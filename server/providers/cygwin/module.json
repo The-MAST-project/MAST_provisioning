@@ -1,0 +1,11 @@
+{
+  "name": "cygwin",
+  "description": "Install Cygwin from cygwin64.tgz and enable basic postinstall setup.",
+  "order": 10,
+  "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-cygwin.ps1\" -TgzPath \".\\cygwin64.tgz\" -InstallDir \"C:\\cygwin64\"",
+  "commandfiles": [
+    "provide-cygwin.ps1",
+    "assets/cygwin64.tgz"
+  ],
+  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -Command \"${log} = Join-Path $env:ProgramData 'MAST\\logs\\cygwin-verify.log'; & 'C:\\cygwin64\\bin\\bash.exe' -lc 'uname -a; which bash' | Tee-Object -FilePath ${log}; Set-Content -Path (Join-Path $env:ProgramData 'MAST\\logs\\cygwin-smoke.txt') -Value 'cygwin_ok'\""
+}

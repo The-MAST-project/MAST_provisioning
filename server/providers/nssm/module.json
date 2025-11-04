@@ -1,0 +1,11 @@
+{
+  "name": "nssm",
+  "description": "Install NSSM (Non-Sucking Service Manager) from nssm-2.24.zip and add to PATH.",
+  "order": 15,
+  "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-nssm.ps1\" -AssetsRoot \".\" -InstallDir \"C:\\Program Files\\nssm\"",
+  "commandfiles": [
+    "provide-nssm.ps1",
+    "assets/nssm-2.24.zip"
+  ],
+  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -Command \"$log = Join-Path $env:ProgramData 'MAST\\logs\\nssm-verify.log'; & 'C:\\Program Files\\nssm\\nssm.exe' 2>&1 | Select-Object -First 1 | Out-File -FilePath $log -Encoding UTF8; Set-Content -Path (Join-Path $env:ProgramData 'MAST\\logs\\nssm-smoke.txt') -Value 'nssm_ok'\""
+}

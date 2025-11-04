@@ -1,0 +1,272 @@
+[CmdletBinding()]
+param(
+  [string]${Top},                                                   # path to <TOP>
+  [Parameter(Mandatory)]
+    [ValidateScript({
+        if (-not $_) {
+            throw "Parameter -HostName must be supplied."
+        }
+        if ($_ -notmatch '^mast(0[1-9]|1[0-9]|20)$') {
+            throw "Parameter -HostName must match pattern 'mast01'..'mast20'."
+        }
+        $true
+    })]
+  [string]${HostName},
+  [string[]]${Modules} = @('cygwin','mongodb','nomachine','ascom', 'python', 'mast'), # your module order
+  [hashtable]${Overrides} = @{ mongodb = @{ NoCompass = $true } }  # same overrides for everyone
+)
+
+# Set-StrictMode -Version Latest
+${ErrorActionPreference} = 'Stop'
+
+# Paths
+if (-not $Top -or [string]::IsNullOrWhiteSpace($Top)) {
+    $Top = Split-Path -Parent $PSScriptRoot
+}
+
+[string]${OutRoot} = (Join-Path ${Top} 'staging')
+
+# If the folder does not exist, create it (recursively)
+if (-not (Test-Path -Path $Top -PathType Container)) {
+    New-Item -ItemType Directory -Force -Path $Top | Out-Null
+    Write-Host "Created missing folder: $Top"
+}
+
+${serverRoot} = Join-Path ${Top} 'server'
+${serverLib}   = Join-Path ${serverRoot} 'lib\provisioning.psm1'
+${providersRoot} = Join-Path ${serverRoot} 'providers'
+if (-not (Test-Path ${serverLib})) { throw "Missing provisioning.psm1 at ${serverLib}" }
+[string]${LicensesRoot} = (Join-Path ${providersRoot} 'nomachine\assets\licenses')
+
+# Read a module manifest: modules\<name>\module.json
+function Read-ModuleManifest {
+    param([Parameter(Mandatory)][string]$ModuleName)
+    $path = Join-Path (Join-Path $providersRoot $ModuleName) 'module.json'
+    if (-not (Test-Path $path)) { throw "Missing module.json for module '$ModuleName' at $path" }
+    return Get-Content $path -Raw | ConvertFrom-Json
+}
+
+# Return $true if the commandfiles entry is under assets/
+# function Test-IsAssetEntry {
+#     param([Parameter(Mandatory)][string]$RelativePath)
+#     $norm = $RelativePath -replace '\\','/'
+#     return $norm.StartsWith('assets/', [System.StringComparison]::OrdinalIgnoreCase)
+# }
+
+# Copy an entry (file or directory) from module root to common cache
+# function Sync-Entry-ToCommon {
+#     param([Parameter(Mandatory)][string]$ModuleRoot,
+#           [Parameter(Mandatory)][string]$RelativePath,
+#           [Parameter(Mandatory)][string]$CommonModuleRoot)
+
+#     $src = Join-Path $ModuleRoot $RelativePath
+#     $dst = Join-Path $CommonModuleRoot $RelativePath
+#     $dstDir = Split-Path $dst -Parent
+#     New-Item -ItemType Directory -Force -Path $dstDir | Out-Null
+
+#     if (Test-Path $src -PathType Container) {
+#         robocopy "$src" "$dst" /MIR /NFL /NDL /NJH /NJS /NP | Out-Null
+#     } else {
+#         Copy-Item -Force $src $dst
+#     }
+# }
+
+# Create a junction/hardlink/symlink into staging; fallback to copy if linking not allowed
+# function New-LinkOrCopy {
+#     param([Parameter(Mandatory)][string]$Target,
+#           [Parameter(Mandatory)][string]$LinkPath)
+
+#     $parent = Split-Path $LinkPath -Parent
+#     New-Item -ItemType Directory -Force -Path $parent | Out-Null
+#     if (Test-Path $LinkPath) { Remove-Item -Force -Recurse $LinkPath -ErrorAction SilentlyContinue }
+
+#     $isDir = Test-Path $Target -PathType Container
+
+#     # Prefer junction for directories (no Developer Mode needed)
+#     if ($isDir) {
+#         try { cmd /c "mklink /J `"$LinkPath`" `"$Target`"" | Out-Null; return } catch {}
+#     } else {
+#         # Try hardlink for files (same volume required)
+#         try { cmd /c "mklink /H `"$LinkPath`" `"$Target`"" | Out-Null; return } catch {}
+#     }
+
+#     # Try symlink
+#     try {
+#         if ($isDir) {
+#             New-Item -ItemType SymbolicLink -Path $LinkPath -Target $Target -Force | Out-Null
+#         } else {
+#             New-Item -ItemType SymbolicLink -Path $LinkPath -Target $Target -Force | Out-Null
+#         }
+#         return
+#     } catch {}
+
+#     # Fallback: copy
+#     if ($isDir) {
+#         robocopy "$Target" "$LinkPath" /E /NFL /NDL /NJH /NJS /NP | Out-Null
+#     } else {
+#         Copy-Item -Force $Target $LinkPath
+#     }
+# }
+
+# Sync all ASSET entries from module.json into common cache (once)
+# function Sync-ModuleAssetsToCommonFromManifest {
+#     param([Parameter(Mandatory)][string]$providersRoot,
+#           [Parameter(Mandatory)][string]$ModuleName,
+#           [Parameter(Mandatory)][string]$CommonAssetsRoot)
+
+#     $mf         = Read-ModuleManifest -providersRoot $providersRoot -ModuleName $ModuleName
+#     $moduleRoot = Join-Path $providersRoot $ModuleName
+#     $commonMod  = Join-Path $CommonAssetsRoot $ModuleName
+
+#     foreach ($rel in $mf.commandfiles) {
+#         if (Test-IsAssetEntry -RelativePath $rel) {
+#             Sync-Entry-ToCommon -ModuleRoot $moduleRoot -RelativePath $rel -CommonModuleRoot $commonMod
+#         }
+#     }
+# }
+
+# Stage a module from manifest: copy non-assets; link assets from common; optional filter for specific files
+# function Stage-ModuleFromManifest {
+#     param([Parameter(Mandatory)][string]$providersRoot,
+#           [Parameter(Mandatory)][string]$ModuleName,
+#           [Parameter(Mandatory)][string]$CommonAssetsRoot,
+#           [Parameter(Mandatory)][string]$StagingRoot,
+#           [string[]]$OnlyTheseAssetFiles)  # optional: whitelist specific asset files relative to assets/...
+
+#     $mf         = Read-ModuleManifest -providersRoot $providersRoot -ModuleName $ModuleName
+#     $moduleRoot = Join-Path $providersRoot $ModuleName
+#     $commonMod  = Join-Path $CommonAssetsRoot $ModuleName
+
+#     foreach ($rel in $mf.commandfiles) {
+#         $srcFromModule = Join-Path $moduleRoot $rel
+#         if (Test-IsAssetEntry -RelativePath $rel) {
+#             # If a whitelist is provided, skip asset entries that are not in it
+#             $relNorm = ($rel -replace '\\','/')
+
+#             $isFolder = Test-Path $srcFromModule -PathType Container
+#             $okay = $true
+#             if ($OnlyTheseAssetFiles -and -not $isFolder) {
+#                 # compare against 'assets/...' style
+#                 $okay = $OnlyTheseAssetFiles -contains $relNorm
+#             }
+#             if (-not $okay) { continue }
+
+#             $srcInCommon = Join-Path $commonMod $rel
+#             $dstInStage  = Join-Path $StagingRoot $rel
+#             New-LinkOrCopy -Target $srcInCommon -LinkPath $dstInStage
+#         } else {
+#             # Non-asset → copy (scripts, etc.)
+#             $dst = Join-Path $StagingRoot $rel
+#             $dstDir = Split-Path $dst -Parent
+#             New-Item -ItemType Directory -Force -Path $dstDir | Out-Null
+#             if (Test-Path $srcFromModule -PathType Container) {
+#                 robocopy "$srcFromModule" "$dst" /E /NFL /NDL /NJH /NJS /NP | Out-Null
+#             } else {
+#                 Copy-Item -Force $srcFromModule $dst
+#             }
+#         }
+#     }
+# }
+
+
+# Optional: load/parse license allocation CSV (if preallocating)
+function Load-AllocCsv([string]${Path}) {
+  if (-not (Test-Path ${Path})) { return @() }
+  try { return (Import-Csv -Path ${Path}) } catch {
+    # barebones manual parse (license,host)
+    ${rows}=@(); foreach (${line} in Get-Content ${Path}) {
+      if (-not ${line} -or ${line} -match '^license,') { continue }
+      ${p}=${line}.Split(',',2); if (${p}.Count -ge 2) { ${rows}+=[pscustomobject]@{license=${p}[0].Trim();host=${p}[1].Trim()} }
+    }; return ${rows}
+  }
+}
+
+function Save-AllocCsv([string]${Path}, [object[]]${Rows}) {
+    ${tmp} = "${Path}.tmp"
+    ${Rows} | Export-Csv -Path ${tmp} -NoTypeInformation -Encoding UTF8 -Force -Delimiter ','
+    Move-Item -Force ${tmp} ${Path}
+    Write-Host "Updated allocation file: ${Path}"
+}
+
+${allocCsv} = Join-Path ${TOP} 'server\providers\nomachine\assets\licenses\allocated.csv'
+# allocRows
+${allocRows} = Load-AllocCsv ${allocCsv}
+
+# allLicFiles
+${allLicFiles} = Get-ChildItem -Path ${LicensesRoot} -Filter '*.lic' -File -ErrorAction SilentlyContinue | Sort-Object Name
+
+# Build commands list once (same for all), then tweak per host only if we add a SingleLicensePath
+function Compose-Commands([string[]]${Mods}, [hashtable]${Ovr}) {
+  ${cmds}=@()
+  foreach (${m} in ${Mods}) {
+    ${mf}=Read-ModuleManifest ${m}
+
+    # base command from manifest
+    ${cmd} = [string]${mf}.command
+
+    # common overrides (e.g., mongodb NoCompass)
+    if (${Ovr}.ContainsKey(${m})) {
+      ${ov} = ${Ovr}.${m}
+      if ($ov.PSObject.Properties.Name -contains 'NoCompass') {
+        if ($ov.NoCompass -eq $true -and (${cmd} -notmatch '\-NoCompass')) { ${cmd} += ' -NoCompass' }
+        if ($ov.NoCompass -eq $false) { ${cmd} = ${cmd} -replace '\s-?NoCompass','' }
+      }
+    }
+
+    ${cmds} += [pscustomobject]@{ order = [int]${mf}.order; desc = [string]${mf}.description; cmd = ${cmd}; module=${m} }
+
+    if (${mf}.verify) {
+      ${cmds} += [pscustomobject]@{ order = [int](${mf}.order + 1); desc = "[verify] " + [string]${mf}.name; cmd = [string]${mf}.verify; module="${m}-verify" } }
+    }
+  ${cmds} | Sort-Object order, desc
+}
+
+${baseCmds} = Compose-Commands -Mods ${Modules} -Ovr ${Overrides}
+
+${staging} = Join-Path ${OutRoot} ${HostName}
+if (Test-Path ${staging}) { Remove-Item -Recurse -Force ${staging} }
+New-Item -ItemType Directory -Force -Path ${staging} | Out-Null
+
+# Always place provisioning.psm1 into staging
+Copy-Item -Force ${serverLib} (Join-Path ${staging} 'provisioning.psm1')
+
+# Copy CommandFiles of each module into staging (flatten)
+foreach (${m} in ${Modules}) {
+  ${mf}=Read-ModuleManifest ${m}
+  Write-Host "Flattening " ${m} " ..."
+  foreach (${rel} in ${mf}.commandfiles) {
+    ${src} = Join-Path (Join-Path ${providersRoot} ${m}) ${rel}
+    if (-not (Test-Path ${src})) { throw "[${m}] missing CommandFile: ${src}" }
+    Copy-Item -Force -Recurse ${src} ${staging}
+  }
+}
+
+# clone base commands; optionally inject a per-host license into the nomachine command
+${cmds} = ${baseCmds}
+
+# do we already have a license for this host?
+${existing} = ${allocRows} | Where-Object { $_.host -ieq ${HostName} } | Select-Object -First 1
+if (${existing}) {
+    Copy-Item -Force -Path (Join-Path ${LicensesRoot} ${existing}.license) -Destination (Join-Path ${staging} "nomachine.lic")
+} else {
+    ${allocatedNames} = @(${allocRows} | ForEach-Object { $_.license }) | Where-Object { $_ } | Select-Object -Unique
+    ${free} = ${allLicFiles} | Where-Object { ${allocatedNames} -notcontains $_.Name } | Select-Object -First 1
+    if (-not ${free}) {
+        Write-Warning "No free NoMachine license left for ${HostName} (have $(@(${allLicFiles}).Count) total)."
+    } else {
+        ${allocRows} += [pscustomobject]@{ license=${free}.Name; host=${HostName} }
+        # stage that single .lic
+        Copy-Item -Force ${free}.FullName (Join-Path ${staging} "nomachine.lic")
+  }
+}
+
+# deploy the github token
+Copy-Item -Path (Join-Path ${serverRoot} 'tokens\mast_github.txt') (Join-Path ${staging} 'mast_github.txt')
+
+# emit commands.json
+(${cmds} | Select-Object order,desc,cmd | ConvertTo-Json -Depth 6) | Out-File -FilePath (Join-Path ${staging} 'commands.json') -Encoding UTF8
+
+Write-Host "Staged ${HostName} at ${staging}"
+
+# save allocation CSV if we changed it
+Save-AllocCsv -Path ${allocCsv} -Rows ${allocRows}

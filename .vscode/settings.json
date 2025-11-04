@@ -1,0 +1,30 @@
+{
+  // ===============================
+  // MAST-provisioning workspace settings
+  // ===============================
+
+  // 👀 Hide build output and generated folders from the Explorer view
+  // "files.exclude": {
+  //   "**/staging": true,
+  // },
+
+  // 🔍 Exclude these folders from global search (Ctrl+Shift+F)
+  "search.exclude": {
+    "**/staging": true,
+  },
+
+  // 🕵️ Prevent VS Code from watching for file changes in these folders (saves CPU)
+  "files.watcherExclude": {
+    "**/staging/**": true,
+  },
+
+  // ===============================
+  // General quality-of-life settings
+  // ===============================
+  "editor.tabSize": 2,
+  "editor.insertSpaces": true,
+  "files.trimTrailingWhitespace": true,
+  "files.insertFinalNewline": true,
+  "powershell.codeFormatting.preset": "OTBS",
+  // "powershell.integratedConsole.showOnStartup": false
+}
