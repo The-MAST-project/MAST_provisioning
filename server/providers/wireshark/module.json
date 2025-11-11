@@ -1,12 +1,11 @@
 {
-  "name": "cygwin",
+  "name": "wireshark",
   "description": "Install Cygwin from a prebuilt cygwin64.tgz, run postinstall, add to PATH, and verify.",
-  "order": 10,
+  "order": 50,
   "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-cygwin.ps1\" -AssetsRoot \".\" -InstallRoot \"C:\\cygwin64\"",
   "commandfiles": [
-    "provide-cygwin.ps1",
-    "assets/cygwin64-clean.tgz",
-    "assets/astrometry.tgz"
+    "provide-wireshark.ps1",
+    "assets/Wireshark-4.6.0-x64.exe"
   ],
   "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -Command \"$bin='C:\\cygwin64\\bin'; $bash=Join-Path $bin 'bash.exe'; $log=Join-Path $env:ProgramData 'MAST\\logs\\cygwin-verify.log'; if (Test-Path $bash) { & $bash -lc 'uname -a' | Out-File -FilePath $log -Encoding UTF8; & $bash -lc 'cygcheck -V' | Out-File -FilePath $log -Append -Encoding UTF8; Set-Content -Path (Join-Path $env:ProgramData 'MAST\\logs\\cygwin-smoke.txt') -Value 'cygwin_ok' } else { 'bash.exe not found' | Out-File -FilePath $log -Encoding UTF8 }\""
 }

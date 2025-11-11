@@ -1,7 +1,7 @@
 {
   "name": "nomachine",
   "description": "Install NoMachine Enterprise Client and Desktop, and apply license if provided.",
-  "order": 30,
+  "order": 70,
   "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-nomachine.ps1\" -AssetsRoot \".\"",
   "commandfiles": [
     "provide-nomachine.ps1",

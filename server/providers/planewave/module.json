@@ -1,0 +1,13 @@
+{
+  "name": "planewave",
+  "description": "Install PlaneWave Instruments telescope control software (PWI4) and PS3 CLI tools.",
+  "order": 110,
+  "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-planewave.ps1\" -AssetsRoot \".\"",
+  "commandfiles": [
+    "provide-planewave.ps1",
+    "assets/Setup_PWI_4.1.8_Final.exe",
+    "assets/Setup_PWShutter_1.12.0.exe",
+    "assets/ps3cli.zip"
+  ],
+  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -Command \"${pwi4Path}='C:\\Program Files\\PlaneWave Instruments\\PWI4\\pwi4.exe'; ${ps3cliPath}='C:\\Users\\mast\\Documents\\PlaneWave\\ps3cli'; ${log}=Join-Path ${env:ProgramData} 'MAST\\logs\\planewave-verify.log'; if ((Test-Path ${pwi4Path}) -and (Test-Path ${ps3cliPath})) { Set-Content -Path ${log} -Value 'PlaneWave installed successfully'; Set-Content -Path (Join-Path ${env:ProgramData} 'MAST\\logs\\planewave-smoke.txt') -Value 'planewave_ok' } else { 'PlaneWave components not found' | Out-File -FilePath ${log} -Encoding UTF8 }\""
+}

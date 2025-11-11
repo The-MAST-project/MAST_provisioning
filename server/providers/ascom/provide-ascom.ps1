@@ -113,7 +113,7 @@ function Invoke-Proc {
   }
 }
 
-function Try-EnableNetFx3 {
+function Enable-NetFx3Feature {
   param([string]$FoDSource)
   Write-Host "Enabling .NET Framework 3.5 (NetFx3)..."
   try {
@@ -219,7 +219,7 @@ Write-Host "Using assets folder: $assets"
 
 # --- Enable .NET 3.5 (unless skipped) ---
 if (-not $NoNet) {
-  Try-EnableNetFx3 -FoDSource $FoDSource | Out-Null
+  Enable-NetFx3Feature -FoDSource $FoDSource | Out-Null
 } else {
   Write-Host "Skipping NetFx3 enablement (-NoNet)."
 }

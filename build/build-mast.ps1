@@ -33,10 +33,12 @@ if (-not (Test-Path -Path $Top -PathType Container)) {
 }
 
 ${serverRoot} = Join-Path ${Top} 'server'
+${vault} = Join-Path ${Top} 'vault'
 ${serverLib}   = Join-Path ${serverRoot} 'lib\provisioning.psm1'
 ${providersRoot} = Join-Path ${serverRoot} 'providers'
 if (-not (Test-Path ${serverLib})) { throw "Missing provisioning.psm1 at ${serverLib}" }
 [string]${LicensesRoot} = (Join-Path ${providersRoot} 'nomachine\assets\licenses')
+${licensesVault} = (Join-Path ${vault} 'nomachine-licenses')
 
 # Read a module manifest: modules\<name>\module.json
 function Read-ModuleManifest {
@@ -72,41 +74,41 @@ function Read-ModuleManifest {
 # }
 
 # Create a junction/hardlink/symlink into staging; fallback to copy if linking not allowed
-# function New-LinkOrCopy {
-#     param([Parameter(Mandatory)][string]$Target,
-#           [Parameter(Mandatory)][string]$LinkPath)
+function New-LinkOrCopy {
+    param([Parameter(Mandatory)][string]$Target,
+          [Parameter(Mandatory)][string]$LinkPath)
 
-#     $parent = Split-Path $LinkPath -Parent
-#     New-Item -ItemType Directory -Force -Path $parent | Out-Null
-#     if (Test-Path $LinkPath) { Remove-Item -Force -Recurse $LinkPath -ErrorAction SilentlyContinue }
+    $parent = Split-Path $LinkPath -Parent
+    New-Item -ItemType Directory -Force -Path $parent | Out-Null
+    if (Test-Path $LinkPath) { Remove-Item -Force -Recurse $LinkPath -ErrorAction SilentlyContinue }
 
-#     $isDir = Test-Path $Target -PathType Container
+    $isDir = Test-Path $Target -PathType Container
 
-#     # Prefer junction for directories (no Developer Mode needed)
-#     if ($isDir) {
-#         try { cmd /c "mklink /J `"$LinkPath`" `"$Target`"" | Out-Null; return } catch {}
-#     } else {
-#         # Try hardlink for files (same volume required)
-#         try { cmd /c "mklink /H `"$LinkPath`" `"$Target`"" | Out-Null; return } catch {}
-#     }
+    # Prefer junction for directories (no Developer Mode needed)
+    if ($isDir) {
+        try { cmd /c "mklink /J `"$LinkPath`" `"$Target`"" | Out-Null; return } catch {}
+    } else {
+        # Try hardlink for files (same volume required)
+        try { cmd /c "mklink /H `"$LinkPath`" `"$Target`"" | Out-Null; return } catch {}
+    }
 
-#     # Try symlink
-#     try {
-#         if ($isDir) {
-#             New-Item -ItemType SymbolicLink -Path $LinkPath -Target $Target -Force | Out-Null
-#         } else {
-#             New-Item -ItemType SymbolicLink -Path $LinkPath -Target $Target -Force | Out-Null
-#         }
-#         return
-#     } catch {}
+    # Try symlink
+    try {
+        if ($isDir) {
+            New-Item -ItemType SymbolicLink -Path $LinkPath -Target $Target -Force | Out-Null
+        } else {
+            New-Item -ItemType SymbolicLink -Path $LinkPath -Target $Target -Force | Out-Null
+        }
+        return
+    } catch {}
 
-#     # Fallback: copy
-#     if ($isDir) {
-#         robocopy "$Target" "$LinkPath" /E /NFL /NDL /NJH /NJS /NP | Out-Null
-#     } else {
-#         Copy-Item -Force $Target $LinkPath
-#     }
-# }
+    # Fallback: copy
+    if ($isDir) {
+        robocopy "$Target" "$LinkPath" /E /NFL /NDL /NJH /NJS /NP | Out-Null
+    } else {
+        Copy-Item -Force $Target $LinkPath
+    }
+}
 
 # Sync all ASSET entries from module.json into common cache (once)
 # function Sync-ModuleAssetsToCommonFromManifest {
@@ -193,7 +195,7 @@ ${allocCsv} = Join-Path ${TOP} 'server\providers\nomachine\assets\licenses\alloc
 ${allocRows} = Load-AllocCsv ${allocCsv}
 
 # allLicFiles
-${allLicFiles} = Get-ChildItem -Path ${LicensesRoot} -Filter '*.lic' -File -ErrorAction SilentlyContinue | Sort-Object Name
+${allLicFiles} = Get-ChildItem -Path ${licensesVault} -Filter '*.lic' -File -ErrorAction SilentlyContinue | Sort-Object Name
 
 # Build commands list once (same for all), then tweak per host only if we add a SingleLicensePath
 function Compose-Commands([string[]]${Mods}, [hashtable]${Ovr}) {
@@ -237,9 +239,14 @@ foreach (${m} in ${Modules}) {
   foreach (${rel} in ${mf}.commandfiles) {
     ${src} = Join-Path (Join-Path ${providersRoot} ${m}) ${rel}
     if (-not (Test-Path ${src})) { throw "[${m}] missing CommandFile: ${src}" }
-    Copy-Item -Force -Recurse ${src} ${staging}
+    if (${m}.Equals("cygwin")) {
+      Copy-Item -Force -Recurse ${src} ${staging}
+    } else {
+      New-LinkOrCopy -Target ${src} -LinkPath ${staging}
+    }
   }
 }
+
 
 # clone base commands; optionally inject a per-host license into the nomachine command
 ${cmds} = ${baseCmds}
@@ -261,7 +268,7 @@ if (${existing}) {
 }
 
 # deploy the github token
-Copy-Item -Path (Join-Path ${serverRoot} 'tokens\mast_github.txt') (Join-Path ${staging} 'mast_github.txt')
+Copy-Item -Path (Join-Path ${vault} 'tokens\mast_github.txt') (Join-Path ${staging} 'mast_github.txt')
 
 # emit commands.json
 (${cmds} | Select-Object order,desc,cmd | ConvertTo-Json -Depth 6) | Out-File -FilePath (Join-Path ${staging} 'commands.json') -Encoding UTF8

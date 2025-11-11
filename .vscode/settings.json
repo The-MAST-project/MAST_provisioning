@@ -26,5 +26,7 @@
   "files.trimTrailingWhitespace": true,
   "files.insertFinalNewline": true,
   "powershell.codeFormatting.preset": "OTBS",
-  // "powershell.integratedConsole.showOnStartup": false
+  // "powershell.integratedConsole.showOnStartup": false"
+  "powershell.powerShellDefaultVersion": "Windows PowerShell (x64)"
+
 }

@@ -1,0 +1,11 @@
+{
+  "name": "stage",
+  "description": "Install Stage (telescope mount control software) for mount automation and tracking.",
+  "order": 100,
+  "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-stage.ps1\" -AssetsRoot \".\" -InstallRoot \"C:\\Program Files\\Stage\"",
+  "commandfiles": [
+    "provide-stage.ps1",
+    "assets/xilab-1.20.19-win32_win64.exe"
+  ],
+  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -Command \"${stagePath}='C:\\Program Files\\Stage\\stage.exe'; ${log}=Join-Path ${env:ProgramData} 'MAST\\logs\\stage-verify.log'; if (Test-Path ${stagePath}) { Set-Content -Path ${log} -Value 'Stage installed successfully'; Set-Content -Path (Join-Path ${env:ProgramData} 'MAST\\logs\\stage-smoke.txt') -Value 'stage_ok' } else { 'Stage executable not found at ' + ${stagePath} | Out-File -FilePath ${log} -Encoding UTF8 }\""
+}

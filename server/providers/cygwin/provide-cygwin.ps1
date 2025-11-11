@@ -1,177 +1,109 @@
-<#
-.SYNOPSIS
-  Unpacks a Cygwin tgz and finalizes the install for provisioning.
-
-.DESCRIPTION
-  - Looks for astrometry\assets\cygwin64.tgz (override with -AssetsRoot or -TgzPath).
-  - Extracts to -InstallDir (default C:\cygwin64) using tar.exe.
-  - Runs /etc/postinstall scripts if present.
-  - Appends Cygwin bin to the system PATH (idempotent).
-  - Logs to %ProgramData%\MAST\logs.
-
-.PARAMETER AssetsRoot
-  Root that contains 'astrometry\assets\cygwin64.tgz'. Default: $PSScriptRoot.
-
-.PARAMETER TgzPath
-  Explicit path to the tgz (overrides AssetsRoot discovery).
-
-.PARAMETER InstallDir
-  Target Cygwin root (default: C:\cygwin64).
-
-.PARAMETER Help
-  Show usage and exit.
-#>
-
-[CmdletBinding(SupportsShouldProcess = $true)]
+#requires -RunAsAdministrator
+[CmdletBinding()]
 param(
-  [string]${AssetsRoot} = ${PSScriptRoot},
-  [string]${TgzPath},
-  [string]${InstallDir} = 'C:\cygwin64',
-  [switch]${Help}
+    [string]${AssetsRoot}  = ${PSScriptRoot},
+    [string]${ArchiveName} = 'cygwin64-clean.tgz',
+    [string]${AstrometryArchiveName} = 'astrometry.tgz',
+    [string]${InstallRoot} = 'C:\cygwin64'
 )
 
+# --- Import shared helpers from provisioning.psm1 (PS 5.1 safe) ---
 try {
-  ${provLocal} = Join-Path ${PSScriptRoot} 'provisioning.psm1'
-  ${provGlobal} = 'C:\ProgramData\MAST\provisioning.psm1'
-  Import-Module (Test-Path ${provLocal} ? ${provLocal} : ${provGlobal}) -Force
-} catch { Write-Warning "provisioning.psm1 import failed: $($_.Exception.Message)" }
-
-function Show-Help {
-@"
-provide-cygwin.ps1 - Install Cygwin from cygwin64.tgz (WCD-ready)
-
-USAGE:
-  .\provide-cygwin.ps1 [-AssetsRoot <path>] [-TgzPath <file>] [-InstallDir <dir>] [-Verbose] [-Help]
-
-NOTES:
-  - Expects tar.exe on Windows (present on Windows 10/11). If missing, install the native tar feature or ship an extractor.
-"@ | Write-Host
+    ${provLocal}  = Join-Path ${PSScriptRoot} 'provisioning.psm1'
+    ${provGlobal} = 'C:\ProgramData\MAST\provisioning.psm1'
+    if (Test-Path ${provLocal}) {
+        Import-Module ${provLocal} -Force -ErrorAction Stop
+    }
+    elseif (Test-Path ${provGlobal}) {
+        Import-Module ${provGlobal} -Force -ErrorAction Stop
+    }
+    else {
+        throw "provisioning.psm1 not found next to script or in ${provGlobal}"
+    }
+}
+catch {
+    throw "Failed to import provisioning.psm1: $($_.Exception.Message)"
 }
 
-if (${Help}) { Show-Help; return }
-
-# --- Logging ---
-${LogRoot} = Join-Path ${env:ProgramData} 'MAST\logs'
-${null} = New-Item -ItemType Directory -Path ${LogRoot} -Force -ErrorAction SilentlyContinue
-${LogFile} = Join-Path ${LogRoot} ("provide-cygwin_{0:yyyyMMdd_HHmmss}.log" -f (Get-Date))
-Start-Transcript -Path ${LogFile} -Append | Out-Null
-
-Write-Verbose "Log file: ${LogFile}"
-
-# --- Locate tar.exe ---
-${TarExe} = "${env:SystemRoot}\System32\tar.exe"
-if (-not (Test-Path ${TarExe})) {
-  Stop-Transcript | Out-Null
-  throw "tar.exe not found at ${TarExe}. Provide an extractor or enable the Windows tar tool."
-}
-
-# --- Locate the tgz ---
-if (-not ${TgzPath}) {
-  ${TgzPath} = Join-Path ${AssetsRoot} 'astrometry\assets\cygwin64.tgz'
-}
-if (-not (Test-Path ${TgzPath})) {
-  Stop-Transcript | Out-Null
-  throw "Cygwin archive not found: ${TgzPath}"
-}
-Write-Host "Using archive: ${TgzPath}"
-
-# --- Prepare install dir ---
+${log} = Start-ProvisionLog -Component 'provide-cygwin'
 try {
-  if (-not (Test-Path ${InstallDir})) {
-    New-Item -ItemType Directory -Path ${InstallDir} -Force | Out-Null
-  }
-} catch {
-  Stop-Transcript | Out-Null
-  throw "Failed to create install dir ${InstallDir}: $($_.Exception.Message)"
-}
+    # --- Locate archive ---
+    ${archivePath} = Join-Path (Join-Path ${AssetsRoot} 'assets') ${ArchiveName}
+    if (-not (Test-Path ${archivePath})) {
+        throw "Cygwin archive not found: ${archivePath}"
+    }
 
-# --- Extract to a staging folder to handle archive root layout ---
-${Staging} = Join-Path ${env:TEMP} ("cygwin64_stage_{0:yyyyMMdd_HHmmss}" -f (Get-Date))
-New-Item -ItemType Directory -Path ${Staging} -Force | Out-Null
+    # --- Stage extraction to a temp folder ---
+    ${stage} = Join-Path ${env:TEMP} ("cygwin_stage_{0:yyyyMMdd_HHmmss}" -f (Get-Date))
+    Ensure-Dir ${stage}
 
-Write-Host "Extracting to staging: ${Staging}"
-& ${TarExe} -x -z -f "${TgzPath}" -C "${Staging}"
-if ($LASTEXITCODE -ne 0) {
-  Stop-Transcript | Out-Null
-  throw "Extraction failed with exit code ${LASTEXITCODE}."
-}
+    Write-Host "Extracting ${archivePath} to staging ${stage} ..."
+    # Expand-AnyArchive should handle .zip, .7z, .tar.gz/.tgz per your provisioning.psm1
+    Expand-AnyArchive -ArchivePath ${archivePath} -Destination ${stage}
 
-# Determine actual root inside the archive
-${CandidateRoot} = Join-Path ${Staging} 'cygwin64'
-if (-not (Test-Path ${CandidateRoot})) {
-  # maybe archive was a flat root; use staging itself
-  ${CandidateRoot} = ${Staging}
-}
+    # The tgz may contain a top-level "cygwin64" folder or the tree directly.
+    # Resolve the source folder that actually contains /bin, /etc, etc.
+    ${candidate} = Join-Path ${stage} 'cygwin64-clean'
+    if (Test-Path ${candidate} -PathType Container) {
+        ${srcRoot} = ${candidate}
+    }
+    else {
+        ${srcRoot} = ${stage}
+    }
 
-# If InstallDir isn't empty, move aside (idempotent: only if empty we continue)
-${existing} = Get-ChildItem -Path ${InstallDir} -Force -ErrorAction SilentlyContinue
-if (${existing} -and ${existing}.Count -gt 0) {
-  Write-Host "InstallDir ${InstallDir} is not empty; will overlay files."
-}
+    # --- Install to target root ---
+    Write-Host "Syncing Cygwin files into ${InstallRoot} ..."
+    Ensure-Dir ${InstallRoot}
+    # Use robocopy for speed and ACLs; mirrors content
+    robocopy "${srcRoot}" "${InstallRoot}" /MIR /R:1 /W:2 /NFL /NDL /NJH /NJS /NP | Out-Null
 
-# Copy into place
-Write-Host "Copying Cygwin files to ${InstallDir}..."
-robocopy "${CandidateRoot}" "${InstallDir}" /E /NFL /NDL /NJH /NJS /NP | Out-Null
+    # --- Ensure bin is on the System PATH ---
+    ${binDir} = Join-Path ${InstallRoot} 'bin'
+    Add-ToSystemPath -Dir ${binDir}
 
-# --- Postinstall: run any pending scripts ---
-${Bash} = Join-Path ${InstallDir} 'bin\bash.exe'
-${Dash} = Join-Path ${InstallDir} 'bin\dash.exe'   # fallback shell for some scripts
-if (Test-Path ${Bash}) {
-  # If there are *.sh without .done, execute them and mark as done
-  ${PostDir} = Join-Path ${InstallDir} 'etc\postinstall'
-  if (Test-Path ${PostDir}) {
-    ${pending} = Get-ChildItem -Path ${PostDir} -Filter '*.sh' -File -ErrorAction SilentlyContinue
-    if (${pending}) {
-      Write-Host "Running Cygwin postinstall scripts..."
-      ${cmd} = @'
+    # --- Run Cygwin postinstall scripts (once) ---
+    ${bashExe} = Join-Path ${binDir} 'bash.exe'
+    if (-not (Test-Path ${bashExe})) {
+        throw "bash.exe not found at ${bashExe}"
+    }
+
+    # Execute any pending /etc/postinstall/*.sh (rename to .done after success)
+    Write-Host "Running Cygwin postinstall scripts ..."
+    ${postInstallCmd} = @'
 set -e
 shopt -s nullglob
 for f in /etc/postinstall/*.sh; do
-  if [ -f "$f" ] && [ ! -f "$f.done" ]; then
-    /bin/dash "$f" || /bin/bash "$f"
-    mv -f "$f" "$f.done" || true
-  fi
+  /usr/bin/dash "$f" || exit 1
+  mv "$f" "$f.done"
 done
+exit 0
 '@
-      & "${Bash}" -lc "${cmd}"
-      if ($LASTEXITCODE -ne 0) {
-        Write-Warning "Some postinstall scripts returned non-zero; check Cygwin logs."
-      }
-    } else {
-      Write-Verbose "No pending postinstall scripts."
-    }
-  }
-} else {
-  Write-Warning "bash.exe not found under ${InstallDir}\bin. Postinstall scripts (if any) were not executed."
-}
 
-# --- PATH: ensure Cygwin bin is on the system PATH (idempotent) ---
-function Add-ToSystemPath {
-  param([Parameter(Mandatory)][string]${Dir})
-  ${envKey} = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment'
-  ${pathVal} = (Get-ItemProperty -Path ${envKey} -Name PATH -ErrorAction SilentlyContinue).Path
-  if (-not ${pathVal}) { ${pathVal} = '' }
-  if (${pathVal} -notmatch [Regex]::Escape(${Dir})) {
-    ${newPath} = (${pathVal}.TrimEnd(';') + ';' + ${Dir}).Trim(';')
-    Set-ItemProperty -Path ${envKey} -Name PATH -Value ${newPath}
-    # Broadcast WM_SETTINGCHANGE so new processes see it
-    $signature = @"
-using System;
-using System.Runtime.InteropServices;
-public class NativeMethods {
-  [DllImport("user32.dll", SetLastError=true, CharSet=CharSet.Auto)]
-  public static extern IntPtr SendMessageTimeout(IntPtr hWnd, int Msg, IntPtr wParam, string lParam, int fuFlags, int uTimeout, out IntPtr lpdwResult);
-}
-"@
-    Add-Type -TypeDefinition $signature -ErrorAction SilentlyContinue | Out-Null
-    [void][NativeMethods]::SendMessageTimeout([IntPtr]0xffff, 0x1A, [IntPtr]0, 'Environment', 2, 5000, [ref]([IntPtr]::Zero))
-    Write-Host "Added to PATH: ${Dir}"
-  } else {
-    Write-Verbose "PATH already contains ${Dir}"
-  }
-}
-Add-ToSystemPath -Dir (Join-Path ${InstallDir} 'bin')
+    # TODO: extract astrometry.tgz
 
-Write-Host "Cygwin deployment complete at ${InstallDir}. Log: ${LogFile}"
-Stop-Transcript | Out-Null
+    # Run inside Cygwin
+    ${tmpScript} = Join-Path ${env:TEMP} "cygwin_postinstall_$(Get-Random).sh"
+    Set-Content -Path ${tmpScript} -Value ${postInstallCmd} -Encoding ASCII
+    & ${bashExe} -lc "/usr/bin/dos2unix '${tmpScript}' >/dev/null 2>&1 || true"
+    & ${bashExe} -lc "/bin/chmod +x '${tmpScript}' && '${tmpScript}'"
+    Remove-Item -Force ${tmpScript} -ErrorAction SilentlyContinue
+
+    # --- Verification: print versions and a simple command ---
+    Write-Host "Verifying Cygwin ..."
+    ${verifyLog} = Join-Path ${env:ProgramData} 'MAST\logs\cygwin-verify.log'
+    Ensure-Dir (Split-Path ${verifyLog} -Parent)
+
+    # Capture uname, which, and cygcheck versions
+    & ${bashExe} -lc 'uname -a'           | Out-File -FilePath ${verifyLog} -Encoding UTF8
+    & ${bashExe} -lc 'which bash; which tar; which gzip' | Out-File -FilePath ${verifyLog} -Append -Encoding UTF8
+    & ${bashExe} -lc 'cygcheck -V'        | Out-File -FilePath ${verifyLog} -Append -Encoding UTF8
+
+    # Smoke marker
+    Set-Content -Path (Join-Path ${env:ProgramData} 'MAST\logs\cygwin-smoke.txt') -Value 'cygwin_ok' -Encoding ASCII
+
+    Write-Host "Cygwin installed to ${InstallRoot}. PATH updated. Verification log at ${verifyLog}."
+}
+finally {
+    Stop-ProvisionLog
+}
 exit 0

@@ -1,7 +1,7 @@
 {
   "name": "mongodb",
   "description": "Install MongoDB client tools: mongosh, Database Tools, and optionally Compass.",
-  "order": 20,
+  "order": 40,
   "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-mongodb.ps1\" -AssetsRoot \".\" -InstallRoot \"C:\\Program Files\\MongoDB\"",
   "commandfiles": [
     "provide-mongodb.ps1",
