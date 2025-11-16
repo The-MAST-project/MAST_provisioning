@@ -11,7 +11,7 @@ try {
     Write-Host "Starting PlaneWave installation..."
 
     # Install PWI4
-    ${pwi4InstallerPath} = Join-Path ${AssetsRoot} "assets\PWI4_Setup.exe"
+    ${pwi4InstallerPath} = Join-Path ${AssetsRoot} "PWI4_Setup.exe"
     if (-not (Test-Path ${pwi4InstallerPath})) {
         throw "PWI4 installer not found at ${pwi4InstallerPath}"
     }
@@ -24,7 +24,7 @@ try {
     }
 
     # Extract PS3 CLI tools
-    ${ps3cliZipPath} = Join-Path ${AssetsRoot} "assets\ps3cli.zip"
+    ${ps3cliZipPath} = Join-Path ${AssetsRoot} "ps3cli.zip"
     if (-not (Test-Path ${ps3cliZipPath})) {
         throw "PS3 CLI archive not found at ${ps3cliZipPath}"
     }

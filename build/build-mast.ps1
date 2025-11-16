@@ -12,9 +12,32 @@ param(
         $true
     })]
   [string]${HostName},
-  [string[]]${Modules} = @('cygwin','mongodb','nomachine','ascom', 'python', 'mast'), # your module order
-  [hashtable]${Overrides} = @{ mongodb = @{ NoCompass = $true } }  # same overrides for everyone
+  [string[]]${Modules} = @(
+    'ascom',
+    'cygwin',
+    'mast',
+    'mongodb',
+    'nomachine',
+    'nssm',
+    'phd2',
+    'planewave',
+    'python',
+    'stage',
+    'sysinternals',
+    'vscode',
+    'wireshark',
+    'zwo'
+    ) # your module order
 )
+
+# Require administrator
+${isAdmin} = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")
+if (-not ${isAdmin}) {
+    Write-Host "This script requires Administrator privileges."
+    ${arguments} = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Top `"${Top}`" -HostName `"${HostName}`""
+    Start-Process -FilePath "powershell.exe" -ArgumentList ${arguments} -Verb RunAs -Wait
+    exit 0
+}
 
 # Set-StrictMode -Version Latest
 ${ErrorActionPreference} = 'Stop'
@@ -37,13 +60,13 @@ ${vault} = Join-Path ${Top} 'vault'
 ${serverLib}   = Join-Path ${serverRoot} 'lib\provisioning.psm1'
 ${providersRoot} = Join-Path ${serverRoot} 'providers'
 if (-not (Test-Path ${serverLib})) { throw "Missing provisioning.psm1 at ${serverLib}" }
-[string]${LicensesRoot} = (Join-Path ${providersRoot} 'nomachine\assets\licenses')
+[string]${LicensesRoot} = (Join-Path ${Top} 'vault\nomachine-licenses')
 ${licensesVault} = (Join-Path ${vault} 'nomachine-licenses')
 
 # Read a module manifest: modules\<name>\module.json
 function Read-ModuleManifest {
     param([Parameter(Mandatory)][string]$ModuleName)
-    $path = Join-Path (Join-Path $providersRoot $ModuleName) 'module.json'
+    $path = Join-Path (Join-Path ${providersRoot} $ModuleName) 'module.json'
     if (-not (Test-Path $path)) { throw "Missing module.json for module '$ModuleName' at $path" }
     return Get-Content $path -Raw | ConvertFrom-Json
 }
@@ -198,32 +221,24 @@ ${allocRows} = Load-AllocCsv ${allocCsv}
 ${allLicFiles} = Get-ChildItem -Path ${licensesVault} -Filter '*.lic' -File -ErrorAction SilentlyContinue | Sort-Object Name
 
 # Build commands list once (same for all), then tweak per host only if we add a SingleLicensePath
-function Compose-Commands([string[]]${Mods}, [hashtable]${Ovr}) {
+function Compose-Commands([string[]]${Mods}) {
   ${cmds}=@()
   foreach (${m} in ${Mods}) {
-    ${mf}=Read-ModuleManifest ${m}
+    ${mf}=Read-ModuleManifest -ModuleName ${m}
 
     # base command from manifest
     ${cmd} = [string]${mf}.command
 
-    # common overrides (e.g., mongodb NoCompass)
-    if (${Ovr}.ContainsKey(${m})) {
-      ${ov} = ${Ovr}.${m}
-      if ($ov.PSObject.Properties.Name -contains 'NoCompass') {
-        if ($ov.NoCompass -eq $true -and (${cmd} -notmatch '\-NoCompass')) { ${cmd} += ' -NoCompass' }
-        if ($ov.NoCompass -eq $false) { ${cmd} = ${cmd} -replace '\s-?NoCompass','' }
-      }
-    }
-
     ${cmds} += [pscustomobject]@{ order = [int]${mf}.order; desc = [string]${mf}.description; cmd = ${cmd}; module=${m} }
 
     if (${mf}.verify) {
-      ${cmds} += [pscustomobject]@{ order = [int](${mf}.order + 1); desc = "[verify] " + [string]${mf}.name; cmd = [string]${mf}.verify; module="${m}-verify" } }
+      ${cmds} += [pscustomobject]@{ order = [int](${mf}.order + 1); desc = "[verify] " + [string]${mf}.name; cmd = [string]${mf}.verify; module="${m}-verify" }
     }
-  ${cmds} | Sort-Object order, desc
+  }
+  return (${cmds} | Sort-Object order, desc)
 }
 
-${baseCmds} = Compose-Commands -Mods ${Modules} -Ovr ${Overrides}
+${baseCmds} = Compose-Commands -Mods ${Modules}
 
 ${staging} = Join-Path ${OutRoot} ${HostName}
 if (Test-Path ${staging}) { Remove-Item -Recurse -Force ${staging} }
@@ -232,17 +247,45 @@ New-Item -ItemType Directory -Force -Path ${staging} | Out-Null
 # Always place provisioning.psm1 into staging
 Copy-Item -Force ${serverLib} (Join-Path ${staging} 'provisioning.psm1')
 
+# Copy client execution script into staging
+${clientRoot} = Join-Path ${Top} 'client'
+${executeScript} = Join-Path ${clientRoot} 'execute-mast-provisioning.ps1'
+if (Test-Path ${executeScript}) {
+    Copy-Item -Force ${executeScript} (Join-Path ${staging} 'execute-mast-provisioning.ps1')
+    Write-Host "Staged execute-mast-provisioning.ps1"
+} else {
+    Write-Warning "execute-mast-provisioning.ps1 not found at ${executeScript}"
+}
+
 # Copy CommandFiles of each module into staging (flatten)
 foreach (${m} in ${Modules}) {
-  ${mf}=Read-ModuleManifest ${m}
+  ${mf}=Read-ModuleManifest -ModuleName ${m}
   Write-Host "Flattening " ${m} " ..."
-  foreach (${rel} in ${mf}.commandfiles) {
-    ${src} = Join-Path (Join-Path ${providersRoot} ${m}) ${rel}
+
+  if (-not ${mf}.commandfiles) {
+    Write-Warning "[${m}] No commandfiles defined in module.json"
+    continue
+  }
+
+  foreach (${cmdfile} in ${mf}.commandfiles) {
+    ${src} = Join-Path (Join-Path ${providersRoot} ${m}) ${cmdfile}
     if (-not (Test-Path ${src})) { throw "[${m}] missing CommandFile: ${src}" }
-    if (${m}.Equals("cygwin")) {
-      Copy-Item -Force -Recurse ${src} ${staging}
+
+    # Flatten assets/ files to staging root; keep scripts in root
+    if (${cmdfile} -like "assets/*") {
+        ${dst} = Join-Path ${staging} (Split-Path ${cmdfile} -Leaf)
     } else {
-      New-LinkOrCopy -Target ${src} -LinkPath ${staging}
+        ${dst} = Join-Path ${staging} ${cmdfile}
+    }
+
+    ${dstDir} = Split-Path ${dst} -Parent
+    New-Item -ItemType Directory -Force -Path ${dstDir} | Out-Null
+    Write-Host " Staging " ${cmdfile} " ..."
+
+    if (${m}.Equals("cygwin")) {
+      Copy-Item -Force -Recurse ${src} ${dst}
+    } else {
+      New-LinkOrCopy -Target ${src} -LinkPath ${dst}
     }
   }
 }
@@ -277,3 +320,68 @@ Write-Host "Staged ${HostName} at ${staging}"
 
 # save allocation CSV if we changed it
 Save-AllocCsv -Path ${allocCsv} -Rows ${allocRows}
+
+# Share staging folder over network
+${shareName} = "mast-staging"
+${sharePath} = ${OutRoot}
+${shareComment} = "MAST provisioning staging area for VMs and physical machines"
+
+Write-Host "Setting up network share for provisioning..."
+
+# Check if share already exists
+${existingShare} = Get-SmbShare -Name ${shareName} -ErrorAction SilentlyContinue
+if (${existingShare}) {
+    Write-Host "Share '${shareName}' already exists at $($existingShare.Path)"
+    if ($existingShare.Path -ne ${sharePath}) {
+        Write-Warning "Existing share points to different path: $($existingShare.Path). Removing and recreating..."
+        Remove-SmbShare -Name ${shareName} -Force
+    } else {
+        Write-Host "Share is up to date."
+        exit 0
+    }
+}
+
+# Create new SMB share
+try {
+    New-SmbShare -Name ${shareName} `
+        -Path ${sharePath} `
+        -FullAccess @("Administrators", "SYSTEM") `
+        -Description ${shareComment} `
+        -ErrorAction Stop | Out-Null
+    Write-Host "Created SMB share: \\$($env:COMPUTERNAME)\${shareName}"
+} catch {
+    Write-Error "Failed to create SMB share: $_"
+    exit 1
+}
+
+# Configure share permissions (allow Everyone read access for provisioning clients)
+try {
+    $acl = Get-Acl ${sharePath}
+    $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+        "Everyone",
+        "ReadAndExecute",
+        "ContainerInherit,ObjectInherit",
+        "None",
+        "Allow"
+    )
+    $acl.AddAccessRule($rule)
+    Set-Acl -Path ${sharePath} -AclObject $acl
+    Write-Host "Configured permissions for \\$($env:COMPUTERNAME)\${shareName}"
+} catch {
+    Write-Warning "Could not configure Everyone read access: $_"
+}
+
+Write-Host ""
+Write-Host "=========================================="
+Write-Host "Provisioning share ready:"
+Write-Host "  UNC Path: \\$($env:COMPUTERNAME)\${shareName}"
+Write-Host "  Local Path: ${sharePath}"
+Write-Host "  Host folder: ${staging}"
+Write-Host "=========================================="
+Write-Host ""
+Write-Host "Client mount command:"
+Write-Host "  net use Z: \\$($env:COMPUTERNAME)\${shareName} /persistent:yes"
+Write-Host ""
+Write-Host "Client staging path:"
+Write-Host "  Z:\${HostName}\"
+Write-Host "=========================================="

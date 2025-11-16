@@ -25,7 +25,6 @@ catch {
     throw "Failed to import provisioning.psm1: $($_.Exception.Message)"
 }
 
-${log} = Start-ProvisionLog -Component 'provide-nssm'
 try {
     if (-not ${ZipPath}) {
         ${ZipPath} = Join-Path (Join-Path ${AssetsRoot} 'assets') 'nssm-2.24.zip'
@@ -36,7 +35,7 @@ try {
 
     # --- Expand to temporary staging folder ---
     ${stage} = Join-Path ${env:TEMP} ("nssm_stage_{0:yyyyMMdd_HHmmss}" -f (Get-Date))
-    Ensure-Dir ${stage}
+    Confirm-Dir ${stage}
     Expand-AnyArchive -ArchivePath ${ZipPath} -Destination ${stage}
 
     # --- Locate nssm.exe ---
@@ -57,7 +56,7 @@ try {
     }
 
     # --- Install NSSM ---
-    Ensure-Dir ${InstallDir}
+    Confirm-Dir ${InstallDir}
     ${destExe} = Join-Path ${InstallDir} 'nssm.exe'
     Copy-Item -Force ${exe} ${destExe}
 

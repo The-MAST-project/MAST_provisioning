@@ -37,7 +37,7 @@ try {
     Remove-Item ${tokenFile} -Force -ErrorAction SilentlyContinue
 
     # Prepare repo root
-    Ensure-Dir ${CloneRoot}
+    Confirm-Dir ${CloneRoot}
 
     ${repos} = @(
         'github.com/The-MAST-project/MAST_unit.2024-12-12',

@@ -11,7 +11,7 @@ ${logFile} = Join-Path ${logDir} "stage-install.log"
 try {
     Write-Host "Starting Stage installation..."
 
-    ${installerPath} = Join-Path ${AssetsRoot} "assets\stage-installer.exe"
+    ${installerPath} = Join-Path ${AssetsRoot} "stage-installer.exe"
     if (-not (Test-Path ${installerPath})) {
         throw "Stage installer not found at ${installerPath}"
     }

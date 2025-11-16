@@ -16,9 +16,9 @@
 
 .NOTES
   Expects:
-    mongodb\assets\mongosh-2.2.6-win32-x64.zip
-    mongodb\assets\mongodb-database-tools-windows-x86_64-100.9.4.zip
-    mongodb\assets\mongodb-compass-1.43.0-win32-x64.exe (optional)
+    mongosh-2.2.6-win32-x64.zip
+    mongodb-database-tools-windows-x86_64-100.9.4.zip
+    mongodb-compass-1.43.0-win32-x64.exe (optional)
 #>
 
 [CmdletBinding(SupportsShouldProcess = $true)]
@@ -53,7 +53,7 @@ Start-Transcript -Path ${LogFile} -Append | Out-Null
 Write-Verbose "Log: ${LogFile}"
 
 # --- Helpers ---
-function Ensure-Dir([string]${Path}) {
+function Confirm-Dir([string]${Path}) {
   if (-not (Test-Path ${Path})) { New-Item -ItemType Directory -Path ${Path} -Force | Out-Null }
 }
 
@@ -82,17 +82,17 @@ public class NativeMethods {
   }
 }
 
-function Extract-Zip {
+function ConvertFrom-Zip {
   param(
     [Parameter(Mandatory)][string]${ZipPath},
     [Parameter(Mandatory)][string]${Destination}
   )
   Write-Host "Extracting ${ZipPath} -> ${Destination}"
-  Ensure-Dir ${Destination}
+  Confirm-Dir ${Destination}
   Expand-Archive -Path ${ZipPath} -DestinationPath ${Destination} -Force
 }
 
-function Try-Run {
+function Invoke-Command {
   param([string]${FilePath}, [string]${Arguments}, [int[]]${OkCodes} = @(0), [string]${Tag} = "proc")
   Write-Verbose "${Tag}: ${FilePath} ${Arguments}"
   ${p} = Start-Process -FilePath ${FilePath} -ArgumentList ${Arguments} -PassThru -Wait -WindowStyle Hidden
@@ -119,7 +119,7 @@ if (-not ${NoCompass} -and -not (Test-Path ${exeCompass})) {
 
 # --- Install mongosh ---
 ${mongoshRoot} = Join-Path ${InstallRoot} 'mongosh\2.2.6'
-Extract-Zip -ZipPath ${zipMongosh} -Destination ${mongoshRoot}
+ConvertFrom-Zip -ZipPath ${zipMongosh} -Destination ${mongoshRoot}
 
 # Common zip layout: mongosh-2.2.6-win32-x64\bin\mongosh.exe
 ${mongoshBinGuess} = Join-Path ${mongoshRoot} 'mongosh-2.2.6-win32-x64\bin'
@@ -135,7 +135,7 @@ Add-ToSystemPath -Dir ${mongoshBin}
 
 # --- Install Database Tools ---
 ${toolsRoot} = Join-Path ${InstallRoot} 'tools\100.9.4'
-Extract-Zip -ZipPath ${zipTools} -Destination ${toolsRoot}
+ConvertFrom-Zip -ZipPath ${zipTools} -Destination ${toolsRoot}
 # Typical layout: mongodb-database-tools-windows-x86_64-100.9.4\bin\mongoimport.exe etc.
 ${toolsBinGuess} = Join-Path ${toolsRoot} 'mongodb-database-tools-windows-x86_64-100.9.4\bin'
 if (Test-Path ${toolsBinGuess}) {
@@ -160,7 +160,7 @@ if (-not ${NoCompass}) {
   ${ok} = $false
   foreach (${a} in ${argsList}) {
     try {
-      Try-Run -FilePath ${exeCompass} -Arguments ${a} -Tag "compass"
+      Invoke-Command -FilePath ${exeCompass} -Arguments ${a} -Tag "compass"
       ${ok} = $true
       break
     } catch {

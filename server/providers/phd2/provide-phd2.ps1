@@ -11,7 +11,7 @@ ${logFile} = Join-Path ${logDir} "phd2-install.log"
 try {
     Write-Host "Starting PHD2 installation..."
 
-    ${installerPath} = Join-Path ${AssetsRoot} "assets\phd2-installer.exe"
+    ${installerPath} = Join-Path ${AssetsRoot} "phd2-installer.exe"
     if (-not (Test-Path ${installerPath})) {
         throw "PHD2 installer not found at ${installerPath}"
     }

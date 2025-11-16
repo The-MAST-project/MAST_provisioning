@@ -11,7 +11,7 @@ ${logFile} = Join-Path ${logDir} "vscode-install.log"
 try {
     Write-Host "Starting VSCode installation..."
 
-    ${installerPath} = Join-Path ${AssetsRoot} "assets\VSCodeSetup-x64.exe"
+    ${installerPath} = Join-Path ${AssetsRoot} "VSCodeSetup-x64.exe"
     if (-not (Test-Path ${installerPath})) {
         throw "VSCode installer not found at ${installerPath}"
     }

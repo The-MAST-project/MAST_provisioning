@@ -35,7 +35,7 @@ try {
 
     # --- Stage extraction to a temp folder ---
     ${stage} = Join-Path ${env:TEMP} ("cygwin_stage_{0:yyyyMMdd_HHmmss}" -f (Get-Date))
-    Ensure-Dir ${stage}
+    Confirm-Dir ${stage}
 
     Write-Host "Extracting ${archivePath} to staging ${stage} ..."
     # Expand-AnyArchive should handle .zip, .7z, .tar.gz/.tgz per your provisioning.psm1
@@ -53,7 +53,7 @@ try {
 
     # --- Install to target root ---
     Write-Host "Syncing Cygwin files into ${InstallRoot} ..."
-    Ensure-Dir ${InstallRoot}
+    Confirm-Dir ${InstallRoot}
     # Use robocopy for speed and ACLs; mirrors content
     robocopy "${srcRoot}" "${InstallRoot}" /MIR /R:1 /W:2 /NFL /NDL /NJH /NJS /NP | Out-Null
 
@@ -91,7 +91,7 @@ exit 0
     # --- Verification: print versions and a simple command ---
     Write-Host "Verifying Cygwin ..."
     ${verifyLog} = Join-Path ${env:ProgramData} 'MAST\logs\cygwin-verify.log'
-    Ensure-Dir (Split-Path ${verifyLog} -Parent)
+    Confirm-Dir (Split-Path ${verifyLog} -Parent)
 
     # Capture uname, which, and cygcheck versions
     & ${bashExe} -lc 'uname -a'           | Out-File -FilePath ${verifyLog} -Encoding UTF8

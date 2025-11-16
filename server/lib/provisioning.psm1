@@ -56,7 +56,7 @@ public class NativeMethods {
 # ---------------------------
 # Files / Directories / Hash
 # ---------------------------
-function Ensure-Dir { param([Parameter(Mandatory)][string]${Path}) if (-not (Test-Path ${Path})) { New-Item -ItemType Directory -Path ${Path} -Force | Out-Null } }
+function Confirm-Dir { param([Parameter(Mandatory)][string]${Path}) if (-not (Test-Path ${Path})) { New-Item -ItemType Directory -Path ${Path} -Force | Out-Null } }
 
 function Copy-Safe {
   [CmdletBinding()]
@@ -65,7 +65,7 @@ function Copy-Safe {
     [Parameter(Mandatory)][string]${Destination},
     [switch]${Recurse}
   )
-  Ensure-Dir (Split-Path -Parent ${Destination})
+  Confirm-Dir (Split-Path -Parent ${Destination})
   if (Test-Path ${Destination}) { Remove-Item -Force -Recurse ${Destination} -ErrorAction SilentlyContinue }
   if (${Recurse}) {
     robocopy "${Source}" "${Destination}" /E /NFL /NDL /NJH /NJS /NP | Out-Null
@@ -115,7 +115,7 @@ function Expand-AnyArchive {
     [Parameter(Mandatory)][string]${ArchivePath},
     [Parameter(Mandatory)][string]${Destination}
   )
-  Ensure-Dir ${Destination}
+  Confirm-Dir ${Destination}
   ${ext} = [IO.Path]::GetExtension(${ArchivePath}).ToLowerInvariant()
   switch (${ext}) {
     '.zip' { Expand-Archive -Path ${ArchivePath} -DestinationPath ${Destination} -Force; break }
@@ -164,7 +164,7 @@ function Read-SimpleCsv2 {
   }
   # manual
   ${rows} = @()
-  foreach (${line} in (${hasHeader} ? (${content} | Select-Object -Skip 1) : ${content})) {
+  foreach (${line} in $(if (${hasHeader}) { ${content} | Select-Object -Skip 1 } else { ${content} })) {
     if (-not ${line}) { continue }
     ${parts} = ${line}.Split(',',2)
     if (${parts}.Count -ge 2) { ${rows} += [PSCustomObject]@{ column1 = ${parts}[0].Trim(); column2 = ${parts}[1].Trim() } }

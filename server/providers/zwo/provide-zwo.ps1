@@ -11,7 +11,7 @@ try {
     Write-Host "Starting ZWO camera driver installation..."
 
     # Install ZWO ASI Camera Drivers
-    ${asiDriverPath} = Join-Path ${AssetsRoot} "assets\ZWO_ASI_Cameras_driver_Setup_V3.25.exe"
+    ${asiDriverPath} = Join-Path ${AssetsRoot} "ZWO_ASI_Cameras_driver_Setup_V3.25.exe"
     if (-not (Test-Path ${asiDriverPath})) {
         throw "ZWO ASI camera driver not found at ${asiDriverPath}"
     }
@@ -24,7 +24,7 @@ try {
     }
 
     # Install ZWO ASCOM Drivers
-    ${ascomPath} = Join-Path ${AssetsRoot} "assets\ZWO_ASCOM_Setup_V6.5.32.exe"
+    ${ascomPath} = Join-Path ${AssetsRoot} "ZWO_ASCOM_Setup_V6.5.32.exe"
     if (-not (Test-Path ${ascomPath})) {
         throw "ZWO ASCOM driver not found at ${ascomPath}"
     }
@@ -37,7 +37,7 @@ try {
     }
 
     # Install ASI Studio
-    ${asiStudioPath} = Join-Path ${AssetsRoot} "assets\ASIStudio_V1.16.2_x64_Setup.exe"
+    ${asiStudioPath} = Join-Path ${AssetsRoot} "ASIStudio_V1.16.2_x64_Setup.exe"
     if (-not (Test-Path ${asiStudioPath})) {
         throw "ASI Studio installer not found at ${asiStudioPath}"
     }

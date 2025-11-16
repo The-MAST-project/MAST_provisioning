@@ -11,7 +11,7 @@ ${logFile} = Join-Path ${logDir} "wireshark-install.log"
 try {
     Write-Host "Starting Wireshark installation..."
 
-    ${installerPath} = Join-Path ${AssetsRoot} "assets\Wireshark-4.6.0-x64.exe"
+    ${installerPath} = Join-Path ${AssetsRoot} "Wireshark-4.6.0-x64.exe"
     if (-not (Test-Path ${installerPath})) {
         throw "Wireshark installer not found at ${installerPath}"
     }
