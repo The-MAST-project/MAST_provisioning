@@ -12,10 +12,10 @@ try {
     ${provLocal}  = Join-Path ${PSScriptRoot} 'provisioning.psm1'
     ${provGlobal} = 'C:\ProgramData\MAST\provisioning.psm1'
     if (Test-Path ${provLocal}) {
-        Import-Module ${provLocal} -Force -ErrorAction Stop
+        Import-Module ${provLocal} -Force -ErrorAction Stop -DisableNameChecking
     }
     elseif (Test-Path ${provGlobal}) {
-        Import-Module ${provGlobal} -Force -ErrorAction Stop
+        Import-Module ${provGlobal} -Force -ErrorAction Stop -DisableNameChecking
     }
     else {
         throw "provisioning.psm1 not found next to script or in ${provGlobal}"
@@ -28,7 +28,7 @@ catch {
 ${log} = Start-ProvisionLog -Component 'provide-cygwin'
 try {
     # --- Locate archive ---
-    ${archivePath} = Join-Path (Join-Path ${AssetsRoot} 'assets') ${ArchiveName}
+    ${archivePath} = Join-Path ${AssetsRoot} ${ArchiveName}
     if (-not (Test-Path ${archivePath})) {
         throw "Cygwin archive not found: ${archivePath}"
     }
@@ -79,8 +79,6 @@ done
 exit 0
 '@
 
-    # TODO: extract astrometry.tgz
-
     # Run inside Cygwin
     ${tmpScript} = Join-Path ${env:TEMP} "cygwin_postinstall_$(Get-Random).sh"
     Set-Content -Path ${tmpScript} -Value ${postInstallCmd} -Encoding ASCII
@@ -102,6 +100,10 @@ exit 0
     Set-Content -Path (Join-Path ${env:ProgramData} 'MAST\logs\cygwin-smoke.txt') -Value 'cygwin_ok' -Encoding ASCII
 
     Write-Host "Cygwin installed to ${InstallRoot}. PATH updated. Verification log at ${verifyLog}."
+
+    Write-Host "Expanding Astrometry.net ..."
+    Expand-AnyArchive -ArchivePath ${astrometryArchivePath} -Destination "C:\cygwin64\usr\local\astrometry"
+    Write-Host "Astrometry.net expanded."
 }
 finally {
     Stop-ProvisionLog

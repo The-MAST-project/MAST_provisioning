@@ -36,7 +36,7 @@ param(
 try {
   ${provLocal} = Join-Path ${PSScriptRoot} 'provisioning.psm1'
   ${provGlobal} = 'C:\ProgramData\MAST\provisioning.psm1'
-  Import-Module (Test-Path ${provLocal} ? ${provLocal} : ${provGlobal}) -Force
+  Import-Module (Test-Path ${provLocal} ? ${provLocal} : ${provGlobal}) -Force -DisableNameChecking
 } catch { Write-Warning "provisioning.psm1 import failed: $($_.Exception.Message)" }
 
 function Show-Help {
@@ -46,7 +46,7 @@ provide-nomachine.ps1
 USAGE:
   .\provide-nomachine.ps1 [-AssetsRoot <path>] [-InstallDir <dir>] [-Verbose] [-Help]
 
-FILES (under ${AssetsRoot}\nomachine\assets):
+FILES (under ${AssetsRoot}):
   nomachine-enterprise-client_9.0.188_11_x64.exe
   nomachine-enterprise-desktop_9.0.188_11_x64.exe
   nomachine.lic
@@ -62,7 +62,7 @@ Start-Transcript -Path ${LogFile} -Append | Out-Null
 Write-Verbose "Log: ${LogFile}"
 
 # --- Paths & Inputs ---
-${assets}     = Join-Path ${AssetsRoot} 'nomachine\assets'
+${assets}     = ${AssetsRoot}
 ${clientExe}  = Join-Path ${assets} 'nomachine-enterprise-client_9.0.188_11_x64.exe'
 ${serverExe}  = Join-Path ${assets} 'nomachine-enterprise-desktop_9.0.188_11_x64.exe'
 ${licFile} = Join-Path ${PSScriptRoot} "nomachine.lic"
@@ -75,7 +75,7 @@ if (-not (Test-Path ${serverExe})) { Stop-Transcript | Out-Null; throw "Missing 
 function Try-InstallExe {
   param(
     [Parameter(Mandatory)][string]${FilePath},
-    [string[]]${ArgsList} = @('/S','/silent','/verysilent /norestart','/quiet /norestart'),
+    [string[]]${ArgsList} = @('/verysilent'),
     [string]${Tag} = 'install'
   )
   foreach (${a} in ${ArgsList}) {
@@ -91,38 +91,10 @@ function Try-InstallExe {
   return $false
 }
 
-function Detect-LicenseTargetDir {
-  # Try common locations and discovery
-  ${candidates} = @(
-    Join-Path ${env:ProgramData} 'NoMachine\licenses',
-    Join-Path ${env:ProgramData} 'NoMachine\var\licenses',
-    Join-Path ${InstallDir} 'licenses',
-    Join-Path ${InstallDir} 'etc'
-  ) + (Get-ChildItem -Path 'C:\Program Files*' -Directory -Filter 'NoMachine' -ErrorAction SilentlyContinue |
-        ForEach-Object {
-          @(
-            Join-Path $_.FullName 'licenses',
-            Join-Path $_.FullName 'etc'
-          )
-        })
-
-  foreach (${d} in ${candidates} | Get-Unique) {
-    if (Test-Path ${d}) {
-      # If it already contains any *.lic, prefer it
-      ${hasLic} = @(Get-ChildItem -Path ${d} -Filter '*.lic' -ErrorAction SilentlyContinue).Count -gt 0
-      if (${hasLic}) { return ${d} }
-    }
-  }
-  # Default to ProgramData path
-  ${fallback} = Join-Path ${env:ProgramData} 'NoMachine\licenses'
-  if (-not (Test-Path ${fallback})) { New-Item -ItemType Directory -Path ${fallback} -Force | Out-Null }
-  return ${fallback}
-}
-
 function Install-License {
   param([Parameter(Mandatory)][string]${SourceLicPath})
-  ${targetDir} = Detect-LicenseTargetDir
-  ${targetPath} = Join-Path ${targetDir} (Split-Path -Leaf ${SourceLicPath})
+  ${targetDir} = Join-Path ${InstallDir} 'etc'
+  ${targetPath} = Join-Path ${targetDir} "server.lic"
   Copy-Item -Path ${licFile} -Destination ${targetPath} -Force
   Write-Host "License installed to ${targetPath}"
   # Try to restart a NoMachine service if present so new license is read
@@ -146,6 +118,7 @@ if (-not (Try-InstallExe -FilePath ${clientExe} -Tag 'NoMachine Client')) {
 if (-not (Try-InstallExe -FilePath ${serverExe} -Tag 'NoMachine Enterprise Desktop')) {
   Write-Warning "NoMachine Enterprise Desktop (server) install may have failed. Check logs."
 }
+Install-License -SourceLicPath ${licFile}
 
 # --- Quick verification ---
 try {

@@ -14,6 +14,7 @@ param(
   [string]${HostName},
   [string[]]${Modules} = @(
     'ascom',
+    'chrome',
     'cygwin',
     'mast',
     'mongodb',
@@ -56,6 +57,7 @@ if (-not (Test-Path -Path $Top -PathType Container)) {
 }
 
 ${serverRoot} = Join-Path ${Top} 'server'
+${clientRoot} = Join-Path ${Top} 'client'
 ${vault} = Join-Path ${Top} 'vault'
 ${serverLib}   = Join-Path ${serverRoot} 'lib\provisioning.psm1'
 ${providersRoot} = Join-Path ${serverRoot} 'providers'
@@ -221,7 +223,7 @@ ${allocRows} = Load-AllocCsv ${allocCsv}
 ${allLicFiles} = Get-ChildItem -Path ${licensesVault} -Filter '*.lic' -File -ErrorAction SilentlyContinue | Sort-Object Name
 
 # Build commands list once (same for all), then tweak per host only if we add a SingleLicensePath
-function Compose-Commands([string[]]${Mods}) {
+function Generate-Commands([string[]]${Mods}) {
   ${cmds}=@()
   foreach (${m} in ${Mods}) {
     ${mf}=Read-ModuleManifest -ModuleName ${m}
@@ -229,7 +231,7 @@ function Compose-Commands([string[]]${Mods}) {
     # base command from manifest
     ${cmd} = [string]${mf}.command
 
-    ${cmds} += [pscustomobject]@{ order = [int]${mf}.order; desc = [string]${mf}.description; cmd = ${cmd}; module=${m} }
+    ${cmds} += [pscustomobject]@{ order = [int]${mf}.order; desc = [string]${mf}.description; cmd = ${cmd}; module = ${m} }
 
     if (${mf}.verify) {
       ${cmds} += [pscustomobject]@{ order = [int](${mf}.order + 1); desc = "[verify] " + [string]${mf}.name; cmd = [string]${mf}.verify; module="${m}-verify" }
@@ -238,21 +240,33 @@ function Compose-Commands([string[]]${Mods}) {
   return (${cmds} | Sort-Object order, desc)
 }
 
-${baseCmds} = Compose-Commands -Mods ${Modules}
+${baseCmds} = Generate-Commands -Mods ${Modules}
 
-${staging} = Join-Path ${OutRoot} ${HostName}
+${stagingTop} = Join-Path ${OutRoot} ${HostName}
 if (Test-Path ${staging}) { Remove-Item -Recurse -Force ${staging} }
 New-Item -ItemType Directory -Force -Path ${staging} | Out-Null
+
+${clientRoot} = Join-Path ${Top} 'client'
+# Preparations
+${staging} = Join-Path ${stagingTop} "00-preparation"
+New-Item -ItemType Directory -Force -Path ${staging} | Out-Null
+Copy-Item -Force (Join-Path ${clientRoot} 'prepare-mast-client.ps1') (Join-Path ${staging} 'prepare-mast-client.ps1')
+Write-Host "Populating preparation stage ${staging} ..."
+Write-Host " Staged prepare-mast-client.ps1"
+
+# Actual provisioning
+${staging} = Join-Path ${stagingTop} "01-provisioning"
+New-Item -ItemType Directory -Force -Path ${staging} | Out-Null
+Write-Host "Populating provisioning stage ${staging} ..."
 
 # Always place provisioning.psm1 into staging
 Copy-Item -Force ${serverLib} (Join-Path ${staging} 'provisioning.psm1')
 
 # Copy client execution script into staging
-${clientRoot} = Join-Path ${Top} 'client'
 ${executeScript} = Join-Path ${clientRoot} 'execute-mast-provisioning.ps1'
 if (Test-Path ${executeScript}) {
     Copy-Item -Force ${executeScript} (Join-Path ${staging} 'execute-mast-provisioning.ps1')
-    Write-Host "Staged execute-mast-provisioning.ps1"
+    Write-Host " Staged execute-mast-provisioning.ps1"
 } else {
     Write-Warning "execute-mast-provisioning.ps1 not found at ${executeScript}"
 }
@@ -314,7 +328,7 @@ if (${existing}) {
 Copy-Item -Path (Join-Path ${vault} 'tokens\mast_github.txt') (Join-Path ${staging} 'mast_github.txt')
 
 # emit commands.json
-(${cmds} | Select-Object order,desc,cmd | ConvertTo-Json -Depth 6) | Out-File -FilePath (Join-Path ${staging} 'commands.json') -Encoding UTF8
+(${cmds} | Select-Object order,desc,cmd,module | ConvertTo-Json -Depth 6) | Out-File -FilePath (Join-Path ${staging} 'commands.json') -Encoding UTF8
 
 Write-Host "Staged ${HostName} at ${staging}"
 
