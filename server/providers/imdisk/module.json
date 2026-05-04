@@ -1,0 +1,11 @@
+{
+  "name": "imdisk",
+  "description": "Install ImDisk virtual disk driver and create a 10GB ramdisk at D: with boot-time activation.",
+  "order": 170,
+  "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -Command \"${wd} = Split-Path -Parent ${PSCommandPath}; & powershell.exe -ExecutionPolicy Bypass -NoProfile -File (Join-Path ${wd} 'provide-imdisk.ps1') -AssetsRoot ${wd}\"",
+  "commandfiles": [
+    "provide-imdisk.ps1",
+    "assets/ImDiskTk-x64.zip"
+  ],
+  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -Command \"${log} = Join-Path ${env:ProgramData} 'MAST\\logs\\imdisk-verify.log'; if (Test-Path 'C:\\Windows\\System32\\imdisk.exe') { 'ImDisk installed successfully' | Out-File -FilePath ${log}; Set-Content -Path (Join-Path ${env:ProgramData} 'MAST\\logs\\imdisk-smoke.txt') -Value 'imdisk_ok' } else { 'ImDisk executable not found' | Out-File -FilePath ${log} -Encoding UTF8 }\""
+}
