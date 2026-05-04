@@ -57,6 +57,7 @@ try {
 
     ${taskName} = "MAST-ImDisk-Ramdisk"
     ${taskDescription} = "Create ImDisk 10GB ramdisk at D: on system startup"
+    # TBD: give imdisk.exe parameter with the pre-populated image file
     ${taskAction} = New-ScheduledTaskAction -Execute ${imdiskExe} -Argument "-a -t vm -s 10G -m D: -p `"/fs:ntfs /q /y`""
     ${taskTrigger} = New-ScheduledTaskTrigger -AtStartup
     ${taskPrincipal} = New-ScheduledTaskPrincipal -UserID "NT AUTHORITY\SYSTEM" -LogonType ServiceAccount -RunLevel Highest
