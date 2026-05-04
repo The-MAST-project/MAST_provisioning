@@ -5,8 +5,7 @@
   "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -Command \"$wd = Split-Path -Parent $PSCommandPath; & powershell.exe -ExecutionPolicy Bypass -NoProfile -File (Join-Path $wd 'provide-ascom.ps1') -AssetsRoot $wd\"",
   "commandfiles": [
     "provide-ascom.ps1",
-    "assets/ASCOMPlatform710.4707.exe",
-    "assets/AscomDeveloper662.4294.NewCertificate.exe"
+    "assets/ASCOMPlatform710.4707.exe"
   ],
   "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -Command \"$log = Join-Path $env:ProgramData 'MAST\\logs\\ascom-verify.log'; if (Test-Path 'HKLM:\\SOFTWARE\\ASCOM') { Get-Item 'HKLM:\\SOFTWARE\\ASCOM' | Format-List * | Out-File -FilePath $log } else { 'ASCOM registry key not found' | Out-File -FilePath $log }; Set-Content -Path (Join-Path $env:ProgramData 'MAST\\logs\\ascom-smoke.txt') -Value 'ascom_ok'\""
 }
