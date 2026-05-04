@@ -2,7 +2,7 @@
 [CmdletBinding()]
 param(
     [string]${AssetsRoot} = ${PSScriptRoot},
-    [string]${CloneRoot}  = 'C:Users\mast\source\repos'
+    [string]${CloneRoot}  = 'C:\Users\mast\source\repos'
 )
 
 # Import shared helpers
@@ -10,15 +10,31 @@ try {
     ${provLocal}  = Join-Path ${PSScriptRoot} 'provisioning.psm1'
     ${provGlobal} = 'C:\ProgramData\MAST\provisioning.psm1'
     if (Test-Path ${provLocal}) {
-        Import-Module ${provLocal} -Force
+        Import-Module ${provLocal} -Force -DisableNameChecking
     } elseif (Test-Path ${provGlobal}) {
-        Import-Module ${provGlobal} -Force
+        Import-Module ${provGlobal} -Force -DisableNameChecking
     } else {
         throw "provisioning.psm1 not found."
     }
 }
 catch {
     throw "Failed to import provisioning.psm1: $($_.Exception.Message)"
+}
+
+# Ensure Git is installed
+${InstallRoot} = "C:\Program Files\Git\bin"
+# Verify git installation
+${gitExe} = Join-Path ${InstallRoot} "git.exe"
+if (-not (Test-Path ${gitExe})) {
+    ${installerPath} = Join-Path ${AssetsRoot} "Git-2.52.0-64-bit.exe"
+    if (-not (Test-Path ${installerPath})) {
+        throw "Git installer not found at ${installerPath}"
+    }
+    & ${installerPath} /VERYSILENT
+
+    if (-not (Test-Path ${gitExe})) {
+        throw "Git installation failed; git.exe not found at ${gitExe}"
+    }
 }
 
 ${log} = Start-ProvisionLog -Component 'provide-github'
@@ -34,7 +50,7 @@ try {
     }
 
     # Optionally delete immediately after reading
-    Remove-Item ${tokenFile} -Force -ErrorAction SilentlyContinue
+    # Remove-Item ${tokenFile} -Force -ErrorAction SilentlyContinue
 
     # Prepare repo root
     Confirm-Dir ${CloneRoot}
@@ -44,6 +60,7 @@ try {
         'github.com/The-MAST-project/MAST_common'
     )
 
+    ${PythonExe} = "C:\Python312\python.exe"
     foreach (${repo} in ${repos}) {
         ${repoName} = Split-Path ${repo} -Leaf
         ${targetDir} = Join-Path ${CloneRoot} ${repoName}
@@ -52,9 +69,11 @@ try {
             continue
         }
 
-        ${url} = "https://${token}:x-oauth-basic@${repo}"
+        ${url} = "https://${repo}.git"
         Write-Host "Cloning ${repoName} ..."
-        Invoke-Exe -FilePath "git.exe" -Arguments "clone ${url} `"$targetDir`"" -Tag "git-clone"
+        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue ${targetDir}
+        # Write-Host === Invoke-Exe -FilePath git.exe -Arguments "clone ${url} ${targetDir}" ===
+        Invoke-Exe -FilePath git.exe -Arguments "clone ${url} ${targetDir}" -Tag "git-clone"
 
         # --- Create a per-repo virtualenv at <repo>\.venv ---
         ${venvPath}    = Join-Path ${targetDir} '.venv'
@@ -66,7 +85,7 @@ try {
             # Prefer virtualenv (installed by your Python provider); fallback to venv if needed
             if (Test-Path ${PythonExe}) {
                 # Try: python -m virtualenv .venv
-                Invoke-Exe -FilePath ${PythonExe} -Arguments "-m virtualenv `"$venvPath`"" -Tag "venv-create" -IgnoreExitCode:$false
+                Invoke-Exe -FilePath ${PythonExe} -Arguments "-m virtualenv `"$venvPath`"" -Tag "venv-create"
             }
             # Fallback to stdlib venv if virtualenv module isn’t present
             if (-not (Test-Path ${venvPython})) {
