@@ -12,10 +12,10 @@ try {
     ${provGlobal} = 'C:\ProgramData\MAST\provisioning.psm1'
 
     if (Test-Path ${provLocal}) {
-        Import-Module ${provLocal} -Force -ErrorAction Stop
+        Import-Module ${provLocal} -Force -ErrorAction Stop -DisableNameChecking
     }
     elseif (Test-Path ${provGlobal}) {
-        Import-Module ${provGlobal} -Force -ErrorAction Stop
+        Import-Module ${provGlobal} -Force -ErrorAction Stop -DisableNameChecking
     }
     else {
         throw "provisioning.psm1 not found next to script or in ${provGlobal}"
@@ -27,7 +27,7 @@ catch {
 
 try {
     if (-not ${ZipPath}) {
-        ${ZipPath} = Join-Path (Join-Path ${AssetsRoot} 'assets') 'nssm-2.24.zip'
+        ${ZipPath} = ${AssetsRoot}
     }
     if (-not (Test-Path ${ZipPath})) {
         throw "NSSM archive not found: ${ZipPath}"

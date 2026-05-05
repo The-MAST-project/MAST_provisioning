@@ -42,7 +42,7 @@ param(
 try {
   ${provLocal} = Join-Path ${PSScriptRoot} 'provisioning.psm1'
   ${provGlobal} = 'C:\ProgramData\MAST\provisioning.psm1'
-  Import-Module (Test-Path ${provLocal} ? ${provLocal} : ${provGlobal}) -Force
+  Import-Module (Test-Path ${provLocal} ? ${provLocal} : ${provGlobal}) -Force  -DisableNameChecking
 } catch { Write-Warning "provisioning.psm1 import failed: $($_.Exception.Message)" }
 
 function Show-Help {
@@ -190,10 +190,7 @@ function Install-Silent {
     # EXE silent — try common flags used by Inno/NSIS/MSI-bootstrappers
     # Prefer very silent & no reboot; suppress msg boxes; log if supported.
     $exeArgsTry = @(
-      "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /LOG=`"$pkgLog`"",
-      "/SILENT /SUPPRESSMSGBOXES /NORESTART /SP-",
-      "/quiet /norestart /log `"$pkgLog`"",
-      "/qn /norestart" # some exe wrappers pass through to MSI
+      "/s"
     )
     $lastErr = $null
     foreach ($a in $exeArgsTry) {
@@ -210,7 +207,7 @@ function Install-Silent {
 }
 
 # --- Resolve assets folder ---
-$assets = Join-Path $AssetsRoot "ascom\assets"
+$assets = $AssetsRoot
 if (-not (Test-Path $assets)) {
   Stop-Transcript | Out-Null
   throw "Assets folder not found: $assets"
@@ -226,19 +223,13 @@ if (-not $NoNet) {
 
 # --- Locate installers ---
 $ascomPlatform = Get-InstallerPath -AssetsFolder $assets -BaseName "ASCOMPlatform710.4707"
-$ascomDev      = Get-InstallerPath -AssetsFolder $assets -BaseName "AscomDeveloper662.4294.NewCertificate"
 
 if (-not $ascomPlatform) {
   Stop-Transcript | Out-Null
   throw "ASCOM Platform installer not found (expected 'ASCOMPlatform710.4707.*' under $assets)."
 }
-if (-not $ascomDev) {
-  Stop-Transcript | Out-Null
-  throw "ASCOM Developer installer not found (expected 'AscomDeveloper662.4294.NewCertificate*' under $assets)."
-}
 
 Write-Host "Found ASCOM Platform: $ascomPlatform"
-Write-Host "Found ASCOM Developer: $ascomDev"
 
 # --- Installers (order: Platform -> Developer) ---
 try {
@@ -248,15 +239,6 @@ try {
   Write-Warning "ASCOM Platform install failed: $($_.Exception.Message)"
   Stop-Transcript | Out-Null
   exit 1
-}
-
-try {
-  Install-Silent -InstallerPath $ascomDev -DisplayName "ASCOM Developer 6.6.2"
-  Write-Host "ASCOM Developer installed."
-} catch {
-  Write-Warning "ASCOM Developer install failed: $($_.Exception.Message)"
-  Stop-Transcript | Out-Null
-  exit 2
 }
 
 Write-Host "Provisioning completed. Review log: $LogFile"

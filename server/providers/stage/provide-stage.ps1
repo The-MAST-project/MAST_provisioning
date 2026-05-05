@@ -11,7 +11,7 @@ ${logFile} = Join-Path ${logDir} "stage-install.log"
 try {
     Write-Host "Starting Stage installation..."
 
-    ${installerPath} = Join-Path ${AssetsRoot} "stage-installer.exe"
+    ${installerPath} = Join-Path ${AssetsRoot} "xilab-1.20.19-win32_win64.exe"
     if (-not (Test-Path ${installerPath})) {
         throw "Stage installer not found at ${installerPath}"
     }
@@ -24,7 +24,7 @@ try {
     }
 
     # Verify installation
-    ${stageExe} = Join-Path ${InstallRoot} "stage.exe"
+    ${stageExe} = Join-Path ${InstallRoot} "xilab.exe"
     if (-not (Test-Path ${stageExe})) {
         throw "Stage executable not found after installation at ${stageExe}"
     }

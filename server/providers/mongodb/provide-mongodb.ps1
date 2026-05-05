@@ -32,7 +32,7 @@ param(
 try {
   ${provLocal} = Join-Path ${PSScriptRoot} 'provisioning.psm1'
   ${provGlobal} = 'C:\ProgramData\MAST\provisioning.psm1'
-  Import-Module (Test-Path ${provLocal} ? ${provLocal} : ${provGlobal}) -Force
+  Import-Module (Test-Path ${provLocal} ? ${provLocal} : ${provGlobal}) -Force -DisableNameChecking
 } catch { Write-Warning "provisioning.psm1 import failed: $($_.Exception.Message)" }
 
 function Show-Help {
@@ -100,7 +100,7 @@ function Invoke-Command {
 }
 
 # --- Locate assets ---
-${assets} = Join-Path ${AssetsRoot} 'mongodb\assets'
+${assets} = ${AssetsRoot}
 if (-not (Test-Path ${assets})) {
   Stop-Transcript | Out-Null
   throw "Assets folder not found: ${assets}"

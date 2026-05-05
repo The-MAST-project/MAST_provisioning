@@ -11,10 +11,10 @@ try {
     ${provLocal}  = Join-Path ${PSScriptRoot} 'provisioning.psm1'
     ${provGlobal} = 'C:\ProgramData\MAST\provisioning.psm1'
     if (Test-Path ${provLocal}) {
-        Import-Module ${provLocal} -Force -ErrorAction Stop
+        Import-Module ${provLocal} -Force -ErrorAction Stop -DisableNameChecking
     }
     elseif (Test-Path ${provGlobal}) {
-        Import-Module ${provGlobal} -Force -ErrorAction Stop
+        Import-Module ${provGlobal} -Force -ErrorAction Stop -DisableNameChecking
     }
     else {
         throw "provisioning.psm1 not found next to script or in ${provGlobal}"
@@ -24,10 +24,10 @@ catch {
     throw "Failed to import provisioning.psm1: $($_.Exception.Message)"
 }
 
-${log} = Start-ProvisionLog -Component 'provide-python'
+${log} = Start-ProvisionLog -Component 'provide-python'Test-NetConnection -ComputerName 192.168.10.1 -Port 445
 try {
     # --- Locate installer ---
-    ${exePath} = Join-Path (Join-Path ${AssetsRoot} 'assets') ${Installer}
+    ${exePath} = Join-Path ${AssetsRoot} ${Installer}
     if (-not (Test-Path ${exePath})) {
         throw "Python installer not found: ${exePath}"
     }

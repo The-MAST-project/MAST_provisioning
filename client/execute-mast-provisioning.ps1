@@ -31,7 +31,7 @@ try {
     if (-not (Test-Path ${provModulePath})) {
         Write-Log "WARNING: provisioning.psm1 not found at ${provModulePath}"
     } else {
-        Import-Module ${provModulePath} -Force
+        Import-Module ${provModulePath} -Force -DisableNameChecking
         Write-Log "Imported provisioning module"
     }
 

@@ -1,6 +1,6 @@
 param(
     [string]${AssetsRoot} = ".",
-    [string]${InstallRoot} = "C:\Program Files\PHD2"
+    [string]${InstallRoot} = "C:\Program Files (x86)\PHDGuiding2"
 )
 
 ${ErrorActionPreference} = "Stop"
@@ -10,14 +10,13 @@ ${logFile} = Join-Path ${logDir} "phd2-install.log"
 
 try {
     Write-Host "Starting PHD2 installation..."
-
-    ${installerPath} = Join-Path ${AssetsRoot} "phd2-installer.exe"
+    ${installerPath} = Join-Path ${AssetsRoot} "phd2-x64-2.6.13dev7mast04-installer.exe"
     if (-not (Test-Path ${installerPath})) {
         throw "PHD2 installer not found at ${installerPath}"
     }
 
     Write-Host "Running PHD2 installer: ${installerPath}"
-    & ${installerPath} /S /D=${InstallRoot} 2>&1 | Tee-Object -FilePath ${logFile}
+    & ${installerPath} /VERYSILENT 2>&1 | Tee-Object -FilePath ${logFile}
 
     if (${LASTEXITCODE} -ne 0) {
         throw "PHD2 installer exited with code ${LASTEXITCODE}"
