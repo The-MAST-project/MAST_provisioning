@@ -4,3 +4,5 @@ vault/
 
 # Huge (30GB) file
 server/providers/cygwin/assets/astrometry.tgz
+.venv/
+venv/
