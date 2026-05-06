@@ -127,11 +127,13 @@ function New-LinkOrCopy {
         return
     } catch {}
 
-    # Fallback: copy
+    # Fallback: copy (may fail for large files on VirtFS - non-fatal, orchestrator sources directly)
     if ($isDir) {
         robocopy "$Target" "$LinkPath" /E /NFL /NDL /NJH /NJS /NP | Out-Null
     } else {
-        Copy-Item -Force $Target $LinkPath
+        try { Copy-Item -Force $Target $LinkPath } catch {
+            Write-Warning "Skipping large-file copy for $(Split-Path $Target -Leaf): VirtFS size limit"
+        }
     }
 }
 
@@ -243,16 +245,21 @@ function Generate-Commands([string[]]${Mods}) {
 ${baseCmds} = Generate-Commands -Mods ${Modules}
 
 ${stagingTop} = Join-Path ${OutRoot} ${HostName}
-if (Test-Path ${staging}) { Remove-Item -Recurse -Force ${staging} }
-New-Item -ItemType Directory -Force -Path ${staging} | Out-Null
+if (Test-Path ${stagingTop}) { Remove-Item -Recurse -Force ${stagingTop} }
+New-Item -ItemType Directory -Force -Path ${stagingTop} | Out-Null
 
 ${clientRoot} = Join-Path ${Top} 'client'
 # Preparations
 ${staging} = Join-Path ${stagingTop} "00-preparation"
 New-Item -ItemType Directory -Force -Path ${staging} | Out-Null
-Copy-Item -Force (Join-Path ${clientRoot} 'prepare-mast-client.ps1') (Join-Path ${staging} 'prepare-mast-client.ps1')
+${prepScript} = Join-Path ${clientRoot} 'prepare-mast-client.ps1'
+if (Test-Path ${prepScript}) {
+    Copy-Item -Force ${prepScript} (Join-Path ${staging} 'prepare-mast-client.ps1')
+    Write-Host " Staged prepare-mast-client.ps1"
+} else {
+    Write-Warning " prepare-mast-client.ps1 not found - skipping"
+}
 Write-Host "Populating preparation stage ${staging} ..."
-Write-Host " Staged prepare-mast-client.ps1"
 
 # Actual provisioning
 ${staging} = Join-Path ${stagingTop} "01-provisioning"
@@ -296,11 +303,7 @@ foreach (${m} in ${Modules}) {
     New-Item -ItemType Directory -Force -Path ${dstDir} | Out-Null
     Write-Host " Staging " ${cmdfile} " ..."
 
-    if (${m}.Equals("cygwin")) {
-      Copy-Item -Force -Recurse ${src} ${dst}
-    } else {
-      New-LinkOrCopy -Target ${src} -LinkPath ${dst}
-    }
+    New-LinkOrCopy -Target ${src} -LinkPath ${dst}
   }
 }
 
@@ -364,8 +367,7 @@ try {
         -ErrorAction Stop | Out-Null
     Write-Host "Created SMB share: \\$($env:COMPUTERNAME)\${shareName}"
 } catch {
-    Write-Error "Failed to create SMB share: $_"
-    exit 1
+    Write-Warning "Failed to create SMB share (non-fatal, staging was written): $_"
 }
 
 # Configure share permissions (allow Everyone read access for provisioning clients)

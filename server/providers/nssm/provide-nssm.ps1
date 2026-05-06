@@ -27,7 +27,11 @@ catch {
 
 try {
     if (-not ${ZipPath}) {
-        ${ZipPath} = ${AssetsRoot}
+        ${ZipPath} = Get-ChildItem -Path ${AssetsRoot} -Filter 'nssm-*.zip' |
+            Select-Object -First 1 -ExpandProperty FullName
+        if (-not ${ZipPath}) {
+            throw "No nssm-*.zip found in ${AssetsRoot}"
+        }
     }
     if (-not (Test-Path ${ZipPath})) {
         throw "NSSM archive not found: ${ZipPath}"

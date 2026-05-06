@@ -75,7 +75,7 @@ if (-not (Test-Path ${serverExe})) { Stop-Transcript | Out-Null; throw "Missing 
 function Try-InstallExe {
   param(
     [Parameter(Mandatory)][string]${FilePath},
-    [string[]]${ArgsList} = @('/verysilent'),
+    [string[]]${ArgsList} = @('/verysilent /usbinstall="0" /printerinstall="0"'),
     [string]${Tag} = 'install'
   )
   foreach (${a} in ${ArgsList}) {

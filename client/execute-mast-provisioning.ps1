@@ -62,8 +62,10 @@ try {
 
             Write-Log "Executing: $($cmd.cmd)"
 
-            # Execute command and capture output
-            ${output} = Invoke-Expression ${cmd}.cmd 2>&1
+            # Execute command and capture output.
+            # Use cmd /c to avoid PowerShell expanding $variables in the command
+            # string before passing it to the child powershell.exe -Command "...".
+            ${output} = cmd /c $cmd.cmd 2>&1
             ${exitCode} = ${LASTEXITCODE}
 
             # Log output

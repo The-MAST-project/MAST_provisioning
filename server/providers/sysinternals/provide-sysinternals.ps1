@@ -11,7 +11,7 @@ ${logFile} = Join-Path ${logDir} "sysinternals-install.log"
 try {
     Write-Host "Starting Sysinternals installation..."
 
-    ${zipPath} = Join-Path ${AssetsRoot} "sysinternals-suite.zip"
+    ${zipPath} = Join-Path ${AssetsRoot} "SysinternalsSuite.zip"
     if (-not (Test-Path ${zipPath})) {
         throw "Sysinternals archive not found at ${zipPath}"
     }

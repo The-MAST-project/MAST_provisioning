@@ -11,17 +11,23 @@ try {
     Write-Host "Starting PlaneWave installation..."
 
     # Install PWI4
-    ${pwi4InstallerPath} = Join-Path ${AssetsRoot} "PWI4_Setup.exe"
+    ${pwi4InstallerPath} = Join-Path ${AssetsRoot} "Setup_PWI_4.1.8_Final.exe"
     if (-not (Test-Path ${pwi4InstallerPath})) {
         throw "PWI4 installer not found at ${pwi4InstallerPath}"
     }
 
     Write-Host "Installing PWI4 telescope control software..." | Tee-Object -FilePath ${logFile}
     & ${pwi4InstallerPath} /S 2>&1 | Tee-Object -FilePath ${logFile} -Append
+    Start-Sleep -Seconds 5
 
-    if (${LASTEXITCODE} -ne 0) {
-        throw "PWI4 installer exited with code ${LASTEXITCODE}"
+    # Locate pwi4.exe — NSIS installs to its own default path; search rather than hardcode.
+    ${pwi4ExePath} = Get-ChildItem -Path 'C:\Program Files', 'C:\Program Files (x86)' `
+        -Recurse -Filter 'pwi4.exe' -ErrorAction SilentlyContinue |
+        Select-Object -First 1 -ExpandProperty FullName
+    if (-not ${pwi4ExePath}) {
+        throw "pwi4.exe not found after installation"
     }
+    Write-Host "Found pwi4.exe at: ${pwi4ExePath}"
 
     # Extract PS3 CLI tools
     ${ps3cliZipPath} = Join-Path ${AssetsRoot} "ps3cli.zip"
@@ -34,12 +40,6 @@ try {
 
     Write-Host "Extracting PS3 CLI tools to ${ps3cliDestPath}" | Tee-Object -FilePath ${logFile} -Append
     Expand-Archive -Path ${ps3cliZipPath} -DestinationPath ${ps3cliDestPath} -Force 2>&1 | Tee-Object -FilePath ${logFile} -Append
-
-    # Verify PWI4 installation
-    ${pwi4ExePath} = "C:\Program Files\PlaneWave Instruments\PWI4\pwi4.exe"
-    if (-not (Test-Path ${pwi4ExePath})) {
-        throw "PWI4 executable not found after installation at ${pwi4ExePath}"
-    }
 
     # Verify PS3 CLI extraction
     if (-not (Test-Path ${ps3cliDestPath})) {

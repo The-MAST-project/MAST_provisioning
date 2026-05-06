@@ -79,11 +79,15 @@ done
 exit 0
 '@
 
-    # Run inside Cygwin
+    # Run inside Cygwin.
+    # Write to a Windows path, then convert to a Cygwin path via cygpath so
+    # bash can locate the file (bash cannot resolve Windows-style paths directly).
     ${tmpScript} = Join-Path ${env:TEMP} "cygwin_postinstall_$(Get-Random).sh"
     Set-Content -Path ${tmpScript} -Value ${postInstallCmd} -Encoding ASCII
-    & ${bashExe} -lc "/usr/bin/dos2unix '${tmpScript}' >/dev/null 2>&1 || true"
-    & ${bashExe} -lc "/bin/chmod +x '${tmpScript}' && '${tmpScript}'"
+    # Cygwin -lc login shell emits skeleton-file messages before the cygpath output;
+    # take only the last line which is the actual converted path.
+    ${cygTmp} = ((& ${bashExe} -lc "cygpath -u '$($tmpScript -replace '\\','/')'") | Select-Object -Last 1).Trim()
+    & ${bashExe} -lc "dos2unix '$cygTmp' 2>/dev/null; chmod +x '$cygTmp' && bash '$cygTmp'"
     Remove-Item -Force ${tmpScript} -ErrorAction SilentlyContinue
 
     # --- Verification: print versions and a simple command ---

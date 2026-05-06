@@ -17,15 +17,13 @@ try {
 
     Write-Host "Running Chrome installer: ${installerPath}"
     & ${installerPath} /silent /install 2>&1 | Tee-Object -FilePath ${logFile}
+    ${installerExit} = ${LASTEXITCODE}
 
-    if (${LASTEXITCODE} -ne 0) {
-        throw "Chrome installer exited with code ${LASTEXITCODE}"
-    }
-
-    # Verify installation
+    # The online stub may exit non-zero even when Chrome installs successfully.
+    # Treat presence of chrome.exe as the authoritative success criterion.
     ${chromeExe} = "C:\Program Files\Google\Chrome\Application\chrome.exe"
     if (-not (Test-Path ${chromeExe})) {
-        throw "Chrome executable not found after installation at ${chromeExe}"
+        throw "Chrome executable not found after installation (installer exit: ${installerExit})"
     }
 
     Write-Host "Chrome installation completed successfully" | Tee-Object -FilePath ${logFile} -Append

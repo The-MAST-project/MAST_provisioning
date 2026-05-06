@@ -1,13 +1,13 @@
 {
-  "name": "cygwin",
-  "description": "Install Cygwin from a prebuilt cygwin64.tgz, run postinstall, add to PATH, and verify.",
+  "name": "zwo",
+  "description": "Install ZWO camera drivers, ASI Studio, and ASCOM driver.",
   "order": 120,
-  "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-cygwin.ps1\" -AssetsRoot \".\" -InstallRoot \"C:\\cygwin64\"",
+  "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-zwo.ps1\" -AssetsRoot \".\"",
   "commandfiles": [
     "provide-zwo.ps1",
     "assets/ASIStudio_V1.16.2_x64_Setup.exe",
     "assets/ZWO_ASCOM_Setup_V6.5.32.exe",
     "assets/ZWO_ASI_Cameras_driver_Setup_V3.25.exe"
   ],
-  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -Command \"$bin='C:\\cygwin64\\bin'; $bash=Join-Path $bin 'bash.exe'; $log=Join-Path $env:ProgramData 'MAST\\logs\\cygwin-verify.log'; if (Test-Path $bash) { & $bash -lc 'uname -a' | Out-File -FilePath $log -Encoding UTF8; & $bash -lc 'cygcheck -V' | Out-File -FilePath $log -Append -Encoding UTF8; Set-Content -Path (Join-Path $env:ProgramData 'MAST\\logs\\cygwin-smoke.txt') -Value 'cygwin_ok' } else { 'bash.exe not found' | Out-File -FilePath $log -Encoding UTF8 }\""
+  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -Command \"$log = Join-Path $env:ProgramData 'MAST\\logs\\zwo-verify.log'; $driver = 'C:\\Program Files\\ZWO'; if (Test-Path $driver) { Set-Content -Path $log -Value 'ZWO driver installed'; Set-Content -Path (Join-Path $env:ProgramData 'MAST\\logs\\zwo-smoke.txt') -Value 'zwo_ok' } else { 'ZWO driver path not found' | Out-File $log; exit 1 }\""
 }

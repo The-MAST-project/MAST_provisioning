@@ -22,11 +22,15 @@ try {
         throw "PHD2 installer exited with code ${LASTEXITCODE}"
     }
 
-    # Verify installation
-    ${phd2Exe} = Join-Path ${InstallRoot} "phd2.exe"
-    if (-not (Test-Path ${phd2Exe})) {
-        throw "PHD2 executable not found after installation at ${phd2Exe}"
+    # NSIS installs to its own default path; search rather than assume InstallRoot.
+    Start-Sleep -Seconds 3
+    ${phd2Exe} = Get-ChildItem -Path 'C:\Program Files', 'C:\Program Files (x86)' `
+        -Recurse -Filter 'phd2.exe' -ErrorAction SilentlyContinue |
+        Select-Object -First 1 -ExpandProperty FullName
+    if (-not ${phd2Exe}) {
+        throw "phd2.exe not found after installation"
     }
+    Write-Host "Found phd2.exe at: ${phd2Exe}"
 
     Write-Host "PHD2 installation completed successfully" | Tee-Object -FilePath ${logFile} -Append
     exit 0

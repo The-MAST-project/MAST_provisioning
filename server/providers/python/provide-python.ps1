@@ -24,7 +24,7 @@ catch {
     throw "Failed to import provisioning.psm1: $($_.Exception.Message)"
 }
 
-${log} = Start-ProvisionLog -Component 'provide-python'Test-NetConnection -ComputerName 192.168.10.1 -Port 445
+${log} = Start-ProvisionLog -Component 'provide-python'
 try {
     # --- Locate installer ---
     ${exePath} = Join-Path ${AssetsRoot} ${Installer}
