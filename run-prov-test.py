@@ -39,6 +39,7 @@ import json
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from contextlib import contextmanager
@@ -64,6 +65,7 @@ except ImportError:
 # ---------------------------------------------------------------------------
 REPO_ROOT = Path(__file__).parent
 VAULT_CREDS = REPO_ROOT / "vault" / "utm-creds.json"
+VAULT_GITHUB_TOKEN = REPO_ROOT / "vault" / "tokens" / "mast_github.txt"
 LOG_ROOT = Path.home() / "shared-utm" / "test-runs"
 UTMCTL = Path("/Applications/UTM.app/Contents/MacOS/utmctl")
 UTM_DOCS = Path.home() / "Library/Containers/com.utmapp.UTM/Data/Documents"
@@ -78,7 +80,7 @@ UTM_GUEST_TOOLS_ISO = (
     / "GuestSupportTools/utm-guest-tools-latest.iso"
 )
 WIN_TEMPLATE_VM = "Windows"          # UTM VM to clone (empty disk, right QEMU config)
-WIN_INSTALL_TIMEOUT_S = 45 * 60     # max time for unattended Windows setup
+WIN_INSTALL_TIMEOUT_S = 3 * 60 * 60  # 3 hours — allows for manual guest tools install + reboot
 
 MAC_SMB_HOST = "192.168.64.1"
 PROV_SHARE_DRIVE = "Z:"
@@ -230,8 +232,13 @@ def run_ps(
         log_raw(r.std_out.decode(errors="replace").rstrip())
     if r.std_err:
         stderr_text = r.std_err.decode(errors="replace").rstrip()
-        # Filter noisy CLIXML progress blobs
-        if "<Objs" not in stderr_text:
+        if "<Objs" in stderr_text:
+            # CLIXML blob — extract the error message text from it
+            import re as _re
+            msgs = _re.findall(r"<S S=\"Error\">(.*?)</S>", stderr_text)
+            if msgs:
+                log_raw(f"[stderr] {''.join(msgs)[:500]}")
+        else:
             log_raw(f"[stderr] {stderr_text[:500]}")
     return r
 
@@ -288,7 +295,7 @@ def utm_stop(vm_name: str) -> None:
 def utm_start(vm_name: str) -> None:
     vid = utm_vm_id(vm_name)
     log(f"Starting UTM VM '{vm_name}' ({vid}) in disposable mode…")
-    utmctl("start", "--disposable", vid)
+    utmctl("start", "--hide", "--disposable", vid)
 
 
 def setup_log_dir(cycle: int) -> Path:
@@ -305,31 +312,39 @@ def setup_log_dir(cycle: int) -> Path:
 # Commands injected into autounattend FirstLogonCommands for the VM build path.
 # These mirror what bootstrap-winrm.ps1 does for physical units.
 # Each tuple: (order-offset, description, cmd — will be wrapped in cmd /c "...")
+#
+# NOTE (VM build path): UTM guest tools (virtio-net driver) must be installed MANUALLY
+# by the operator after Windows setup completes, followed by a manual reboot.
+# Only after that reboot will the NIC be visible and WinRM reachable.
+# The script waits for WinRM with a generous timeout to allow for this.
 _BOOTSTRAP_COMMANDS: list[tuple[int, str, str]] = [
-    # Install UTM guest tools (virtio-net driver) — runs first so NIC is up before WinRM.
-    # Guest tools ISO is mounted as third CD drive; search common drive letters.
-    (1,  "Install UTM guest tools",
-         "for %d in (D E F) do if exist %d:\\utm-guest-tools-*.exe (%d:\\utm-guest-tools-*.exe /S)"),
-    # mast account (answer file creates it, but ensure password and admin membership)
-    (2,  "Set mast password",
-         "net user mast physics /add & net localgroup Administrators mast /add"),
+    # mast account — create if missing, then force-set password and ensure admin membership.
+    # net user ... /add fails if the account already exists (answer file may have created it),
+    # so we add it (ignoring failure) then always set the password explicitly.
+    (1,  "Set mast password",
+         "net user mast physics /add 2>nul & net user mast physics & net localgroup Administrators mast /add 2>nul"),
     # Windows Update — disable automatic installs and prevent auto-reboot
-    (3,  "Disable WU NoAutoUpdate",
+    (2,  "Disable WU NoAutoUpdate",
          'reg add "HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsUpdate\\AU" /v NoAutoUpdate /t REG_DWORD /d 1 /f'),
-    (4,  "Disable WU AUOptions",
+    (3,  "Disable WU AUOptions",
          'reg add "HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsUpdate\\AU" /v AUOptions /t REG_DWORD /d 1 /f'),
-    (5,  "Disable WU NoAutoReboot",
+    (4,  "Disable WU NoAutoReboot",
          'reg add "HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsUpdate\\AU" /v NoAutoRebootWithLoggedOnUsers /t REG_DWORD /d 1 /f'),
-    (6,  "Disable wuauserv",
+    (5,  "Disable wuauserv",
          "sc config wuauserv start= disabled & net stop wuauserv"),
-    # WinRM
+    # WinRM — set network profile to Private first so winrm quickconfig accepts the
+    # firewall exception (it refuses on Public networks).
+    (6,  "Set network profile to Private",
+         'powershell -Command "Get-NetConnectionProfile | Set-NetConnectionProfile -NetworkCategory Private"'),
     (7,  "Enable WinRM",             "winrm quickconfig -quiet"),
     (8,  "WinRM basic auth",         'winrm set winrm/config/service/auth @{Basic="true"}'),
     (9,  "WinRM allow unencrypted",  'winrm set winrm/config/service @{AllowUnencrypted="true"}'),
     (10, "WinRM firewall HTTP",
          "netsh advfirewall firewall add rule name=WinRM-HTTP dir=in action=allow protocol=TCP localport=5985"),
-    # Reset the 90-day evaluation grace period so the license doesn't expire during testing
-    (11, "Rearm evaluation license", "slmgr /rearm"),
+    # Reset the 90-day evaluation grace period so the license doesn't expire during testing.
+    # Use cscript (console mode) so slmgr.vbs doesn't show a blocking MsgBox dialog.
+    (11, "Rearm evaluation license",
+         "cscript //nologo %windir%\\system32\\slmgr.vbs /rearm"),
 ]
 
 
@@ -473,7 +488,11 @@ def phase_build_image(
         ts = datetime.now().strftime("%Y%m%d-%H%M%S")
         build_name = f"mast-unit-build-{ts}"
         log(f"Creating new UTM bundle '{build_name}'…")
-        build_bundle = _utm_bundle(build_name)
+        # Build in a staging dir OUTSIDE the UTM sandbox container.  UTM rejects
+        # importing bundles that were created directly inside its Documents folder;
+        # it must copy them in itself via the normal open/import flow.
+        _stage_root = Path(tempfile.mkdtemp(prefix="utm-stage-"))
+        build_bundle = _stage_root / f"{build_name}.utm"
         build_bundle.mkdir(parents=True, exist_ok=False)
         data_dir = build_bundle / "Data"
         data_dir.mkdir()
@@ -489,12 +508,15 @@ def phase_build_image(
         config["Information"]["UUID"] = new_uuid
         config["Information"]["Name"] = build_name
 
-        # Replace the existing disk drive entry with a fresh qcow2 UUID
+        # Replace the existing disk drive entry with a fresh qcow2 UUID.
+        # Also backfill any drive entries missing an Identifier (UTM rejects configs
+        # where any drive lacks one — the template's 4th CD slot has this bug).
         for drive in config.get("Drive", []):
             if drive.get("ImageType") == "Disk":
                 drive["Identifier"] = disk_uuid
                 drive["ImageName"] = f"{disk_uuid}.qcow2"
-                break
+            if "Identifier" not in drive:
+                drive["Identifier"] = str(_uuid.uuid4()).upper()
 
         # Copy the seed qcow2 (empty sparse disk from the template VM)
         disk_name = f"{disk_uuid}.qcow2"
@@ -525,8 +547,12 @@ def phase_build_image(
         log("Copying UTM guest tools ISO…")
         shutil.copy2(UTM_GUEST_TOOLS_ISO, guest_tools_dest)
 
-        # Patch config.plist: autounattend first, Windows ISO second, guest tools third
-        config = _utm_config(build_name)
+        # Patch config.plist: autounattend first, Windows ISO second, guest tools third.
+        # Read/write the staging bundle directly — it hasn't been imported yet so
+        # _utm_config/_utm_write_config (which look in UTM_DOCS) won't find it.
+        import plistlib as _pl3
+        with cfg_path.open("rb") as f:
+            config = _pl3.load(f)
         cd_drives = [d for d in config.get("Drive", []) if d.get("ImageType") == "CD"]
         if len(cd_drives) < 3:
             raise RuntimeError(
@@ -535,22 +561,42 @@ def phase_build_image(
         cd_drives[0]["ImageName"] = patched_unattend.name
         cd_drives[1]["ImageName"] = win_dest.name
         cd_drives[2]["ImageName"] = guest_tools_dest.name
-        # Force CD boot first and suppress the "press any key" UEFI prompt
-        config.setdefault("QEMU", {})["AdditionalArguments"] = ["-boot", "order=d,menu=off"]
-        _utm_write_config(build_name, config)
+        config["Sharing"]["DirectorySharePath"] = str(REPO_ROOT)
+        with cfg_path.open("wb") as f:
+            _pl3.dump(config, f)
         log("ISOs mounted in VM config.")
 
-        # Register the new bundle with UTM by opening it, then start it.
-        # UTM only knows about VMs it has imported; opening the .utm file imports it.
+        # Register the new bundle with UTM.  The bundle must be opened from OUTSIDE
+        # the UTM sandbox container — UTM rejects importing bundles already inside
+        # its Documents folder.  -g keeps UTM in the background.
         log(f"Registering '{build_name}' with UTM…")
-        subprocess.run(["open", str(build_bundle)], check=True)
-        time.sleep(3)  # give UTM a moment to register the VM
+        subprocess.run(["open", "-g", str(build_bundle)], check=True)
+        # Poll until utmctl list shows the new UUID — import is async.
+        deadline = time.monotonic() + 120
+        while time.monotonic() < deadline:
+            result = subprocess.run(
+                [str(UTMCTL), "list"], check=True, text=True, capture_output=True
+            )
+            if new_uuid.lower() in result.stdout.lower():
+                log(f"VM {new_uuid} registered with UTM.")
+                break
+            time.sleep(3)
+        else:
+            raise TimeoutError(f"UTM did not register VM {new_uuid} within 120s")
 
         log(f"Starting '{build_name}' ({new_uuid}) for unattended Windows install…")
-        utmctl("start", new_uuid)
+        # --hide keeps the VM window from popping to the foreground.
+        subprocess.run([str(UTMCTL), "start", "--hide", new_uuid], check=True, text=True, capture_output=True)
 
         # Wait for WinRM — unattended setup enables it via answer file
-        log(f"Waiting up to {WIN_INSTALL_TIMEOUT_S // 60} min for Windows setup to complete…")
+        log("")
+        log("*** MANUAL STEPS REQUIRED ***")
+        log("  1. In the VM window: press any key to boot from the Windows ISO.")
+        log("  2. Wait for Windows setup to complete and reach the desktop (~20 min).")
+        log("  3. Open the guest tools CD (last CD drive) and run utm-guest-tools-*.exe.")
+        log("  4. Reboot the VM when the installer finishes.")
+        log(f"  Waiting up to {WIN_INSTALL_TIMEOUT_S // 3600}h for WinRM on {host_unit}…")
+        log("")
         wait_for_winrm(host_unit, unit_cred, timeout=WIN_INSTALL_TIMEOUT_S)
 
         # Upload and run prepare-mast-client.ps1 via HTTP file server
@@ -566,7 +612,7 @@ def phase_build_image(
                 url = f"http://{MAC_TRANSFER_HOST}:{HTTP_TRANSFER_PORT}/{prepare_src.name}"
                 run_ps(
                     unit_session,
-                    f'Invoke-WebRequest -Uri "{url}" -OutFile "C:\\prepare-mast-client.ps1" -UseBasicParsing',
+                    f'$wc=[System.Net.WebClient]::new();$wc.Proxy=$null;$wc.DownloadFile("{url}","C:\\prepare-mast-client.ps1")',
                     label="fetch-prepare",
                     timeout_s=2 * 60,
                     echo=False,
@@ -580,13 +626,12 @@ def phase_build_image(
             timeout_s=10 * 60,
         )
 
-        # Eject ISOs and clear build-time boot args so normal runs boot from HDD
+        # Eject ISOs so normal runs boot from HDD
         log("Ejecting ISOs from VM config…")
         config = _utm_config(build_name)
         cd_drives = [d for d in config.get("Drive", []) if d.get("ImageType") == "CD"]
         for d in cd_drives:
             d.pop("ImageName", None)
-        config.setdefault("QEMU", {})["AdditionalArguments"] = []
         _utm_write_config(build_name, config)
 
         # Shut down cleanly
@@ -597,7 +642,11 @@ def phase_build_image(
             pass
         time.sleep(10)
 
+        # Clean up the staging bundle — UTM already copied it into Documents on import.
+        shutil.rmtree(_stage_root, ignore_errors=True)
+
         # Replace the old mast-unit bundle with the new one.
+        # The new VM is registered under build_name; rename it to unit_vm_name.
         # Prefer utmctl delete (cleans up UTM's registry too); fall back to
         # rmtree if the old VM isn't in utmctl's list.
         log(f"Replacing '{unit_vm_name}' with new image…")
@@ -616,8 +665,8 @@ def phase_build_image(
                 shutil.rmtree(old_bundle)
                 log(f"Removed old '{unit_vm_name}' bundle directly.")
 
-        # Rename build bundle → canonical name
-        build_bundle.rename(old_bundle)
+        # Rename the imported build bundle to the canonical unit VM name.
+        _utm_bundle(build_name).rename(old_bundle)
 
         # Update name in config.plist (UUID stays as the fresh one we assigned)
         import plistlib as _pl2
@@ -687,9 +736,8 @@ def phase_build(
             arr = ",".join(f"'{m}'" for m in modules)
             modules_arg = f" -Modules @({arr})"
         build_cmd = (
-            "Set-ExecutionPolicy Bypass -Scope Process -Force; "
-            f"Copy-Item -Force '{PROV_SHARE_DRIVE}\\build\\build-mast.ps1' 'C:\\build-mast.ps1'; "
-            f"& 'C:\\build-mast.ps1'"
+            f"Set-ExecutionPolicy Bypass -Scope Process -Force; "
+            f"& '{PROV_SHARE_DRIVE}\\build\\build-mast.ps1'"
             f" -Top '{PROV_SHARE_DRIVE}'"
             f" -HostName '{hostname}'"
             f"{modules_arg}"
@@ -815,7 +863,9 @@ def phase_transfer(
                     )
                     r = run_ps(
                         unit,
-                        f'Invoke-WebRequest -Uri "{url}" -OutFile "{dest}" -UseBasicParsing',
+                        # WebClient with Proxy=null bypasses the institutional proxy
+                        # (Weizmann) which otherwise intercepts 192.168.64.x traffic.
+                        f'$wc=[System.Net.WebClient]::new();$wc.Proxy=$null;$wc.DownloadFile("{url}","{dest}")',
                         label="fetch",
                         timeout_s=30 * 60,
                         echo=False,

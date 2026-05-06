@@ -62,6 +62,8 @@
 			<true/>
 		</dict>
 		<dict>
+			<key>Identifier</key>
+			<string>7F2B78E5-DD42-4E58-BBD8-C3BDBE88C7DC</string>
 			<key>ImageType</key>
 			<string>CD</string>
 			<key>Interface</key>
@@ -138,6 +140,8 @@
 		<true/>
 		<key>DirectoryShareMode</key>
 		<string>WebDAV</string>
+		<key>DirectorySharePath</key>
+		<string>/Users/ebrody/projects/MAST/MAST_provisioning</string>
 		<key>DirectoryShareReadOnly</key>
 		<false/>
 	</dict>

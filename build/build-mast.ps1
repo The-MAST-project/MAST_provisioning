@@ -245,7 +245,6 @@ function Generate-Commands([string[]]${Mods}) {
 ${baseCmds} = Generate-Commands -Mods ${Modules}
 
 ${stagingTop} = Join-Path ${OutRoot} ${HostName}
-if (Test-Path ${stagingTop}) { Remove-Item -Recurse -Force ${stagingTop} }
 New-Item -ItemType Directory -Force -Path ${stagingTop} | Out-Null
 
 ${clientRoot} = Join-Path ${Top} 'client'
