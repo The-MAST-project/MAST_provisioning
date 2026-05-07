@@ -107,6 +107,32 @@ try {
         Write-Log "⚠ Provisioning completed with ${failCount} failures"
         exit 1
     } else {
+        # ---------------------------------------------------------------
+        # Record the installed payload fingerprint so check-and-provision.ps1
+        # can detect drift on the next autonomous cycle.
+        # Only written on a fully-clean run (failCount == 0).
+        # ---------------------------------------------------------------
+        ${buildManifest}     = Join-Path ${StagingPath} "build-manifest.json"
+        ${mastDataRoot}      = Join-Path ${env:ProgramData} "MAST"
+        ${installedManifest} = Join-Path ${mastDataRoot} "installed-manifest.json"
+        if (Test-Path ${buildManifest}) {
+            try {
+                ${m} = Get-Content ${buildManifest} -Raw | ConvertFrom-Json
+                ${m} | Add-Member -NotePropertyName installed_at `
+                                  -NotePropertyValue ((Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')) -Force
+                # Atomic write: tmp then rename, so a concurrent reader never
+                # sees a partial file.
+                ${tmp} = "${installedManifest}.tmp"
+                (${m} | ConvertTo-Json -Depth 4) | Out-File -FilePath ${tmp} -Encoding UTF8
+                Move-Item -Force ${tmp} ${installedManifest}
+                Write-Log "Wrote installed-manifest.json (payload_hash=$($m.payload_hash))"
+            } catch {
+                Write-Log "WARNING: Failed to write installed-manifest.json: $_"
+            }
+        } else {
+            Write-Log "WARNING: build-manifest.json not found in staging; skipping installed-manifest.json"
+        }
+
         Write-Log "MAST provisioning completed successfully!"
         exit 0
     }

@@ -1,0 +1,8 @@
+{
+    "_comment": "Copy this file to creds.json and fill in real values. creds.json is gitignored.",
+    "_comment_unit": "Credentials of the local 'mast' admin account on the unit VM/machine.",
+    "unit": {
+        "user": ".\\mast",
+        "pass": "physics"
+    }
+}

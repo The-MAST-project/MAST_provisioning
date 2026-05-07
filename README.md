@@ -1,363 +1,292 @@
 # MAST Provisioning
 
-Automated Windows provisioning for MAST telescope unit machines (`mast01`–`mast20`).
+Automated Windows provisioning for MAST telescope unit machines (`mast01`-`mast20`).
 
 ## Overview
 
-This system installs and configures all software required to run a MAST unit on a bare Windows machine. It is structured as a **two-machine build-then-execute pipeline**:
+The provisioning server (a long-lived Windows machine) builds a per-unit staging
+payload from this repo, then pushes it to each unit machine via WinRM and runs the
+provisioning script on the unit. Modules are self-describing via `module.json`
+manifests; the orchestrator never has to know what software lives in which module.
 
-1. **Provisioning server** — runs the build script, stages files, and hosts them over SMB or WinRM
-2. **Target machine** — receives the staged payload and executes it
+In production this loop runs autonomously every N minutes via a Windows Task
+Scheduler job (`server/check-and-provision.ps1`). In development we test the full
+pipeline against a single VirtualBox VM on the same host.
 
-In the development/test environment both machines are VirtualBox VMs on a Mac host.
+```
++-----------------------------------+
+| Windows host (the prov server)    |
+|                                   |
+|   Task Scheduler                  |
+|     -> check-and-provision.ps1    |
+|          -> build-mast.ps1        |
+|          -> WinRM push to unit    |
+|          -> execute on unit       |
+|          -> verify smoke tests    |
+|                                   |
+|   VirtualBox (dev/test only)      |
+|     +-------- mast-unit VM ------+|
+|     |  192.168.56.20             ||
+|     |  WinRM, HTTPS              ||
+|     +----------------------------+|
++-----------------------------------+
+```
 
 ---
 
-## Directory Structure
+## Directory layout
 
 ```
 MAST_provisioning/
-├── build/
-│   ├── build-mast.ps1              # Main build orchestrator — run this on the prov server
-│   ├── run-build.ps1               # Quick convenience wrapper
-│   └── make-wcd-package.ps1        # WCD package creation (offline provisioning)
-├── client/
-│   ├── prepare-mast-client.ps1     # Pre-provisioning setup — run on the target
-│   └── execute-mast-provisioning.ps1  # Execution engine — run on the target
-├── server/
-│   ├── lib/
-│   │   └── provisioning.psm1       # Shared PowerShell utilities (logging, PATH, services)
-│   └── providers/                  # One directory per software module
-│       ├── python/
-│       │   ├── module.json         # Module manifest (order, command, files, verify)
-│       │   ├── provide-python.ps1
-│       │   └── assets/
-│       │       └── python-3.12.0-amd64.exe
-│       └── <module>/               # ascom, cygwin, mast, mongodb, nomachine, nssm, ...
-├── vault/                          # Secrets — NOT committed to git
-│   ├── tokens/
-│   │   └── mast_github.txt         # GitHub PAT with repo read access
-│   └── nomachine-licenses/
-│       └── *.lic                   # One .lic file per licensed unit
-└── staging/                        # Build output — generated, NOT committed
-    └── <hostname>/                 # Flat staged payload for that host
-        ├── commands.json
-        ├── provisioning.psm1
-        ├── execute-mast-provisioning.ps1
-        └── <module scripts + assets>
+|-- build/
+|   |-- build-mast.ps1                # Builds staging\<host>\01-provisioning\
+|   |-- run-build.ps1                 # Convenience wrapper
+|   `-- make-wcd-package.ps1          # Offline (Windows Configuration Designer) package
+|-- client/
+|   |-- bootstrap-winrm.ps1           # Run once on a fresh unit (mast user, WinRM)
+|   |-- prepare-mast-client.ps1       # Run after bootstrap (hostname, HTTPS, WU policy)
+|   |-- execute-mast-provisioning.ps1 # Runs on the unit; iterates through commands.json
+|   `-- onboard-mast-unit.ps1         # One-shot Stages 0-5 bootstrap for a new unit
+|-- server/
+|   |-- lib/provisioning.psm1         # Shared PS helpers
+|   |-- providers/<module>/...        # Per-module install logic + assets
+|   |-- check-and-provision.ps1       # Autonomous loop -- the production driver
+|   |-- install-scheduled-task.ps1    # Wires check-and-provision.ps1 into Task Scheduler
+|   `-- unit-registry.json.template   # Per-unit metadata, copy to unit-registry.json
+|-- tools/
+|   `-- unit/vm-fix-winrm.ps1         # Break-glass WinRM recovery (run locally on unit)
+|-- vault/                            # Secrets, gitignored
+|   |-- creds.json                    # WinRM credentials for units
+|   |-- tokens/mast_github.txt        # GitHub PAT
+|   `-- nomachine-licenses/*.lic
+|-- staging/<host>/01-provisioning/   # Build output, gitignored
+|-- admin-prep.ps1                    # One-time elevated host prep (PATH, firewall)
+|-- vbox-create-unit.ps1              # Helper to create the dev VirtualBox VM
+|-- build-autounattend-iso.ps1        # Builds an Autounattend ISO for unattended Windows install
+|-- run-prov-test.py                  # Throwaway test orchestrator (dev only)
+|-- DECISIONS.md
+|-- autonomous-provisioning.md
+`-- README.md
 ```
+
+## Module execution order
+
+| Order | Module       | Description                                  |
+|------:|--------------|----------------------------------------------|
+|    10 | `cygwin`     | Cygwin environment (prebuilt tgz)            |
+|    20 | `python`     | Python 3.12 + virtualenv                     |
+|    30 | `ascom`      | ASCOM Platform 7.1.0 + Developer tools       |
+|    40 | `mongodb`    | MongoDB client tools                         |
+|    50 | `wireshark`  | Wireshark network analyzer                   |
+|    60 | `nssm`       | Non-Sucking Service Manager                  |
+|    70 | `nomachine`  | NoMachine + license                          |
+|    80 | `mast`       | Clone MAST repos, install requirements       |
+|    90 | `phd2`       | PHD2 telescope autoguiding                   |
+|   100 | `stage`      | Optical stage control                        |
+|   110 | `planewave`  | PlaneWave PWI4 + PS3                         |
+|   120 | `zwo`        | ZWO camera drivers                           |
+|   130 | `vscode`     | Visual Studio Code                           |
+|   140 | `sysinternals`| Sysinternals Suite                          |
+|   150 | `chrome`     | Google Chrome                                |
+
+Order numbers leave gaps so new modules can be inserted without renumbering.
 
 ---
 
-## Module Execution Order
+## Production path (physical unit)
 
-| Order | Module | Description |
-|------:|--------|-------------|
-| 10 | `cygwin` | Cygwin environment (prebuilt tgz) |
-| 20 | `python` | Python 3.12.0 + virtualenv |
-| 30 | `ascom` | ASCOM Platform 7.1.0 + Developer tools |
-| 40 | `mongodb` | MongoDB client tools (mongosh, Database Tools, Compass) |
-| 50 | `wireshark` | Wireshark network analyzer |
-| 60 | `nssm` | Non-Sucking Service Manager |
-| 70 | `nomachine` | NoMachine Enterprise Client/Desktop + license |
-| 80 | `mast` | Clone MAST repos, create virtualenvs, install requirements |
-| 90 | `phd2` | PHD2 telescope autoguiding |
-| 100 | `stage` | Optical stage control software |
-| 110 | `planewave` | PlaneWave PWI4 + PS3 CLI tools |
-| 120 | `zwo` | ZWO camera drivers |
-| 130 | `vscode` | Visual Studio Code |
-| 140 | `sysinternals` | Sysinternals Suite |
+This is the only path operators run by hand. Everything else is autonomous.
 
-Each module declares its own install command and an optional smoke-test command in `module.json`.
+1. Plug the unit machine in, install Windows IoT, complete OOBE.
+2. Copy `client/onboard-mast-unit.ps1` plus `vault/creds.json` to the unit
+   (USB drive or temporary share).
+3. On the unit, in an elevated PowerShell:
 
----
+   ```powershell
+   Set-ExecutionPolicy Bypass -Scope Process -Force
+   .\onboard-mast-unit.ps1 -HostName mast05 -ProvServer <prov-ip> -StaticIp 10.x.y.z/24
+   ```
 
-## Prerequisites
+4. The script runs Stages 0-5 (preflight, bootstrap, prepare, provision, register,
+   handoff) and exits `ONBOARD_OK`. From here on the prov server's Task Scheduler
+   loop manages all updates.
 
-### Vault (required before running the build)
-
-Create `vault/` at the repo root (it is gitignored):
-
-```
-vault/
-  tokens/
-    mast_github.txt      ← GitHub PAT (repo scope, read-only is fine)
-  nomachine-licenses/
-    <name>.lic           ← One file per licensed unit
-```
-
-### Provisioning server requirements
-
-- Windows 10/11 with PowerShell 5.1+
-- Administrator privileges
-- Network access to the target (host-only subnet in VirtualBox dev setup)
-- MAST_provisioning repo accessible (VirtualBox Shared Folder recommended)
-
-### Target machine requirements
-
-- Windows 10/11 or Windows IoT Enterprise
-- Administrator access for initial prep script
-- WinRM enabled (handled by `prepare-mast-client.ps1`)
+If a stage fails, the script prints a `-ResumeFrom <stage>` command for re-runs.
+Logs: `C:\ProgramData\MAST\logs\onboarding.log` (mirrored to the prov server
+under `C:\ProgramData\MAST\logs\onboarding\<hostname>.log`).
 
 ---
 
-## Step-by-Step: UTM Dev Setup (current)
+## Autonomous loop on the prov server
 
-### 1. Networking (one-time)
-
-In UTM → each VM → Network, set the adapter to **Shared Network** (UTM's default). Both VMs and
-the Mac host share the `192.168.64.0/24` subnet; the Mac host is always `192.168.64.1`.
-
-Assign static IPs inside each Windows VM (Control Panel → Network → adapter properties → IPv4):
-- Provisioning server: `192.168.64.10 / 255.255.255.0`, gateway `192.168.64.1`
-- IoT unit: `192.168.64.20 / 255.255.255.0`, gateway `192.168.64.1`
-
-Keep a NAT adapter (or use the same Shared Network adapter) for internet access — Shared Network
-already provides outbound internet via the Mac.
-
-### 1a. Windows 11 ARM64 ISO
-
-Download from: https://www.microsoft.com/en-us/software-download/windows11arm64
-
-This is the full ARM64 image (not evaluation). No product key is needed to run — Windows operates
-fully without activation; only cosmetic restrictions apply (desktop watermark, wallpaper locked).
-PowerShell, SMB, WinRM, and all provisioning tooling work without a license.
-
-### 2. Share the repo directory from the Mac
-
-Enable macOS File Sharing for `~/shared-utm`:
-
-```
-System Settings → General → Sharing → File Sharing → add ~/shared-utm
-```
-
-Create a symlink so the repo is accessible at the expected path inside the share:
-
-```bash
-ln -s /path/to/MAST_provisioning ~/shared-utm/mast-prov
-```
-
-On the provisioning server VM (as Administrator), mount it as `Z:`:
+After the first successful onboarding, the prov server installs and enables the
+Task Scheduler job that runs every 30 min:
 
 ```powershell
-net use Z: \\192.168.64.1\shared-utm /user:MACHOST\<mac-username> <password> /persistent:yes
+# On the prov server, as Administrator:
+.\server\install-scheduled-task.ps1
+Start-ScheduledTask -TaskName MAST-CheckAndProvision   # run once now
+Get-ScheduledTask    -TaskName MAST-CheckAndProvision | Get-ScheduledTaskInfo
 ```
 
-All edits on the Mac are immediately visible inside the VM at `Z:\mast-prov\`.
+Each run:
+1. Reads `server/unit-registry.json` for the unit list.
+2. For every reachable unit: builds the latest staging payload, compares its
+   `build-manifest.json` `payload_hash` against the unit's
+   `C:\ProgramData\MAST\installed-manifest.json`, and skips if matching.
+3. Otherwise WinRM-pushes the staged payload to `C:\mast-staging` on the unit
+   and runs `execute-mast-provisioning.ps1`.
+4. Verifies smoke markers and writes structured logs to
+   `C:\ProgramData\MAST\logs\prov\run-<ts>.log` and `activity.csv`.
 
-### 3. Enable WinRM on the provisioning server (one-time)
+See `autonomous-provisioning.md` for the full design (log schema, availability
+contract, maintenance windows).
+
+---
+
+## Dev/test loop (Windows host + VirtualBox VM)
+
+This is the bring-up loop used while debugging modules; the throwaway Python
+orchestrator (`run-prov-test.py`) drives it.
+
+### One-time host setup
 
 ```powershell
-# On provisioning server, as Administrator
-winrm quickconfig -quiet
-winrm set winrm/config/client/auth '@{Basic="true"}'
-winrm set winrm/config/service/auth '@{Basic="true"}'
-winrm set winrm/config/service '@{AllowUnencrypted="true"}'
-netsh advfirewall firewall add rule name="WinRM" dir=in action=allow protocol=TCP localport=5985
+# Non-elevated:
+winget install Python.Python.3.12   # if not already installed
+pip install pywinrm
+
+# Elevated (once):
+.\admin-prep.ps1                     # adds VBox + Python to Machine PATH, opens ICMP
 ```
 
-WinRM on the IoT VM is handled by `prepare-mast-client.ps1` (see Running the Provisioning below).
-
-### 4. Create the IoT VM baseline (one-time)
-
-1. Boot the clean Windows IoT VM.
-2. Run `prepare-mast-client.ps1` (see Step 1 of Running the Provisioning).
-3. Confirm WinRM is reachable from the Mac: `nc -zv 192.168.64.20 5985`.
-4. In UTM → IoT VM → Snapshots, take a snapshot named `post-prepare`.
-5. Enable **Disposable Mode** on the IoT VM (UTM 4+): UTM → VM → Edit → check *Run in Disposable
-   Mode*. With this enabled, every shutdown discards all changes — the VM always boots from
-   the `post-prepare` baseline without manual snapshot restore.
-
-### 5. Create vault/utm-creds.json
+Then create `vault/creds.json` from `vault/creds.json.template`:
 
 ```json
-{
-    "prov":  {"user": ".\\mast", "pass": "<prov-server-mast-password>"},
-    "unit":  {"user": ".\\mast", "pass": "<unit-mast-password>"},
-    "smb":   {"user": "<mac-username>", "pass": "<mac-login-password>"}
-}
+{ "unit": { "user": ".\\mast", "pass": "physics" } }
 ```
 
-This file is gitignored (`vault/` is never committed).
+### One-time unit VM setup
 
-### 6. Install pywinrm on the Mac
+Two paths: an unattended path (recommended) and a manual path.
 
-```bash
-pip install pywinrm
+#### Unattended (no operator interaction during install)
+
+```powershell
+# 1) Build a small autounattend ISO (~1 MB). It contains Autounattend.xml plus
+#    bootstrap-winrm.ps1, executed on first auto-logon.
+.\build-autounattend-iso.ps1
+# Optional: target ARM64 IoT LTSC and pick a specific edition
+# .\build-autounattend-iso.ps1 -Architecture arm64 -WindowsEdition "Windows 11 IoT Enterprise LTSC"
+
+# 2) Create the VM with both ISOs mounted:
+.\vbox-create-unit.ps1 -IsoPath C:\path\to\Win11_or_IoTLTSC.iso `
+                       -AutounattendIso .\autounattend-mast.iso
+
+# 3) Start headless and wait ~15-25 min:
+VBoxManage startvm mast-unit --type headless
+
+# 4) bootstrap-winrm.ps1 on the autounattend ISO pins the host-only NIC to
+#    192.168.56.20 and brings up WinRM. Confirm reachability:
+Test-NetConnection 192.168.56.20 -Port 5985
+
+# 5) Run prepare-mast-client.ps1 remotely to finish hostname + WinRM HTTPS:
+$cred = Get-Credential   # mast / physics
+Invoke-Command -ComputerName 192.168.56.20 -Credential $cred `
+    -FilePath .\client\prepare-mast-client.ps1 `
+    -ArgumentList @{HostName='mast01'; Provider='192.168.56.1'}
+
+# 6) Power off, snapshot:
+.\vbox-create-unit.ps1 -SnapshotOnly
 ```
 
-### 7. Running the automated test
+Defaults baked into the answer file: `mast` / `physics`, `en-US`, `Israel
+Standard Time`. Override via parameters on `build-autounattend-iso.ps1`.
 
-```bash
-# Single full cycle
-python MAST_provisioning/run-prov-test.py \
-    --host-prov 192.168.64.10 \
-    --host-unit 192.168.64.20 \
-    --hostname mast01
+#### Manual (walk through Windows setup yourself)
 
-# Three back-to-back cycles (IoT VM auto-resets between runs)
-python MAST_provisioning/run-prov-test.py \
-    --host-prov 192.168.64.10 \
-    --host-unit 192.168.64.20 \
-    --hostname mast01 \
-    --repeat 3
+```powershell
+# Create the VM (no Windows install yet):
+.\vbox-create-unit.ps1 -IsoPath C:\path\to\Win11_or_IoTLTSC.iso
 
-# Build only (no execution on unit)
-python MAST_provisioning/run-prov-test.py \
-    --host-prov 192.168.64.10 \
-    --host-unit 192.168.64.20 \
-    --hostname mast01 \
-    --build-only
+# Start it and walk through Windows setup interactively:
+VBoxManage startvm mast-unit --type gui
+
+# Inside the VM after first login:
+#   1) Set static IP 192.168.56.20/24, gateway 192.168.56.1
+#   2) Open admin PowerShell:
+#         Set-ExecutionPolicy Bypass -Scope Process -Force
+#         .\bootstrap-winrm.ps1
+#         .\prepare-mast-client.ps1 -HostName mast01 -Provider 192.168.56.1
+#   3) Power off cleanly.
+
+# Take the snapshots:
+.\vbox-create-unit.ps1 -SnapshotOnly
 ```
 
-Run logs are written to `~/shared-utm/test-runs/<timestamp>-cycle<N>/results.json`.
+Either path produces two snapshots: `clean-state` (post-Windows install, no MAST
+tools) and `post-prepare` (after `bootstrap-winrm` + `prepare-mast-client` ran).
+
+### Run a test cycle
+
+```powershell
+# Single cycle, all modules:
+python .\run-prov-test.py --host-unit 192.168.56.20 --hostname mast01
+
+# Just the build (no transfer / execute):
+python .\run-prov-test.py --host-unit 192.168.56.20 --hostname mast01 --build-only
+
+# Three cycles, restoring the post-prepare snapshot between each:
+python .\run-prov-test.py --host-unit 192.168.56.20 --hostname mast01 --repeat 3
+
+# Subset of modules (faster iteration on a single problem):
+python .\run-prov-test.py --host-unit 192.168.56.20 --hostname mast01 --modules python,mast
+```
+
+Logs land in `test-runs/<timestamp>-cycle<N>/results.json`.
 
 ---
 
-## Step-by-Step: VirtualBox Dev Setup (legacy)
+## Smoke / verify
 
-> This section documents the original VirtualBox-based workflow. The active dev environment is
-> now UTM (see above).
-
-### 1. Networking (one-time)
-
-In VirtualBox → File → Host Network Manager, create a host-only network:
-- Subnet: `192.168.56.0/24`, DHCP enabled
-- Assign to **both VMs** as Adapter 2; keep Adapter 1 as NAT for internet
-
-### 2. Mount the repo in the provisioning server VM
-
-In the provisioning server VM settings → Shared Folders, add:
-- Host path: path to this `MAST_provisioning/` directory
-- Name: `mast-prov`
-
-Then in the VM:
-```powershell
-net use Z: \\vboxsvr\mast-prov
-```
-
-### 3. Snapshot the target VM
-
-Before any provisioning attempt, snapshot the clean Windows IoT state:
-
-```bash
-# On Mac
-VBoxManage snapshot "mast01" take "clean-state" --description "Pre-provisioning baseline"
-```
-
-**Reset after a failed attempt:**
-```bash
-VBoxManage controlvm "mast01" poweroff
-VBoxManage snapshot "mast01" restore "clean-state"
-VBoxManage startvm "mast01" --type gui
-```
-
-After `prepare-mast-client.ps1` runs cleanly once, take a second snapshot (`post-prepare`) to skip that step on future resets.
-
----
-
-## Running the Provisioning
-
-### Step 1 — Prepare the target (run on target VM, as Administrator)
-
-```powershell
-.\client\prepare-mast-client.ps1 -HostName mast01 -Provider <prov-server-ip>
-```
-
-This sets the hostname, creates the local `mast` admin user, enables WinRM with HTTPS, and opens firewall ports. A reboot is required if the hostname changed.
-
-### Step 2 — Build the staging payload (run on provisioning server, as Administrator)
-
-```powershell
-# Full build (all modules)
-powershell.exe -ExecutionPolicy Bypass -File Z:\build\build-mast.ps1 -Top Z:\ -HostName mast01
-
-# Subset — e.g. skip nomachine if no license available yet
-powershell.exe -ExecutionPolicy Bypass -File Z:\build\build-mast.ps1 -Top Z:\ -HostName mast01 `
-    -Modules python,ascom,mongodb,nssm,mast,cygwin,sysinternals,vscode
-```
-
-Output: `staging/mast01/` with all scripts, assets, and `commands.json`.
-
-### Step 3 — Execute on the target
-
-**Option A — SMB mount (simpler):**
-
-On the target VM, mount the staging share and run:
-```powershell
-net use Z: \\<prov-server-ip>\mast-staging /user:.\mast <password>
-powershell.exe -ExecutionPolicy Bypass -NonInteractive `
-    -File Z:\mast01\execute-mast-provisioning.ps1 -StagingPath Z:\mast01
-```
-
-**Option B — WinRM remote (from provisioning server):**
-
-```powershell
-$cred = Get-Credential   # .\mast credentials for the target
-$sopts = New-PSSessionOption -SkipCACheck -SkipCNCheck
-$s = New-PSSession -ComputerName <target-ip> -UseSSL -Credential $cred -SessionOption $sopts
-
-Copy-Item -Path "Z:\staging\mast01" -Destination "C:\mast-staging" -ToSession $s -Recurse -Force
-
-Invoke-Command -Session $s -ScriptBlock {
-    powershell.exe -ExecutionPolicy Bypass -NonInteractive `
-        -File "C:\mast-staging\execute-mast-provisioning.ps1" `
-        -StagingPath "C:\mast-staging"
-}
-```
-
----
-
-## Monitoring and Verification
-
-**Live log** (on target during execution):
-```
-C:\ProgramData\MAST\logs\provisioning-execute.log
-```
-
-**Smoke test markers** (written per module on success):
-```
-C:\ProgramData\MAST\logs\<module>-smoke.txt   → contains "success"
-```
-
-**Remote log tail** (from provisioning server):
-```powershell
-Invoke-Command -Session $s -ScriptBlock {
-    Get-Content "C:\ProgramData\MAST\logs\provisioning-execute.log" | Select-Object -Last 40
-}
-```
-
-**Minimal pass criteria:**
 - `execute-mast-provisioning.ps1` exits 0
 - `C:\Python312\python.exe --version` succeeds
-- `C:\MAST\repos\` contains cloned repos with `.venv\` virtualenvs
-- All `*-smoke.txt` files present
+- `C:\MAST\repos\` exists and has cloned repos with virtualenvs
+- Every module wrote a non-empty `C:\ProgramData\MAST\logs\<module>-smoke.txt`
+- `C:\ProgramData\MAST\installed-manifest.json` exists and matches the build's
+  `payload_hash`
 
 ---
 
-## Adding or Modifying a Module
+## Adding or modifying a module
 
 1. Create `server/providers/<module>/module.json`:
    ```json
    {
      "name": "mymodule",
-     "description": "Human-readable description.",
+     "description": "...",
      "order": 150,
      "command": "powershell.exe -ExecutionPolicy Bypass -NonInteractive -File \".\\provide-mymodule.ps1\"",
      "commandfiles": ["provide-mymodule.ps1", "assets/installer.exe"],
      "verify": "powershell.exe ... smoke test ..."
    }
    ```
-2. Add install script to `server/providers/<module>/provide-mymodule.ps1`
-3. Drop binary assets into `server/providers/<module>/assets/`
-4. Add the module name to the `-Modules` list when calling `build-mast.ps1`
+2. Drop scripts into `server/providers/<module>/`.
+3. Drop binary assets into `server/providers/<module>/assets/`.
+4. Add the module name to `unit-registry.json` `modules` lists (or it gets the default).
+
+No edit to `build-mast.ps1` or `execute-mast-provisioning.ps1` is required.
 
 ---
 
-## Secrets and gitignore
+## Secrets / vault
 
-`vault/` must never be committed. Ensure `.gitignore` contains:
-```
-vault/
-staging/
-```
+`vault/` is gitignored except for `vault/README.md` and `vault/creds.json.template`.
+Never commit secrets, tokens, or `.lic` files.
+
+---
+
+## See also
+
+- [DECISIONS.md](DECISIONS.md) - architecture decisions, in chronological order
+- [autonomous-provisioning.md](autonomous-provisioning.md) - design of the autonomous loop

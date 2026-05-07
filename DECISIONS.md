@@ -2,6 +2,52 @@
 
 ---
 
+## [2026-05-07] Re-hosted on Windows 11 host with VirtualBox + collapsed prov-server VM
+
+**Why:** The development setup moved from a Mac (Apple Silicon) host running two
+UTM VMs to a single Windows 11 machine with VirtualBox 7.2 and a single
+provisionee VM. The Windows host itself is now the provisioning server -- there is
+no longer a separate "prov server VM". This matches the eventual physical-fleet
+topology (one dedicated provisioning machine driving N units) while removing
+two layers of indirection (Mac shared folder, prov-server VM).
+
+**What:**
+- The Windows host (`192.168.56.1` on the existing VirtualBox host-only network)
+  runs `build-mast.ps1` natively. No `\\vboxsvr\mast-prov` mount, no UTM SMB share.
+- One VirtualBox VM (`mast-unit`, `192.168.56.20`) plays the unit role. Reset
+  between cycles with `VBoxManage snapshot restore` (UTM Disposable Mode is gone).
+- The Mac/UTM-specific orchestrator code in `run-prov-test.py` was replaced
+  with a Windows + `VBoxManage` variant. The build phase becomes a local
+  PowerShell subprocess on the host (no WinRM into a prov-server VM).
+- File transfer host -> unit uses HTTP pull (the throwaway orchestrator) and
+  WinRM `Copy-Item -ToSession` (the autonomous `check-and-provision.ps1`),
+  avoiding SMB credential setup on every unit.
+- Autonomous pipeline pieces from `autonomous-provisioning.md` were built in
+  parallel with the Windows port:
+    - `build-mast.ps1` now emits `staging\<host>\01-provisioning\build-manifest.json`
+      with a `payload_hash` (SHA-256 over every staged file).
+    - `execute-mast-provisioning.ps1` writes `C:\ProgramData\MAST\installed-manifest.json`
+      on a fully-clean run.
+    - `server\check-and-provision.ps1` is the autonomous driver (runs as a
+      Task Scheduler job via `server\install-scheduled-task.ps1`).
+    - `client\onboard-mast-unit.ps1` is the one-shot bootstrap for new units.
+- A new `build-autounattend-iso.ps1` produces a small companion ISO with
+  `Autounattend.xml` + `bootstrap-winrm.ps1`, driving an unattended Windows
+  install on fresh units (VM or physical).
+- Mac/UTM-specific assets (UTM bundle template, qcow2 seed disk, EFI vars) were
+  removed outright; the design is git-recoverable if ever needed again.
+
+**Implications:**
+- The `run-prov-test.py` orchestrator is now throwaway scaffolding kept only
+  until the autonomous loop is verified end-to-end on a real VM. Once that
+  passes it is removed.
+- Physical-unit deployment uses `client\onboard-mast-unit.ps1` only -- no
+  separate prov-server VM, no UTM, no Mac.
+- The two-VM architecture decision below ([2026-05-04]) is partially reversed:
+  the prov server is now a host machine, not a VM.
+
+---
+
 ## [2026-05-05] Migrated dev/test environment from VirtualBox to UTM
 
 **Why:** Apple Silicon; VirtualBox on Apple Silicon has limited ARM64 guest support and requires

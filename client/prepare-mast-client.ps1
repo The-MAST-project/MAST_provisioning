@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Prepare a Windows client for MAST: set name, create 'mast' admin (prompted password), and enable secure remoting.
 
@@ -73,7 +73,7 @@ function Ensure-ComputerName {
   param([string]$NewName, [switch]$Reboot)
   $current = Get-CurrentComputerName
   if ($current -ieq $NewName) {
-    Write-Host "Computer name already '$current' — no change needed."
+    Write-Host "Computer name already '$current' -- no change needed."
     return $false
   }
 
@@ -174,9 +174,11 @@ function Ensure-LocalAdminUser {
 function Enable-WinRM-HttpHttps {
   Write-Headline "Enabling PowerShell Remoting (WinRM) and configuring firewall"
   try {
+    # WSMan refuses some operations when any profile is Public.
+    try { Get-NetConnectionProfile | Set-NetConnectionProfile -NetworkCategory Private } catch {}
     Enable-PSRemoting -SkipNetworkProfileCheck -Force -ErrorAction Stop
   } catch {
-    Write-Warning "Enable-PSRemoting had a problem: $($_.Exception.Message) — continuing."
+    Write-Warning "Enable-PSRemoting had a problem: $($_.Exception.Message) -- continuing."
   }
 
   # Ensure firewall rules for WinRM (HTTP and HTTPS)
@@ -202,18 +204,22 @@ function Enable-WinRM-HttpHttps {
   # Create or refresh a self-signed cert for WinRM HTTPS and create listener
   Write-Headline "Creating self-signed certificate and configuring WinRM HTTPS listener"
   try {
-    $dnsNames = @($env:COMPUTERNAME)
-    if ($HostName) { $dnsNames += $HostName }
-    $cert = New-SelfSignedCertificate -DnsName $dnsNames -CertStoreLocation Cert:\LocalMachine\My -KeyLength 2048 -NotAfter (Get-Date).AddYears(5) -ErrorAction Stop
-
-    # Remove existing HTTPS listeners to avoid conflicts
+    $activeName = $env:COMPUTERNAME
     try {
-      Get-ChildItem WSMan:\LocalHost\Listener\ -ErrorAction SilentlyContinue | `
-        Where-Object { $_.Keys -match 'Transport=HTTPS' } | ForEach-Object { Remove-Item $_.PSPath -Recurse -Force -ErrorAction SilentlyContinue }
+      $activeName = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\ComputerName\ActiveComputerName').ComputerName
     } catch {}
 
-    # Create new listener
-    New-Item -Path WSMan:\LocalHost\Listener -Transport HTTPS -Address * -Hostname $dnsNames[0] -CertificateThumbprint $cert.Thumbprint -ErrorAction Stop | Out-Null
+    $dnsNames = @($activeName)
+    if ($HostName) { $dnsNames += $HostName }
+    $dnsNames += @('192.168.56.20')
+
+    $cert = New-SelfSignedCertificate -DnsName $dnsNames -CertStoreLocation Cert:\LocalMachine\My -KeyLength 2048 -NotAfter (Get-Date).AddYears(5) -ErrorAction Stop
+
+    # IMPORTANT: WSMan:\ New-Item/Remove-Item can hang on some Windows builds.
+    # Use winrm.cmd create/delete instead.
+    try { & winrm.cmd delete winrm/config/Listener?Address=*+Transport=HTTPS 2>$null | Out-Null } catch {}
+    $createArg = "@{Hostname=`"$activeName`";CertificateThumbprint=`"$($cert.Thumbprint)`"}"
+    & winrm.cmd create winrm/config/Listener?Address=*+Transport=HTTPS $createArg 2>&1 | Out-Null
     Set-Service WinRM -StartupType Automatic
     if ((Get-Service WinRM -ErrorAction SilentlyContinue).Status -ne 'Running') { Start-Service WinRM -ErrorAction SilentlyContinue }
     Write-Host "WinRM HTTPS listener created (cert thumbprint: $($cert.Thumbprint))."

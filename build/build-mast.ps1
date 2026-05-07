@@ -332,6 +332,65 @@ Copy-Item -Path (Join-Path ${vault} 'tokens\mast_github.txt') (Join-Path ${stagi
 # emit commands.json
 (${cmds} | Select-Object order,desc,cmd,module | ConvertTo-Json -Depth 6) | Out-File -FilePath (Join-Path ${staging} 'commands.json') -Encoding UTF8
 
+# ---------------------------------------------------------------------------
+# build-manifest.json — payload fingerprint for autonomous drift detection.
+# Consumed by check-and-provision.ps1 to decide whether a unit needs an update,
+# and copied to C:\ProgramData\MAST\installed-manifest.json on the unit by
+# execute-mast-provisioning.ps1 once provisioning succeeds.
+# ---------------------------------------------------------------------------
+function Get-PayloadHash {
+    param([Parameter(Mandatory)][string]$StagingDir)
+
+    # Hash inputs: every regular file under the staging dir, in lexical order,
+    # combining "<relative-path>:<sha256>" into a single rolling hash.
+    # commands.json is included implicitly. build-manifest.json is excluded
+    # (we are generating it now).
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    $bytes = [System.IO.MemoryStream]::new()
+    $files = Get-ChildItem -Path $StagingDir -File -Recurse |
+                Where-Object { $_.Name -ne 'build-manifest.json' } |
+                Sort-Object FullName
+    foreach ($f in $files) {
+        $rel = $f.FullName.Substring($StagingDir.Length).TrimStart('\','/').Replace('\','/')
+        $fileHash = (Get-FileHash -Path $f.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+        $line = [System.Text.Encoding]::UTF8.GetBytes("$rel`:$fileHash`n")
+        $bytes.Write($line, 0, $line.Length)
+    }
+    $bytes.Position = 0
+    $digest = $sha.ComputeHash($bytes)
+    return ([System.BitConverter]::ToString($digest) -replace '-','').ToLowerInvariant()
+}
+
+function Get-GitSha {
+    param([Parameter(Mandatory)][string]$RepoTop)
+    try {
+        $git = Get-Command git -ErrorAction SilentlyContinue
+        if (-not $git) { return $null }
+        Push-Location $RepoTop
+        try {
+            $sha = (& git rev-parse HEAD 2>$null).Trim()
+            if ($LASTEXITCODE -eq 0 -and $sha) { return $sha } else { return $null }
+        } finally {
+            Pop-Location
+        }
+    } catch {
+        return $null
+    }
+}
+
+${payloadHash} = Get-PayloadHash -StagingDir ${staging}
+${gitSha}      = Get-GitSha -RepoTop ${Top}
+${manifest}    = [pscustomobject]@{
+    built_at     = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+    git_sha      = ${gitSha}
+    payload_hash = ${payloadHash}
+    hostname     = ${HostName}
+    modules      = ${Modules}
+}
+(${manifest} | ConvertTo-Json -Depth 4) |
+    Out-File -FilePath (Join-Path ${staging} 'build-manifest.json') -Encoding UTF8
+Write-Host "Wrote build-manifest.json (payload_hash=${payloadHash}, git_sha=${gitSha})"
+
 Write-Host "Staged ${HostName} at ${staging}"
 
 # save allocation CSV if we changed it
