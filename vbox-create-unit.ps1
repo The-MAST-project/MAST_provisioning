@@ -18,12 +18,13 @@
     A. VBoxManage startvm mast-unit --type gui
     B. Walk through the Windows installer in the GUI window
     C. After Windows boots:
-       - Configure static IP 192.168.56.20/24, gateway 192.168.56.1 on
-         the host-only adapter
+       - Leave the host-only adapter on DHCP (enable VirtualBox DHCP for the
+         host-only network if needed), or use a temporary address until DNS/hosts
+         maps the unit hostname (mast01) from this host.
        - Run bootstrap-winrm.ps1 (creates 'mast' user, enables WinRM)
        - Run prepare-mast-client.ps1 -HostName mast01 -Provider 192.168.56.1
        - Verify WinRM reachability from this host (the prov server) on
-         port 5985 and 5986
+         port 5985 and 5986 using the unit hostname once it resolves
     D. Power off cleanly, then come back here and run:
          vbox-create-unit.ps1 -SnapshotOnly
        to take the 'clean-state' and 'post-prepare' snapshots.
@@ -34,10 +35,11 @@
 
 .PARAMETER AutounattendIso
   Optional. Path to an autounattend ISO (built by build-autounattend-iso.ps1).
-  When supplied, mounts it on the IDE controller's secondary slot so Windows
-  Setup picks up Autounattend.xml automatically. Skips the manual install
-  walkthrough entirely; FirstLogonCommands runs bootstrap-winrm.ps1 from
-  the ISO so WinRM is reachable from the prov server on first boot.
+  When supplied, mounts the Windows install ISO on SATA port 1 (EFI must boot
+  that disc) and the autounattend ISO on port 2. Setup discovers Autounattend.xml
+  on the second optical volume during windowsPE. Skips the manual install
+  walkthrough entirely; FirstLogonCommands runs bootstrap-winrm.ps1 from the ISO
+  (factory user -> mast, WinRM) so the prov server can reach the unit on first boot.
 
 .PARAMETER VmName
   VM name in VirtualBox. Default 'mast-unit'.
@@ -88,10 +90,28 @@ function Test-HostOnlyNetExists {
     return ($nets -match '192\.168\.56\.1')
 }
 
+$totalSw = [System.Diagnostics.Stopwatch]::StartNew()
+$phaseSw = [System.Diagnostics.Stopwatch]::StartNew()
+function Format-MastElapsed([TimeSpan]$t) {
+    if ($t.TotalHours -ge 1) { return $t.ToString('h\:mm\:ss') }
+    if ($t.TotalMinutes -ge 1) { return ('{0:N1} min' -f $t.TotalMinutes) }
+    return ('{0:N2}s' -f $t.TotalSeconds)
+}
+function Write-MastTiming([string]$Label) {
+    $phaseSw.Stop()
+    Write-Host ('[TIMING] {0}: {1}' -f $Label, (Format-MastElapsed $phaseSw.Elapsed)) -ForegroundColor DarkCyan
+    $phaseSw.Restart()
+}
+function Write-MastTimingTotal([string]$Note) {
+    $totalSw.Stop()
+    Write-Host ('[TIMING] Total (vbox-create-unit.ps1 {0}): {1}' -f $Note, (Format-MastElapsed $totalSw.Elapsed)) -ForegroundColor Cyan
+}
+
 # ---------------------------------------------------------------------------
 # Snapshot-only mode
 # ---------------------------------------------------------------------------
 if ($SnapshotOnly) {
+    $phaseSw.Restart()
     Write-Headline "Snapshot-only mode for VM '$VmName'"
     if (-not (Test-VmExists $VmName)) { throw "VM '$VmName' does not exist." }
 
@@ -109,10 +129,12 @@ if ($SnapshotOnly) {
             VBox snapshot $VmName take $snap --description "Auto-taken by vbox-create-unit.ps1"
         }
     }
+    Write-MastTiming 'Snapshots'
     Write-Host "`nSnapshots ready. Restore with:"
     Write-Host "  VBoxManage controlvm $VmName poweroff"
     Write-Host "  VBoxManage snapshot $VmName restore post-prepare"
-    Write-Host "  VBoxManage startvm $VmName --type headless"
+    Write-Host "  VBoxManage startvm $VmName --type gui"
+    Write-MastTimingTotal 'SnapshotOnly'
     exit 0
 }
 
@@ -135,21 +157,25 @@ if ($AutounattendIso) {
 }
 
 if (-not (Test-HostOnlyNetExists)) {
-    Write-Warning "No host-only network with 192.168.56.1 found. Create one in VirtualBox > Tools > Network Manager (subnet 192.168.56.0/24, DHCP off), then re-run."
+    Write-Warning "No host-only network with 192.168.56.1 found. Create one in VirtualBox > Tools > Network Manager (subnet 192.168.56.0/24). Enable the DHCP server there if you want addresses assigned automatically."
+    Write-MastTimingTotal '(preflight failed)'
     exit 1
 }
 
 if (Test-VmExists $VmName) {
     Write-Host "VM '$VmName' already exists -- skipping creation steps."
     Write-Host "Delete it first if you want to recreate: VBoxManage unregistervm $VmName --delete"
+    Write-MastTimingTotal '(VM already exists)'
     exit 0
 }
 
 # ---------------------------------------------------------------------------
 # Create VM
 # ---------------------------------------------------------------------------
+$phaseSw.Restart()
 Write-Headline "Creating VM '$VmName'"
 VBox createvm --name $VmName --ostype Windows11_64 --register
+Write-MastTiming 'Register VM'
 
 # ---------------------------------------------------------------------------
 # Hardware: CPU / RAM / firmware / clipboard / paravirt
@@ -170,6 +196,7 @@ VBox modifyvm $VmName `
 
 # Add TPM 2.0 (Windows 11 hard requirement)
 VBox modifyvm $VmName --tpm-type 2.0
+Write-MastTiming 'Hardware + TPM'
 
 # ---------------------------------------------------------------------------
 # Storage: SATA controller + dynamic VDI
@@ -188,17 +215,24 @@ VBox storageattach $VmName --storagectl SATA --port 0 --device 0 --type hdd --me
 # ---------------------------------------------------------------------------
 # Storage: ISO(s) on SATA (EFI boots SATA DVDs reliably; IDE PIIX4 + EFI
 # sometimes fails to enumerate the DVD as a boot device).
+# Windows install ISO MUST be port 1 (first DVD): firmware boots bootmgr/setup from it.
+# Autounattend-only ISO on port 2 is not a substitute boot image; putting it on
+# port 1 causes EFI to target the wrong disc (flash/error), then unattended breaks.
 # ---------------------------------------------------------------------------
-Write-Headline "Mounting Windows ISO"
-VBox storageattach $VmName --storagectl SATA --port 1 --device 0 --type dvddrive --medium $IsoPath
-
+Write-Headline "Mounting ISO(s)"
 if ($AutounattendIso) {
+    Write-Host "  + Windows install ISO at SATA port 1: $IsoPath"
+    VBox storageattach $VmName --storagectl SATA --port 1 --device 0 --type dvddrive --medium $IsoPath
     Write-Host "  + Autounattend ISO at SATA port 2: $AutounattendIso"
     VBox storageattach $VmName --storagectl SATA --port 2 --device 0 --type dvddrive --medium $AutounattendIso
+} else {
+    Write-Host "  + Windows install ISO at SATA port 1: $IsoPath"
+    VBox storageattach $VmName --storagectl SATA --port 1 --device 0 --type dvddrive --medium $IsoPath
 }
 
-# Boot order: DVD first so Windows installer launches on first boot
+# Boot order: DVD (Windows on port 1) before disk.
 VBox modifyvm $VmName --boot1 dvd --boot2 disk --boot3 none --boot4 none
+Write-MastTiming 'VDI + ISO mounts + boot order'
 
 # ---------------------------------------------------------------------------
 # Network: NAT (adapter 1) + host-only (adapter 2)
@@ -218,6 +252,7 @@ VBox modifyvm $VmName `
     --nic2 hostonly `
     --hostonlyadapter2 $hostOnlyName `
     --nictype2 82540EM
+Write-MastTiming 'Network adapters'
 
 # ---------------------------------------------------------------------------
 # Done
@@ -232,27 +267,27 @@ Next steps (autounattend mode):
   1) Start the VM (GUI mode if you want to watch progress):
        VBoxManage startvm {0} --type gui
 
-     Within ~5 seconds, the Windows installer shows
+     Within ~5 seconds, the Windows installer may show
        "Press any key to boot from CD or DVD..."
-     If ignored, EFI gives up and shows a boot-failed dialog. Send Enter:
-       Start-Sleep 5; VBoxManage controlvm {0} keyboardputscancode 1c 9c
+     Click the VM window and press Enter (if ignored, EFI may show a boot-failed dialog).
 
   2) Wait. Windows installs unattended (~15-25 min depending on host).
      The answer file + bootstrap-winrm.ps1 do all of:
        - Wipe disk 0, partition GPT, install Windows
-       - Create the 'mast' admin account
-       - Pin the host-only NIC to static 192.168.56.20/24
+       - Create generic factory admin user/password1, auto-logon once
+       - Run bootstrap-winrm.ps1 (rename OEM user -> mast, WinRM)
+       - Leave host-only networking on DHCP (no static IP requirement)
        - Bring up WinRM HTTP + Basic on port 5985
 
-  3) From this host confirm WinRM reachability:
-       Test-NetConnection 192.168.56.20 -Port 5985
+  3) Ensure mast01 resolves from this host (hosts file or DNS). Then confirm WinRM:
+       Test-NetConnection mast01 -Port 5985
 
   4) Run prepare-mast-client.ps1 remotely from the prov server to finish
      hostname rename + WinRM HTTPS:
        $cred = Get-Credential   # mast / physics
-       Invoke-Command -ComputerName 192.168.56.20 -Credential $cred ``
+       Invoke-Command -ComputerName mast01 -Credential $cred ``
            -FilePath .\client\prepare-mast-client.ps1 ``
-           -ArgumentList @{HostName='mast01'; Provider='192.168.56.1'}
+           -ArgumentList @{{HostName='mast01'; Provider='192.168.56.1'}}
 
   5) Power the VM off cleanly, then:
        .\vbox-create-unit.ps1 -SnapshotOnly
@@ -267,10 +302,8 @@ Next steps (manual install):
 
   2) Walk through Windows setup in the VM window.
      When done and at the desktop, inside the VM:
-       - Open Settings, then Network, then Ethernet (host-only adapter):
-           IP:      192.168.56.20
-           Mask:    255.255.255.0
-           Gateway: 192.168.56.1
+       - Prefer DHCP on the host-only adapter (enable VBox host-only DHCP or use
+         a lease-friendly layout). Identity is the hostname (mast01), not a fixed IP.
        - Open an admin PowerShell and run, in this order:
              Set-ExecutionPolicy Bypass -Scope Process -Force
              .\bootstrap-winrm.ps1
@@ -279,9 +312,9 @@ Next steps (manual install):
      (Copy these two scripts onto the VM via shared clipboard or a
       temporary VBox shared folder.)
 
-  3) From this host (192.168.56.1) confirm WinRM reachability:
-       Test-NetConnection 192.168.56.20 -Port 5985
-       Test-NetConnection 192.168.56.20 -Port 5986
+  3) From this host (192.168.56.1) map mast01 to the VM address if needed, then:
+       Test-NetConnection mast01 -Port 5985
+       Test-NetConnection mast01 -Port 5986
 
   4) Power the VM off cleanly (shutdown from inside Windows), then:
        .\vbox-create-unit.ps1 -SnapshotOnly
@@ -293,3 +326,4 @@ Next steps (manual install):
 '@
 }
 Write-Host ($nextSteps -f $VmName)
+Write-MastTimingTotal '(create VM)'

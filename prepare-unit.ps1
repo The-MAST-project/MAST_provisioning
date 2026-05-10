@@ -1,5 +1,5 @@
 param(
-    [string]$UnitIP   = "192.168.64.20",
+    [string]$UnitHost = "mast01",
     [string]$ProvIP   = "192.168.64.10",
     [string]$HostName = "mast01",
     [string]$User     = ".\mast",
@@ -11,8 +11,8 @@ $pass  = ConvertTo-SecureString $Password -AsPlainText -Force
 $cred  = New-Object System.Management.Automation.PSCredential($User, $pass)
 $sopts = New-PSSessionOption -SkipCACheck -SkipCNCheck
 
-Write-Host "Connecting to $UnitIP..."
-$s = New-PSSession -ComputerName $UnitIP -Port 5985 -Credential $cred -SessionOption $sopts
+Write-Host "Connecting to $UnitHost..."
+$s = New-PSSession -ComputerName $UnitHost -Port 5985 -Credential $cred -SessionOption $sopts
 if (-not $s) { Write-Error "Failed to open PSSession"; exit 1 }
 Write-Host "Connected."
 

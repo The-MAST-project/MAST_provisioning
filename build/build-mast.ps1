@@ -28,16 +28,28 @@ param(
     'vscode',
     'wireshark',
     'zwo'
-    ) # your module order
+    ), # your module order
+  # Dev/test: allow missing NoMachine license files (skip staging nomachine.lic).
+  [switch]${AllowMissingNoMachineLicense},
+  # Dev/test: allow missing GitHub token file (skip staging mast_github.txt).
+  [switch]${AllowMissingGithubToken},
+  # Dev/test: skip SMB share creation (WinRM push is preferred).
+  [switch]${SkipSmbShare}
+  ,
+  # Dev/test: allow missing large optional assets (skip with warning).
+  [switch]${TestMode}
 )
 
 # Require administrator
 ${isAdmin} = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")
 if (-not ${isAdmin}) {
-    Write-Host "This script requires Administrator privileges."
-    ${arguments} = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Top `"${Top}`" -HostName `"${HostName}`""
-    Start-Process -FilePath "powershell.exe" -ArgumentList ${arguments} -Verb RunAs -Wait
-    exit 0
+    if (-not ${SkipSmbShare}) {
+        Write-Host "This script requires Administrator privileges."
+        ${arguments} = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Top `"${Top}`" -HostName `"${HostName}`""
+        Start-Process -FilePath "powershell.exe" -ArgumentList ${arguments} -Verb RunAs -Wait
+        exit 0
+    }
+    Write-Warning "Running non-elevated due to -SkipSmbShare (dev/test mode). Linking optimizations will be disabled."
 }
 
 # Set-StrictMode -Version Latest
@@ -108,6 +120,16 @@ function New-LinkOrCopy {
     if (Test-Path $LinkPath) { Remove-Item -Force -Recurse $LinkPath -ErrorAction SilentlyContinue }
 
     $isDir = Test-Path $Target -PathType Container
+
+    # Non-admin mode: avoid mklink/junction attempts entirely (they can trigger permission errors / UAC prompts).
+    if (-not ${isAdmin}) {
+        if ($isDir) {
+            robocopy "$Target" "$LinkPath" /E /NFL /NDL /NJH /NJS /NP | Out-Null
+        } else {
+            Copy-Item -Force $Target $LinkPath
+        }
+        return
+    }
 
     # Prefer junction for directories (no Developer Mode needed)
     if ($isDir) {
@@ -184,7 +206,7 @@ function New-LinkOrCopy {
 #             $dstInStage  = Join-Path $StagingRoot $rel
 #             New-LinkOrCopy -Target $srcInCommon -LinkPath $dstInStage
 #         } else {
-#             # Non-asset → copy (scripts, etc.)
+#             # Non-asset -> copy (scripts, etc.)
 #             $dst = Join-Path $StagingRoot $rel
 #             $dstDir = Split-Path $dst -Parent
 #             New-Item -ItemType Directory -Force -Path $dstDir | Out-Null
@@ -289,7 +311,19 @@ foreach (${m} in ${Modules}) {
 
   foreach (${cmdfile} in ${mf}.commandfiles) {
     ${src} = Join-Path (Join-Path ${providersRoot} ${m}) ${cmdfile}
-    if (-not (Test-Path ${src})) { throw "[${m}] missing CommandFile: ${src}" }
+    if (-not (Test-Path ${src})) {
+        # Dev/test exception: some payloads are intentionally omitted (large artifacts).
+        $norm = (${cmdfile} -replace '\\','/').ToLowerInvariant()
+        if (${TestMode} -and (
+            ($m -eq 'cygwin' -and $norm -eq 'assets/astrometry.tgz') -or
+            # mast_github.txt is sourced from vault/ and staged separately
+            ($m -eq 'mast' -and $norm -eq 'assets/mast_github.txt')
+        )) {
+            Write-Warning "[${m}] Optional dev/test CommandFile missing: ${src} (skipping due to -TestMode)"
+            continue
+        }
+        throw "[${m}] missing CommandFile: ${src}"
+    }
 
     # Flatten assets/ files to staging root; keep scripts in root
     if (${cmdfile} -like "assets/*") {
@@ -310,30 +344,48 @@ foreach (${m} in ${Modules}) {
 # clone base commands; optionally inject a per-host license into the nomachine command
 ${cmds} = ${baseCmds}
 
-# do we already have a license for this host?
-${existing} = ${allocRows} | Where-Object { $_.host -ieq ${HostName} } | Select-Object -First 1
-if (${existing}) {
-    Copy-Item -Force -Path (Join-Path ${LicensesRoot} ${existing}.license) -Destination (Join-Path ${staging} "nomachine.lic")
-} else {
-    ${allocatedNames} = @(${allocRows} | ForEach-Object { $_.license }) | Where-Object { $_ } | Select-Object -Unique
-    ${free} = ${allLicFiles} | Where-Object { ${allocatedNames} -notcontains $_.Name } | Select-Object -First 1
-    if (-not ${free}) {
-        Write-Warning "No free NoMachine license left for ${HostName} (have $(@(${allLicFiles}).Count) total)."
+if (${Modules} -contains 'nomachine') {
+    # do we already have a license for this host?
+    ${existing} = ${allocRows} | Where-Object { $_.host -ieq ${HostName} } | Select-Object -First 1
+    if (${existing}) {
+        $licPath = Join-Path ${LicensesRoot} ${existing}.license
+        if (Test-Path $licPath) {
+            Copy-Item -Force -Path $licPath -Destination (Join-Path ${staging} "nomachine.lic")
+        } elseif (${AllowMissingNoMachineLicense}) {
+            Write-Warning "NoMachine license '$licPath' missing; continuing due to -AllowMissingNoMachineLicense."
+        } else {
+            throw "NoMachine license '$licPath' missing. Provide the license or pass -AllowMissingNoMachineLicense for dev/test."
+        }
     } else {
-        ${allocRows} += [pscustomobject]@{ license=${free}.Name; host=${HostName} }
-        # stage that single .lic
-        Copy-Item -Force ${free}.FullName (Join-Path ${staging} "nomachine.lic")
-  }
+        ${allocatedNames} = @(${allocRows} | ForEach-Object { $_.license }) | Where-Object { $_ } | Select-Object -Unique
+        ${free} = ${allLicFiles} | Where-Object { ${allocatedNames} -notcontains $_.Name } | Select-Object -First 1
+        if (-not ${free}) {
+            Write-Warning "No free NoMachine license left for ${HostName} (have $(@(${allLicFiles}).Count) total)."
+        } else {
+            ${allocRows} += [pscustomobject]@{ license=${free}.Name; host=${HostName} }
+            # stage that single .lic
+            Copy-Item -Force ${free}.FullName (Join-Path ${staging} "nomachine.lic")
+        }
+    }
 }
 
-# deploy the github token
-Copy-Item -Path (Join-Path ${vault} 'tokens\mast_github.txt') (Join-Path ${staging} 'mast_github.txt')
+if (${Modules} -contains 'mast') {
+    # deploy the github token (used by the mast module)
+    $tokenPath = Join-Path ${vault} 'tokens\mast_github.txt'
+    if (Test-Path $tokenPath) {
+        Copy-Item -Force -Path $tokenPath (Join-Path ${staging} 'mast_github.txt')
+    } elseif (${AllowMissingGithubToken}) {
+        Write-Warning "GitHub token '$tokenPath' missing; continuing due to -AllowMissingGithubToken."
+    } else {
+        throw "GitHub token '$tokenPath' missing. Create it or pass -AllowMissingGithubToken for dev/test."
+    }
+}
 
 # emit commands.json
 (${cmds} | Select-Object order,desc,cmd,module | ConvertTo-Json -Depth 6) | Out-File -FilePath (Join-Path ${staging} 'commands.json') -Encoding UTF8
 
 # ---------------------------------------------------------------------------
-# build-manifest.json — payload fingerprint for autonomous drift detection.
+# build-manifest.json - payload fingerprint for autonomous drift detection.
 # Consumed by check-and-provision.ps1 to decide whether a unit needs an update,
 # and copied to C:\ProgramData\MAST\installed-manifest.json on the unit by
 # execute-mast-provisioning.ps1 once provisioning succeeds.
@@ -397,6 +449,11 @@ Write-Host "Staged ${HostName} at ${staging}"
 Save-AllocCsv -Path ${allocCsv} -Rows ${allocRows}
 
 # Share staging folder over network
+if (${SkipSmbShare}) {
+    Write-Host "Skipping SMB share creation due to -SkipSmbShare."
+    exit 0
+}
+
 ${shareName} = "mast-staging"
 ${sharePath} = ${OutRoot}
 ${shareComment} = "MAST provisioning staging area for VMs and physical machines"

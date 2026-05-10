@@ -26,7 +26,7 @@ pipeline against a single VirtualBox VM on the same host.
 |                                   |
 |   VirtualBox (dev/test only)      |
 |     +-------- mast-unit VM ------+|
-|     |  192.168.56.20             ||
+|     |  DHCP / mast01 (DNS)       ||
 |     |  WinRM, HTTPS              ||
 |     +----------------------------+|
 +-----------------------------------+
@@ -104,8 +104,10 @@ This is the only path operators run by hand. Everything else is autonomous.
 
    ```powershell
    Set-ExecutionPolicy Bypass -Scope Process -Force
-   .\onboard-mast-unit.ps1 -HostName mast05 -ProvServer <prov-ip> -StaticIp 10.x.y.z/24
+   .\onboard-mast-unit.ps1 -HostName mast05 -ProvServer <prov-ip-or-dns>
    ```
+
+   Ensure `mast05` resolves from the provisioning server (DNS or hosts file). Units use DHCP; identity is the hostname, not a fixed IP.
 
 4. The script runs Stages 0-5 (preflight, bootstrap, prepare, provision, register,
    handoff) and exits `ONBOARD_OK`. From here on the prov server's Task Scheduler
@@ -183,16 +185,16 @@ Two paths: an unattended path (recommended) and a manual path.
 .\vbox-create-unit.ps1 -IsoPath C:\path\to\Win11_or_IoTLTSC.iso `
                        -AutounattendIso .\autounattend-mast.iso
 
-# 3) Start headless and wait ~15-25 min:
-VBoxManage startvm mast-unit --type headless
+# 3) Start with GUI and wait ~15-25 min:
+VBoxManage startvm mast-unit --type gui
 
-# 4) bootstrap-winrm.ps1 on the autounattend ISO pins the host-only NIC to
-#    192.168.56.20 and brings up WinRM. Confirm reachability:
-Test-NetConnection 192.168.56.20 -Port 5985
+# 4) bootstrap-winrm.ps1 leaves networking on DHCP and brings up WinRM. Confirm
+#    reachability by hostname once DNS or hosts maps mast01 to the VM address:
+Test-NetConnection mast01 -Port 5985
 
 # 5) Run prepare-mast-client.ps1 remotely to finish hostname + WinRM HTTPS:
 $cred = Get-Credential   # mast / physics
-Invoke-Command -ComputerName 192.168.56.20 -Credential $cred `
+Invoke-Command -ComputerName mast01 -Credential $cred `
     -FilePath .\client\prepare-mast-client.ps1 `
     -ArgumentList @{HostName='mast01'; Provider='192.168.56.1'}
 
@@ -213,7 +215,9 @@ Standard Time`. Override via parameters on `build-autounattend-iso.ps1`.
 VBoxManage startvm mast-unit --type gui
 
 # Inside the VM after first login:
-#   1) Set static IP 192.168.56.20/24, gateway 192.168.56.1
+#   1) Ensure the host-only adapter has an address (DHCP on the VirtualBox
+#      host-only network, or set a temporary address) and that mast01 resolves
+#      from the host after prepare-mast-client runs.
 #   2) Open admin PowerShell:
 #         Set-ExecutionPolicy Bypass -Scope Process -Force
 #         .\bootstrap-winrm.ps1
@@ -230,17 +234,17 @@ tools) and `post-prepare` (after `bootstrap-winrm` + `prepare-mast-client` ran).
 ### Run a test cycle
 
 ```powershell
-# Single cycle, all modules:
-python .\run-prov-test.py --host-unit 192.168.56.20 --hostname mast01
+# Single cycle, all modules (--host-unit is the WinRM target: hostname preferred):
+python .\run-prov-test.py --host-unit mast01 --hostname mast01
 
 # Just the build (no transfer / execute):
-python .\run-prov-test.py --host-unit 192.168.56.20 --hostname mast01 --build-only
+python .\run-prov-test.py --host-unit mast01 --hostname mast01 --build-only
 
 # Three cycles, restoring the post-prepare snapshot between each:
-python .\run-prov-test.py --host-unit 192.168.56.20 --hostname mast01 --repeat 3
+python .\run-prov-test.py --host-unit mast01 --hostname mast01 --repeat 3
 
 # Subset of modules (faster iteration on a single problem):
-python .\run-prov-test.py --host-unit 192.168.56.20 --hostname mast01 --modules python,mast
+python .\run-prov-test.py --host-unit mast01 --hostname mast01 --modules python,mast
 ```
 
 Logs land in `test-runs/<timestamp>-cycle<N>/results.json`.

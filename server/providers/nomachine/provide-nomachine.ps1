@@ -23,7 +23,7 @@
   Show usage.
 
 .NOTES
-  Run as admin. Suitable for WCD ProvisioningCommands → DeviceContext.
+  Run as admin. Suitable for WCD ProvisioningCommands -> DeviceContext.
 #>
 
 [CmdletBinding(SupportsShouldProcess = $true)]

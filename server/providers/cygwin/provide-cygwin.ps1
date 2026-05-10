@@ -67,9 +67,10 @@ try {
         throw "bash.exe not found at ${bashExe}"
     }
 
-    # Execute any pending /etc/postinstall/*.sh (rename to .done after success)
+    # Execute any pending /etc/postinstall/*.sh (rename to .done after success).
+    # Avoid temp scripts and CRLF/encoding issues by running inline.
     Write-Host "Running Cygwin postinstall scripts ..."
-    ${postInstallCmd} = @'
+    & ${bashExe} -lc @'
 set -e
 shopt -s nullglob
 for f in /etc/postinstall/*.sh; do
@@ -78,17 +79,6 @@ for f in /etc/postinstall/*.sh; do
 done
 exit 0
 '@
-
-    # Run inside Cygwin.
-    # Write to a Windows path, then convert to a Cygwin path via cygpath so
-    # bash can locate the file (bash cannot resolve Windows-style paths directly).
-    ${tmpScript} = Join-Path ${env:TEMP} "cygwin_postinstall_$(Get-Random).sh"
-    Set-Content -Path ${tmpScript} -Value ${postInstallCmd} -Encoding ASCII
-    # Cygwin -lc login shell emits skeleton-file messages before the cygpath output;
-    # take only the last line which is the actual converted path.
-    ${cygTmp} = ((& ${bashExe} -lc "cygpath -u '$($tmpScript -replace '\\','/')'") | Select-Object -Last 1).Trim()
-    & ${bashExe} -lc "dos2unix '$cygTmp' 2>/dev/null; chmod +x '$cygTmp' && bash '$cygTmp'"
-    Remove-Item -Force ${tmpScript} -ErrorAction SilentlyContinue
 
     # --- Verification: print versions and a simple command ---
     Write-Host "Verifying Cygwin ..."
@@ -105,9 +95,16 @@ exit 0
 
     Write-Host "Cygwin installed to ${InstallRoot}. PATH updated. Verification log at ${verifyLog}."
 
-    Write-Host "Expanding Astrometry.net ..."
-    Expand-AnyArchive -ArchivePath ${astrometryArchivePath} -Destination "C:\cygwin64\usr\local\astrometry"
-    Write-Host "Astrometry.net expanded."
+    # Optional: Astrometry.net payload can be very large and may not be present in
+    # dev/test runs. Skip gracefully if missing.
+    ${astrometryArchivePath} = Join-Path ${AssetsRoot} ${AstrometryArchiveName}
+    if (Test-Path ${astrometryArchivePath}) {
+        Write-Host "Expanding Astrometry.net ..."
+        Expand-AnyArchive -ArchivePath ${astrometryArchivePath} -Destination "C:\cygwin64\usr\local\astrometry"
+        Write-Host "Astrometry.net expanded."
+    } else {
+        Write-Warning "Astrometry archive not found: ${astrometryArchivePath}. Skipping (dev/test mode)."
+    }
 }
 finally {
     Stop-ProvisionLog

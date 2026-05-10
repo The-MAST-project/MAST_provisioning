@@ -65,12 +65,20 @@ try {
 } catch {}
 try {
   $cert = Get-ChildItem Cert:\LocalMachine\My | Where-Object {
-    $_.HasPrivateKey -and $_.DnsNameList.Unicode -contains '192.168.56.20'
+    if (-not $_.HasPrivateKey) { return $false }
+    foreach ($u in $_.DnsNameList.Unicode) {
+      if ($u -eq $activeName) { return $true }
+      try {
+        [void][System.Net.IPAddress]::Parse($u)
+        return $true
+      } catch {}
+    }
+    return $false
   } | Sort-Object NotAfter -Descending | Select-Object -First 1
 } catch {}
 
 if (-not $cert) {
-  Write-Host "ERROR: no suitable cert found with DNS name 192.168.56.20 in Cert:\LocalMachine\My" -ForegroundColor Red
+  Write-Host "ERROR: no suitable cert found for this machine name or IPv4 in Cert:\LocalMachine\My" -ForegroundColor Red
 } else {
   Write-Host ("Using cert thumbprint: " + $cert.Thumbprint)
   Write-Host ("Using listener Hostname: " + $activeName)

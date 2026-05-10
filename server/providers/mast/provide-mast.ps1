@@ -87,7 +87,7 @@ try {
                 # Try: python -m virtualenv .venv
                 Invoke-Exe -FilePath ${PythonExe} -Arguments "-m virtualenv `"$venvPath`"" -Tag "venv-create"
             }
-            # Fallback to stdlib venv if virtualenv module isn’t present
+            # Fallback to stdlib venv if virtualenv module isn't present
             if (-not (Test-Path ${venvPython})) {
                 Invoke-Exe -FilePath ${PythonExe} -Arguments "-m venv `"$venvPath`"" -Tag "venv-create-fallback"
             }

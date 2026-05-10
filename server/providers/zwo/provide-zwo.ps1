@@ -14,7 +14,7 @@ function Invoke-Installer {
     $finished = $p.WaitForExit($TimeoutSec * 1000)
     if (-not $finished) {
         $p.Kill()
-        Write-Warning "Installer timed out after ${TimeoutSec}s — killed"
+        Write-Warning "Installer timed out after ${TimeoutSec}s - killed"
     }
     return $p.ExitCode
 }

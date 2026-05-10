@@ -20,7 +20,7 @@ try {
     & ${pwi4InstallerPath} /S 2>&1 | Tee-Object -FilePath ${logFile} -Append
     Start-Sleep -Seconds 5
 
-    # Locate pwi4.exe — NSIS installs to its own default path; search rather than hardcode.
+    # Locate pwi4.exe - NSIS installs to its own default path; search rather than hardcode.
     ${pwi4ExePath} = Get-ChildItem -Path 'C:\Program Files', 'C:\Program Files (x86)' `
         -Recurse -Filter 'pwi4.exe' -ErrorAction SilentlyContinue |
         Select-Object -First 1 -ExpandProperty FullName

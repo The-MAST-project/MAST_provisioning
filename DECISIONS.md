@@ -14,7 +14,7 @@ two layers of indirection (Mac shared folder, prov-server VM).
 **What:**
 - The Windows host (`192.168.56.1` on the existing VirtualBox host-only network)
   runs `build-mast.ps1` natively. No `\\vboxsvr\mast-prov` mount, no UTM SMB share.
-- One VirtualBox VM (`mast-unit`, `192.168.56.20`) plays the unit role. Reset
+- One VirtualBox VM (`mast-unit`, identified by hostname `mast01` / DHCP on host-only) plays the unit role. Reset
   between cycles with `VBoxManage snapshot restore` (UTM Disposable Mode is gone).
 - The Mac/UTM-specific orchestrator code in `run-prov-test.py` was replaced
   with a Windows + `VBoxManage` variant. The build phase becomes a local

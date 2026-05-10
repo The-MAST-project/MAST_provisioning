@@ -4,7 +4,7 @@
 This is throwaway test scaffolding for the Stage C/D bring-up of MAST
 provisioning on a Windows 11 host with a single VirtualBox unit VM.
 It is retired once `server/check-and-provision.ps1` (the autonomous
-driver) is working — see autonomous-provisioning.md.
+driver) is working - see autonomous-provisioning.md.
 
 Drives a full MAST provisioning cycle:
   1. BUILD    - host runs build-mast.ps1 locally (no VM, no WinRM)
@@ -15,7 +15,7 @@ Drives a full MAST provisioning cycle:
 
 Usage (Windows PowerShell, run from anywhere):
     python MAST_provisioning\\run-prov-test.py ^
-        --host-unit 192.168.56.20 ^
+        --host-unit mast01 ^
         --hostname  mast01 ^
         [--modules python,ascom,mast] ^
         [--repeat 3] ^
@@ -66,7 +66,7 @@ LOG_ROOT = REPO_ROOT / "test-runs"
 
 VBOXMANAGE = Path(r"C:\Program Files\Oracle\VirtualBox\VBoxManage.exe")
 
-# The Windows host's address on the host-only adapter — the unit pulls
+# The Windows host's address on the host-only adapter - the unit pulls
 # staging files from us over HTTP on this address.
 HOST_TRANSFER_HOST = "192.168.56.1"
 HTTP_TRANSFER_PORT = 18080
@@ -90,7 +90,7 @@ ALL_MODULES = [
 ]
 
 # ---------------------------------------------------------------------------
-# Logging — tee to file and stdout
+# Logging - tee to file and stdout
 # ---------------------------------------------------------------------------
 _log_file: TextIO | None = None
 
@@ -125,6 +125,16 @@ def log_to_file(path: Path) -> Generator[None, None, None]:
             _log_file = None
 
 
+def _format_elapsed(seconds: float) -> str:
+    if seconds >= 3600:
+        h, rem = divmod(int(seconds), 3600)
+        m, s = divmod(rem, 60)
+        return f"{h}h {m}m {seconds % 60:.1f}s"
+    if seconds >= 60:
+        return f"{seconds / 60:.2f} min ({seconds:.1f}s)"
+    return f"{seconds:.2f}s"
+
+
 @contextmanager
 def timed(label: str) -> Generator[None, None, None]:
     log(f"\n=== {label} ===")
@@ -132,8 +142,8 @@ def timed(label: str) -> Generator[None, None, None]:
     try:
         yield
     finally:
-        elapsed = int(time.monotonic() - t0)
-        log(f"=== {label} done in {elapsed}s ===")
+        elapsed = time.monotonic() - t0
+        log(f"=== {label} done in {_format_elapsed(elapsed)} ===")
 
 
 # ---------------------------------------------------------------------------
@@ -184,7 +194,7 @@ def _run_with_heartbeat(
             log(f"  ... {label} still running ({elapsed}s elapsed)")
             if elapsed >= timeout_s:
                 raise TimeoutError(
-                    f"{label} exceeded {timeout_s}s timeout — likely hung"
+                    f"{label} exceeded {timeout_s}s timeout - likely hung"
                 )
     if exc:
         raise exc[0]
@@ -283,8 +293,8 @@ def unit_reset_to_snapshot(vm: str, snapshot: str) -> None:
 
 
 def unit_start(vm: str) -> None:
-    log(f"Starting VM '{vm}' (headless)...")
-    vbox("startvm", vm, "--type", "headless")
+    log(f"Starting VM '{vm}' (GUI)...")
+    vbox("startvm", vm, "--type", "gui")
 
 
 def setup_log_dir(cycle: int) -> Path:
@@ -295,7 +305,7 @@ def setup_log_dir(cycle: int) -> Path:
 
 
 # ---------------------------------------------------------------------------
-# Execute-log poller — streams provisioning-execute.log during execute phase
+# Execute-log poller - streams provisioning-execute.log during execute phase
 # ---------------------------------------------------------------------------
 
 class ExecuteLogPoller:
@@ -440,7 +450,7 @@ def phase_transfer(unit: winrm.Session, hostname: str) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             serve_root = Path(tmpdir)
             for local, remote_name in transfer_files:
-                # On Windows, symlinks need either Developer Mode or admin —
+                # On Windows, symlinks need either Developer Mode or admin -
                 # fall back to hardlink on the same volume, then copy.
                 dest = serve_root / remote_name
                 try:
@@ -519,7 +529,7 @@ def phase_execute(unit: winrm.Session, host_unit: str, unit_cred: dict[str, str]
             poller.stop()
 
         if r.status_code != 0:
-            log(f"Execute exited with code {r.status_code} — fetching tail of execute log...")
+            log(f"Execute exited with code {r.status_code} - fetching tail of execute log...")
             _fetch_execute_log_tail(unit)
 
         return r
@@ -645,7 +655,11 @@ def phase_reset(
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="MAST VirtualBox provisioning test orchestrator (Windows host)")
-    p.add_argument("--host-unit", required=True, help="IP of the unit VM (e.g. 192.168.56.20)")
+    p.add_argument(
+        "--host-unit",
+        required=True,
+        help="WinRM target for the unit: hostname (recommended, e.g. mast01) or IPv4 if DNS is unavailable",
+    )
     p.add_argument("--hostname", default="mast01", help="Windows hostname for the unit (default: mast01)")
     p.add_argument("--modules", help="Comma-separated module list (default: all)")
     p.add_argument("--repeat", type=int, default=1, help="Number of test cycles (default: 1)")
@@ -667,13 +681,14 @@ def main() -> None:
     LOG_ROOT.mkdir(parents=True, exist_ok=True)
     run_ts = datetime.now().strftime("%Y%m%d-%H%M%S")
     run_log = LOG_ROOT / f"{run_ts}-run.log"
+    run_started = time.monotonic()
 
     with log_to_file(run_log):
         log(f"Run log: {run_log}")
         log(f"Modules: {', '.join(modules)}")
         log(f"Cycles:  {args.repeat}")
         log(f"VM:      {args.vbox_vm}  (snapshot: {args.snapshot})")
-        log(f"Unit IP: {args.host_unit}")
+        log(f"Unit WinRM target: {args.host_unit}")
 
         cycle_results: list[bool] = []
         built = False
@@ -695,7 +710,8 @@ def main() -> None:
                     break
 
                 if unit_session is None:
-                    wait_for_winrm(args.host_unit, creds["unit"])
+                    with timed("WAIT FOR WINRM"):
+                        wait_for_winrm(args.host_unit, creds["unit"])
                     unit_session = winrm_session(args.host_unit, creds["unit"])
 
                 phase_transfer(unit_session, args.hostname)
@@ -724,6 +740,11 @@ def main() -> None:
 
             if cycle < args.repeat and not args.no_reset:
                 unit_session = phase_reset(args.vbox_vm, args.snapshot, args.host_unit, creds["unit"])
+
+        log(
+            f"[TIMING] Total run (run-prov-test.py): "
+            f"{_format_elapsed(time.monotonic() - run_started)}"
+        )
 
         if not args.build_only:
             total = len(cycle_results)

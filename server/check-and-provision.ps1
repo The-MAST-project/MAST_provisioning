@@ -60,17 +60,27 @@
 
 [CmdletBinding()]
 param(
-    [string]   $RepoTop      = (Split-Path -Parent (Split-Path -Parent $PSCommandPath)),
+    [string]   $RepoTop      = '',
     [string]   $UnitRegistry,
     [string]   $VaultCreds,
     [string[]] $Modules,
     [string[]] $OnlyHosts,
     [switch]   $DryRun,
     [switch]   $Force,
-    [switch]   $WinRMUseSSL
+    [switch]   $WinRMUseSSL,
+    [switch]   $TestMode
 )
 
 $ErrorActionPreference = 'Stop'
+
+if (-not $RepoTop) {
+    $scriptDir = if ($PSScriptRoot) { $PSScriptRoot }
+                 elseif ($PSCommandPath) { Split-Path -Parent $PSCommandPath }
+                 elseif ($MyInvocation.MyCommand.Path) { Split-Path -Parent $MyInvocation.MyCommand.Path }
+                 else { (Get-Location).Path }
+    # This script lives at <RepoTop>\server\check-and-provision.ps1
+    $RepoTop = Split-Path -Parent $scriptDir
+}
 
 # ---------------------------------------------------------------------------
 # Paths and logging
@@ -124,7 +134,7 @@ function Log-Activity {
 # ---------------------------------------------------------------------------
 # Preflight
 # ---------------------------------------------------------------------------
-Log-Event 'RUN_START' @{ run_id=$RunId; trigger=if ($env:USERNAME -eq 'SYSTEM') {'TaskScheduler'} else {'manual'} }
+Log-Event 'RUN_START' @{ run_id=$RunId; trigger=$(if ($env:USERNAME -eq 'SYSTEM') {'TaskScheduler'} else {'manual'}) }
 
 if (-not (Test-Path $UnitRegistry)) {
     Log-Event 'FATAL' @{ reason='unit_registry_missing'; path=$UnitRegistry }
@@ -161,20 +171,31 @@ $exitCode = 0
 foreach ($unit in $units) {
     $unitStart = Get-Date
     $hostname = $unit.hostname
-    $ip       = $unit.ip
+    # Hostname is the identity / WinRM target (DNS must resolve). Legacy 'ip' field is ignored.
     $modules  = if ($Modules) { $Modules } else { $unit.modules }
     $payloadHash = ''
     $gitSha      = ''
 
-    Log-Event 'UNIT_BEGIN' @{ unit=$hostname; ip=$ip }
+    $resolved = $null
+    try {
+        $resolved = (
+            [System.Net.Dns]::GetHostAddresses($hostname) |
+              Where-Object AddressFamily -EQ ([System.Net.Sockets.AddressFamily]::InterNetwork) |
+              Where-Object { $_.IPAddressToString -notmatch '^(127\.|169\.254\.)' } |
+              Select-Object -First 1
+        ).IPAddressToString
+    } catch {}
+
+    Log-Event 'UNIT_BEGIN' @{ unit=$hostname; resolved_ip=$resolved }
 
     try {
         # -------------------------------------------------------------------
         # 1. Reachability -- fast TCP check, no full WinRM round-trip yet
         # -------------------------------------------------------------------
-        $tcp = Test-NetConnection -ComputerName $ip -Port (if ($WinRMUseSSL) {5986} else {5985}) -WarningAction SilentlyContinue
+        $port = if ($WinRMUseSSL) { 5986 } else { 5985 }
+        $tcp = Test-NetConnection -ComputerName $hostname -Port $port -WarningAction SilentlyContinue
         if (-not $tcp.TcpTestSucceeded) {
-            Log-Event 'UNIT_UNREACHABLE' @{ unit=$hostname; ip=$ip }
+            Log-Event 'UNIT_UNREACHABLE' @{ unit=$hostname; resolved_ip=$resolved }
             Log-Activity -Unit $hostname -Outcome 'UNREACHABLE' -Reason 'winrm_port_closed' `
                          -DurationS ([int]((Get-Date) - $unitStart).TotalSeconds)
             $exitCode = 1
@@ -186,7 +207,7 @@ foreach ($unit in $units) {
         # -------------------------------------------------------------------
         $sopts = New-PSSessionOption -SkipCACheck -SkipCNCheck
         $sessParams = @{
-            ComputerName  = $ip
+            ComputerName  = $hostname
             Credential    = $unitCred
             SessionOption = $sopts
         }
@@ -213,18 +234,25 @@ foreach ($unit in $units) {
             # ---------------------------------------------------------------
             Log-Event 'BUILD_START' @{ unit=$hostname }
             $buildScript = Join-Path $RepoTop 'build\build-mast.ps1'
-            $buildArgs = @(
-                '-NoProfile','-ExecutionPolicy','Bypass','-File', $buildScript,
-                '-Top', $RepoTop, '-HostName', $hostname
-            )
-            if ($modules) { $buildArgs += @('-Modules', ($modules -join ',')) }
             $buildLog = Join-Path $LogRoot "$RunId-$hostname-build.log"
-            $proc = Start-Process -FilePath powershell.exe -ArgumentList $buildArgs `
-                                   -NoNewWindow -Wait -PassThru `
-                                   -RedirectStandardOutput $buildLog -RedirectStandardError "$buildLog.err"
-            if ($proc.ExitCode -ne 0) {
-                Log-Event 'BUILD_FAIL' @{ unit=$hostname; exit_code=$proc.ExitCode; log=$buildLog }
-                Log-Activity -Unit $hostname -Outcome 'BUILD_FAIL' -Reason "exit_$($proc.ExitCode)" `
+            try {
+                # Run build in-process to avoid Start-Process quoting edge cases.
+                $args = @{
+                    Top        = $RepoTop
+                    HostName   = $hostname
+                    SkipSmbShare = $true
+                }
+                if ($modules) { $args.Modules = $modules }
+                if ($TestMode) {
+                    $args.TestMode = $true
+                    $args.AllowMissingNoMachineLicense = $true
+                    $args.AllowMissingGithubToken = $true
+                }
+                & $buildScript @args *>&1 | Out-File -FilePath $buildLog -Encoding UTF8
+            } catch {
+                $_ | Out-String | Out-File -FilePath "$buildLog.err" -Encoding UTF8
+                Log-Event 'BUILD_FAIL' @{ unit=$hostname; exit_code=1; log=$buildLog }
+                Log-Activity -Unit $hostname -Outcome 'BUILD_FAIL' -Reason "exception" `
                              -DurationS ([int]((Get-Date) - $unitStart).TotalSeconds)
                 $exitCode = 1
                 continue
@@ -278,22 +306,41 @@ foreach ($unit in $units) {
             # ---------------------------------------------------------------
             # 7. Transfer staging payload via WinRM (Copy-Item -ToSession)
             # ---------------------------------------------------------------
+            $unitStage = "C:\mast-staging\$RunId"
             $files = Get-ChildItem -Path $stagingDir -File
             $totalBytes = ($files | Measure-Object -Sum Length).Sum
             Log-Event 'TRANSFER_START' @{ unit=$hostname; files=$files.Count; bytes=$totalBytes }
             $tStart = Get-Date
 
             Invoke-Command -Session $session -ScriptBlock {
-                if (Test-Path 'C:\mast-staging') {
-                    Remove-Item 'C:\mast-staging' -Recurse -Force
+                param($stagePath)
+                # Use a unique staging directory per run to avoid file-lock collisions.
+                New-Item -ItemType Directory -Force -Path $stagePath | Out-Null
+                # Best-effort cleanup of older run dirs (keep newest 3).
+                $root = Split-Path $stagePath -Parent
+                if (Test-Path $root) {
+                    Get-ChildItem $root -Directory -ErrorAction SilentlyContinue |
+                        Sort-Object LastWriteTime -Descending |
+                        Select-Object -Skip 3 |
+                        ForEach-Object { Remove-Item -Recurse -Force $_.FullName -ErrorAction SilentlyContinue }
                 }
-                New-Item -ItemType Directory -Force -Path 'C:\mast-staging' | Out-Null
-            }
+            } -ArgumentList $unitStage
 
             $copied = 0
             foreach ($f in $files) {
-                Copy-Item -Path $f.FullName -Destination 'C:\mast-staging\' `
-                          -ToSession $session -Force
+                $attempt = 0
+                while ($true) {
+                    $attempt++
+                    try {
+                        Copy-Item -Path $f.FullName -Destination ($unitStage + '\') `
+                                  -ToSession $session -Force -ErrorAction Stop
+                        break
+                    } catch {
+                        # Some large EXEs can be transiently locked by AV / indexing right after build.
+                        if ($attempt -ge 5) { throw }
+                        Start-Sleep -Seconds (2 * $attempt)
+                    }
+                }
                 $copied += $f.Length
                 $elapsed = [int]((Get-Date) - $tStart).TotalSeconds
                 # Heartbeat every ~30s, not every file (would spam for large fleets).
@@ -309,11 +356,13 @@ foreach ($unit in $units) {
             Log-Event 'EXECUTE_START' @{ unit=$hostname }
             $eStart = Get-Date
             $execResult = Invoke-Command -Session $session -ScriptBlock {
+                param($stagePath)
                 Set-ExecutionPolicy Bypass -Scope Process -Force
-                & 'C:\mast-staging\execute-mast-provisioning.ps1' -StagingPath 'C:\mast-staging'
-                return $LASTEXITCODE
-            }
-            $execRc = [int]$execResult
+                # Suppress script output so the WinRM return value is just the exit code.
+                $null = & (Join-Path $stagePath 'execute-mast-provisioning.ps1') -StagingPath $stagePath
+                return [int]$LASTEXITCODE
+            } -ArgumentList $unitStage
+            $execRc = [int]($execResult | Select-Object -Last 1)
             $eDur   = [int]((Get-Date) - $eStart).TotalSeconds
             if ($execRc -ne 0) {
                 Log-Event 'EXECUTE_FAIL' @{ unit=$hostname; exit_code=$execRc; duration_s=$eDur }

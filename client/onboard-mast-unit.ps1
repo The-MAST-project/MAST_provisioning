@@ -40,10 +40,6 @@
   Only used if pulling source for local build; otherwise the script
   triggers check-and-provision.ps1 remotely on the prov server.
 
-.PARAMETER StaticIp
-  Optional. If given, configures the host-only adapter with this IP.
-  Format "192.168.56.20/24". Default: keep DHCP.
-
 .PARAMETER ResumeFrom
   Stage to resume from (0..5). Default: read checkpoint and continue.
 
@@ -58,8 +54,8 @@
   Log every action but do not execute side effects.
 
 .EXAMPLE
-  # Fresh physical unit:
-  .\onboard-mast-unit.ps1 -HostName mast01 -ProvServer 192.168.56.1 -StaticIp 192.168.56.20/24
+  # Fresh physical unit (networking stays DHCP; hostname identifies the machine):
+  .\onboard-mast-unit.ps1 -HostName mast01 -ProvServer 192.168.56.1
 
   # Resume after a failed Stage 3 (provisioning):
   .\onboard-mast-unit.ps1 -HostName mast01 -ProvServer 192.168.56.1 -ResumeFrom 3
@@ -76,7 +72,6 @@ param(
 
     [string]   $ProvUser      = '.\mast',
     [string]   $ProvSharePath = '',
-    [string]   $StaticIp      = '',
     [int]      $ResumeFrom    = -1,
     [string[]] $Modules,
     [string]   $MastUser      = 'mast',
@@ -234,28 +229,9 @@ function Stage-Bootstrap {
 }
 
 # ---------------------------------------------------------------------------
-# Stage 2 - PREPARE  (hostname, WinRM HTTPS, WU suppression, static IP, prov session)
+# Stage 2 - PREPARE  (hostname, WinRM HTTPS, WU suppression, prov session)
 # ---------------------------------------------------------------------------
 function Stage-Prepare {
-    if ($StaticIp) {
-        Log-Event 'ACTION' @{ step='set_static_ip'; value=$StaticIp }
-        $parts = $StaticIp -split '/'
-        $ip = $parts[0]; $prefix = if ($parts.Count -ge 2) { [int]$parts[1] } else { 24 }
-        $hostOnlyAdapter = Get-NetAdapter | Where-Object { $_.Status -eq 'Up' -and $_.Name -notmatch 'Wi-Fi|Bluetooth' } |
-                            Sort-Object InterfaceMetric | Select-Object -First 1
-        if ($hostOnlyAdapter) {
-            try {
-                Get-NetIPAddress -InterfaceIndex $hostOnlyAdapter.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue |
-                    Where-Object { $_.PrefixOrigin -eq 'Manual' } |
-                    Remove-NetIPAddress -Confirm:$false -ErrorAction SilentlyContinue
-                New-NetIPAddress -InterfaceIndex $hostOnlyAdapter.ifIndex -IPAddress $ip -PrefixLength $prefix -DefaultGateway $ProvServer | Out-Null
-                Log-Event 'ACTION_OK' @{ step='set_static_ip'; ip=$ip; prefix=$prefix }
-            } catch {
-                Log-Event 'ACTION_WARN' @{ step='set_static_ip'; error=$_.Exception.Message }
-            }
-        }
-    }
-
     Log-Event 'ACTION' @{ step='set_hostname'; value=$HostName }
     $current = (Get-CimInstance Win32_ComputerSystem).Name
     if ($current -ieq $HostName) {

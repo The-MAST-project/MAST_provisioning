@@ -30,14 +30,18 @@
   ARM64 unit from an x64 host.
 
 .PARAMETER MastUser, MastPassword
-  Local admin account created by the answer file. Defaults: mast / physics.
-  Must match the credentials used everywhere else in the project (vault/creds.json,
-  bootstrap-winrm.ps1).
+  Local admin account created by the answer file (factory/OEM defaults).
+  Defaults: user / password1 - simulates a generic machine from the factory.
+  FirstLogonCommands run client\bootstrap-winrm.ps1 only; it renames user -> mast,
+  sets physics, enables WinRM (matches vault/creds.json).
 
 .PARAMETER WindowsEdition
-  Optional <InstallFrom> filter when the install ISO has multiple editions.
-  Examples: "Windows 11 IoT Enterprise LTSC", "Windows 11 Pro".
-  If omitted, Setup installs the first / only image.
+  Optional <InstallFrom> filter when the install ISO has multiple editions (required
+  for autonomous setup on typical IoT LTSC ISOs or you get the Select Image wizard).
+  The Value must match an image Name from:
+    dism /Get-WimInfo /WimFile:X:\sources\install.wim
+  Common IoT LTSC name: Windows 11 IoT Enterprise LTSC (verify with DISM).
+  If omitted and the WIM has one image only, Setup picks it; multiple images without this stay interactive.
 
 .PARAMETER Locale
   System / UI / user locale. Default 'en-US'.
@@ -49,10 +53,19 @@
   Default 'Israel Standard Time'. Use tzutil /l on a Windows box for the list.
 
 .PARAMETER ProductKey
-  Optional. Skip if you have an embedded license / running unactivated.
+  Optional. If set, adds `<ProductKey>` with WillShowUI Never.
+  Use Microsoft's KMS *client setup* key for your edition from Learn (volume channel;
+  not a license substitute). Multi-edition LTSC ISOs often need this plus -WindowsEdition.
+  If omitted, no ProductKey element is written (product key wizard may appear).
 
 .PARAMETER VolumeLabel
   ISO volume label. Default 'MAST_AU'. Must be <= 16 chars (Joliet limit).
+
+.PARAMETER FactoryComputerName
+  NetBIOS computer name written during specialize (max 15 chars).
+  Default (omit): OEM + 12 hex chars, unique each time you build the ISO - mimics
+  a generic factory serial. Pass '*' to let Windows pick a random name at install
+  time (legacy behavior). prepare-mast-client.ps1 still renames to mast01 later.
 
 .PARAMETER ExtraScripts
   Optional list of extra files to copy into the ISO root (in addition to
@@ -75,14 +88,15 @@ param(
     [string]   $OutputIso       = '',
     [ValidateSet('amd64','arm64')]
     [string]   $Architecture    = $(if ($env:PROCESSOR_ARCHITECTURE -ieq 'arm64') {'arm64'} else {'amd64'}),
-    [string]   $MastUser        = 'mast',
-    [string]   $MastPassword    = 'physics',
+    [string]   $MastUser        = 'user',
+    [string]   $MastPassword    = 'password1',
     [string]   $WindowsEdition  = '',
     [string]   $Locale          = 'en-US',
     [string]   $InputLocale     = '0409:00000409',
     [string]   $TimeZone        = 'Israel Standard Time',
     [string]   $ProductKey      = '',
     [string]   $VolumeLabel     = 'MAST_AU',
+    [string]   $FactoryComputerName = '',
     [string[]] $ExtraScripts    = @()
 )
 
@@ -95,11 +109,40 @@ if (-not $OutputIso) { $OutputIso = Join-Path $RepoRoot 'autounattend-mast.iso' 
 
 function Write-Headline($msg) { Write-Host "`n=== $msg ===" -ForegroundColor Cyan }
 
+$totalSw = [System.Diagnostics.Stopwatch]::StartNew()
+$phaseSw = [System.Diagnostics.Stopwatch]::StartNew()
+function Format-MastElapsed([TimeSpan]$t) {
+    if ($t.TotalHours -ge 1) { return $t.ToString('h\:mm\:ss') }
+    if ($t.TotalMinutes -ge 1) { return ('{0:N1} min' -f $t.TotalMinutes) }
+    return ('{0:N2}s' -f $t.TotalSeconds)
+}
+function Write-MastTiming([string]$Label) {
+    $phaseSw.Stop()
+    Write-Host ('[TIMING] {0}: {1}' -f $Label, (Format-MastElapsed $phaseSw.Elapsed)) -ForegroundColor DarkCyan
+    $phaseSw.Restart()
+}
+function Write-MastTimingTotal([string]$ScriptName) {
+    $totalSw.Stop()
+    Write-Host ('[TIMING] Total ({0}): {1}' -f $ScriptName, (Format-MastElapsed $totalSw.Elapsed)) -ForegroundColor Cyan
+}
+
 # ---------------------------------------------------------------------------
 # Validate inputs
 # ---------------------------------------------------------------------------
 if ($VolumeLabel.Length -gt 16) {
     throw "VolumeLabel '$VolumeLabel' is longer than 16 chars (Joliet limit)."
+}
+
+# Factory hostname: OEM + 12 hex (15 chars NETBIOS max), or '*' for Windows random
+if ([string]::IsNullOrWhiteSpace($FactoryComputerName)) {
+    $resolvedComputerName = 'OEM' + ([guid]::NewGuid().ToString('N').Substring(0, 12))
+} elseif ($FactoryComputerName.Trim() -eq '*') {
+    $resolvedComputerName = '*'
+} else {
+    $resolvedComputerName = $FactoryComputerName.Trim()
+    if ($resolvedComputerName.Length -lt 1 -or $resolvedComputerName.Length -gt 15) {
+        throw "FactoryComputerName must be 1-15 characters or '*': got '$resolvedComputerName'"
+    }
 }
 
 $bootstrapPath = Join-Path $RepoRoot 'client\bootstrap-winrm.ps1'
@@ -119,7 +162,7 @@ foreach ($s in $ExtraScripts) {
 # ---------------------------------------------------------------------------
 # Build Autounattend.xml in memory
 # ---------------------------------------------------------------------------
-Write-Headline "Generating Autounattend.xml (arch=$Architecture, locale=$Locale, tz=$TimeZone)"
+Write-Headline "Generating Autounattend.xml (arch=$Architecture, locale=$Locale, tz=$TimeZone, ComputerName=$resolvedComputerName)"
 
 # Optional <InstallFrom> block
 $installFrom = ''
@@ -136,7 +179,13 @@ if ($WindowsEdition) {
 
 $productKeyBlock = ''
 if ($ProductKey) {
-    $productKeyBlock = "                <ProductKey><WillShowUI>OnError</WillShowUI><Key>$ProductKey</Key></ProductKey>"
+    $pk = $ProductKey.Trim()
+    $productKeyBlock = @"
+                <ProductKey>
+                  <WillShowUI>Never</WillShowUI>
+                  <Key>$pk</Key>
+                </ProductKey>
+"@
 }
 
 $xml = @"
@@ -203,7 +252,7 @@ $productKeyBlock
                processorArchitecture="$Architecture" publicKeyToken="31bf3856ad364e35"
                language="neutral" versionScope="nonSxS"
                xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
-      <ComputerName>*</ComputerName>
+      <ComputerName>$resolvedComputerName</ComputerName>
       <TimeZone>$TimeZone</TimeZone>
     </component>
     <component name="Microsoft-Windows-Deployment"
@@ -262,7 +311,7 @@ $productKeyBlock
       <FirstLogonCommands>
         <SynchronousCommand wcm:action="add">
           <Order>1</Order>
-          <Description>Locate and run bootstrap-winrm.ps1 from the Autounattend ISO</Description>
+          <Description>OEM account to mast + WinRM bootstrap (bootstrap-winrm.ps1)</Description>
           <CommandLine>cmd /c "for %d in (D E F G H I J K) do if exist %d:\bootstrap-winrm.ps1 powershell.exe -NoProfile -ExecutionPolicy Bypass -File %d:\bootstrap-winrm.ps1 1>C:\bootstrap-winrm.log 2>&amp;1"</CommandLine>
           <RequiresUserInput>false</RequiresUserInput>
         </SynchronousCommand>
@@ -279,6 +328,7 @@ $productKeyBlock
 $staging = Join-Path ([System.IO.Path]::GetTempPath()) ("autounattend-stage-" + [System.Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force -Path $staging | Out-Null
 try {
+    $phaseSw.Restart()
     $xmlPath = Join-Path $staging 'Autounattend.xml'
     [System.IO.File]::WriteAllText($xmlPath, $xml, [System.Text.UTF8Encoding]::new($false))
     Write-Host "  Staged Autounattend.xml ($([int]((Get-Item $xmlPath).Length / 1KB)) KB)"
@@ -291,6 +341,8 @@ try {
         Copy-Item -Force $extra (Join-Path $staging $name)
         Write-Host "  Staged $name"
     }
+
+    Write-MastTiming 'Generate XML + stage payload'
 
     # -----------------------------------------------------------------------
     # Build the ISO via IMAPI2FS COM
@@ -345,6 +397,8 @@ public static class MastIsoHelper {
 
     [MastIsoHelper]::Write($OutputIso, $result.ImageStream, $result.BlockSize, $result.TotalBlocks)
 
+    Write-MastTiming 'Build ISO (IMAPI2FS + write file)'
+
     Write-Host ""
     Write-Host "Wrote: $OutputIso" -ForegroundColor Green
     Write-Host "Size:  $([int]((Get-Item $OutputIso).Length / 1KB)) KB"
@@ -352,6 +406,7 @@ public static class MastIsoHelper {
     Write-Host "Mount alongside the Windows install ISO. Examples:"
     Write-Host "  .\vbox-create-unit.ps1 -IsoPath <win-iso> -AutounattendIso `"$OutputIso`""
     Write-Host "  VBoxManage storageattach mast-unit --storagectl SATA --port 2 --device 0 --type dvddrive --medium `"$OutputIso`""
+    Write-MastTimingTotal 'build-autounattend-iso.ps1'
 }
 finally {
     Remove-Item -Recurse -Force $staging -ErrorAction SilentlyContinue

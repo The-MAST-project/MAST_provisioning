@@ -8,6 +8,20 @@ ${logDir} = Join-Path ${env:ProgramData} "MAST\logs"
 New-Item -ItemType Directory -Path ${logDir} -Force | Out-Null
 ${logFile} = Join-Path ${logDir} "provisioning-execute.log"
 
+# Prevent overlapping provisioning runs on the same unit.
+${lockPath} = Join-Path ${env:ProgramData} "MAST\execute.lock"
+if (Test-Path ${lockPath}) {
+    ${lockInfo} = ''
+    try { ${lockInfo} = Get-Content ${lockPath} -Raw -ErrorAction SilentlyContinue } catch {}
+    Write-Error "Another provisioning run appears to be in progress (lock file exists at ${lockPath}). ${lockInfo}"
+    exit 2
+}
+try {
+    "pid=$PID`nstarted=$(Get-Date -Format s)`nstaging=${StagingPath}" | Out-File -FilePath ${lockPath} -Encoding UTF8 -Force
+} catch {
+    Write-Warning "Failed to create lock file at ${lockPath}: $($_.Exception.Message)"
+}
+
 function Write-Log {
     param([string]${Message})
     ${timestamp} = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
@@ -81,14 +95,14 @@ try {
                 ${smokeTestFile} = Join-Path ${logDir} "$($cmd.module)-smoke.txt"
                 Set-Content -Path ${smokeTestFile} -Value "success" -Force
             } else {
-                Write-Log "✗ FAILED: $($cmd.module) (exit code: ${exitCode})"
+                Write-Log "[FAIL] $($cmd.module) (exit code: ${exitCode})"
                 ${failCount}++
             }
 
             Pop-Location
         }
         catch {
-            Write-Log "✗ EXCEPTION in $($cmd.module): $_"
+            Write-Log "[FAIL] EXCEPTION in $($cmd.module): $_"
             ${failCount}++
             Pop-Location
         }
@@ -104,7 +118,7 @@ try {
     Write-Log "=========================================="
 
     if (${failCount} -gt 0) {
-        Write-Log "⚠ Provisioning completed with ${failCount} failures"
+        Write-Log "[WARN] Provisioning completed with ${failCount} failures"
         exit 1
     } else {
         # ---------------------------------------------------------------
@@ -145,4 +159,5 @@ catch {
 }
 finally {
     Write-Log "Log file: ${logFile}"
+    Remove-Item -Force ${lockPath} -ErrorAction SilentlyContinue
 }

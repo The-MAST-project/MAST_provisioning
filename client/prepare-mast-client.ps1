@@ -6,6 +6,7 @@
   This script:
     - takes a HostName parameter and renames the computer if needed
     - creates a local user 'mast' and adds it to Administrators (prompts for password if user missing)
+    - sets that account's display name (FullName) to 'mast' so Windows Settings shows 'mast', not e.g. 'user'
     - enables PowerShell Remoting (WinRM), creates a self-signed cert for HTTPS listener, opens firewall ports
     - optionally adds a provider IP/DNS to WSMan TrustedHosts
     - does NOT change network settings (DHCP remains)
@@ -14,6 +15,7 @@
   - Run this script AS ADMINISTRATOR on the target machine.
   - If you request a reboot after renaming (-Reboot), the machine will restart and further actions will not run until next boot.
   - This script prefers Desktop PowerShell cmdlets (Get-LocalUser / New-LocalUser); it contains fallbacks using net.exe for older OS variants.
+  - When env MAST_RUN_ID is set (run-remote-script-winrm.py), slmgr /rearm is skipped so WinRM can complete; run rearm locally if needed.
 #>
 
 [CmdletBinding(SupportsShouldProcess=$true)]
@@ -105,14 +107,29 @@ function Try-GetLocalUser {
   }
 }
 
+function Set-LocalUserDisplayName {
+  param(
+    [string]$UserName,
+    [string]$DisplayName
+  )
+  if (Get-Command -Name Set-LocalUser -ErrorAction SilentlyContinue) {
+    Set-LocalUser -Name $UserName -FullName $DisplayName -ErrorAction Stop
+  } else {
+    $proc = Start-Process -FilePath net -ArgumentList "user", $UserName, ("/fullname:{0}" -f $DisplayName) -NoNewWindow -Wait -PassThru
+    if ($proc.ExitCode -ne 0) { throw "Failed to set account display name with net user (code $($proc.ExitCode))." }
+  }
+}
+
 function Create-LocalUser {
   param(
     [string]$UserName,
-    [System.Security.SecureString]$SecurePassword
+    [System.Security.SecureString]$SecurePassword,
+    [string]$DisplayName
   )
   if (Get-Command -Name New-LocalUser -ErrorAction SilentlyContinue) {
     New-LocalUser -Name $UserName `
                   -Password $SecurePassword `
+                  -FullName $DisplayName `
                   -PasswordNeverExpires:$true `
                   -AccountNeverExpires:$true `
                   -UserMayNotChangePassword:$false -ErrorAction Stop
@@ -121,7 +138,7 @@ function Create-LocalUser {
     $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($SecurePassword)
     $plain = [Runtime.InteropServices.Marshal]::PtrToStringAuto($bstr)
     [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
-    $proc = Start-Process -FilePath net -ArgumentList "user", $UserName, $plain, "/add" -NoNewWindow -Wait -PassThru
+    $proc = Start-Process -FilePath net -ArgumentList "user", $UserName, $plain, "/add", ("/fullname:{0}" -f $DisplayName) -NoNewWindow -Wait -PassThru
     if ($proc.ExitCode -ne 0) { throw "Failed to create local user with net user (code $($proc.ExitCode))." }
     # set account to never expires (if supported)
     Start-Process -FilePath net -ArgumentList "user", $UserName, "/expires:never" -NoNewWindow -Wait | Out-Null
@@ -130,7 +147,8 @@ function Create-LocalUser {
 
 function Ensure-LocalAdminUser {
   param(
-    [string]$UserName = 'mast'
+    [string]$UserName = 'mast',
+    [string]$DisplayName = 'mast'
   )
   Write-Headline "Ensuring local admin user '$UserName' exists"
   $user = Try-GetLocalUser -UserName $UserName
@@ -140,8 +158,16 @@ function Ensure-LocalAdminUser {
     Write-Host "User '$UserName' not found. You will be prompted for a password to create it."
     $securePw = Read-Host -AsSecureString "Enter password for local user '$UserName' (input hidden)"
     if (-not $securePw) { throw "No password entered; aborting user creation." }
-    Create-LocalUser -UserName $UserName -SecurePassword $securePw
+    Create-LocalUser -UserName $UserName -SecurePassword $securePw -DisplayName $DisplayName
     Write-Host "User '$UserName' created."
+  }
+
+  # Friendly name shown in Settings / login screen (FullName) is separate from the account name (SAM).
+  try {
+    Set-LocalUserDisplayName -UserName $UserName -DisplayName $DisplayName
+    Write-Host "Account display name set to '$DisplayName'."
+  } catch {
+    Write-Warning "Could not set account display name: $($_.Exception.Message)"
   }
 
   # Ensure the user is in Administrators group
@@ -171,14 +197,44 @@ function Ensure-LocalAdminUser {
   }
 }
 
-function Enable-WinRM-HttpHttps {
-  Write-Headline "Enabling PowerShell Remoting (WinRM) and configuring firewall"
+function Test-MastHttpsListenerPresent {
   try {
-    # WSMan refuses some operations when any profile is Public.
-    try { Get-NetConnectionProfile | Set-NetConnectionProfile -NetworkCategory Private } catch {}
-    Enable-PSRemoting -SkipNetworkProfileCheck -Force -ErrorAction Stop
+    $rows = @(Get-WSManInstance -ResourceURI winrm/config/Listener -Enumerate -ErrorAction Stop)
+    foreach ($r in $rows) {
+      if ($r.Transport -eq 'HTTPS') { return $true }
+    }
+    return $false
   } catch {
-    Write-Warning "Enable-PSRemoting had a problem: $($_.Exception.Message) -- continuing."
+    return $false
+  }
+}
+
+function Initialize-MastWinRmFirewallAndRemoting {
+  Write-Headline "Enabling PowerShell Remoting (WinRM) and configuring firewall"
+
+  # Invoked via tools/run-remote-script-winrm.py (sets MAST_RUN_ID): avoid Enable-PSRemoting
+  # when listeners already exist — recycling WinRM mid-run drops the active session.
+  $mastRemote = [bool]$env:MAST_RUN_ID
+  $mastSkipEnablePsRemoting = $false
+  if ($mastRemote) {
+    try {
+      $svc = Get-Service WinRM -ErrorAction Stop
+      $listeners = @(Get-ChildItem WSMan:\localhost\Listener -ErrorAction SilentlyContinue)
+      if ($svc.Status -eq 'Running' -and $listeners.Count -gt 0) {
+        $mastSkipEnablePsRemoting = $true
+        Write-Host "MAST_RUN_ID set and WinRM listeners already present -- skipping Enable-PSRemoting (keeps current WinRM session alive)."
+      }
+    } catch {}
+  }
+
+  if (-not $mastSkipEnablePsRemoting) {
+    try {
+      # WSMan refuses some operations when any profile is Public.
+      try { Get-NetConnectionProfile | Set-NetConnectionProfile -NetworkCategory Private } catch {}
+      Enable-PSRemoting -SkipNetworkProfileCheck -Force -ErrorAction Stop
+    } catch {
+      Write-Warning "Enable-PSRemoting had a problem: $($_.Exception.Message) -- continuing."
+    }
   }
 
   # Ensure firewall rules for WinRM (HTTP and HTTPS)
@@ -200,9 +256,31 @@ function Enable-WinRM-HttpHttps {
   New-Item -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -ErrorAction SilentlyContinue | Out-Null
   New-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" `
                   -Name "LocalAccountTokenFilterPolicy" -Value 1 -PropertyType DWord -Force | Out-Null
+}
 
-  # Create or refresh a self-signed cert for WinRM HTTPS and create listener
-  Write-Headline "Creating self-signed certificate and configuring WinRM HTTPS listener"
+function Emit-PrepareSafeCompleteSignal {
+  param([string]$ComputerHostName)
+  $rid = if ($env:MAST_RUN_ID) { $env:MAST_RUN_ID } else { 'n/a' }
+  # Orchestrator (run-remote-script-winrm.py) mirrors ##MAST## lines to stderr as [guest].
+  # Emit immediately before optional HTTPS listener / winrm.cmd work (last stage).
+  Write-Host ("##MAST## kind=prepare_safe_complete run_id={0} computer={1} host_name_param={2}" -f $rid, $env:COMPUTERNAME, $ComputerHostName)
+  try { [Console]::Out.Flush() } catch {}
+}
+
+function Install-MastWinRmHttpsListener {
+  param(
+    [Parameter(Mandatory=$true)]
+    [string]$PrimaryHostName
+  )
+
+  if (Test-MastHttpsListenerPresent) {
+    Write-Headline "WinRM HTTPS listener"
+    Write-Host "HTTPS listener already present -- skipping certificate/listener creation."
+    return
+  }
+
+  Write-Headline "Creating self-signed certificate and configuring WinRM HTTPS listener (final operation)"
+
   try {
     $activeName = $env:COMPUTERNAME
     try {
@@ -210,13 +288,16 @@ function Enable-WinRM-HttpHttps {
     } catch {}
 
     $dnsNames = @($activeName)
-    if ($HostName) { $dnsNames += $HostName }
-    $dnsNames += @('192.168.56.20')
+    if ($PrimaryHostName) { $dnsNames += $PrimaryHostName }
+    Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+      Where-Object { $_.IPAddress -notmatch '^(127\.|169\.254\.)' } |
+      ForEach-Object { $dnsNames += $_.IPAddress }
+    $dnsNames = $dnsNames | Where-Object { $_ } | Select-Object -Unique
 
     $cert = New-SelfSignedCertificate -DnsName $dnsNames -CertStoreLocation Cert:\LocalMachine\My -KeyLength 2048 -NotAfter (Get-Date).AddYears(5) -ErrorAction Stop
 
     # IMPORTANT: WSMan:\ New-Item/Remove-Item can hang on some Windows builds.
-    # Use winrm.cmd create/delete instead.
+    # Use winrm.cmd create/delete instead (can recycle WinRM — runs last, after prepare_safe_complete).
     try { & winrm.cmd delete winrm/config/Listener?Address=*+Transport=HTTPS 2>$null | Out-Null } catch {}
     $createArg = "@{Hostname=`"$activeName`";CertificateThumbprint=`"$($cert.Thumbprint)`"}"
     & winrm.cmd create winrm/config/Listener?Address=*+Transport=HTTPS $createArg 2>&1 | Out-Null
@@ -255,26 +336,39 @@ try {
   }
 
   Write-Headline "MAST client preparation starting"
+  $prepTotalSw = [System.Diagnostics.Stopwatch]::StartNew()
 
   # 1) Ensure computer name
   $renamed = Ensure-ComputerName -NewName $HostName -Reboot:$Reboot
 
   # If rename requested with reboot, the machine will restart and the rest won't run now.
-  if ($renamed -and $Reboot) { return }
+  if ($renamed -and $Reboot) {
+    $prepTotalSw.Stop()
+    Write-Host ('[TIMING] Total (prepare-mast-client.ps1, interrupted by reboot): {0}' -f $prepTotalSw.Elapsed.ToString('mm\:ss\.fff')) -ForegroundColor Cyan
+    return
+  }
 
   # 2) Ensure local admin user 'mast', prompting for password only if user missing
   Ensure-LocalAdminUser -UserName 'mast'
 
-  # 3) Enable WinRM + HTTPS + firewall
-  Enable-WinRM-HttpHttps
+  # 3) WinRM firewall + remoting (HTTPS listener deferred — last operation after handshake line)
+  Initialize-MastWinRmFirewallAndRemoting
 
   # 4) TrustedHosts for provider if specified
   Set-TrustedHostsIfNeeded -Provider $Provider
 
   # 5) Reset the Windows evaluation grace period so it does not expire during testing.
-  Write-Headline "Rearming Windows evaluation license"
-  $rearmResult = & slmgr /rearm 2>&1
-  Write-Host "slmgr /rearm: $rearmResult"
+  # slmgr /rearm can stall or otherwise prevent the WinRM SOAP response from completing when this
+  # script is invoked via tools/run-remote-script-winrm.py (sets env MAST_RUN_ID). Skip in that case;
+  # run prepare locally on the unit if you need the rearm.
+  if ([bool]$env:MAST_RUN_ID) {
+    Write-Headline "Windows evaluation license (rearm skipped)"
+    Write-Host "Skipping slmgr /rearm during remote WinRM run (MAST_RUN_ID set). Run locally if you need /rearm."
+  } else {
+    Write-Headline "Rearming Windows evaluation license"
+    $rearmResult = & slmgr /rearm 2>&1
+    Write-Host "slmgr /rearm: $rearmResult"
+  }
 
   # 6) Disable Windows Update automatic installation for the duration of provisioning.
   #    Prevents mid-run reboots. Restored to download-only (AUOptions=3) after provisioning.
@@ -288,16 +382,32 @@ try {
   Set-Service  wuauserv -StartupType Disabled
   Write-Host "Windows Update automatic installs disabled."
 
-  Write-Headline "Done"
+  # --- Prepare phase complete: summary and timing before any WinRM HTTPS listener recreation ---
+  Write-Headline "Prepare phase complete (before optional WinRM HTTPS listener)"
   Write-Host "Summary:"
   Write-Host (" - Computer name: {0}{1}" -f $HostName, $(if ($renamed -and -not $Reboot) {" (pending reboot)"} else {""}))
   Write-Host " - Local admin user: mast"
   if ($Provider) { Write-Host (" - Provider added to TrustedHosts: {0}" -f $Provider) }
-
-  Write-Host "`nNext steps from the provider machine:"
-  Write-Host "  - Connect with: Enter-PSSession -ComputerName <client-ip> -UseSSL -Credential (Get-Credential)"
-  Write-Host "  - Admin share: \\<client-ip>\C$  (use .\mast credentials)"
   if ($renamed -and -not $Reboot) { Write-Host "`nNOTE: Reboot is required for the new computer name to take effect." -ForegroundColor Yellow }
+
+  Write-Host ('[TIMING] Through prepare_safe_complete (before WinRM HTTPS listener): {0}' -f $prepTotalSw.Elapsed.ToString('mm\:ss\.fff')) -ForegroundColor Cyan
+
+  # Handshake for orchestrators: appears in transcript before winrm.cmd work that may recycle WinRM.
+  Emit-PrepareSafeCompleteSignal -ComputerHostName $HostName
+
+  Install-MastWinRmHttpsListener -PrimaryHostName $HostName
+
+  Write-Headline "Done"
+  Write-Host "`nNext steps from the provider machine:"
+  if (Test-MastHttpsListenerPresent) {
+    Write-Host "  - Connect with: Enter-PSSession -ComputerName <client-ip> -UseSSL -Credential (Get-Credential)"
+  } else {
+    Write-Host "  - WinRM over HTTP (5985) is available; HTTPS listener was not created (see warnings above if any)."
+  }
+  Write-Host "  - Admin share: \\<client-ip>\C$  (use .\mast credentials)"
+
+  $prepTotalSw.Stop()
+  Write-Host ('[TIMING] Total (prepare-mast-client.ps1): {0}' -f $prepTotalSw.Elapsed.ToString('mm\:ss\.fff')) -ForegroundColor Cyan
 
 } catch {
   Write-Error "Fatal: $($_.Exception.Message)"
