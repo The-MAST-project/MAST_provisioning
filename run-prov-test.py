@@ -38,6 +38,7 @@ from __future__ import annotations
 import argparse
 import http.server
 import json
+import re
 import socket
 import subprocess
 import sys
@@ -80,8 +81,9 @@ EXECUTE_POLL_INTERVAL_S = 20
 
 EXPECTED_PYTHON = "C:\\Python312\\python.exe"
 EXPECTED_REPOS_ROOT = "C:\\MAST\\repos"
-SMOKE_LOG_DIR = "C:\\ProgramData\\MAST\\logs"
-EXECUTE_LOG = f"{SMOKE_LOG_DIR}\\provisioning-execute.log"
+MAST_LOGS_BASE = "C:\\MAST\\logs"
+SMOKE_LOG_DIR = f"{MAST_LOGS_BASE}\\smoke"
+VERIFY_LOG_DIR = f"{MAST_LOGS_BASE}\\verify"
 
 ALL_MODULES = [
     "ascom", "chrome", "cygwin", "mast", "mongodb", "nomachine",
@@ -170,6 +172,31 @@ def winrm_session(host: str, cred: dict[str, str]) -> winrm.Session:
     )
 
 
+def _candidate_users(host: str, raw_user: str) -> list[str]:
+    # vault/creds.json user may be '.\\mast'. pywinrm on some hosts accepts 'mast' instead.
+    # Try a small set of common equivalences without guessing domains.
+    u = (raw_user or "").strip()
+    if not u:
+        return []
+    candidates: list[str] = [u]
+    if u.startswith(".\\"):
+        candidates.append(u[2:])
+    if "\\" in u:
+        candidates.append(u.split("\\")[-1])
+    # If host is an IPv4, try <host>\\user (workgroup-style).
+    if re.match(r"^\\d{1,3}(\\.\\d{1,3}){3}$", host):
+        base = u[2:] if u.startswith(".\\") else (u.split("\\")[-1] if "\\" in u else u)
+        candidates.append(f"{host}\\{base}")
+    # de-dupe preserving order
+    seen: set[str] = set()
+    out: list[str] = []
+    for c in candidates:
+        if c and c not in seen:
+            seen.add(c)
+            out.append(c)
+    return out
+
+
 def _run_with_heartbeat(
     fn: Any,
     label: str,
@@ -240,15 +267,27 @@ def check_rc(r: winrm.Response, phase: str) -> None:
 def wait_for_winrm(host: str, cred: dict[str, str], timeout: int = WINRM_BOOT_TIMEOUT_S) -> None:
     log(f"Waiting for WinRM on {host} (up to {timeout}s)...")
     deadline = time.monotonic() + timeout
+    users = _candidate_users(host, cred.get("user", ""))
     while time.monotonic() < deadline:
         try:
             with socket.create_connection((host, WINRM_PORT), timeout=5):
                 pass
-            s = winrm_session(host, cred)
-            r = s.run_cmd("echo", ["ping"])
-            if r.status_code == 0:
-                log(f"WinRM on {host} is ready.")
-                return
+            for usr in users or [cred.get("user", "")]:
+                try:
+                    s = winrm.Session(
+                        f"http://{host}:{WINRM_PORT}/wsman",
+                        auth=(usr, cred["pass"]),
+                        transport="basic",
+                        read_timeout_sec=30,
+                        operation_timeout_sec=20,
+                    )
+                    r = s.run_cmd("echo", ["ping"])
+                    if r.status_code == 0:
+                        cred["user"] = usr
+                        log(f"WinRM on {host} is ready (user={usr!r}).")
+                        return
+                except Exception:
+                    continue
         except Exception:
             pass
         time.sleep(5)
@@ -328,8 +367,21 @@ class ExecuteLogPoller:
     def _run(self) -> None:
         while not self._stop.wait(timeout=EXECUTE_POLL_INTERVAL_S):
             try:
+                r0 = self._session.run_ps(
+                    "$b = Join-Path $env:SystemDrive 'MAST\\logs\\sessions'; "
+                    "$p = ''; "
+                    "if (Test-Path $b) { "
+                    "  $d = Get-ChildItem -LiteralPath $b -Directory "
+                    "    -ErrorAction SilentlyContinue | Sort-Object Name -Descending | "
+                    "    Select-Object -First 1; "
+                    "  if ($d) { $p = Join-Path $d.FullName 'provisioning-execute.log' } "
+                    "}; $p"
+                )
+                path = (r0.std_out or b"").decode(errors="replace").strip()
+                if not path:
+                    continue
                 r = self._session.run_ps(
-                    f"$lines = Get-Content '{EXECUTE_LOG}' -ErrorAction SilentlyContinue; "
+                    f"$lines = Get-Content -LiteralPath '{path}' -ErrorAction SilentlyContinue; "
                     f"if ($lines) {{ $lines | Select-Object -Skip {self._lines_seen} }}",
                 )
                 if r.status_code == 0 and r.std_out:
@@ -361,6 +413,13 @@ def phase_build(hostname: str, modules: list[str]) -> None:
             "-File", str(build_script),
             "-Top", str(REPO_ROOT),
             "-HostName", hostname,
+            # Dev/test: avoid admin-only SMB share creation in build-mast.ps1.
+            # Transfer to the unit happens over the embedded HTTP server in this test harness.
+            "-SkipSmbShare",
+            # Dev/test: allow missing large optional assets and license/token material.
+            "-TestMode",
+            "-AllowMissingNoMachineLicense",
+            "-AllowMissingGithubToken",
         ]
         if sorted(modules) != sorted(ALL_MODULES):
             cmd += ["-Modules", ",".join(modules)]
@@ -514,7 +573,10 @@ def phase_transfer(unit: winrm.Session, hostname: str) -> None:
 def phase_execute(unit: winrm.Session, host_unit: str, unit_cred: dict[str, str]) -> winrm.Response:
     with timed("EXECUTE PHASE"):
         log("Starting execute-mast-provisioning.ps1 on unit (up to 90 min)...")
-        log(f"Streaming {EXECUTE_LOG} from unit every {EXECUTE_POLL_INTERVAL_S}s...")
+        log(
+            f"Streaming latest provisioning-execute.log under {MAST_LOGS_BASE}\\sessions "
+            f"from unit every {EXECUTE_POLL_INTERVAL_S}s..."
+        )
 
         poller = ExecuteLogPoller(host_unit, unit_cred)
         poller.start()
@@ -537,8 +599,22 @@ def phase_execute(unit: winrm.Session, host_unit: str, unit_cred: dict[str, str]
 
 def _fetch_execute_log_tail(unit: winrm.Session, lines: int = 40) -> None:
     try:
+        r0 = unit.run_ps(
+            "$b = Join-Path $env:SystemDrive 'MAST\\logs\\sessions'; "
+            "$p = ''; "
+            "if (Test-Path $b) { "
+            "  $d = Get-ChildItem -LiteralPath $b -Directory "
+            "    -ErrorAction SilentlyContinue | Sort-Object Name -Descending | "
+            "    Select-Object -First 1; "
+            "  if ($d) { $p = Join-Path $d.FullName 'provisioning-execute.log' } "
+            "}; $p"
+        )
+        path = (r0.std_out or b"").decode(errors="replace").strip()
+        if not path:
+            log("--- provisioning-execute.log not found under sessions ---")
+            return
         r = unit.run_ps(
-            f"Get-Content '{EXECUTE_LOG}' -ErrorAction SilentlyContinue "
+            f"Get-Content -LiteralPath '{path}' -ErrorAction SilentlyContinue "
             f"| Select-Object -Last {lines}"
         )
         if r.std_out:
@@ -562,7 +638,8 @@ def _fetch_diagnostics(unit: winrm.Session) -> None:
             log_raw(r.std_out.decode(errors="replace").rstrip())
 
         r = unit.run_ps(
-            f"Get-ChildItem '{SMOKE_LOG_DIR}' -Filter '*-verify.log' -ErrorAction SilentlyContinue "
+            f"Get-ChildItem '{VERIFY_LOG_DIR}' -Filter '*-verify.log' "
+            "-ErrorAction SilentlyContinue "
             "| Select-Object Name, Length, LastWriteTime | Format-Table -AutoSize"
         )
         if r.std_out:

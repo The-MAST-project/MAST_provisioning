@@ -7,5 +7,5 @@
     "provide-ascom.ps1",
     "assets/ASCOMPlatform710.4707.exe"
   ],
-  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -Command \"$log = Join-Path $env:ProgramData 'MAST\\logs\\ascom-verify.log'; if (Test-Path 'HKLM:\\SOFTWARE\\ASCOM') { Get-Item 'HKLM:\\SOFTWARE\\ASCOM' | Format-List * | Out-File -FilePath $log; Set-Content -Path (Join-Path $env:ProgramData 'MAST\\logs\\ascom-smoke.txt') -Value 'ascom_ok' } else { 'ASCOM registry key not found' | Out-File -FilePath $log; exit 1 }\""
+  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -Command \"$log = Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\verify\\ascom-verify.log'; if (Test-Path 'HKLM:\\SOFTWARE\\ASCOM') { Get-Item 'HKLM:\\SOFTWARE\\ASCOM' | Format-List * | Out-File -FilePath $log; Set-Content -Path (Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\smoke\\ascom-smoke.txt') -Value 'ascom_ok' } else { 'ASCOM registry key not found' | Out-File -FilePath $log; exit 1 }\""
 }

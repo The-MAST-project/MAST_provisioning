@@ -4,8 +4,19 @@ param(
 )
 
 ${ErrorActionPreference} = "Stop"
-${logDir} = Join-Path ${env:ProgramData} "MAST\logs"
+
+${mastLogDot} = Join-Path ${PSScriptRoot} 'mast-log.ps1'
+if (-not (Test-Path ${mastLogDot})) {
+    ${mastLogDot} = Join-Path ${PSScriptRoot} '..\server\lib\mast-log.ps1'
+}
+if (-not (Test-Path ${mastLogDot})) {
+    throw "mast-log.ps1 not found (expected next to this script or under server\lib)."
+}
+. ${mastLogDot}
+
+${logDir} = Get-MastLogSessionDir
 New-Item -ItemType Directory -Path ${logDir} -Force | Out-Null
+${smokeDir} = Get-MastSmokeDir
 ${logFile} = Join-Path ${logDir} "provisioning-execute.log"
 
 # Prevent overlapping provisioning runs on the same unit.
@@ -92,7 +103,7 @@ try {
                 ${successCount}++
 
                 # Write smoke test file
-                ${smokeTestFile} = Join-Path ${logDir} "$($cmd.module)-smoke.txt"
+                ${smokeTestFile} = Join-Path ${smokeDir} "$($cmd.module)-smoke.txt"
                 Set-Content -Path ${smokeTestFile} -Value "success" -Force
             } else {
                 Write-Log "[FAIL] $($cmd.module) (exit code: ${exitCode})"

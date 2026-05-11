@@ -7,5 +7,5 @@
     "provide-chrome.ps1",
     "assets/ChromeSetup.exe"
   ],
-  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -Command \"${chromePath}='C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'; ${log}=Join-Path ${env:ProgramData} 'MAST\\logs\\chrome-verify.log'; if (Test-Path ${chromePath}) { Set-Content -Path ${log} -Value 'Chrome installed successfully'; Set-Content -Path (Join-Path ${env:ProgramData} 'MAST\\logs\\chrome-smoke.txt') -Value 'chrome_ok' } else { 'Chrome executable not found at ' + ${chromePath} | Out-File -FilePath ${log} -Encoding UTF8 }\""
+  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -Command \"${chromePath}='C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'; ${log}=Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\verify\\chrome-verify.log'; if (Test-Path ${chromePath}) { Set-Content -Path ${log} -Value 'Chrome installed successfully'; Set-Content -Path (Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\smoke\\chrome-smoke.txt') -Value 'chrome_ok' } else { 'Chrome executable not found at ' + ${chromePath} | Out-File -FilePath ${log} -Encoding UTF8 }\""
 }

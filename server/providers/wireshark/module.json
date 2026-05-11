@@ -7,5 +7,5 @@
     "provide-wireshark.ps1",
     "assets/Wireshark-4.6.0-x64.exe"
   ],
-  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -Command \"$exe = 'C:\\Program Files\\Wireshark\\Wireshark.exe'; $log = Join-Path $env:ProgramData 'MAST\\logs\\wireshark-verify.log'; if (Test-Path $exe) { Set-Content -Path $log -Value 'Wireshark installed'; Set-Content -Path (Join-Path $env:ProgramData 'MAST\\logs\\wireshark-smoke.txt') -Value 'wireshark_ok' } else { 'Wireshark.exe not found' | Out-File $log }\""
+  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -Command \"$exe = 'C:\\Program Files\\Wireshark\\Wireshark.exe'; $log = Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\verify\\wireshark-verify.log'; if (Test-Path $exe) { Set-Content -Path $log -Value 'Wireshark installed'; Set-Content -Path (Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\smoke\\wireshark-smoke.txt') -Value 'wireshark_ok' } else { 'Wireshark.exe not found' | Out-File $log }\""
 }

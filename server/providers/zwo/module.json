@@ -9,5 +9,5 @@
     "assets/ZWO_ASCOM_Setup_V6.5.32.exe",
     "assets/ZWO_ASI_Cameras_driver_Setup_V3.25.exe"
   ],
-  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -Command \"$log = Join-Path $env:ProgramData 'MAST\\logs\\zwo-verify.log'; $driver = 'C:\\Program Files\\ZWO'; if (Test-Path $driver) { Set-Content -Path $log -Value 'ZWO driver installed'; Set-Content -Path (Join-Path $env:ProgramData 'MAST\\logs\\zwo-smoke.txt') -Value 'zwo_ok' } else { 'ZWO driver path not found' | Out-File $log; exit 1 }\""
+  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -Command \"$log = Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\verify\\zwo-verify.log'; $driver = 'C:\\Program Files\\ZWO'; if (Test-Path $driver) { Set-Content -Path $log -Value 'ZWO driver installed'; Set-Content -Path (Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\smoke\\zwo-smoke.txt') -Value 'zwo_ok' } else { 'ZWO driver path not found' | Out-File $log; exit 1 }\""
 }

@@ -48,9 +48,9 @@
 
 .NOTES
   Logs:
-    C:\ProgramData\MAST\logs\prov\run-<timestamp>.log
-    C:\ProgramData\MAST\logs\prov\activity.csv
-    C:\ProgramData\MAST\logs\prov\last-error.log
+    C:\MAST\logs\prov\sessions\run-<timestamp>\run-<timestamp>.log
+    C:\MAST\logs\prov\activity.csv
+    C:\MAST\logs\prov\last-error.log
 
   Exit codes:
     0  all units OK or SKIPPED
@@ -88,13 +88,17 @@ if (-not $RepoTop) {
 if (-not $UnitRegistry) { $UnitRegistry = Join-Path $RepoTop 'server\unit-registry.json' }
 if (-not $VaultCreds)   { $VaultCreds   = Join-Path $RepoTop 'vault\creds.json' }
 
-$LogRoot = Join-Path $env:ProgramData 'MAST\logs\prov'
+$mastLogsBase = Join-Path $env:SystemDrive 'MAST\logs'
+$provLogsStable = Join-Path $mastLogsBase 'prov'
+New-Item -ItemType Directory -Force -Path $provLogsStable | Out-Null
+
+$RunId = "run-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
+$LogRoot = Join-Path $mastLogsBase ('prov\sessions\' + $RunId)
 New-Item -ItemType Directory -Force -Path $LogRoot | Out-Null
 
-$RunId      = "run-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
 $RunLogPath = Join-Path $LogRoot "$RunId.log"
-$ActivityCsv = Join-Path $LogRoot 'activity.csv'
-$LastErrLog  = Join-Path $LogRoot 'last-error.log'
+$ActivityCsv = Join-Path $provLogsStable 'activity.csv'
+$LastErrLog  = Join-Path $provLogsStable 'last-error.log'
 
 if (-not (Test-Path $ActivityCsv)) {
     'timestamp_utc,run_id,unit,outcome,reason,duration_s,payload_hash,git_sha' |
@@ -380,7 +384,7 @@ foreach ($unit in $units) {
             Log-Event 'SMOKE_START' @{ unit=$hostname }
             $smokeResults = Invoke-Command -Session $session -ScriptBlock {
                 param($mods)
-                $logDir = 'C:\ProgramData\MAST\logs'
+                $logDir = Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\smoke'
                 $out = @{}
                 foreach ($m in $mods) {
                     $p = Join-Path $logDir "$m-smoke.txt"

@@ -8,7 +8,7 @@
   - Installs:
       * ASCOMPlatform710.4707.exe
       * AscomDeveloper662.4294.NewCertificate (exe or msi; extension optional)
-  - Writes logs to %ProgramData%\MAST\logs
+  - Writes logs under <SystemDrive>\MAST\logs\sessions\<timestamp>
   - Designed for WCD provisioning (unattended / no UI / no reboot).
 
 .PARAMETER AssetsRoot
@@ -68,7 +68,7 @@ NOTES:
 if ($Help) { Show-Help; return }
 
 # --- Prep logging ---
-$LogRoot = Join-Path $env:ProgramData 'MAST\logs'
+$LogRoot = Get-MastLogSessionDir
 $null = New-Item -ItemType Directory -Path $LogRoot -Force -ErrorAction SilentlyContinue
 $LogFile = Join-Path $LogRoot ("provide-ascom_{0:yyyyMMdd_HHmmss}.log" -f (Get-Date))
 Start-Transcript -Path $LogFile -Append | Out-Null

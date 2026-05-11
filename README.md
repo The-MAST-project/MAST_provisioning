@@ -114,8 +114,8 @@ This is the only path operators run by hand. Everything else is autonomous.
    loop manages all updates.
 
 If a stage fails, the script prints a `-ResumeFrom <stage>` command for re-runs.
-Logs: `C:\ProgramData\MAST\logs\onboarding.log` (mirrored to the prov server
-under `C:\ProgramData\MAST\logs\onboarding\<hostname>.log`).
+Logs: `C:\MAST\logs\onboarding\onboarding.log` (mirrored to the prov server
+under `C:\MAST\logs\onboarding\<hostname>.log`).
 
 ---
 
@@ -139,7 +139,7 @@ Each run:
 3. Otherwise WinRM-pushes the staged payload to `C:\mast-staging` on the unit
    and runs `execute-mast-provisioning.ps1`.
 4. Verifies smoke markers and writes structured logs to
-   `C:\ProgramData\MAST\logs\prov\run-<ts>.log` and `activity.csv`.
+   `C:\MAST\logs\prov\sessions\run-<ts>\run-<ts>.log` and `C:\MAST\logs\prov\activity.csv`.
 
 See `autonomous-provisioning.md` for the full design (log schema, availability
 contract, maintenance windows).
@@ -256,7 +256,7 @@ Logs land in `test-runs/<timestamp>-cycle<N>/results.json`.
 - `execute-mast-provisioning.ps1` exits 0
 - `C:\Python312\python.exe --version` succeeds
 - `C:\MAST\repos\` exists and has cloned repos with virtualenvs
-- Every module wrote a non-empty `C:\ProgramData\MAST\logs\<module>-smoke.txt`
+- Every module wrote a non-empty `C:\MAST\logs\smoke\<module>-smoke.txt`
 - `C:\ProgramData\MAST\installed-manifest.json` exists and matches the build's
   `payload_hash`
 

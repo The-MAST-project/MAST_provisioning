@@ -20,9 +20,9 @@
   Idempotent. Re-running on a partially-onboarded machine resumes from
   the last completed stage (checkpoint at C:\ProgramData\MAST\onboarding-checkpoint.json).
 
-  All progress is logged structured at C:\ProgramData\MAST\logs\onboarding.log
+  All progress is logged structured at C:\MAST\logs\onboarding\onboarding.log
   and (from Stage 2 onward) mirrored to the prov server at
-  C:\ProgramData\MAST\logs\onboarding\<hostname>.log.
+  C:\MAST\logs\onboarding\<hostname>.log.
 
 .PARAMETER HostName
   Required. The unit's MAST hostname (mast01..mast20).
@@ -85,8 +85,9 @@ $ErrorActionPreference = 'Stop'
 # Constants
 # ---------------------------------------------------------------------------
 $DataRoot       = Join-Path $env:ProgramData 'MAST'
-$LogDir         = Join-Path $DataRoot 'logs'
-$OnboardingLog  = Join-Path $LogDir   'onboarding.log'
+$mastLogsBase   = Join-Path $env:SystemDrive 'MAST\logs'
+$LogDir         = Join-Path $mastLogsBase 'onboarding'
+$OnboardingLog  = Join-Path $LogDir 'onboarding.log'
 $CheckpointPath = Join-Path $DataRoot 'onboarding-checkpoint.json'
 $StatusDir      = Join-Path $DataRoot 'status'
 
@@ -114,7 +115,7 @@ function Mirror-ToProvServer {
     try {
         Invoke-Command -Session $script:ProvSession -ScriptBlock {
             param($host, $line)
-            $remoteDir = "C:\ProgramData\MAST\logs\onboarding"
+            $remoteDir = Join-Path (Join-Path $env:SystemDrive 'MAST\logs') 'onboarding'
             New-Item -ItemType Directory -Force -Path $remoteDir | Out-Null
             $remoteLog = Join-Path $remoteDir "$host.log"
             Add-Content -Path $remoteLog -Value $line -Encoding UTF8

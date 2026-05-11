@@ -8,5 +8,5 @@
     "assets/cygwin64-clean.tgz",
     "assets/astrometry.tgz"
   ],
-  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -Command \"$bin='C:\\cygwin64\\bin'; $bash=Join-Path $bin 'bash.exe'; $log=Join-Path $env:ProgramData 'MAST\\logs\\cygwin-verify.log'; if (Test-Path $bash) { & $bash -lc 'uname -a' | Out-File -FilePath $log -Encoding UTF8; & $bash -lc 'cygcheck -V' | Out-File -FilePath $log -Append -Encoding UTF8; Set-Content -Path (Join-Path $env:ProgramData 'MAST\\logs\\cygwin-smoke.txt') -Value 'cygwin_ok' } else { 'bash.exe not found' | Out-File -FilePath $log -Encoding UTF8 }\""
+  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -Command \"$bin='C:\\cygwin64\\bin'; $bash=Join-Path $bin 'bash.exe'; $log=Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\verify\\cygwin-verify.log'; if (Test-Path $bash) { & $bash -lc 'uname -a' | Out-File -FilePath $log -Encoding UTF8; & $bash -lc 'cygcheck -V' | Out-File -FilePath $log -Append -Encoding UTF8; Set-Content -Path (Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\smoke\\cygwin-smoke.txt') -Value 'cygwin_ok' } else { 'bash.exe not found' | Out-File -FilePath $log -Encoding UTF8 }\""
 }

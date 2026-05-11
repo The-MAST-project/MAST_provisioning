@@ -46,7 +46,7 @@ USAGE:
 if (${Help}) { Show-Help; return }
 
 # --- Logging ---
-${LogRoot} = Join-Path ${env:ProgramData} 'MAST\logs'
+${LogRoot} = Get-MastLogSessionDir
 ${null} = New-Item -ItemType Directory -Path ${LogRoot} -Force -ErrorAction SilentlyContinue
 ${LogFile} = Join-Path ${LogRoot} ("provide-mongodb_{0:yyyyMMdd_HHmmss}.log" -f (Get-Date))
 Start-Transcript -Path ${LogFile} -Append | Out-Null

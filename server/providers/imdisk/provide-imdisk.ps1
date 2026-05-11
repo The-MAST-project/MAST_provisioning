@@ -3,7 +3,10 @@ param(
 )
 
 ${ErrorActionPreference} = "Stop"
-${logDir} = Join-Path ${env:ProgramData} "MAST\logs"
+${mastLogDot} = Join-Path ${PSScriptRoot} 'mast-log.ps1'
+if (-not (Test-Path ${mastLogDot})) { ${mastLogDot} = Join-Path ${PSScriptRoot} '..\..\lib\mast-log.ps1' }
+. ${mastLogDot}
+${logDir} = Get-MastLogSessionDir
 New-Item -ItemType Directory -Path ${logDir} -Force | Out-Null
 ${logFile} = Join-Path ${logDir} "imdisk-install.log"
 

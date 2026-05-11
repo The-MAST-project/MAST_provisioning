@@ -69,7 +69,7 @@ try {
     # --- Verify installation ---
     try {
         ${verLine} = & ${destExe} 2>&1 | Select-Object -First 1
-        ${verLog}  = Join-Path ${env:ProgramData} 'MAST\logs\nssm-verify.log'
+        ${verLog}  = Join-Path (Get-MastVerifyDir) 'nssm-verify.log'
         ${verLine} | Out-File -FilePath ${verLog} -Encoding UTF8
         Write-Host "NSSM installed: ${verLine}"
     }

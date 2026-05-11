@@ -82,7 +82,7 @@ exit 0
 
     # --- Verification: print versions and a simple command ---
     Write-Host "Verifying Cygwin ..."
-    ${verifyLog} = Join-Path ${env:ProgramData} 'MAST\logs\cygwin-verify.log'
+    ${verifyLog} = Join-Path (Get-MastVerifyDir) 'cygwin-verify.log'
     Confirm-Dir (Split-Path ${verifyLog} -Parent)
 
     # Capture uname, which, and cygcheck versions
@@ -91,7 +91,7 @@ exit 0
     & ${bashExe} -lc 'cygcheck -V'        | Out-File -FilePath ${verifyLog} -Append -Encoding UTF8
 
     # Smoke marker
-    Set-Content -Path (Join-Path ${env:ProgramData} 'MAST\logs\cygwin-smoke.txt') -Value 'cygwin_ok' -Encoding ASCII
+    Set-Content -Path (Join-Path (Get-MastSmokeDir) 'cygwin-smoke.txt') -Value 'cygwin_ok' -Encoding ASCII
 
     Write-Host "Cygwin installed to ${InstallRoot}. PATH updated. Verification log at ${verifyLog}."
 

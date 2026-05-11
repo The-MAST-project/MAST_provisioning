@@ -8,7 +8,7 @@ runs as an unprivileged service using pywinrm-style HTTP Basic.
 
 Observability (guest):
   - Sets env MAST_RUN_ID, MAST_REMOTE_SCRIPT_REPO, MAST_REMOTE_SCRIPT_PATH, MAST_REMOTE_LOG_ROOT.
-  - Writes transcript + JSON summary under <SystemDrive>\\MAST\\logs\\remote-runs\\
+  - Writes transcript + JSON summary under <SystemDrive>\\MAST\\logs\\remote-runs\\<timestamp>_<run_id>\\
     (unless --no-remote-transcript; JSON is always written).
   - Emits ##MAST## lines on stdout; this driver mirrors them to stderr as [guest] lines.
 
@@ -80,8 +80,29 @@ def emit_guest_mast_lines(stdout: bytes, stderr: bytes) -> None:
     if stderr:
         blob += stderr
     for line in blob.decode(errors="replace").splitlines():
-        if "##MAST##" in line:
-            print(f"[{_ts()}] [guest] {line.strip()}", file=sys.stderr, flush=True)
+        if "##MAST##" not in line:
+            continue
+        # WinRM often embeds Write-Host output inside CLIXML; avoid dumping the entire XML blob.
+        if "<Objs" in line or line.lstrip().startswith("<"):
+            # Try to salvage just the marker payload if present.
+            idx = line.find("##MAST##")
+            if idx >= 0:
+                msg = line[idx:].strip()
+                # Trim any appended CLIXML fragments.
+                cut = msg.find("<")
+                if cut > 0:
+                    msg = msg[:cut].rstrip()
+                if msg:
+                    print(f"[{_ts()}] [guest] {msg}", file=sys.stderr, flush=True)
+            continue
+        idx = line.find("##MAST##")
+        msg = line[idx:].strip() if idx >= 0 else line.strip()
+        # If CLIXML fragments are appended after the marker, trim at the first '<'.
+        lt = msg.find("<")
+        if lt > 0:
+            msg = msg[:lt].rstrip()
+        if msg:
+            print(f"[{_ts()}] [guest] {msg}", file=sys.stderr, flush=True)
 
 
 def _strip_powershell_clixml(text: str) -> str:
@@ -115,6 +136,53 @@ def _drop_mast_marker_lines(text: str) -> str:
     return "\n".join(kept) + ("\n" if kept else "")
 
 
+def _decode_and_clean(b: bytes | None, *, drop_markers: bool) -> str:
+    if not b:
+        return ""
+    s = b.decode(errors="replace")
+    s = _strip_powershell_clixml(s)
+    if drop_markers:
+        s = _drop_mast_marker_lines(s)
+    return s
+
+
+def _guest_log_root_default() -> str:
+    # C:\MAST\logs\remote-runs\<stamp>_<run_id>\ on typical installs.
+    # (Some environments may not have C: as SystemDrive; we'll print actual paths used.)
+    return r"(Join-Path $env:SystemDrive 'MAST\logs\remote-runs')"
+
+
+def print_guest_remote_runs_listing(session: winrm.Session, *, quiet: bool) -> None:
+    """Best-effort: show where remote-runs would be and what's present."""
+    ps = (
+        "$root = "
+        + _guest_log_root_default()
+        + "; "
+        'Write-Host ("##MAST## kind=remote_runs_root root=" + $root); '
+        "if (Test-Path -LiteralPath $root) { "
+        "  $items = @(Get-ChildItem -LiteralPath $root -Recurse -File -Force -ErrorAction SilentlyContinue | "
+        "            Sort-Object -Property LastWriteTime -Descending | Select-Object -First 20); "
+        '  Write-Host ("##MAST## kind=remote_runs_list count=" + $items.Count); '
+        "  foreach ($it in $items) { "
+        '    Write-Host ("##MAST## kind=remote_runs_item name=" + $it.FullName + " bytes=" + $it.Length + " mtime=" + ($it.LastWriteTime.ToUniversalTime().ToString(\'yyyy-MM-ddTHH:mm:ssZ\'))); '
+        "  } "
+        "} else { "
+        '  Write-Host "##MAST## kind=remote_runs_list count=0 missing=true"; '
+        "}"
+    )
+    try:
+        r = run_ps_interruptible(session, ps, quiet=quiet, label="list guest remote-runs")
+        emit_guest_mast_lines(r.std_out or b"", r.std_err or b"")
+        out = _decode_and_clean(r.std_out, drop_markers=True)
+        err = _decode_and_clean(r.std_err, drop_markers=True)
+        if out:
+            sys.stdout.write(out)
+        if err:
+            sys.stderr.write(err)
+    except Exception as e:
+        obs(f"warning: failed to list guest remote-runs: {e!r}", quiet=quiet)
+
+
 def build_remote_invoke(
     invoke_tail: str,
     run_id: str,
@@ -145,10 +213,11 @@ def build_remote_invoke(
         "$env:MAST_REMOTE_SCRIPT_REPO = '"
         + repo
         + "'; "
-        "$mastLogRoot = Join-Path $env:SystemDrive 'MAST\\logs\\remote-runs'; "
+        "$mastRunId = $env:MAST_RUN_ID; "
+        "$mastStamp = Get-Date -Format 'yyyyMMdd-HHmmss'; "
+        "$mastLogRoot = Join-Path $env:SystemDrive ('MAST\\logs\\remote-runs\\' + $mastStamp + '_' + $mastRunId); "
         "$env:MAST_REMOTE_LOG_ROOT = $mastLogRoot; "
         "$null = New-Item -ItemType Directory -Force -Path $mastLogRoot; "
-        "$mastRunId = $env:MAST_RUN_ID; "
         "$mastLog = Join-Path $mastLogRoot ('remote-' + $env:COMPUTERNAME + '-' + $mastRunId + '.log'); "
         "$mastMeta = Join-Path $mastLogRoot ('remote-' + $env:COMPUTERNAME + '-' + $mastRunId + '.json'); "
         "$b64 = Join-Path $env:TEMP 'mast-remote.b64'; "
@@ -392,6 +461,11 @@ def main() -> int:
         help="Write orchestrator-side JSON summary to PATH after the run (hostname, run_id, exit code).",
     )
     ap.add_argument(
+        "--show-remote-runs",
+        action="store_true",
+        help="After the run, query the guest for the remote-runs folder and list recent files.",
+    )
+    ap.add_argument(
         "--wait-winrm-seconds",
         type=int,
         default=900,
@@ -432,7 +506,7 @@ def main() -> int:
         f"run-remote-script-winrm starting run_id={run_id} host={args.host!r} "
         f"script={args.script!r} bytes={len(raw)} chunks={nchunks} "
         f"(~{nchunks} WinRM round-trips for upload; remote logs under "
-        f"<SystemDrive>\\\\MAST\\\\logs\\\\remote-runs\\\\)",
+        f"<SystemDrive>\\\\MAST\\\\logs\\\\remote-runs\\\\<timestamp>_<run_id>\\\\)",
         quiet=quiet,
     )
 
@@ -510,17 +584,16 @@ def main() -> int:
     obs(f"guest script finished status_code={r.status_code} in {exec_s:.1f}s", quiet=quiet)
     emit_guest_mast_lines(r.std_out or b"", r.std_err or b"")
     if r.std_out:
-        out = r.std_out.decode(errors="replace")
-        out = _strip_powershell_clixml(out)
-        out = _drop_mast_marker_lines(out)
+        out = _decode_and_clean(r.std_out, drop_markers=True)
         if out:
             sys.stdout.write(out)
     if r.std_err:
-        err = r.std_err.decode(errors="replace")
-        err = _strip_powershell_clixml(err)
-        err = _drop_mast_marker_lines(err)
+        err = _decode_and_clean(r.std_err, drop_markers=True)
         if err:
             sys.stderr.write(err)
+
+    if args.show_remote_runs:
+        print_guest_remote_runs_listing(s, quiet=quiet)
 
     if args.write_local_meta:
         local_path = Path(args.write_local_meta).resolve()
@@ -533,7 +606,7 @@ def main() -> int:
             "status_code": int(r.status_code),
             "duration_exec_s": round(exec_s, 3),
             "finished_local_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "remote_note": "See unit <SystemDrive>\\MAST\\logs\\remote-runs\\remote-<host>-<run_id>.json",
+            "remote_note": "See unit <SystemDrive>\\MAST\\logs\\remote-runs\\<timestamp>_<run_id>\\remote-<host>-<run_id>.json",
         }
         local_path.write_text(json.dumps(local_meta, indent=2), encoding="utf-8")
         obs(f"wrote local meta {local_path}", quiet=quiet)

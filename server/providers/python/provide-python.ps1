@@ -64,7 +64,7 @@ try {
         ${verVenv} = & ${pythonExe} -m virtualenv --version
         Write-Host "Python version: ${verPy}"
         Write-Host "virtualenv version: ${verVenv}"
-        ${verPy} + "`n" + ${verVenv} | Out-File -FilePath (Join-Path ${env:ProgramData} 'MAST\logs\python-verify.log') -Encoding UTF8
+        ${verPy} + "`n" + ${verVenv} | Out-File -FilePath (Join-Path (Get-MastVerifyDir) 'python-verify.log') -Encoding UTF8
     }
     catch {
         Write-Warning "Verification failed: $($_.Exception.Message)"

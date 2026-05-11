@@ -8,5 +8,5 @@
     "assets/Git-2.52.0-64-bit.exe",
     "assets/mast_github.txt"
   ],
-  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -Command \"if (Test-Path 'C:\\MAST\\repos') { Set-Content -Path (Join-Path $env:ProgramData 'MAST\\logs\\mast-smoke.txt') -Value 'mast_ok' } else { 'C:\\MAST\\repos not found' | Out-File (Join-Path $env:ProgramData 'MAST\\logs\\mast-verify.log'); exit 1 }\""
+  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -Command \"if (Test-Path 'C:\\MAST\\repos') { Set-Content -Path (Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\smoke\\mast-smoke.txt') -Value 'mast_ok' } else { 'C:\\MAST\\repos not found' | Out-File (Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\verify\\mast-verify.log'); exit 1 }\""
 }

@@ -172,9 +172,9 @@ for each unit in unit-registry.json:
      - Invoke-Command → execute-mast-provisioning.ps1
 
   6. Verify smoke tests
-     - check C:\ProgramData\MAST\logs\*-smoke.txt on unit
+     - check C:\MAST\logs\smoke\*-smoke.txt on unit
 
-  7. Log result to C:\ProgramData\MAST\logs\autonomous-prov.log
+  7. Log result to C:\MAST\logs\autonomous-prov.log
 ```
 
 ### 5. Scheduling
@@ -245,10 +245,68 @@ Two levels:
 
 ---
 
+## Package lifecycle, MAST version pinning, rollback, and observability (**target**)
+
+### Per-package uninstall and reinstall
+
+Upgrades must be **clean**: for each provisioned **package/module**, automation needs **full
+control** to **uninstall** and **reinstall** that module alone (or run an equivalent **repair**
+that resets the same surface area). Layering new files on top of a broken, partial, or manually
+altered install is not acceptable as the only strategy. Module boundaries should expose **paired**
+operations suitable for scripting — install, uninstall or teardown, then install again — so the
+fleet can recover from corruption and so major version jumps do not inherit stale registry keys,
+services, or paths.
+
+### Pinning and rolling MAST services by git tag or commit
+
+**Desired vs accidental drift:** Deployments must not depend solely on “whatever the prov server
+checkout built last.” **MAST-owned services and payloads** must be updatable and rollable against
+explicit **git identity**: a **tag** (release) and/or **commit hash** recorded in `build-manifest.json`
+(and echoed in **effective** inspected state on the unit).
+
+**Operational contract:**
+
+- `build-mast.ps1` (and any prerequisite **git checkout / fetch** step on the prov server) must
+  support targeting a **pinned ref** so staged artifacts correspond to a **known** revision.
+- **Rollback** is **deploying a prior ref** through the same pipeline (build → transfer → execute),
+  subject to schema/data compatibility and operator policy — not ad hoc file swaps on the unit.
+- Drift detection compares **effective** identity on the machine (from inspection) to the
+  **intended** ref for that rollout, aligned with **Version / Drift Detection** above.
+
+Pinning parameters may surface as flags, config on the prov server, or optional fields in
+**discovery metadata** (for example per-unit or fleet-wide **target ref**), but the prov server
+still does **not** store a cached copy of **what is installed** — only what **should** be built
+for the next action.
+
+### Full observability without caching machine state on the prov server
+
+The fleet still requires **full observability** (logs, metrics, dashboards — see **Observability**).
+That does **not** relax **Unit provisioning manifest (source of truth)**: the provisioning server
+must **not** persist per-unit installed manifests or probe snapshots as an orchestration ledger.
+
+**How both hold:**
+
+- **Truth for control plane decisions** comes from **fresh** probes each cycle (and/or scrape
+  targets that read live state on the unit), compared to the **build** produced for that run.
+- **Monitoring systems** (Prometheus time series, log aggregation) store **history for humans and
+  alerts**; that is **telemetry**, not the authoritative “installed state” database for
+  `check-and-provision`. Avoid duplicating “current manifest” rows on the prov server **for
+  automation** — use live inspection or metrics emitted **from** the unit.
+
+---
+
 ## Observability
 
 This section mixes **implemented** tooling (for example `run-remote-script-winrm.py`) with
 **planned** logging and metrics for the future autonomous prov-server loop.
+
+**Fleet visibility target:** In addition to logs and CSV on the prov server, the **installed
+software manifest**, the **set and health of MAST-related Windows services**, and **component
+heartbeats** must be **machine-readable and scrapeable** (Prometheus-compatible exposition)
+so a **central command dashboard** (for example Grafana backed by Prometheus) shows fleet
+state at a glance. Ad hoc WinRM or RDP should not be the primary way to answer "what is on this
+box?" or "is the stack alive?" See **Package lifecycle, MAST version pinning, rollback, and
+observability** for how this coexists with **no cached per-unit manifest on the prov server**.
 
 ### Remote one-off scripts (`tools/run-remote-script-winrm.py`) — **implemented**
 
@@ -278,7 +336,7 @@ Those runs should be **correlatable** with server-side logs and **inspectable** 
 
 **Startup wait:** `run-remote-script-winrm.py` loops until TCP **5985** is open and WinRM accepts Basic auth (defaults: `--wait-winrm-seconds 900`, `--wait-winrm-poll-seconds 5`). Use **`--wait-winrm-seconds 0`** for fail-fast when the unit is already up.
 
-**Convention for custom scripts:** emit occasional `Write-Host "##MAST## kind=phase phase=<name> ..."` lines for long phases (similar to prov-server `EVENT_TYPE` tokens). Prefer reading **`$env:MAST_RUN_ID`** when appending logs (remote-run transcripts live under **`C:\MAST\logs\remote-runs\`** on typical installs; module provisioning keeps using **`%ProgramData%\MAST\logs\`**).
+**Convention for custom scripts:** emit occasional `Write-Host "##MAST## kind=phase phase=<name> ..."` lines for long phases (similar to prov-server `EVENT_TYPE` tokens). Prefer reading **`$env:MAST_RUN_ID`** when appending logs (remote-run transcripts live under **`C:\MAST\logs\remote-runs\<timestamp>_<run_id>\`** on typical installs; module provisioning uses **`C:\MAST\logs\sessions\<timestamp>\`** plus **`C:\MAST\logs\smoke`** and **`C:\MAST\logs\verify`**).
 
 **Caveat:** if a child script calls **`exit`** in the same WinRM runspace, the wrapper’s `finally` may not run; WinRM `status_code` and partial transcript / JSON may still be missing. Prefer **`throw`** or non-terminating flow for clean summaries.
 
@@ -288,7 +346,7 @@ Those runs should be **correlatable** with server-side logs and **inspectable** 
 
 **TODO — robust remote handshake (orchestrator):** Teach `run-remote-script-winrm.py` (or a follow-on tool) to treat **`prepare_safe_complete`** as a completion milestone: e.g. stream **stdout** during the long WinRM invoke, **exit 0** (or open a **fresh** WinRM call only for the HTTPS step) once that marker is seen, instead of blocking until the single SOAP response finishes—so a subsequent WinRM recycle does not hold the primary client. Until then, deferring listener recreation to the end plus **`prepare_safe_complete`** is a pragmatic compromise.
 
-### Log files on the prov server (`C:\ProgramData\MAST\logs\prov\`) — **target layout**
+### Log files on the prov server (`C:\MAST\logs\prov\`) — **target layout**
 
 Planned structure once the autonomous loop logging described here is fully wired up (today’s
 behavior may differ; see `server/check-and-provision.ps1` and existing logs on disk).
@@ -357,7 +415,7 @@ Long-running phases (transfer, execute) would write heartbeat lines every 30 sec
 ```
 
 **Target:** `execute-mast-provisioning.ps1` would write per-module progress to a sidecar file
-such as `C:\ProgramData\MAST\logs\prov\execute-progress.txt` on the unit, which the prov server
+such as `C:\MAST\logs\prov\execute-progress.txt` on the unit, which the prov server
 would poll via WinRM during execution and relay into the run log.
 
 ### Windows Event Log integration (**planned**)
@@ -372,6 +430,107 @@ The design calls for `check-and-provision.ps1` to accept an optional `-AlertEmai
 If set, it would send a plain-text summary via `Send-MailMessage` when any unit ends `FAIL` or
 `UNREACHABLE`. Subject line example: `[MAST] Provisioning alert: mast02 FAIL (smoke:ascom)`.
 No email on all-OK or all-SKIP runs.
+
+### Prometheus scrape targets and central command dashboard (**target**)
+
+Operators and automation must be able to see **fleet-wide** answers without logging into each
+unit: what payload/modules are effective, which MAST services are running, and whether each
+layer last reported healthy. That state must be **scraped by Prometheus** (or a compatible
+pull-based collector) and rendered clearly on a **central command dashboard** used as the
+primary operations view.
+
+#### Principles
+
+1. **Pull model:** Prometheus scrapes **HTTP(S)** endpoints on a documented interval. Units and
+   the provisioning server participate as **first-class scrape targets** on the monitoring
+   network (not only as files that a human opens after the fact).
+2. **Same truth as provisioning:** Metrics and labels that describe **installed payload hash**,
+   **module versions**, and **drift** must align with the **effective** manifest described under
+   **Unit provisioning manifest (source of truth)** so the dashboard never contradicts
+   `check-and-provision` decisions.
+3. **Low-cardinality labels:** Use stable label keys (`hostname`, `site`, `module`, `service`,
+   `component`). Avoid unbounded label values (full file paths, raw error stacks); put detail in
+   logs or separate info metrics with bounded cardinality.
+4. **Security:** Scrape paths reachable only from the monitoring segment; prefer TLS and auth
+   where site policy requires it.
+
+#### Implementation patterns (non-prescriptive)
+
+Pick one or combine as needed, as long as the result is Prometheus-scrapeable:
+
+- **windows_exporter** (or **node_exporter** on non-Windows collectors) plus optional **textfile
+  collector** directory: a scheduled job or small agent on each unit **atomically** writes
+  `*.prom` snippets for custom facts (payload hash, module versions).
+- A **small MAST-specific exporter** (single HTTP server) that gathers the same facts the unit
+  probe would use (filesystem, services, optional WMI) and exposes **OpenMetrics** / Prometheus
+  text format on `/metrics`.
+- **Pushgateway** only where pull from the unit is impossible (firewall exception); default is
+  **direct scrape** of the unit from Prometheus.
+
+#### Installed package / manifest exposure
+
+The **effective** installed state (what is really on disk and registered), not a stale copy that
+could drift, must be representable for scraping, for example:
+
+- **Gauge or info-style metrics:** `mast_payload_hash` as an info metric with labels for git SHA
+  and payload hash (or separate labeled gauges if info metrics are not used).
+- **Per-module signals:** `mast_module_present{module="..."} == 1`, optional
+  `mast_module_version_info{module="...", version="..."} == 1` where versions are known.
+- **Drift vs build:** If the prov server publishes the **current** `build-manifest` hash for
+  that unit’s module set, the dashboard can compare **effective** vs **desired** in one place
+  (either computed in the exporter or via recording rules in Prometheus).
+
+Goal: the central dashboard shows a **table or stat panel per unit**: expected vs effective hash,
+module checklist, and age of last successful alignment.
+
+#### Running MAST services manifest
+
+**Enumerate** MAST-related Windows services (fixed list per role or discovered from naming
+conventions) and expose **running / stopped / missing** in a scrape-friendly form, for example:
+
+- `mast_expected_service{service="..."} == 1` paired with `windows_service_state` from
+  **windows_exporter**, or
+- Custom `mast_service_up{service="..."}` (1 when Running and expected, 0 otherwise).
+
+Include **start mode** where useful (Automatic vs Manual) so misconfiguration is visible.
+Non-service processes required for science may use a separate **probe success** metric or a
+dedicated heartbeat (see below).
+
+#### Heartbeats and liveness
+
+Heartbeats make **silent failure** visible on the dashboard without parsing logs:
+
+- **Per-service or per-layer last OK time:** e.g. metrics such as
+  `mast_heartbeat_timestamp_seconds{component="..."}` updated when smoke checks pass, or
+  `time() - mast_last_success_timestamp_seconds` as a recording rule for **staleness**.
+- **Provisioning loop:** On the prov server, expose **last successful autonomous run**,
+  **per-unit last outcome** (`OK`, `SKIP`, `FAIL`, `UNREACHABLE`), and **last failure reason**
+  as bounded labels or parallel info metrics so the command view shows **which unit needs attention**.
+- **Scheduler / availability:** Integrate with **`availability.json`** (see **Unit Availability
+  During Maintenance**) via metrics such as `mast_unit_available` and timestamps for last change,
+  scraped from the unit or mirrored by an agent.
+
+**Alerting:** Prometheus **Alertmanager** rules should fire when scrape fails (`up == 0`),
+heartbeat age exceeds threshold, critical `mast_service_up == 0`, or effective payload hash
+differs from desired for longer than a grace period after a known deploy.
+
+#### Central command dashboard (Grafana or equivalent)
+
+The **primary** operations UI should be a **dashboard** backed by the same Prometheus data:
+
+- **Fleet row:** all units, green/yellow/red from heartbeats, availability, and last prov outcome.
+- **Drill-down:** per-unit panels for **manifest** (hash, modules), **services grid**, **heartbeats**,
+  **recent prov events** (linked or embedded from log-derived metrics if optional).
+- **Prov server:** panels for scheduler health, LFS/git freshness if exposed, and aggregate failure rates.
+
+Document **standard dashboard UIDs**, template variables (`hostname`, `site`), and which metrics
+are **SLI**-grade (must not break during exporter upgrades without a migration note).
+
+#### Relation to logs
+
+Logs (`activity.csv`, remote-run transcripts, prov run logs) remain the **deep dive** for
+incidents. Prometheus and the central dashboard provide **continuous, queryable, alertable**
+summaries; they do not replace structured logging.
 
 ---
 
@@ -618,7 +777,7 @@ server from Stage 2 onward (once WinRM to the prov server is available):
 #### Local log (always present, even if network fails)
 
 ```
-C:\ProgramData\MAST\logs\onboarding.log
+C:\MAST\logs\onboarding\onboarding.log
 ```
 
 Structured entries — same format as the autonomous pipeline logs:
@@ -656,13 +815,13 @@ can monitor progress from the Mac without looking at the VM console:
 ```powershell
 # On Mac — tail the remote onboarding log while it runs:
 Invoke-Command -ComputerName 192.168.64.10 -Credential $provCred -ScriptBlock {
-    Get-Content 'C:\ProgramData\MAST\logs\onboarding\mast01.log' -Wait
+    Get-Content 'C:\MAST\logs\onboarding\mast01.log' -Wait
 }
 ```
 
 The prov server stores per-unit onboarding logs under:
 ```
-C:\ProgramData\MAST\logs\onboarding\<hostname>.log
+C:\MAST\logs\onboarding\<hostname>.log
 ```
 
 #### On-screen progress (operator console)
@@ -745,15 +904,22 @@ provisioning stage.
 Work remaining to reach the **target** autonomous loop (partial progress may already exist in tree):
 
 1. Add or complete `payload_hash` generation in `build-mast.ps1` → write `build-manifest.json`
+   (include **git ref** fields when pinning by tag/commit is implemented)
 2. Implement unit-side **effective** state: computed manifest and/or `installed-manifest.json`
    consistent with **Unit provisioning manifest (source of truth)** (inspection-based probe)
-3. Extend `server/check-and-provision.ps1` (and related scripts) until they match the loop and
+3. Per-module **uninstall/reinstall** (or equivalent) paths for clean upgrades; **build-mast** /
+   driver support for **pinned git refs** and rollback deploys — see **Package lifecycle, MAST
+   version pinning, rollback, and observability**
+4. Extend `server/check-and-provision.ps1` (and related scripts) until they match the loop and
    observability described above — not a greenfield “write from scratch” unless the driver is
    replaced deliberately
-4. Ensure `git lfs pull` works on the prov server (deploy key or stored credential)
-5. Set up Task Scheduler trigger (or service wrapper) on the prov server
-6. Run manual dry-runs (`check-and-provision.ps1 -DryRun`) to validate discovery + hash logic
-7. Enable live runs; monitor logs / CSV for a week before treating as production
+5. Ensure `git lfs pull` works on the prov server (deploy key or stored credential)
+6. Set up Task Scheduler trigger (or service wrapper) on the prov server
+7. Run manual dry-runs (`check-and-provision.ps1 -DryRun`) to validate discovery + hash logic
+8. Enable live runs; monitor logs / CSV for a week before treating as production
+9. Stand up Prometheus scrape targets on units and the prov server (manifest, services,
+   heartbeats); wire Grafana (or equivalent) **central command** dashboards and Alertmanager
+   rules aligned with **Prometheus scrape targets and central command dashboard** above
 
 ---
 

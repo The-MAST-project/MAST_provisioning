@@ -289,6 +289,9 @@ Write-Host "Populating provisioning stage ${staging} ..."
 
 # Always place provisioning.psm1 into staging
 Copy-Item -Force ${serverLib} (Join-Path ${staging} 'provisioning.psm1')
+${mastLogLib} = Join-Path (Split-Path -Parent ${serverLib}) 'mast-log.ps1'
+if (-not (Test-Path ${mastLogLib})) { throw "Missing mast-log.ps1 at ${mastLogLib}" }
+Copy-Item -Force ${mastLogLib} (Join-Path ${staging} 'mast-log.ps1')
 
 # Copy client execution script into staging
 ${executeScript} = Join-Path ${clientRoot} 'execute-mast-provisioning.ps1'

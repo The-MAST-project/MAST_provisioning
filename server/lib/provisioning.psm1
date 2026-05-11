@@ -1,6 +1,8 @@
 #Requires -RunAsAdministrator
 Set-StrictMode -Version Latest
 
+. (Join-Path $PSScriptRoot 'mast-log.ps1')
+
 # ---------------------------
 # Logging
 # ---------------------------
@@ -8,8 +10,9 @@ function Start-ProvisionLog {
   [CmdletBinding()]
   param(
     [string]${Component} = "provision",
-    [string]${LogRoot} = (Join-Path ${env:ProgramData} 'MAST\logs')
+    [string]${LogRoot} = ''
   )
+  if (-not ${LogRoot}) { ${LogRoot} = Get-MastLogSessionDir }
   ${null} = New-Item -ItemType Directory -Path ${LogRoot} -Force -ErrorAction SilentlyContinue
   ${LogFile} = Join-Path ${LogRoot} ("{0}_{1:yyyyMMdd_HHmmss}.log" -f ${Component}, (Get-Date))
   Start-Transcript -Path ${LogFile} -Append | Out-Null
@@ -225,4 +228,9 @@ function Enable-NetFx3 {
   }
   return $false
 }
-Export-ModuleMember -Function *-*
+Export-ModuleMember -Function @(
+  'Start-ProvisionLog', 'Stop-ProvisionLog', 'Add-ToSystemPath', 'Confirm-Dir', 'Copy-Safe',
+  'Get-FileSha256', 'Invoke-Exe', 'Invoke-ExeSilent', 'Expand-AnyArchive', 'Restart-ServiceLike',
+  'Read-SimpleCsv2', 'Write-SimpleCsv2', 'Get-WorkingDir', 'Test-IsAdmin', 'Enable-NetFx3',
+  'Get-MastLogSessionDir', 'Get-MastSmokeDir', 'Get-MastVerifyDir'
+)

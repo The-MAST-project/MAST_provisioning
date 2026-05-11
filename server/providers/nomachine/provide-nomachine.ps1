@@ -11,7 +11,7 @@
   - Allocates a license based on ${env:COMPUTERNAME} if not already allocated.
   - Installs the license file into the NoMachine licenses directory.
   - Tries to restart NoMachine service so license is picked up.
-  - Logs to %ProgramData%\MAST\logs.
+  - Logs under <SystemDrive>\MAST\logs\sessions\<timestamp>.
 
 .PARAMETER AssetsRoot
   Root containing 'nomachine\assets'. Default: ${PSScriptRoot}.
@@ -55,7 +55,7 @@ FILES (under ${AssetsRoot}):
 if (${Help}) { Show-Help; return }
 
 # --- Logging ---
-${LogRoot} = Join-Path ${env:ProgramData} 'MAST\logs'
+${LogRoot} = Get-MastLogSessionDir
 ${null} = New-Item -ItemType Directory -Path ${LogRoot} -Force -ErrorAction SilentlyContinue
 ${LogFile} = Join-Path ${LogRoot} ("provide-nomachine_{0:yyyyMMdd_HHmmss}.log" -f (Get-Date))
 Start-Transcript -Path ${LogFile} -Append | Out-Null
