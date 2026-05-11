@@ -16,6 +16,8 @@ without intervention from the Mac host or a separate orchestration process.
 
 **Identity and addressing:** Each unit is identified **only** by its configured Windows hostname (for example `mast01`). The machine **must** be allowed to use **DHCP** for IPv4; operators and automation discover units **by name** (DNS, reverse DNS, or a managed hosts file), not by pinning a fixed address in scripts or `unit-registry.json`. Do not treat an IP as the long-lived identity of a unit.
 
+**Operator SSH access:** Each fleet unit must have an **SSH server installed, configured, and running** in steady state so authorized staff can **remote in interactively** when needed (debugging, recovery, file transfer with familiar tools). This is **complementary** to WinRM used for provisioning automation; see **Fleet SSH server (operator remote access)** below.
+
 ---
 
 ## Development lab: hostname resolution (simulate internal DNS)
@@ -69,11 +71,34 @@ Provisioning Server (Windows, long-lived)
   +-- WinRM --> MAST Unit 1 (mast01)
   +-- WinRM --> MAST Unit 2 (mast02)
   +-- WinRM --> MAST Unit N (mastN)
+  |
+  +-- SSH (optional path for operators) --> same units when enabled
 ```
 
 No Mac host involvement at runtime. The Mac is only used to:
 - Push git commits (new module versions, assets via lfs)
 - Review logs
+
+---
+
+## Fleet SSH server (operator remote access) (**target**)
+
+**Requirement:** Every MAST unit in the fleet must ship with an **SSH server** enabled for
+steady-state operation: installed, configured for site policy (listen address, port, allowed
+users or groups), set to **start automatically** with the OS, and **running** so operators can
+`ssh` to `mastNN` by hostname when the network path allows. Provisioning automation remains on
+**WinRM**; SSH is for **human-driven** remote shells and tooling, not a replacement for the
+autonomous control plane unless explicitly extended later.
+
+**Windows:** Use the platform **OpenSSH Server** optional capability (or equivalent supported
+distribution), harden host keys and `sshd_config`, and restrict access with **firewall rules**
+(for example allow TCP 22 only from management subnets or jump hosts). Document the **expected
+smoke check** (for example: service `sshd` Running, port reachable from a defined bastion) so
+**Observability** can treat SSH availability like other fleet services.
+
+**Security:** Key-based auth, deny-password where policy allows, patch cadence aligned with
+Windows Update, and no overlap with insecure bootstrap shortcuts. SSH must not weaken the
+steady-state posture described under **Test-mode exceptions** for WinRM HTTPS.
 
 ---
 
@@ -878,6 +903,8 @@ After Stage 5 completes successfully, control **should** pass entirely to the pr
 - The unit’s **effective** provisioning state (preferably derived from live contents when probed,
   not only a cached file on the host or unit) reflects the provisioned payload hash
 - Routine software updates or re-provisioning are triggered autonomously — no operator needed
+- **SSH server** (OpenSSH Server on Windows) is **installed, configured, and running** for
+  operator remote access per **Fleet SSH server (operator remote access)**
 
 ### Dev/test VM path
 
@@ -920,6 +947,8 @@ Work remaining to reach the **target** autonomous loop (partial progress may alr
 9. Stand up Prometheus scrape targets on units and the prov server (manifest, services,
    heartbeats); wire Grafana (or equivalent) **central command** dashboards and Alertmanager
    rules aligned with **Prometheus scrape targets and central command dashboard** above
+10. Install and harden **OpenSSH Server** on fleet units; document firewall, auth, and smoke checks
+    per **Fleet SSH server (operator remote access)**
 
 ---
 

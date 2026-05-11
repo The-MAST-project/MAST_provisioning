@@ -43,7 +43,8 @@ MAST_provisioning/
 |   |-- run-build.ps1                 # Convenience wrapper
 |   `-- make-wcd-package.ps1          # Offline (Windows Configuration Designer) package
 |-- client/
-|   |-- bootstrap-winrm.ps1           # Run once on a fresh unit (mast user, WinRM)
+|   |-- bootstrap-winrm.cmd         # Run as Administrator: starts bootstrap (avoids Notepad on .ps1)
+|   |-- bootstrap-winrm.ps1         # Manual first-time: mast user, WinRM, computer name
 |   |-- prepare-mast-client.ps1       # Run after bootstrap (hostname, HTTPS, WU policy)
 |   |-- execute-mast-provisioning.ps1 # Runs on the unit; iterates through commands.json
 |   `-- onboard-mast-unit.ps1         # One-shot Stages 0-5 bootstrap for a new unit
@@ -170,13 +171,15 @@ Then create `vault/creds.json` from `vault/creds.json.template`:
 
 ### One-time unit VM setup
 
+Bootstrap (**`client\bootstrap-winrm.cmd`**) must run **elevated**: in File Explorer, right-click the `.cmd` file and choose **Run as administrator** (or run it from an **elevated Command Prompt** if you need arguments such as `-MastHostName`). The matching `bootstrap-winrm.ps1` must live in the same folder. Alternatively, run `bootstrap-winrm.ps1` from an elevated PowerShell session.
+
 Two paths: an unattended path (recommended) and a manual path.
 
-#### Unattended (no operator interaction during install)
+#### Unattended (no operator interaction during Windows install)
 
 ```powershell
 # 1) Build a small autounattend ISO (~1 MB). It contains Autounattend.xml plus
-#    bootstrap-winrm.ps1, executed on first auto-logon.
+#    bootstrap-winrm.cmd + bootstrap-winrm.ps1 on the ISO root (not executed automatically).
 .\build-autounattend-iso.ps1
 # Optional: target ARM64 IoT LTSC and pick a specific edition
 # .\build-autounattend-iso.ps1 -Architecture arm64 -WindowsEdition "Windows 11 IoT Enterprise LTSC"
@@ -185,25 +188,39 @@ Two paths: an unattended path (recommended) and a manual path.
 .\vbox-create-unit.ps1 -IsoPath C:\path\to\Win11_or_IoTLTSC.iso `
                        -AutounattendIso .\autounattend-mast.iso
 
-# 3) Start with GUI and wait ~15-25 min:
+# 3) Start with GUI and wait ~15-25 min for Windows to finish:
 VBoxManage startvm mast-unit --type gui
 
-# 4) bootstrap-winrm.ps1 leaves networking on DHCP and brings up WinRM. Confirm
-#    reachability by hostname once DNS or hosts maps mast01 to the VM address:
-Test-NetConnection mast01 -Port 5985
+# 4) Log in (factory user/password1 by default). On the second DVD (or USB), locate
+#    bootstrap-winrm.cmd in the same folder as bootstrap-winrm.ps1. Right-click
+#    bootstrap-winrm.cmd and choose Run as administrator (required; the script
+#    elevates WinRM and renames the computer). If you need command-line arguments,
+#    open an elevated Command Prompt (Run as administrator) and run for example:
+#        D:\bootstrap-winrm.cmd -MastHostName mast05 -RebootAfterBootstrap
+#    The .cmd file runs PowerShell for you (.ps1 may open in Notepad if opened directly).
+#    Confirm the script prints [OK] before you continue.
 
-# 5) Run prepare-mast-client.ps1 remotely to finish hostname + WinRM HTTPS:
+# 5) After reboot if prompted, log in as mast / physics. On the VirtualBox host (elevated):
+.\tools\sync-dev-unit-hosts.ps1
+
+# 6) Confirm reachability (use the same mastNN as in step 4):
+Test-NetConnection mast05 -Port 5985
+
+# 7) Run prepare-mast-client.ps1 remotely to finish WinRM HTTPS / steady state:
 $cred = Get-Credential   # mast / physics
-Invoke-Command -ComputerName mast01 -Credential $cred `
+Invoke-Command -ComputerName mast05 -Credential $cred `
     -FilePath .\client\prepare-mast-client.ps1 `
-    -ArgumentList @{HostName='mast01'; Provider='192.168.56.1'}
+    -ArgumentList @{HostName='mast05'; Provider='192.168.56.1'}
 
-# 6) Power off, snapshot:
+# 8) Power off, snapshot:
 .\vbox-create-unit.ps1 -SnapshotOnly
 ```
 
-Defaults baked into the answer file: `mast` / `physics`, `en-US`, `Israel
-Standard Time`. Override via parameters on `build-autounattend-iso.ps1`.
+Defaults baked into the answer file for the first local account: `user` / `password1`
+(until you run `bootstrap-winrm.cmd` as Administrator, or `bootstrap-winrm.ps1` from an elevated
+PowerShell session, which sets `mast` / `physics`). Locale and
+timezone default to `en-US` and `Israel Standard Time` unless overridden on
+`build-autounattend-iso.ps1`.
 
 #### Manual (walk through Windows setup yourself)
 
@@ -216,20 +233,24 @@ VBoxManage startvm mast-unit --type gui
 
 # Inside the VM after first login:
 #   1) Ensure the host-only adapter has an address (DHCP on the VirtualBox
-#      host-only network, or set a temporary address) and that mast01 resolves
-#      from the host after prepare-mast-client runs.
-#   2) Open admin PowerShell:
+#      host-only network, or set a temporary address) and that mastNN resolves
+#      from the host after you run bootstrap + prepare.
+#   2) Run bootstrap: right-click client\bootstrap-winrm.cmd (or the copy on D:\ etc.)
+#      and choose Run as administrator. For arguments (for example -MastHostName mast05),
+#      use an elevated Command Prompt instead:
+#         D:\bootstrap-winrm.cmd -MastHostName mast05
+#      Then open an elevated PowerShell for prepare:
 #         Set-ExecutionPolicy Bypass -Scope Process -Force
-#         .\bootstrap-winrm.ps1
-#         .\prepare-mast-client.ps1 -HostName mast01 -Provider 192.168.56.1
+#         .\prepare-mast-client.ps1 -HostName mast05 -Provider 192.168.56.1
 #   3) Power off cleanly.
 
 # Take the snapshots:
 .\vbox-create-unit.ps1 -SnapshotOnly
 ```
 
-Either path produces two snapshots: `clean-state` (post-Windows install, no MAST
-tools) and `post-prepare` (after `bootstrap-winrm` + `prepare-mast-client` ran).
+Either path produces two snapshots: `clean-state` (post-Windows install, before or
+after manual bootstrap depending when you snapshot) and `post-prepare` (after
+`bootstrap-winrm.cmd` (Run as administrator) + `prepare-mast-client` ran).
 
 ### Run a test cycle
 

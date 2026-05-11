@@ -21,6 +21,7 @@ Usage (Windows PowerShell, run from anywhere):
         [--repeat 3] ^
         [--rebuild] ^
         [--build-only] ^
+        [--execute-only] ^
         [--vbox-vm mast-unit] ^
         [--snapshot post-prepare]
 
@@ -75,7 +76,8 @@ HTTP_TRANSFER_PORT = 18080
 WINRM_PORT = 5985
 WINRM_TIMEOUT_S = 90 * 60
 WINRM_CALL_TIMEOUT_S = 30 * 60
-WINRM_BOOT_TIMEOUT_S = 5 * 60
+# First cycle often waits for the unit after snapshot restore or reboot; auth can lag TCP.
+WINRM_BOOT_TIMEOUT_S = 15 * 60
 HEARTBEAT_INTERVAL_S = 30
 EXECUTE_POLL_INTERVAL_S = 20
 
@@ -268,10 +270,17 @@ def wait_for_winrm(host: str, cred: dict[str, str], timeout: int = WINRM_BOOT_TI
     log(f"Waiting for WinRM on {host} (up to {timeout}s)...")
     deadline = time.monotonic() + timeout
     users = _candidate_users(host, cred.get("user", ""))
+    last_diag = 0.0
     while time.monotonic() < deadline:
+        tcp_ok = False
         try:
             with socket.create_connection((host, WINRM_PORT), timeout=5):
-                pass
+                tcp_ok = True
+        except OSError:
+            pass
+
+        auth_errors: list[str] = []
+        if tcp_ok:
             for usr in users or [cred.get("user", "")]:
                 try:
                     s = winrm.Session(
@@ -286,10 +295,22 @@ def wait_for_winrm(host: str, cred: dict[str, str], timeout: int = WINRM_BOOT_TI
                         cred["user"] = usr
                         log(f"WinRM on {host} is ready (user={usr!r}).")
                         return
-                except Exception:
+                except Exception as e:
+                    auth_errors.append(f"{usr!r}:{type(e).__name__}")
                     continue
-        except Exception:
-            pass
+
+        now = time.monotonic()
+        if now - last_diag >= 60:
+            if tcp_ok:
+                tail = "; ".join(auth_errors[-4:]) if auth_errors else "no auth attempts"
+                log(
+                    f"WinRM: TCP {WINRM_PORT} open on {host} but Basic auth not accepted yet ({tail}). "
+                    "Confirm vault/creds.json matches the unit mast password and that prepare-mast-client "
+                    "finished (HTTPS step can recycle WinRM briefly)."
+                )
+            else:
+                log(f"WinRM: TCP {WINRM_PORT} not open on {host} yet (still booting or wrong host?).")
+            last_diag = now
         time.sleep(5)
     raise TimeoutError(f"WinRM on {host} did not become reachable within {timeout}s")
 
@@ -716,13 +737,14 @@ def phase_reset(
     snapshot: str,
     host_unit: str,
     unit_cred: dict[str, str],
+    winrm_wait_s: int = WINRM_BOOT_TIMEOUT_S,
 ) -> winrm.Session:
     with timed("RESET PHASE"):
         unit_stop(vbox_vm)
         time.sleep(3)
         unit_reset_to_snapshot(vbox_vm, snapshot)
         unit_start(vbox_vm)
-        wait_for_winrm(host_unit, unit_cred)
+        wait_for_winrm(host_unit, unit_cred, timeout=winrm_wait_s)
         return winrm_session(host_unit, unit_cred)
 
 
@@ -742,14 +764,29 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--repeat", type=int, default=1, help="Number of test cycles (default: 1)")
     p.add_argument("--rebuild", action="store_true", help="Re-run build phase on every cycle")
     p.add_argument("--build-only", action="store_true", help="Only run the build phase")
+    p.add_argument(
+        "--execute-only",
+        action="store_true",
+        help="Skip build and transfer; WinRM to the unit and run execute-mast-provisioning.ps1 only "
+        "(expects payload already at C:\\mast-staging)",
+    )
     p.add_argument("--vbox-vm", default="mast-unit", help="VirtualBox VM name (default: 'mast-unit')")
     p.add_argument("--snapshot", default="post-prepare", help="Snapshot name to restore between cycles (default: 'post-prepare')")
     p.add_argument("--no-reset", action="store_true", help="Do not reset the VM between cycles (debug)")
+    p.add_argument(
+        "--winrm-wait-seconds",
+        type=int,
+        default=WINRM_BOOT_TIMEOUT_S,
+        metavar="N",
+        help="Max seconds to wait for TCP :5985 plus WinRM Basic auth before failing (default: %s)." % WINRM_BOOT_TIMEOUT_S,
+    )
     return p.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+    if args.build_only and args.execute_only:
+        sys.exit("ERROR: --build-only and --execute-only cannot be used together.")
     modules = args.modules.split(",") if args.modules else ALL_MODULES
     creds = load_creds()
     if "unit" not in creds:
@@ -766,6 +803,7 @@ def main() -> None:
         log(f"Cycles:  {args.repeat}")
         log(f"VM:      {args.vbox_vm}  (snapshot: {args.snapshot})")
         log(f"Unit WinRM target: {args.host_unit}")
+        log(f"WinRM wait: {args.winrm_wait_seconds}s")
 
         cycle_results: list[bool] = []
         built = False
@@ -778,7 +816,7 @@ def main() -> None:
             log_dir = setup_log_dir(cycle)
 
             try:
-                if not built or args.rebuild:
+                if not args.execute_only and (not built or args.rebuild):
                     phase_build(args.hostname, modules)
                     built = True
 
@@ -788,10 +826,13 @@ def main() -> None:
 
                 if unit_session is None:
                     with timed("WAIT FOR WINRM"):
-                        wait_for_winrm(args.host_unit, creds["unit"])
+                        wait_for_winrm(args.host_unit, creds["unit"], timeout=args.winrm_wait_seconds)
                     unit_session = winrm_session(args.host_unit, creds["unit"])
 
-                phase_transfer(unit_session, args.hostname)
+                if args.execute_only:
+                    log("--execute-only: skipping build and transfer.")
+                else:
+                    phase_transfer(unit_session, args.hostname)
 
                 execute_response = phase_execute(unit_session, args.host_unit, creds["unit"])
 
@@ -816,7 +857,13 @@ def main() -> None:
                         pass
 
             if cycle < args.repeat and not args.no_reset:
-                unit_session = phase_reset(args.vbox_vm, args.snapshot, args.host_unit, creds["unit"])
+                unit_session = phase_reset(
+                    args.vbox_vm,
+                    args.snapshot,
+                    args.host_unit,
+                    creds["unit"],
+                    winrm_wait_s=args.winrm_wait_seconds,
+                )
 
         log(
             f"[TIMING] Total run (run-prov-test.py): "

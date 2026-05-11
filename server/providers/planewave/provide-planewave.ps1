@@ -9,28 +9,51 @@ if (-not (Test-Path ${mastLogDot})) { ${mastLogDot} = Join-Path ${PSScriptRoot} 
 ${logDir} = Get-MastLogSessionDir
 New-Item -ItemType Directory -Path ${logDir} -Force | Out-Null
 ${logFile} = Join-Path ${logDir} "planewave-install.log"
+${innoLog} = Join-Path ${logDir} "pwi4-inno-setup.log"
+
+function Write-MastPwLog {
+    param([string]${Line})
+    ${ts} = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+    Add-Content -LiteralPath ${logFile} -Encoding UTF8 -Value ("[{0}] {1}" -f ${ts}, ${Line})
+    Write-Host ${Line}
+}
+
+# Always create the log file (Write-Host does not pipe to Tee-Object in Windows PowerShell 5.1;
+# silent Inno may emit no stdout so Tee-Object would never open the file.)
+Set-Content -LiteralPath ${logFile} -Encoding UTF8 -Value ("[{0}] PlaneWave provide-planewave.ps1 started." -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))
 
 try {
-    Write-Host "Starting PlaneWave installation..."
+    Write-MastPwLog "Starting PlaneWave installation..."
 
-    # Install PWI4
+    # Install PWI4 (Inno Setup 6.x per vendor log -- use Inno silent flags, not NSIS /S.)
     ${pwi4InstallerPath} = Join-Path ${AssetsRoot} "Setup_PWI_4.1.8_Final.exe"
     if (-not (Test-Path ${pwi4InstallerPath})) {
         throw "PWI4 installer not found at ${pwi4InstallerPath}"
     }
 
-    Write-Host "Installing PWI4 telescope control software..." | Tee-Object -FilePath ${logFile}
-    & ${pwi4InstallerPath} /S 2>&1 | Tee-Object -FilePath ${logFile} -Append
+    Write-MastPwLog "Launching PWI4 setup (silent Inno + dedicated Inno log)."
+    ${argList} = @(
+        '/VERYSILENT',
+        '/SUPPRESSMSGBOXES',
+        '/NORESTART',
+        '/SP-',
+        ('/LOG="{0}"' -f ${innoLog})
+    )
+    ${p} = Start-Process -FilePath ${pwi4InstallerPath} -ArgumentList ${argList} -PassThru -Wait -NoNewWindow
+    Write-MastPwLog ("Setup_PWI_4.1.8_Final.exe exit code: {0}" -f ${p}.ExitCode)
+    if (${p}.ExitCode -ne 0) {
+        throw ("PWI4 installer exited with code {0}. See Inno log: {1}" -f ${p}.ExitCode, ${innoLog})
+    }
     Start-Sleep -Seconds 5
 
-    # Locate pwi4.exe - NSIS installs to its own default path; search rather than hardcode.
+    # Locate pwi4.exe - search default Program Files trees (vendor path may vary).
     ${pwi4ExePath} = Get-ChildItem -Path 'C:\Program Files', 'C:\Program Files (x86)' `
         -Recurse -Filter 'pwi4.exe' -ErrorAction SilentlyContinue |
         Select-Object -First 1 -ExpandProperty FullName
     if (-not ${pwi4ExePath}) {
         throw "pwi4.exe not found after installation"
     }
-    Write-Host "Found pwi4.exe at: ${pwi4ExePath}"
+    Write-MastPwLog ("Found pwi4.exe at: {0}" -f ${pwi4ExePath})
 
     # Extract PS3 CLI tools
     ${ps3cliZipPath} = Join-Path ${AssetsRoot} "ps3cli.zip"
@@ -41,20 +64,21 @@ try {
     ${ps3cliDestPath} = "C:\Users\mast\Documents\PlaneWave\ps3cli"
     New-Item -ItemType Directory -Path ${ps3cliDestPath} -Force | Out-Null
 
-    Write-Host "Extracting PS3 CLI tools to ${ps3cliDestPath}" | Tee-Object -FilePath ${logFile} -Append
-    Expand-Archive -Path ${ps3cliZipPath} -DestinationPath ${ps3cliDestPath} -Force 2>&1 | Tee-Object -FilePath ${logFile} -Append
+    Write-MastPwLog ("Extracting PS3 CLI tools to {0}" -f ${ps3cliDestPath})
+    ${zipOut} = Expand-Archive -Path ${ps3cliZipPath} -DestinationPath ${ps3cliDestPath} -Force 2>&1 | Out-String
+    if (${zipOut}) { Add-Content -LiteralPath ${logFile} -Encoding UTF8 -Value ${zipOut} }
 
     # Verify PS3 CLI extraction
     if (-not (Test-Path ${ps3cliDestPath})) {
         throw "PS3 CLI directory not created after extraction at ${ps3cliDestPath}"
     }
 
-    Write-Host "PlaneWave installation completed successfully" | Tee-Object -FilePath ${logFile} -Append
+    Write-MastPwLog "PlaneWave installation completed successfully"
     exit 0
 }
 catch {
     ${errorMsg} = "PlaneWave installation failed: $_"
     Write-Host ${errorMsg}
-    ${errorMsg} | Out-File -FilePath ${logFile} -Append -Encoding UTF8
+    Add-Content -LiteralPath ${logFile} -Encoding UTF8 -Value ${errorMsg}
     exit 1
 }

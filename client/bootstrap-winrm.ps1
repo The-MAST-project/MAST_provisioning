@@ -1,285 +1,367 @@
 ﻿#Requires -RunAsAdministrator
 <#
 .SYNOPSIS
-    One-time bootstrap for a freshly installed MAST IoT unit (physical or VM).
+    Manual first-time MAST unit bootstrap: mast admin, WinRM HTTP for prov server, optional computer rename.
 
 .DESCRIPTION
-    Run this script ONCE on a unit that has a clean Windows IoT install with no
-    answer file. It brings the machine to a state where prepare-mast-client.ps1
-    can run remotely over WinRM to finish the full unit preparation.
+    Run ONCE per machine in an elevated PowerShell session after Windows is installed (physical unit
+    from USB, or dev VM after first login). This is NOT run from autounattend FirstLogon anymore.
 
-    What this script does:
-      1. If an OEM factory account exists (default 'user' from unattend), renames it
-         to mast and sets the provisioning password.
-      2. Ensures the 'mast' local administrator account (password: physics).
-      3. Suppresses Windows Update automatic installs and reboots.
-      4. Enables WinRM over HTTP (port 5985) with Basic auth.
-      5. Opens the WinRM firewall port.
+    The installing operator must supply the unit Windows hostname (e.g. mast05). The script:
+      1. Optionally renames the factory local account (default 'user') to 'mast' and sets password.
+      2. Ensures 'mast' is a local administrator with the provisioning password.
+      3. Suppresses Windows Update automatic installs.
+      4. Enables WinRM over HTTP (5985) with Basic auth and opens firewall port 5985.
+      5. Renames the computer to -MastHostName (reboot required before the new name is live).
 
-    Networking is DHCP - no static IP. Operators reach units by hostname (DNS / hosts).
+    After this script completes successfully, the operator verifies the summary, reboots if prompted,
+    then the provisioning server may run prepare-mast-client.ps1 over WinRM (HTTPS, TrustedHosts).
 
-    prepare-mast-client.ps1 (run remotely after this) handles:
-      - Computer rename
-      - WinRM HTTPS listener + self-signed cert
-      - TrustedHosts configuration
+    USB / DVD: copy client\bootstrap-winrm.cmd and bootstrap-winrm.ps1 together (or use the
+    autounattend ISO). Double-click bootstrap-winrm.cmd so Windows runs PowerShell (many PCs
+    open .ps1 in Notepad by default). Or from an elevated PowerShell:
+        cd <folder containing bootstrap-winrm.ps1>
+        .\bootstrap-winrm.ps1 -MastHostName mast05
 
-    Delivery:
-      - USB drive: copy to USB, open admin PowerShell on the unit, run it
-      - Local keyboard / paste into an admin PowerShell session
+    If you omit -MastHostName, the script prompts interactively (not valid with -NonInteractive).
 
-    For VM builds using run-prov-test.py --build-image, equivalent commands are
-    injected automatically into the answer file's FirstLogonCommands -- no manual
-    step required.
+.PARAMETER MastHostName
+    Windows computer name for this unit (mast01 .. mast20). NetBIOS: 1-15 chars, letters/digits/hyphen.
+
+.PARAMETER NonInteractive
+    Fail if -MastHostName is missing (for automation); no prompts.
+
+.PARAMETER RebootAfterBootstrap
+    After success, schedule a reboot in 90 seconds (recommended after Rename-Computer or if WinRM/CIM was flaky).
+
+.PARAMETER SkipComputerRename
+    Do not rename the computer (use only if you will set the name elsewhere).
+
+.PARAMETER FactoryUser, MastUser, MastPassword, ProvServerIP
+    Same defaults as factory unattend (user -> mast, physics, prov host for prepare example text).
 #>
 
 param(
-    # Local name created by factory unattend (user/password1). Renamed to MastUser before WinRM. Use '' to skip.
-    [string]$FactoryUser   = 'user',
-    [string]$MastUser      = 'mast',
-    [string]$MastPassword  = 'physics',
-    [string]$ProvServerIP  = '192.168.56.1'
+    [string]$FactoryUser = 'user',
+    [string]$MastUser = 'mast',
+    [string]$MastPassword = 'physics',
+    [string]$ProvServerIP = '192.168.56.1',
+    [string]$MastHostName = '',
+    [switch]$NonInteractive,
+    [switch]$RebootAfterBootstrap,
+    [switch]$SkipComputerRename
 )
 
+Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$totalSw = [System.Diagnostics.Stopwatch]::StartNew()
-$phaseSw = [System.Diagnostics.Stopwatch]::StartNew()
-function Format-MastElapsed([TimeSpan]$t) {
-    if ($t.TotalHours -ge 1) { return $t.ToString('h\:mm\:ss') }
-    if ($t.TotalMinutes -ge 1) { return ('{0:N1} min' -f $t.TotalMinutes) }
-    return ('{0:N2}s' -f $t.TotalSeconds)
-}
-function Write-MastTiming([string]$Label) {
-    $phaseSw.Stop()
-    Write-Host ('[TIMING] {0}: {1}' -f $Label, (Format-MastElapsed $phaseSw.Elapsed)) -ForegroundColor DarkCyan
-    $phaseSw.Restart()
-}
-function Write-MastTimingTotal([string]$ScriptName) {
-    $totalSw.Stop()
-    Write-Host ('[TIMING] Total ({0}): {1}' -f $ScriptName, (Format-MastElapsed $totalSw.Elapsed)) -ForegroundColor Cyan
-}
+$script:BootstrapLogDir = Join-Path $env:ProgramData 'MAST\logs'
+$script:BootstrapLog = Join-Path $script:BootstrapLogDir 'bootstrap-winrm.log'
+$script:RebootRecommended = $false
+$script:AllowUnencryptedOk = $false
 
-function Write-Step([string]$msg) {
-    Write-Host ""
-    Write-Host "--- $msg" -ForegroundColor Cyan
+$null = New-Item -ItemType Directory -Path $script:BootstrapLogDir -Force -ErrorAction SilentlyContinue
+
+function Write-BootstrapMsg {
+    param(
+        [string]$Message,
+        [string]$Color = 'Gray'
+    )
+    $ts = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+    $line = "[$ts] $Message"
+    Add-Content -LiteralPath $script:BootstrapLog -Encoding ASCII -Value $line
+    Write-Host $Message -ForegroundColor $Color
 }
 
-$phaseSw.Restart()
-
-# ---------------------------------------------------------------------------
-# OEM factory account -> mast (optional)
-# Unattend installs use generic credentials (e.g. user/password1); rename here so one
-# script is sufficient before provisioning. Skip when FactoryUser is empty or absent.
-# ---------------------------------------------------------------------------
-$RenamedOemToMast = $false
-if ($FactoryUser) {
-    Write-Step "OEM factory account -> '$MastUser'"
-    $factoryAcct = Get-LocalUser -Name $FactoryUser -ErrorAction SilentlyContinue
-    $mastAcct    = Get-LocalUser -Name $MastUser -ErrorAction SilentlyContinue
-    if ($factoryAcct -and $mastAcct) {
-        throw "Bootstrap: cannot rename '$FactoryUser' to '$MastUser' because '$MastUser' already exists."
-    }
-    if ($factoryAcct -and -not $mastAcct) {
-        $secPwd = ConvertTo-SecureString $MastPassword -AsPlainText -Force
-        Rename-LocalUser -Name $FactoryUser -NewName $MastUser
-        Set-LocalUser -Name $MastUser -Password $secPwd -PasswordNeverExpires $true
-        $RenamedOemToMast = $true
-        Write-Host "  Renamed '$FactoryUser' -> '$MastUser'; password set for provisioning."
-    } else {
-        Write-Host "  No factory account '$FactoryUser' (or mast already present) -- skipping rename."
-    }
-}
-Write-MastTiming 'OEM account rename'
-
-# ---------------------------------------------------------------------------
-# 1. mast local administrator account (creates or syncs password after OEM rename)
-# ---------------------------------------------------------------------------
-Write-Step "Ensuring local admin account '$MastUser'"
-
-$existing = Get-LocalUser -Name $MastUser -ErrorAction SilentlyContinue
-$secPwd = ConvertTo-SecureString $MastPassword -AsPlainText -Force
-
-if ($existing) {
-    Set-LocalUser -Name $MastUser -Password $secPwd -PasswordNeverExpires $true
-    if ($RenamedOemToMast) {
-        Write-Host "  Password synced for '$MastUser' (same account as renamed OEM user -- expected)."
-    } else {
-        Write-Host "  Account '$MastUser' already exists -- password updated."
-    }
-} else {
-    New-LocalUser -Name $MastUser -Password $secPwd `
-        -FullName 'MAST Administrator' -PasswordNeverExpires `
-        -UserMayNotChangePassword | Out-Null
-    Write-Host "  Account '$MastUser' created."
+function Write-BootstrapBanner([string]$Text, [string]$Color = 'Cyan') {
+    Write-BootstrapMsg $Text $Color
 }
 
-# Add to Administrators if not already a member (rename leaves OEM admin in Administrators).
-# Match by SID first; Name formats vary. Add-LocalGroupMember is wrapped: MemberExists must not abort ($ErrorActionPreference = Stop).
-$mastSid = (Get-LocalUser -Name $MastUser).Sid
-$alreadyAdmin = $false
-foreach ($m in @(Get-LocalGroupMember -Group 'Administrators' -ErrorAction SilentlyContinue)) {
-    if ($m.SID -eq $mastSid) {
-        $alreadyAdmin = $true
-        break
-    }
-}
-if (-not $alreadyAdmin) {
+function Test-MastNetFirewallRuleExists {
+    param([string]$DisplayName)
     try {
-        Add-LocalGroupMember -Group 'Administrators' -Member $MastUser -ErrorAction Stop
-        Write-Host "  Added '$MastUser' to Administrators."
+        return [bool](Get-NetFirewallRule -DisplayName $DisplayName -ErrorAction SilentlyContinue)
     } catch {
-        $fe = $_.FullyQualifiedErrorId
-        if ($fe -match 'MemberExists|ResourceExists') {
-            Write-Host "  '$MastUser' is already an Administrator."
+        return $false
+    }
+}
+
+function Ensure-MastWinRmFirewallRule5985 {
+    param([string]$RuleDisplayName = 'MAST - WinRM HTTP')
+    if (Test-MastNetFirewallRuleExists -DisplayName $RuleDisplayName) {
+        Write-BootstrapMsg "  Firewall rule '$RuleDisplayName' already exists." 'Green'
+        return
+    }
+    try {
+        New-NetFirewallRule -DisplayName $RuleDisplayName `
+            -Direction Inbound -Protocol TCP -LocalPort 5985 `
+            -Action Allow -Profile Any -ErrorAction Stop | Out-Null
+        Write-BootstrapMsg "  Firewall rule '$RuleDisplayName' created (NetSecurity module)." 'Green'
+    } catch {
+        Write-BootstrapMsg ("  WARN: New-NetFirewallRule failed ({0}); trying netsh advfirewall." -f $_.Exception.Message) 'Yellow'
+        $showCmd = 'netsh advfirewall firewall show rule name="' + $RuleDisplayName.Replace('"', '') + '"'
+        $show = cmd.exe /c $showCmd 2>&1
+        $showText = if ($show) { ($show | Out-String) } else { '' }
+        if ($LASTEXITCODE -eq 0 -and $showText -and $showText -notmatch 'No rules match') {
+            Write-BootstrapMsg "  netsh: rule '$RuleDisplayName' already present." 'Green'
+            return
+        }
+        $addCmd = 'netsh advfirewall firewall add rule name="' + $RuleDisplayName.Replace('"', '') + '" dir=in action=allow protocol=TCP localport=5985'
+        $null = cmd.exe /c $addCmd 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            throw "Firewall: netsh advfirewall add rule failed (exit $LASTEXITCODE) after New-NetFirewallRule error."
+        }
+        Write-BootstrapMsg "  Firewall rule '$RuleDisplayName' created (netsh advfirewall)." 'Green'
+    }
+}
+
+function Show-BootstrapUserFixNetwork {
+    Write-BootstrapMsg '' 'Yellow'
+    Write-BootstrapMsg '--- USER ACTION: set network profile to Private ---' 'Yellow'
+    Write-BootstrapMsg 'WinRM may refuse AllowUnencrypted while a profile is Public.' 'Yellow'
+    Write-BootstrapMsg '  1) Open Settings > Network & internet > Ethernet (or Wi-Fi).' 'Yellow'
+    Write-BootstrapMsg '  2) Open each active adapter > set Network profile type to Private.' 'Yellow'
+    Write-BootstrapMsg '  3) Reboot, sign in as mast, then re-run this script (it is safe to re-run).' 'Yellow'
+    Write-BootstrapMsg '  Or from elevated PowerShell (example):' 'Yellow'
+    Write-BootstrapMsg '    Get-NetConnectionProfile | Set-NetConnectionProfile -NetworkCategory Private' 'Yellow'
+}
+
+function Show-BootstrapNextSteps([string]$HostNm) {
+    Write-BootstrapMsg '' 'Green'
+    Write-BootstrapMsg '--- NEXT: hand off to provisioning server ---' 'Green'
+    Write-BootstrapMsg "  1) Ensure this PC resolves $HostNm (DNS or hosts on the prov server)." 'Green'
+    Write-BootstrapMsg '  2) From the prov server (one line example):' 'Green'
+    $pyLine = '    python tools\run-remote-script-winrm.py --host ' + $HostNm +
+        ' --vault vault\creds.json --script client\prepare-mast-client.ps1 --invoke-args "-HostName ' +
+        $HostNm + ' -Provider ' + $ProvServerIP + '"'
+    Write-BootstrapMsg $pyLine 'Green'
+    Write-BootstrapMsg '  Dev VM on VirtualBox host-only: run tools\sync-dev-unit-hosts.ps1 (elevated) on the host.' 'Green'
+}
+
+$exitCode = 0
+try {
+    Write-BootstrapBanner '======================================================================' 'Cyan'
+    Write-BootstrapBanner ' MAST bootstrap-winrm.ps1 (manual first-time setup)' 'Cyan'
+    Write-BootstrapBanner '======================================================================' 'Cyan'
+    Write-BootstrapMsg ("Log file (append): {0}" -f $script:BootstrapLog) 'DarkGray'
+
+    if ([string]::IsNullOrWhiteSpace($MastHostName)) {
+        if ($NonInteractive) {
+            throw "Pass -MastHostName mastNN (required when -NonInteractive is set)."
+        }
+        Write-BootstrapMsg '' 'White'
+        Write-BootstrapMsg 'UNIT HOSTNAME (Windows computer name)' 'Yellow'
+        Write-BootstrapMsg '  Examples: mast01, mast05. Max 15 characters; letters, digits, hyphen only.' 'Yellow'
+        Write-BootstrapMsg '  This name must match what the provisioning server will use in DNS/hosts.' 'Yellow'
+        $MastHostName = Read-Host 'Enter MastHostName'
+    }
+    $MastHostName = $MastHostName.Trim()
+    if ($MastHostName -notmatch '^[A-Za-z0-9-]{1,15}$') {
+        throw "Invalid MastHostName '$MastHostName'. Use 1-15 characters: letters, digits, hyphen."
+    }
+    Write-BootstrapMsg ("Using MastHostName (computer rename target): {0}" -f $MastHostName) 'White'
+
+    # --- OEM factory account -> mast (optional) ---
+    Write-BootstrapMsg '' 'Cyan'
+    Write-BootstrapMsg '--- OEM factory account -> mast ---' 'Cyan'
+    $RenamedOemToMast = $false
+    if ($FactoryUser) {
+        $factoryAcct = Get-LocalUser -Name $FactoryUser -ErrorAction SilentlyContinue
+        $mastAcct = Get-LocalUser -Name $MastUser -ErrorAction SilentlyContinue
+        if ($factoryAcct -and $mastAcct) {
+            throw "Cannot rename '$FactoryUser' to '$MastUser' because '$MastUser' already exists."
+        }
+        if ($factoryAcct -and -not $mastAcct) {
+            $secPwd = ConvertTo-SecureString $MastPassword -AsPlainText -Force
+            Rename-LocalUser -Name $FactoryUser -NewName $MastUser
+            Set-LocalUser -Name $MastUser -Password $secPwd -PasswordNeverExpires $true
+            $RenamedOemToMast = $true
+            Write-BootstrapMsg "  Renamed '$FactoryUser' -> '$MastUser'; password set." 'Green'
         } else {
-            throw
+            Write-BootstrapMsg "  No factory account '$FactoryUser' (or mast already present) -- skipping rename." 'DarkGray'
         }
     }
-} else {
-    Write-Host "  '$MastUser' is already an Administrator."
-}
-Write-MastTiming 'mast account + Administrators'
 
-# ---------------------------------------------------------------------------
-# 2. Suppress Windows Update automatic installs
-# ---------------------------------------------------------------------------
-Write-Step "Suppressing Windows Update automatic installs"
-
-$auPath = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU'
-New-Item -Path $auPath -Force | Out-Null
-# AUOptions = 1: never check (fully suppressed during provisioning)
-Set-ItemProperty -Path $auPath -Name NoAutoUpdate  -Value 1 -Type DWord
-Set-ItemProperty -Path $auPath -Name AUOptions     -Value 1 -Type DWord
-# Prevent automatic reboots even if updates somehow slip through
-Set-ItemProperty -Path $auPath -Name NoAutoRebootWithLoggedOnUsers -Value 1 -Type DWord
-
-Stop-Service wuauserv -Force -ErrorAction SilentlyContinue
-Set-Service  wuauserv -StartupType Disabled
-Write-Host "  Windows Update disabled (AUOptions=1, service=Disabled)."
-Write-MastTiming 'Windows Update policy'
-
-# ---------------------------------------------------------------------------
-# 3. Enable WinRM (HTTP, Basic auth, unencrypted)
-# ---------------------------------------------------------------------------
-Write-Step "Enabling WinRM"
-
-# Prefer Private profiles for WS-Man policies. At first logon after OEM rename,
-# NetTCPIP cmdlets (Get-NetConnectionProfile, Get-NetAdapter, etc.) use CIM and can
-# throw 0x80070534 ("No mapping between account names and security IDs") until the
-# session/profile mapping settles -- same HRESULT as the earlier warning. Do not
-# abort bootstrap; registry fallback + Enable-PSRemoting -SkipNetworkProfileCheck still run.
-Write-Host "  Setting NetConnectionProfiles to Private (best-effort)"
-try {
-    $profiles = @(Get-NetConnectionProfile -ErrorAction Stop)
-    foreach ($p in $profiles) {
+    # --- mast admin ---
+    Write-BootstrapMsg '' 'Cyan'
+    Write-BootstrapMsg '--- Ensuring local admin mast ---' 'Cyan'
+    $secPwd = ConvertTo-SecureString $MastPassword -AsPlainText -Force
+    $existing = Get-LocalUser -Name $MastUser -ErrorAction SilentlyContinue
+    if ($existing) {
+        Set-LocalUser -Name $MastUser -Password $secPwd -PasswordNeverExpires $true
+        Write-BootstrapMsg "  Password synced for '$MastUser'." 'Green'
+    } else {
+        New-LocalUser -Name $MastUser -Password $secPwd `
+            -FullName 'MAST Administrator' -PasswordNeverExpires `
+            -UserMayNotChangePassword | Out-Null
+        Write-BootstrapMsg "  Created local user '$MastUser'." 'Green'
+    }
+    $mastSid = (Get-LocalUser -Name $MastUser).Sid
+    $alreadyAdmin = $false
+    foreach ($m in @(Get-LocalGroupMember -Group 'Administrators' -ErrorAction SilentlyContinue)) {
+        if ($m.SID -eq $mastSid) { $alreadyAdmin = $true; break }
+    }
+    if (-not $alreadyAdmin) {
         try {
-            Set-NetConnectionProfile -InputObject $p -NetworkCategory Private -ErrorAction Stop
+            Add-LocalGroupMember -Group 'Administrators' -Member $MastUser -ErrorAction Stop
+            Write-BootstrapMsg "  Added '$MastUser' to Administrators." 'Green'
         } catch {
-            Write-Host ("  WARN: could not set profile '{0}' to Private: {1}" -f $p.Name, $_.Exception.Message)
+            $fe = $_.FullyQualifiedErrorId
+            if ($fe -notmatch 'MemberExists|ResourceExists') { throw }
+            Write-BootstrapMsg "  '$MastUser' already in Administrators." 'DarkGray'
         }
+    } else {
+        Write-BootstrapMsg "  '$MastUser' already an Administrator." 'DarkGray'
     }
-} catch {
-    Write-Host ("  WARN: Get-NetConnectionProfile failed (continuing): {0}" -f $_.Exception.Message)
-}
 
-# Per-adapter step can fail entirely when Get-NetAdapter hits the same CIM 0x80070534;
-# catch so we still reach registry fallback and WinRM enablement.
-try {
-    foreach ($a in @(Get-NetAdapter -ErrorAction Stop | Where-Object { $_.Status -eq 'Up' })) {
-        try {
-            $p = Get-NetConnectionProfile -InterfaceIndex $a.ifIndex -ErrorAction Stop
-            Set-NetConnectionProfile -InputObject $p -NetworkCategory Private -ErrorAction Stop
-            Write-Host ("  Set profile Private via adapter '{0}'." -f $a.Name)
-        } catch {
-            # ignore per-adapter failures
+    # --- Windows Update policy ---
+    Write-BootstrapMsg '' 'Cyan'
+    Write-BootstrapMsg '--- Suppressing Windows Update (provisioning window) ---' 'Cyan'
+    $auPath = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU'
+    New-Item -Path $auPath -Force | Out-Null
+    Set-ItemProperty -Path $auPath -Name NoAutoUpdate -Value 1 -Type DWord
+    Set-ItemProperty -Path $auPath -Name AUOptions -Value 1 -Type DWord
+    Set-ItemProperty -Path $auPath -Name NoAutoRebootWithLoggedOnUsers -Value 1 -Type DWord
+    Stop-Service wuauserv -Force -ErrorAction SilentlyContinue
+    Set-Service wuauserv -StartupType Disabled
+    Write-BootstrapMsg '  Windows Update service disabled for AUOptions=1.' 'Green'
+
+    # --- WinRM ---
+    Write-BootstrapMsg '' 'Cyan'
+    Write-BootstrapMsg '--- Enabling WinRM (HTTP, Basic) ---' 'Cyan'
+    Write-BootstrapMsg '  Setting connection profiles to Private (best-effort)...' 'DarkGray'
+    try {
+        $profiles = @(Get-NetConnectionProfile -ErrorAction Stop)
+        foreach ($p in $profiles) {
+            try {
+                Set-NetConnectionProfile -InputObject $p -NetworkCategory Private -ErrorAction Stop
+            } catch {
+                Write-BootstrapMsg ("  WARN: profile '{0}': {1}" -f $p.Name, $_.Exception.Message) 'Yellow'
+            }
         }
+    } catch {
+        Write-BootstrapMsg ("  WARN: Get-NetConnectionProfile: {0}" -f $_.Exception.Message) 'Yellow'
     }
-} catch {
-    Write-Host ("  WARN: Get-NetAdapter / per-adapter NetConnectionProfile skipped: {0}" -f $_.Exception.Message)
-}
-$nlProfiles = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\NetworkList\Profiles'
-if (Test-Path $nlProfiles) {
-    Get-ChildItem $nlProfiles -ErrorAction SilentlyContinue | ForEach-Object {
-        try {
-            Set-ItemProperty -LiteralPath $_.PSPath -Name 'Category' -Value 1 -Type DWord -Force -ErrorAction Stop
-        } catch {}
+    try {
+        foreach ($a in @(Get-NetAdapter -ErrorAction Stop | Where-Object { $_.Status -eq 'Up' })) {
+            try {
+                $p = Get-NetConnectionProfile -InterfaceIndex $a.ifIndex -ErrorAction Stop
+                Set-NetConnectionProfile -InputObject $p -NetworkCategory Private -ErrorAction Stop
+            } catch { }
+        }
+    } catch {
+        Write-BootstrapMsg ("  WARN: per-adapter profile: {0}" -f $_.Exception.Message) 'Yellow'
     }
-    Write-Host "  Applied registry fallback: NetworkList Profiles Category=Private where possible."
-}
-try {
-    Restart-Service nlasvc -Force -ErrorAction Stop
-    Start-Sleep -Seconds 3
-} catch {}
+    $nlProfiles = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\NetworkList\Profiles'
+    if (Test-Path $nlProfiles) {
+        Get-ChildItem $nlProfiles -ErrorAction SilentlyContinue | ForEach-Object {
+            try {
+                Set-ItemProperty -LiteralPath $_.PSPath -Name 'Category' -Value 1 -Type DWord -Force -ErrorAction Stop
+            } catch { }
+        }
+        Write-BootstrapMsg '  Registry fallback: NetworkList Profiles Category=Private where possible.' 'DarkGray'
+    }
+    try {
+        Restart-Service nlasvc -Force -ErrorAction Stop
+        Start-Sleep -Seconds 3
+    } catch { }
 
-# Enable-PSRemoting starts the WinRM service and creates a default HTTP listener
-Enable-PSRemoting -Force -SkipNetworkProfileCheck
-
-# NOTE: 'winrm set ... @{Key="val"}' is unreliable from PowerShell because
-# PS parses @{...} as a hashtable literal; use the WSMan: provider instead.
-Set-Item WSMan:\localhost\Service\Auth\Basic -Value $true -Force            # Basic auth for pywinrm / run-prov-test.py
-try {
-    Set-Item WSMan:\localhost\Service\AllowUnencrypted -Value $true -Force      # bootstrap only; prepare-mast-client.ps1 adds HTTPS
-} catch {
-    Write-Host ("  WARN: AllowUnencrypted not set yet ({0}); retrying after another NLA refresh..." -f $_.Exception.Message)
-    try { Restart-Service nlasvc -Force; Start-Sleep -Seconds 4 } catch {}
+    Enable-PSRemoting -Force -SkipNetworkProfileCheck
+    Set-Item WSMan:\localhost\Service\Auth\Basic -Value $true -Force
     try {
         Set-Item WSMan:\localhost\Service\AllowUnencrypted -Value $true -Force
+        $script:AllowUnencryptedOk = $true
     } catch {
-        Write-Host ("  WARN: AllowUnencrypted still not set: {0}. Fix network location (Private/Domain) or reboot; pywinrm may need HTTPS." -f $_.Exception.Message)
+        Write-BootstrapMsg ("  WARN: AllowUnencrypted not set: {0}" -f $_.Exception.Message) 'Yellow'
+        try { Restart-Service nlasvc -Force; Start-Sleep -Seconds 4 } catch { }
+        try {
+            Set-Item WSMan:\localhost\Service\AllowUnencrypted -Value $true -Force
+            $script:AllowUnencryptedOk = $true
+        } catch {
+            Write-BootstrapMsg ("  WARN: AllowUnencrypted still not set: {0}" -f $_.Exception.Message) 'Yellow'
+        }
+    }
+    if (-not $script:AllowUnencryptedOk) {
+        Show-BootstrapUserFixNetwork
+    }
+    Set-Service WinRM -StartupType Automatic
+    Write-BootstrapMsg '  WinRM service configured (HTTP listener, Basic auth).' 'Green'
+
+    Write-BootstrapMsg '' 'Cyan'
+    Write-BootstrapMsg '--- LocalAccountTokenFilterPolicy (remote local admin) ---' 'Cyan'
+    $polPath = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
+    New-ItemProperty -Path $polPath -Name LocalAccountTokenFilterPolicy `
+        -Value 1 -PropertyType DWord -Force | Out-Null
+    Restart-Service WinRM
+    Write-BootstrapMsg '  LocalAccountTokenFilterPolicy=1 applied; WinRM restarted.' 'Green'
+
+    Write-BootstrapMsg '' 'Cyan'
+    Write-BootstrapMsg '--- Firewall TCP 5985 ---' 'Cyan'
+    Ensure-MastWinRmFirewallRule5985 -RuleDisplayName 'MAST - WinRM HTTP'
+
+    # --- Computer rename ---
+    if (-not $SkipComputerRename) {
+        Write-BootstrapMsg '' 'Cyan'
+        Write-BootstrapMsg '--- Computer name ---' 'Cyan'
+        $cur = (Get-CimInstance Win32_ComputerSystem -ErrorAction Stop).Name
+        if ($cur -ieq $MastHostName) {
+            Write-BootstrapMsg ("  Computer name already '{0}'." -f $MastHostName) 'Green'
+        } else {
+            Rename-Computer -NewName $MastHostName -Force
+            Write-BootstrapMsg ("  Renamed computer from '{0}' to '{1}' (pending reboot)." -f $cur, $MastHostName) 'Green'
+            $script:RebootRecommended = $true
+        }
+    } else {
+        Write-BootstrapMsg '  Skipped computer rename (-SkipComputerRename).' 'Yellow'
+    }
+
+    # --- Verification ---
+    Write-BootstrapMsg '' 'Cyan'
+    Write-BootstrapMsg '--- Verification ---' 'Cyan'
+    try {
+        $addrs = @(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction Stop |
+            Where-Object { $_.IPAddress -notmatch '^(127\.|169\.254\.)' } |
+            ForEach-Object { $_.IPAddress })
+        Write-BootstrapMsg ("  IPv4: {0}" -f (($addrs | Sort-Object -Unique) -join ', ')) 'White'
+    } catch {
+        Write-BootstrapMsg ("  IPv4: (query failed: {0})" -f $_.Exception.Message) 'Yellow'
+    }
+    $tcp = Test-NetConnection -ComputerName '127.0.0.1' -Port 5985 -WarningAction SilentlyContinue
+    if (-not $tcp.TcpTestSucceeded) {
+        throw 'Local WinRM port 5985 is not accepting connections after configuration.'
+    }
+    Write-BootstrapMsg '  TCP 5985 responds on localhost.' 'Green'
+    if (-not $script:AllowUnencryptedOk) {
+        Write-BootstrapMsg '  [WARN] AllowUnencrypted is still not true; pywinrm may fail until network is Private and you re-run or reboot.' 'Yellow'
+    }
+
+    Write-BootstrapBanner '' 'White'
+    Write-BootstrapBanner '[OK] MAST bootstrap finished successfully.' 'Green'
+    Write-BootstrapBanner '======================================================================' 'Green'
+    Write-BootstrapMsg ("  Account: {0} / {1}" -f $MastUser, $MastPassword) 'White'
+    Write-BootstrapMsg '  WinRM:   HTTP port 5985 (Basic auth; unencrypted for bootstrap only).' 'White'
+    if ($script:RebootRecommended -and -not $RebootAfterBootstrap) {
+        Write-BootstrapMsg '' 'Yellow'
+        Write-BootstrapMsg '  Reboot recommended before remote tools use the new computer name.' 'Yellow'
+        Write-BootstrapMsg '  Re-run this script after reboot is safe (idempotent).' 'Yellow'
+    }
+    Show-BootstrapNextSteps -HostNm $MastHostName
+
+    if ($RebootAfterBootstrap) {
+        Write-BootstrapMsg '' 'Yellow'
+        Write-BootstrapMsg 'Reboot in 90 seconds (-RebootAfterBootstrap). Cancel: shutdown.exe /a' 'Yellow'
+        & shutdown.exe /r /t 90 /c "MAST bootstrap complete; rebooting."
     }
 }
-
-Set-Service WinRM -StartupType Automatic
-Write-Host "  WinRM enabled (HTTP, Basic auth). Check warnings above for AllowUnencrypted."
-Write-MastTiming 'WinRM HTTP + Basic'
-
-# ---------------------------------------------------------------------------
-# 3b. Allow remote admin auth via local accounts (UAC token-filter bypass)
-#     Without this, WinRM Basic auth with a local admin (other than the
-#     built-in 'Administrator') returns 401 even when the password is right.
-# ---------------------------------------------------------------------------
-Write-Step "Setting LocalAccountTokenFilterPolicy=1"
-$polPath = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
-New-ItemProperty -Path $polPath -Name LocalAccountTokenFilterPolicy `
-    -Value 1 -PropertyType DWord -Force | Out-Null
-Restart-Service WinRM
-Write-Host "  LocalAccountTokenFilterPolicy=1; WinRM restarted."
-Write-MastTiming 'LocalAccountTokenFilterPolicy'
-
-# ---------------------------------------------------------------------------
-# 4. Firewall -- open WinRM HTTP port
-# ---------------------------------------------------------------------------
-Write-Step "Opening WinRM firewall port 5985"
-
-$ruleName = 'MAST - WinRM HTTP'
-if (-not (Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue)) {
-    New-NetFirewallRule -DisplayName $ruleName `
-        -Direction Inbound -Protocol TCP -LocalPort 5985 `
-        -Action Allow -Profile Any | Out-Null
-    Write-Host "  Firewall rule '$ruleName' created."
-} else {
-    Write-Host "  Firewall rule '$ruleName' already exists."
+catch {
+    $exitCode = 1
+    Write-BootstrapMsg '' 'Red'
+    Write-BootstrapBanner '[FAIL] MAST bootstrap did not complete.' 'Red'
+    Write-BootstrapMsg $_.Exception.Message 'Red'
+    Write-BootstrapMsg ('At line: {0}' -f $_.InvocationInfo.PositionMessage) 'DarkRed'
+    Write-BootstrapMsg '' 'Yellow'
+    Write-BootstrapMsg 'If the error mentions Public network or AllowUnencrypted, fix profiles (see log) and re-run.' 'Yellow'
+    Write-BootstrapMsg ("Full log: {0}" -f $script:BootstrapLog) 'Yellow'
 }
-Write-MastTiming 'Firewall rule 5985'
 
-# ---------------------------------------------------------------------------
-# Done
-# ---------------------------------------------------------------------------
-$addrs = @(Get-NetIPAddress -AddressFamily IPv4 |
-    Where-Object { $_.IPAddress -notmatch '^(127\.|169\.254\.)' } |
-    ForEach-Object { $_.IPAddress })
-
-Write-Host ""
-Write-Host "Bootstrap complete." -ForegroundColor Green
-Write-Host ""
-Write-Host ("  IPv4 address(es): {0}" -f (($addrs | Sort-Object -Unique) -join ', '))
-Write-Host "  WinRM port       : 5985 (HTTP)"
-Write-Host "  Account          : $MastUser / $MastPassword"
-Write-Host ""
-Write-Host "Next: ensure DNS (or hosts on the prov server) resolves the unit by hostname."
-Write-Host "Then from the prov server run prepare-mast-client.ps1 (example for mast01):"
-Write-Host '    $cred = Get-Credential   # mast / physics'
-Write-Host "    Invoke-Command -ComputerName mast01 -Credential `$cred ``"
-Write-Host "        -FilePath .\client\prepare-mast-client.ps1 ``"
-Write-Host "        -ArgumentList @{ HostName = 'mast01'; Provider = '$ProvServerIP' }"
-Write-MastTimingTotal 'bootstrap-winrm.ps1'
+exit $exitCode

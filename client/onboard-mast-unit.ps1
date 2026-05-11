@@ -11,7 +11,7 @@
 
   Stages:
     0  PREFLIGHT  Verify admin, network, prov server reachable
-    1  BOOTSTRAP  Create 'mast' admin, enable WinRM HTTP+Basic
+    1  BOOTSTRAP  WinRM/mast setup (same as bootstrap-winrm.ps1; on unattended ISO installs run that script with -MastHostName first if you are not using this onboarder).
     2  PREPARE    Set hostname, WinRM HTTPS, suppress Windows Update
     3  PROVISION  Pull staged payload from prov server, run execute-mast-provisioning.ps1
     4  REGISTER   Append unit to prov server's unit-registry.json

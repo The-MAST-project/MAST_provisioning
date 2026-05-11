@@ -49,14 +49,15 @@ try {
 
     # --- Ensure pip is present ---
     Write-Host "Ensuring pip is available ..."
+    ${env:PIP_NO_WARN_SCRIPT_LOCATION} = '1'
     & ${pythonExe} -m ensurepip --default-pip | Out-Null
 
     # --- Upgrade pip (optional but good practice) ---
-    & ${pythonExe} -m pip install --upgrade pip | Out-Null
+    & ${pythonExe} -m pip install --upgrade pip --disable-pip-version-check *>$null
 
     # --- Install virtualenv ---
     Write-Host "Installing virtualenv ..."
-    & ${pythonExe} -m pip install virtualenv | Out-Null
+    & ${pythonExe} -m pip install virtualenv --disable-pip-version-check *>$null
 
     # --- Verify installation ---
     try {

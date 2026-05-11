@@ -7,9 +7,11 @@
   The output ISO contains:
     - Autounattend.xml at the root (Windows Setup auto-detects this on any
       attached drive: ISO, USB, or floppy).
-    - A copy of client\bootstrap-winrm.ps1, executed once via FirstLogonCommands
-      on the unit's first auto-logon, leaving the unit ready for WinRM
-      bring-up by the prov server (or the run-prov-test.py orchestrator).
+  - client\bootstrap-winrm.cmd and bootstrap-winrm.ps1 at the ISO root for the
+    operator to run manually after first login (USB/DVD copy is fine). Use the
+    .cmd so Windows runs PowerShell instead of Notepad (default .ps1 association).
+    They are not executed from FirstLogonCommands. After bootstrap succeeds, the
+    prov server may run prepare-mast-client.ps1 over WinRM.
 
   Mount this ISO as a second DVD drive in the unit VM (vbox-create-unit.ps1
   does this automatically when -AutounattendIso is supplied), then start
@@ -32,8 +34,8 @@
 .PARAMETER MastUser, MastPassword
   Local admin account created by the answer file (factory/OEM defaults).
   Defaults: user / password1 - simulates a generic machine from the factory.
-  FirstLogonCommands run client\bootstrap-winrm.ps1 only; it renames user -> mast,
-  sets physics, enables WinRM (matches vault/creds.json).
+  The operator runs client\bootstrap-winrm.cmd (or .ps1 in PowerShell) with -MastHostName mastNN; it renames user -> mast,
+  sets physics, enables WinRM (matches vault/creds.json), and renames the computer to mastNN.
 
 .PARAMETER WindowsEdition
   Optional <InstallFrom> filter when the install ISO has multiple editions (required
@@ -65,11 +67,12 @@
   NetBIOS computer name written during specialize (max 15 chars).
   Default (omit): OEM + 12 hex chars, unique each time you build the ISO - mimics
   a generic factory serial. Pass '*' to let Windows pick a random name at install
-  time (legacy behavior). prepare-mast-client.ps1 still renames to mast01 later.
+  time (legacy behavior). The operator-chosen mastNN name is applied by bootstrap-winrm.ps1;
+  prepare-mast-client.ps1 aligns HTTPS and steady-state remoting.
 
 .PARAMETER ExtraScripts
   Optional list of extra files to copy into the ISO root (in addition to
-  bootstrap-winrm.ps1). Useful for shipping prepare-mast-client.ps1 or
+  bootstrap-winrm.cmd and bootstrap-winrm.ps1). Useful for shipping prepare-mast-client.ps1 or
   onboard-mast-unit.ps1.
 
 .EXAMPLE
@@ -146,8 +149,12 @@ if ([string]::IsNullOrWhiteSpace($FactoryComputerName)) {
 }
 
 $bootstrapPath = Join-Path $RepoRoot 'client\bootstrap-winrm.ps1'
+$bootstrapCmdPath = Join-Path $RepoRoot 'client\bootstrap-winrm.cmd'
 if (-not (Test-Path $bootstrapPath)) {
     throw "bootstrap-winrm.ps1 not found at $bootstrapPath"
+}
+if (-not (Test-Path $bootstrapCmdPath)) {
+    throw "bootstrap-winrm.cmd not found at $bootstrapCmdPath"
 }
 
 $resolvedExtras = @()
@@ -299,23 +306,6 @@ $productKeyBlock
           </LocalAccount>
         </LocalAccounts>
       </UserAccounts>
-      <AutoLogon>
-        <Username>$MastUser</Username>
-        <Password>
-          <Value>$MastPassword</Value>
-          <PlainText>true</PlainText>
-        </Password>
-        <Enabled>true</Enabled>
-        <LogonCount>1</LogonCount>
-      </AutoLogon>
-      <FirstLogonCommands>
-        <SynchronousCommand wcm:action="add">
-          <Order>1</Order>
-          <Description>OEM account to mast + WinRM bootstrap (bootstrap-winrm.ps1)</Description>
-          <CommandLine>cmd /c "for %d in (D E F G H I J K) do if exist %d:\bootstrap-winrm.ps1 powershell.exe -NoProfile -ExecutionPolicy Bypass -File %d:\bootstrap-winrm.ps1 1>C:\bootstrap-winrm.log 2>&amp;1"</CommandLine>
-          <RequiresUserInput>false</RequiresUserInput>
-        </SynchronousCommand>
-      </FirstLogonCommands>
     </component>
   </settings>
 
@@ -335,6 +325,8 @@ try {
 
     Copy-Item -Force $bootstrapPath (Join-Path $staging 'bootstrap-winrm.ps1')
     Write-Host "  Staged bootstrap-winrm.ps1"
+    Copy-Item -Force $bootstrapCmdPath (Join-Path $staging 'bootstrap-winrm.cmd')
+    Write-Host "  Staged bootstrap-winrm.cmd"
 
     foreach ($extra in $resolvedExtras) {
         $name = Split-Path $extra -Leaf

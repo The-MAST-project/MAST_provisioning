@@ -5,18 +5,19 @@
 
 .DESCRIPTION
   End-to-end helper for a clean factory-simulation run:
-    1. Optionally rebuild autounattend-mast.iso (factory user, OEM hostname, FirstLogon scripts).
+    1. Optionally rebuild autounattend-mast.iso (factory user, OEM hostname; bootstrap-winrm.cmd + .ps1 staged on ISO, not auto-run).
     2. Power off and unregister the existing VM (deletes disks).
     3. Run vbox-create-unit.ps1 with the Windows ISO and autounattend ISO.
     4. Start the VM (default: GUI so you can watch). If EFI shows
        "Press any key to boot from CD or DVD...", click the VM window and press Enter once.
-  5. Wait until WinRM HTTP (port 5985) answers - unattended setup, first logon, bootstrap.
-     Tries -BootstrapWinRmHost first (hostname); if unset or unreachable, scans the host-only
-     subnet prefix for an open WinRM port (DHCP; dev VMs).
+  5. By default exit after starting the VM. With -WaitForDevWinRm, poll until WinRM HTTP (port 5985)
+     answers (run bootstrap-winrm.cmd in the guest first). Tries -BootstrapWinRmHost first (hostname);
+     if unset or unreachable, scans the host-only subnet prefix (DHCP; dev VMs).
 
-.PARAMETER NoWaitForBootstrap
-  Exit immediately after starting the VM (do not wait for WinRM). Total script time will
-  not include the Windows install.
+.PARAMETER WaitForDevWinRm
+  After starting the VM, wait until TCP port 5985 is open on the guest (max
+  -BootstrapTimeoutMinutes). Use only after you ran bootstrap-winrm.cmd in the VM
+  and want an automated smoke check. Default: do not wait.
 
 .PARAMETER BootstrapWinRmHost
   Optional hostname to probe first (must resolve via DNS/hosts, e.g. mast01). Units use DHCP;
@@ -54,8 +55,8 @@
   .\vbox-recreate-unit.ps1 -IsoPath C:\ISOs\Win11_IoT_LTSC.iso
 
 .EXAMPLE
-  # Exit right after boot (do not wait for Windows install / WinRM):
-  .\vbox-recreate-unit.ps1 -IsoPath C:\ISOs\Win11_IoT_LTSC.iso -NoWaitForBootstrap
+  # After Windows installs, log in, run bootstrap from D:\, then optionally wait for WinRM:
+  .\vbox-recreate-unit.ps1 -IsoPath C:\ISOs\Win11_IoT_LTSC.iso -WaitForDevWinRm
 #>
 
 [CmdletBinding()]
@@ -72,7 +73,7 @@ param(
     [int]$MemoryMb = 8192,
     [int]$Cpus = 4,
 
-    [switch]$NoWaitForBootstrap,
+    [switch]$WaitForDevWinRm,
     [string]$BootstrapWinRmHost = '',
     [string]$HostOnlyDhcpScanPrefix = '192.168.56',
     [ValidateRange(1, 1440)]
@@ -193,8 +194,8 @@ if ($LASTEXITCODE -ne 0) {
 Write-Host "  If you see 'Press any key to boot from CD or DVD...', click the VM window and press Enter." -ForegroundColor Yellow
 Write-MastTiming 'Start VM'
 
-if (-not $NoWaitForBootstrap) {
-    Write-Host "`n=== Wait for Windows install + first logon + bootstrap (WinRM :5985) ===" -ForegroundColor Cyan
+if ($WaitForDevWinRm) {
+    Write-Host "`n=== Wait for WinRM :5985 (after manual bootstrap in the guest) ===" -ForegroundColor Cyan
     Write-Host "  Probing hostname first (if set), then host-only DHCP scan (dev)."
     $deadline = [datetime]::UtcNow.AddMinutes($BootstrapTimeoutMinutes)
     $winRmUp = $false
@@ -221,17 +222,15 @@ if (-not $NoWaitForBootstrap) {
             $phaseSw.Elapsed.TotalMinutes, $BootstrapPollSeconds, $BootstrapTimeoutMinutes)
     }
     if (-not $winRmUp) {
-        throw "WinRM did not become reachable within $BootstrapTimeoutMinutes minutes."
+        throw "WinRM did not become reachable within $BootstrapTimeoutMinutes minutes. Log into the VM, run D:\bootstrap-winrm.cmd -MastHostName mastNN (Run as administrator), reboot if prompted, then retry with -WaitForDevWinRm or sync hosts and test manually."
     }
-    Write-MastTiming 'Windows install + bootstrap (WinRM ready)'
+    Write-MastTiming 'WinRM port open (after manual bootstrap)'
 
     Write-Host "`nDone. WinRM HTTP is up - run prepare-mast-client.ps1 when ready." -ForegroundColor Green
-    Write-Host '  Register hostname on this PC (elevated): tools\sync-dev-unit-hosts.ps1'
-    Write-Host '  Then: python tools\run-remote-script-winrm.py --host mast01 --script client\prepare-mast-client.ps1 --invoke-args "-HostName mast01 -Provider 192.168.56.1"'
-    Write-Host '  Or Invoke-Command -ComputerName mast01 ... (needs WinRM client TrustedHosts / DNS)'
+    Write-Host '  Register the guest hostname on this PC (elevated): tools\sync-dev-unit-hosts.ps1'
+    Write-Host '  Then from the prov server use the same mastNN in --host and in -HostName for prepare-mast-client.'
 } else {
-    Write-Host "`nDone (no wait). Windows installs unattended; bootstrap-winrm.ps1 runs on first logon." -ForegroundColor Green
-    Write-Host 'Then: Invoke-Command ... prepare-mast-client.ps1 (use unit hostname; DHCP)'
+    Write-Host "`nDone (no WinRM wait). After Windows finishes: log in, run bootstrap-winrm.cmd from the autounattend ISO (or USB) as Administrator with -MastHostName mastNN (or pass args via cmd.exe), confirm [OK], then tools\sync-dev-unit-hosts.ps1 on the host and prepare-mast-client from the prov server." -ForegroundColor Green
 }
 
 Write-Host ""

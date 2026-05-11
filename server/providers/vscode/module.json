@@ -7,5 +7,5 @@
     "provide-vscode.ps1",
     "assets/VSCodeUserSetup-x64-1.105.1.exe"
   ],
-  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -Command \"${vscodePath}='C:\\Program Files\\Microsoft VS Code\\Code.exe'; ${log}=Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\verify\\vscode-verify.log'; if (Test-Path ${vscodePath}) { Set-Content -Path ${log} -Value 'VSCode installed successfully'; Set-Content -Path (Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\smoke\\vscode-smoke.txt') -Value 'vscode_ok' } else { 'VSCode executable not found at ' + ${vscodePath} | Out-File -FilePath ${log} -Encoding UTF8 }\""
+  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -Command \"$u = Join-Path $env:LOCALAPPDATA 'Programs\\Microsoft VS Code\\Code.exe'; $s = 'C:\\\\Program Files\\\\Microsoft VS Code\\\\Code.exe'; $log = Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\\\verify\\\\vscode-verify.log'; $smoke = Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\\\smoke\\\\vscode-smoke.txt'; if ((Test-Path -LiteralPath $u) -or (Test-Path -LiteralPath $s)) { Set-Content -Path $log -Value 'VSCode installed successfully'; Set-Content -Path $smoke -Value 'vscode_ok' } else { 'VSCode executable not found (UserSetup or system path)' | Out-File -FilePath $log -Encoding UTF8; exit 1 }\""
 }

@@ -67,6 +67,13 @@ NOTES:
 
 if ($Help) { Show-Help; return }
 
+# execute-mast-provisioning.ps1 runs each module in a new powershell.exe; mast-log is not in scope unless
+# provisioning.psm1 imported successfully. Always dot-source mast-log here (same pattern as other providers).
+$mastLogDot = Join-Path $PSScriptRoot 'mast-log.ps1'
+if (-not (Test-Path $mastLogDot)) { $mastLogDot = Join-Path $PSScriptRoot '..\..\lib\mast-log.ps1' }
+if (-not (Test-Path $mastLogDot)) { throw "mast-log.ps1 not found (expected in staging next to this script or under server\lib)." }
+. $mastLogDot
+
 # --- Prep logging ---
 $LogRoot = Get-MastLogSessionDir
 $null = New-Item -ItemType Directory -Path $LogRoot -Force -ErrorAction SilentlyContinue

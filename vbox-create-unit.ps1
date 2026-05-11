@@ -21,8 +21,8 @@
        - Leave the host-only adapter on DHCP (enable VirtualBox DHCP for the
          host-only network if needed), or use a temporary address until DNS/hosts
          maps the unit hostname (mast01) from this host.
-       - Run bootstrap-winrm.ps1 (creates 'mast' user, enables WinRM)
-       - Run prepare-mast-client.ps1 -HostName mast01 -Provider 192.168.56.1
+       - Run bootstrap-winrm.cmd as Administrator (from ISO/USB; same folder as .ps1). Confirm [OK] in the summary.
+       - Run prepare-mast-client.ps1 -HostName mastNN -Provider 192.168.56.1 (mastNN must match bootstrap)
        - Verify WinRM reachability from this host (the prov server) on
          port 5985 and 5986 using the unit hostname once it resolves
     D. Power off cleanly, then come back here and run:
@@ -38,8 +38,9 @@
   When supplied, mounts the Windows install ISO on SATA port 1 (EFI must boot
   that disc) and the autounattend ISO on port 2. Setup discovers Autounattend.xml
   on the second optical volume during windowsPE. Skips the manual install
-  walkthrough entirely; FirstLogonCommands runs bootstrap-winrm.ps1 from the ISO
-  (factory user -> mast, WinRM) so the prov server can reach the unit on first boot.
+  walkthrough entirely. The autounattend ISO also carries bootstrap-winrm.cmd and
+  bootstrap-winrm.ps1 at its root; after first login run bootstrap-winrm.cmd as
+  Administrator before the prov server uses WinRM.
 
 .PARAMETER VmName
   VM name in VirtualBox. Default 'mast-unit'.
@@ -271,25 +272,30 @@ Next steps (autounattend mode):
        "Press any key to boot from CD or DVD..."
      Click the VM window and press Enter (if ignored, EFI may show a boot-failed dialog).
 
-  2) Wait. Windows installs unattended (~15-25 min depending on host).
-     The answer file + bootstrap-winrm.ps1 do all of:
-       - Wipe disk 0, partition GPT, install Windows
-       - Create generic factory admin user/password1, auto-logon once
-       - Run bootstrap-winrm.ps1 (rename OEM user -> mast, WinRM)
-       - Leave host-only networking on DHCP (no static IP requirement)
-       - Bring up WinRM HTTP + Basic on port 5985
+  2) Wait. Windows installs unattended (~15-25 min depending on the host).
+     The answer file wipes disk 0, partitions GPT, installs Windows, and creates
+     the factory admin (user / password1 by default). It does NOT auto-run bootstrap.
 
-  3) Ensure mast01 resolves from this host (hosts file or DNS). Then confirm WinRM:
-       Test-NetConnection mast01 -Port 5985
+  3) Log in as that account. From the second DVD (often D: or E:), right-click
+     bootstrap-winrm.cmd and choose Run as administrator (passes args through to PowerShell).
+     Example from cmd.exe:
+       D:\bootstrap-winrm.cmd -MastHostName mast05 -RebootAfterBootstrap
+     (Use the drive letter that lists bootstrap-winrm.cmd; keep .cmd and .ps1 in the same folder.)
+     Read the [OK] or [FAIL] summary; fix any USER ACTION lines and re-run if needed.
 
-  4) Run prepare-mast-client.ps1 remotely from the prov server to finish
-     hostname rename + WinRM HTTPS:
+  4) After reboot if you used -RebootAfterBootstrap, log in as mast / physics.
+     On the VirtualBox host (elevated): tools\sync-dev-unit-hosts.ps1 so mastNN resolves.
+
+  5) Confirm WinRM from the host:
+       Test-NetConnection mast05 -Port 5985
+
+  6) Run prepare-mast-client.ps1 remotely from the prov server (same mastNN in -HostName):
        $cred = Get-Credential   # mast / physics
-       Invoke-Command -ComputerName mast01 -Credential $cred ``
+       Invoke-Command -ComputerName mast05 -Credential $cred ``
            -FilePath .\client\prepare-mast-client.ps1 ``
-           -ArgumentList @{{HostName='mast01'; Provider='192.168.56.1'}}
+           -ArgumentList @{{HostName='mast05'; Provider='192.168.56.1'}}
 
-  5) Power the VM off cleanly, then:
+  7) Power the VM off cleanly, then:
        .\vbox-create-unit.ps1 -SnapshotOnly
 '@
 } else {
@@ -304,17 +310,19 @@ Next steps (manual install):
      When done and at the desktop, inside the VM:
        - Prefer DHCP on the host-only adapter (enable VBox host-only DHCP or use
          a lease-friendly layout). Identity is the hostname (mast01), not a fixed IP.
-       - Open an admin PowerShell and run, in this order:
+       - Copy bootstrap-winrm.cmd and bootstrap-winrm.ps1 together, then either:
+           Right-click bootstrap-winrm.cmd -> Run as administrator
+         or from an elevated cmd.exe:
+             D:\bootstrap-winrm.cmd -MastHostName mast05
+         Then in admin PowerShell (if prepare is not copied as .cmd):
              Set-ExecutionPolicy Bypass -Scope Process -Force
-             .\bootstrap-winrm.ps1
-             .\prepare-mast-client.ps1 -HostName mast01 -Provider 192.168.56.1
+             .\prepare-mast-client.ps1 -HostName mast05 -Provider 192.168.56.1
 
-     (Copy these two scripts onto the VM via shared clipboard or a
-      temporary VBox shared folder.)
+     (Copy scripts onto the VM via shared clipboard or a temporary VBox shared folder.)
 
-  3) From this host (192.168.56.1) map mast01 to the VM address if needed, then:
-       Test-NetConnection mast01 -Port 5985
-       Test-NetConnection mast01 -Port 5986
+  3) From this host (192.168.56.1) map mastNN to the VM address if needed, then:
+       Test-NetConnection mast05 -Port 5985
+       Test-NetConnection mast05 -Port 5986
 
   4) Power the VM off cleanly (shutdown from inside Windows), then:
        .\vbox-create-unit.ps1 -SnapshotOnly

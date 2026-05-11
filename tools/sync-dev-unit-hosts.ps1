@@ -8,8 +8,9 @@
   Production units resolve by corporate DNS. On a developer PC with VirtualBox host-only DHCP,
   mast01 does not resolve until something maps hostname -> IP.
 
-  This script discovers the guest IPv4 (Guest Additions Net/0 or Net/1 property, else NIC1 MAC
-  match on the host-only subnet, else probe WinRM HTTP 5985 among VirtualBox-style neighbors),
+  This script discovers the guest IPv4 (Guest Additions Net/*/V4/IP, preferring the host-only
+  subnet; skips VirtualBox NAT 10.0.2.x which is often Net/0), else NIC1 MAC match on the host-only
+  subnet, else probe WinRM HTTP 5985 among VirtualBox-style neighbors,
   then writes a marked block into
   %SystemRoot%\System32\drivers\etc\hosts so mast01 (or another name) resolves like production.
 
@@ -82,18 +83,46 @@ function Get-VBoxNic1MacNormalized {
 }
 
 function Get-IpFromGuestProperty {
-    param([string]$VBoxExe, [string]$VmName)
-    foreach ($prop in @(
-            '/VirtualBox/GuestInfo/Net/0/V4/IP',
-            '/VirtualBox/GuestInfo/Net/1/V4/IP'
-        )) {
+    param(
+        [string]$VBoxExe,
+        [string]$VmName,
+        [string]$HostOnlyPrefix = '192.168.56'
+    )
+    # With NAT + host-only, Guest Additions often reports NAT first (e.g. 10.0.2.15 on Net/0).
+    # The hosts file on the hypervisor must point at the host-only address so WinRM/prov match production.
+    $prefixBase = $HostOnlyPrefix.TrimEnd('.')
+    $candidates = @()
+    foreach ($idx in 0..8) {
+        $prop = "/VirtualBox/GuestInfo/Net/$idx/V4/IP"
         Write-MastObsLine "Guest Additions query $prop ..."
         $out = & $VBoxExe guestproperty get $VmName $prop 2>$null
         if ($out -match 'Value:\s*(\d+\.\d+\.\d+\.\d+)') {
-            return $Matches[1]
+            $addr = $Matches[1]
+            if ($addr -match '^(127\.|169\.254\.)') { continue }
+            $candidates += $addr
         }
     }
-    Write-MastObsLine "Guest Additions: no IPv4 in Net/0 or Net/1 (install Guest Additions or wait after boot)."
+    if ($candidates.Count -eq 0) {
+        Write-MastObsLine "Guest Additions: no IPv4 in Net/0..Net/8 (install Guest Additions or wait after boot)."
+        return $null
+    }
+    Write-MastObsLine ("Guest Additions raw IPv4 list: {0}" -f ($candidates -join ', '))
+    $onHostOnly = @($candidates | Where-Object { $_ -like ($prefixBase + '.*') } | Select-Object -Unique)
+    if ($onHostOnly.Count -ge 1) {
+        if ($onHostOnly.Count -gt 1) {
+            Write-Warning ("Multiple $($prefixBase).x from GA: {0}; using {1}. Pass -IpAddress to override." -f `
+                    ($onHostOnly -join ', '), $onHostOnly[0])
+        }
+        return $onHostOnly[0]
+    }
+    # Default VBox NAT segment -- never use for mast01 on the host (wrong interface).
+    $nonVboxNat = @($candidates | Where-Object { $_ -notmatch '^10\.0\.2\.' })
+    if ($nonVboxNat.Count -eq 1) {
+        Write-MastObsLine ("Guest Additions: using {0} (no {1}.x in GA props; not VBox NAT 10.0.2.*)." -f $nonVboxNat[0], $prefixBase)
+        return $nonVboxNat[0]
+    }
+    Write-MastObsLine ("Guest Additions: no {0}.x and only NAT/other ({1}) -- falling back to ARP/WinRM discovery." -f `
+            $prefixBase, ($candidates -join ', '))
     return $null
 }
 
@@ -232,7 +261,7 @@ if ($ip) {
 }
 
 if (-not $ip) {
-    $ip = Get-IpFromGuestProperty -VBoxExe $VBoxExe -VmName $VmName
+    $ip = Get-IpFromGuestProperty -VBoxExe $VBoxExe -VmName $VmName -HostOnlyPrefix $HostOnlyPrefix
     if ($ip) { Write-MastObsLine "Discovery: Guest Additions IPv4 = $ip" }
 }
 

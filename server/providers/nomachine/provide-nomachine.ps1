@@ -33,6 +33,11 @@ param(
   [switch]${Help}
 )
 
+${mastLogDot} = Join-Path ${PSScriptRoot} 'mast-log.ps1'
+if (-not (Test-Path ${mastLogDot})) { ${mastLogDot} = Join-Path ${PSScriptRoot} '..\..\lib\mast-log.ps1' }
+if (-not (Test-Path ${mastLogDot})) { throw "mast-log.ps1 not found (expected in staging or server\lib)." }
+. ${mastLogDot}
+
 try {
   ${provLocal} = Join-Path ${PSScriptRoot} 'provisioning.psm1'
   ${provGlobal} = 'C:\ProgramData\MAST\provisioning.psm1'
