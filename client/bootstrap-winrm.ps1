@@ -174,9 +174,11 @@ try {
         if ($factoryAcct -and -not $mastAcct) {
             $secPwd = ConvertTo-SecureString $MastPassword -AsPlainText -Force
             Rename-LocalUser -Name $FactoryUser -NewName $MastUser
-            Set-LocalUser -Name $MastUser -Password $secPwd -PasswordNeverExpires $true
+            # FullName is what the lock/login screen shows; it is not updated by Rename-LocalUser.
+            Set-LocalUser -Name $MastUser -Password $secPwd -PasswordNeverExpires $true -FullName $MastUser
             $RenamedOemToMast = $true
-            Write-BootstrapMsg "  Renamed '$FactoryUser' -> '$MastUser'; password set." 'Green'
+            Write-BootstrapMsg "  Renamed '$FactoryUser' -> '$MastUser'; password and display name set." 'Green'
+            Write-BootstrapMsg "  If the sign-in screen still shows the old name, sign out or restart once." 'DarkGray'
         } else {
             Write-BootstrapMsg "  No factory account '$FactoryUser' (or mast already present) -- skipping rename." 'DarkGray'
         }
@@ -188,11 +190,11 @@ try {
     $secPwd = ConvertTo-SecureString $MastPassword -AsPlainText -Force
     $existing = Get-LocalUser -Name $MastUser -ErrorAction SilentlyContinue
     if ($existing) {
-        Set-LocalUser -Name $MastUser -Password $secPwd -PasswordNeverExpires $true
-        Write-BootstrapMsg "  Password synced for '$MastUser'." 'Green'
+        Set-LocalUser -Name $MastUser -Password $secPwd -PasswordNeverExpires $true -FullName $MastUser
+        Write-BootstrapMsg "  Password and display name synced for '$MastUser'." 'Green'
     } else {
         New-LocalUser -Name $MastUser -Password $secPwd `
-            -FullName 'MAST Administrator' -PasswordNeverExpires `
+            -FullName $MastUser -PasswordNeverExpires `
             -UserMayNotChangePassword | Out-Null
         Write-BootstrapMsg "  Created local user '$MastUser'." 'Green'
     }
