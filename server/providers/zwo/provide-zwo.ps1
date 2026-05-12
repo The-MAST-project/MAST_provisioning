@@ -38,8 +38,9 @@ function Invoke-ZwoInstaller {
         try { ${p}.Kill() } catch {}
         throw ("{0} timed out after {1}s (process killed)." -f ${Label}, ${TimeoutSec})
     }
+    try { ${p}.Refresh() } catch {}
     Write-ZwoLog ("{0} exit code: {1}" -f ${Label}, ${p}.ExitCode)
-    if (${p}.ExitCode -ne 0) {
+    if ($null -ne ${p}.ExitCode -and ${p}.ExitCode -ne 0) {
         throw ("{0} failed with exit code {1}." -f ${Label}, ${p}.ExitCode)
     }
 }

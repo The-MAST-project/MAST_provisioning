@@ -1,0 +1,11 @@
+{
+  "name": "git",
+  "description": "Install Git for Windows (silent) and add Git cmd/bin to system PATH.",
+  "order": 25,
+  "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-git.ps1\" -AssetsRoot \".\"",
+  "commandfiles": [
+    "provide-git.ps1",
+    "assets/Git-2.52.0-64-bit.exe"
+  ],
+  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -Command \"$log = Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\verify\\git-verify.log'; $g1 = 'C:\\Program Files\\Git\\cmd\\git.exe'; $g2 = 'C:\\Program Files\\Git\\bin\\git.exe'; $g = $null; if (Test-Path -LiteralPath $g1) { $g = $g1 } elseif (Test-Path -LiteralPath $g2) { $g = $g2 }; if ($g) { & $g --version | Out-File -FilePath $log -Encoding UTF8; Set-Content -Path (Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\smoke\\git-smoke.txt') -Value 'git_ok' } else { 'git.exe not found' | Out-File -FilePath $log -Encoding UTF8; exit 1 }\""
+}

@@ -7,5 +7,5 @@
     "provide-imdisk.ps1",
     "assets/ImDiskTk-x64.zip"
   ],
-  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -Command \"${log} = Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\verify\\imdisk-verify.log'; if (Test-Path 'C:\\Windows\\System32\\imdisk.exe') { 'ImDisk installed successfully' | Out-File -FilePath ${log}; Set-Content -Path (Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\smoke\\imdisk-smoke.txt') -Value 'imdisk_ok' } else { 'ImDisk executable not found' | Out-File -FilePath ${log} -Encoding UTF8 }\""
+  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -Command \"${log} = Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\verify\\imdisk-verify.log'; if (Test-Path 'C:\\Windows\\System32\\imdisk.exe') { 'ImDisk installed successfully' | Out-File -FilePath ${log} -Encoding UTF8; Set-Content -Path (Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\smoke\\imdisk-smoke.txt') -Value 'imdisk_ok' } else { 'ImDisk executable not found' | Out-File -FilePath ${log} -Encoding UTF8; exit 1 }\""
 }

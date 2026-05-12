@@ -14,6 +14,15 @@ if (-not (Test-Path ${mastLogDot})) {
 }
 . ${mastLogDot}
 
+${invokeDot} = Join-Path ${PSScriptRoot} 'mast-invoke-child.ps1'
+if (-not (Test-Path ${invokeDot})) {
+    ${invokeDot} = Join-Path ${PSScriptRoot} '..\client\mast-invoke-child.ps1'
+}
+if (-not (Test-Path ${invokeDot})) {
+    throw "mast-invoke-child.ps1 not found (expected next to this script or under client)."
+}
+. ${invokeDot}
+
 ${logDir} = Get-MastLogSessionDir
 New-Item -ItemType Directory -Path ${logDir} -Force | Out-Null
 ${smokeDir} = Get-MastSmokeDir
@@ -82,7 +91,7 @@ try {
         throw "Missing commands.json at ${commandsJsonPath}"
     }
 
-    ${commands} = Get-Content ${commandsJsonPath} -Raw | ConvertFrom-Json
+    ${commands} = Import-MastCommandsFromJson -CommandsJsonPath ${commandsJsonPath}
     Write-Log "Loaded $(@(${commands}).Count) commands from commands.json"
 
     # Execute commands in order
@@ -103,25 +112,29 @@ try {
 
             Write-Log "Executing: $($cmd.cmd)"
 
-            # Execute command and capture output.
-            # Use cmd /c to avoid PowerShell expanding $variables in the command
-            # string before passing it to the child powershell.exe -Command "...".
-            ${output} = cmd /c $cmd.cmd 2>&1
-            ${exitCode} = ${LASTEXITCODE}
+            # Avoid cmd.exe /c: its line limit (~8191) can fail long powershell.exe lines.
+            ${pr} = Invoke-MastChildCommandLine -CommandLine ${cmd}.cmd
+            ${output} = ${pr}.Output
+            ${exitCode} = ${pr}.ExitCode
 
             # Log output
             if (${output}) {
                 ${output} | Tee-Object -FilePath ${logFile} -Append | Out-Null
             }
 
-            if (${exitCode} -eq 0) {
+            if ($null -eq ${exitCode}) {
+                Write-Log "[FAIL] $($cmd.module) (missing exit code after child process)"
+                ${failCount}++
+            }
+            elseif (${exitCode} -eq 0) {
                 Write-Log "SUCCESS: $($cmd.module) (exit code: ${exitCode})"
                 ${successCount}++
 
                 # Write smoke test file
                 ${smokeTestFile} = Join-Path ${smokeDir} "$($cmd.module)-smoke.txt"
                 Set-Content -Path ${smokeTestFile} -Value "success" -Force
-            } else {
+            }
+            else {
                 Write-Log "[FAIL] $($cmd.module) (exit code: ${exitCode})"
                 ${failCount}++
             }

@@ -92,6 +92,10 @@ function Invoke-Exe {
   )
   Write-Verbose "${Tag}: ${FilePath} ${Arguments}"
   ${p} = Start-Process -FilePath ${FilePath} -ArgumentList ${Arguments} -PassThru -Wait -WindowStyle Hidden
+  try { ${p}.Refresh() } catch {}
+  if ($null -eq ${p}.ExitCode) {
+    throw "${Tag}: missing ExitCode after Wait (treat as failure)"
+  }
   if (${OkCodes} -notcontains ${p}.ExitCode) { throw "${Tag} exit code $(${p}.ExitCode)" }
 }
 

@@ -5,7 +5,8 @@
   "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-phd2.ps1\" -AssetsRoot \".\" -InstallRoot \"C:\\Program Files\\PHD2\"",
   "commandfiles": [
     "provide-phd2.ps1",
+    "verify-phd2.ps1",
     "assets/phd2-x64-2.6.13dev7mast04-installer.exe"
   ],
-  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -Command \"$phd2Path='C:\\Program Files\\PHD2\\phd2.exe'; $log=Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\verify\\phd2-verify.log'; if (Test-Path $phd2Path) { Set-Content -Path $log -Value 'PHD2 installed successfully'; Set-Content -Path (Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\smoke\\phd2-smoke.txt') -Value 'phd2_ok' } else { 'PHD2 executable not found at ' + $phd2Path | Out-File -FilePath $log -Encoding UTF8 }\""
+  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\verify-phd2.ps1\""
 }

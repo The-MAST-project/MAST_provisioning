@@ -43,7 +43,11 @@ param(
 try {
   ${provLocal} = Join-Path ${PSScriptRoot} 'provisioning.psm1'
   ${provGlobal} = 'C:\ProgramData\MAST\provisioning.psm1'
-  Import-Module (Test-Path ${provLocal} ? ${provLocal} : ${provGlobal}) -Force  -DisableNameChecking
+  if (Test-Path ${provLocal}) {
+    Import-Module ${provLocal} -Force -DisableNameChecking
+  } else {
+    Import-Module ${provGlobal} -Force -DisableNameChecking
+  }
 } catch { Write-Warning "provisioning.psm1 import failed: $($_.Exception.Message)" }
 
 function Show-Help {
@@ -114,9 +118,10 @@ function Invoke-Proc {
   $stdOut = $p.StandardOutput.ReadToEnd()
   $stdErr = $p.StandardError.ReadToEnd()
   $p.WaitForExit()
+  try { $p.Refresh() } catch {}
   if ($stdOut) { Write-Verbose "$LogTag OUT: $stdOut" }
   if ($stdErr) { Write-Verbose "$LogTag ERR: $stdErr" }
-  if ($SuccessCodes -notcontains $p.ExitCode) {
+  if ($null -ne $p.ExitCode -and $SuccessCodes -notcontains $p.ExitCode) {
     throw "$LogTag failed with exit code $($p.ExitCode)."
   }
 }

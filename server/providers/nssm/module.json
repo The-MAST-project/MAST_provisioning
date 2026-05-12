@@ -5,7 +5,8 @@
   "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-nssm.ps1\" -AssetsRoot \".\" -InstallDir \"C:\\Program Files\\nssm\"",
   "commandfiles": [
     "provide-nssm.ps1",
+    "verify-nssm.ps1",
     "assets/nssm-2.24.zip"
   ],
-  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -Command \"$log = Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\verify\\nssm-verify.log'; & 'C:\\Program Files\\nssm\\nssm.exe' 2>&1 | Select-Object -First 1 | Out-File -FilePath $log -Encoding UTF8; Set-Content -Path (Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\smoke\\nssm-smoke.txt') -Value 'nssm_ok'\""
+  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\verify-nssm.ps1\""
 }

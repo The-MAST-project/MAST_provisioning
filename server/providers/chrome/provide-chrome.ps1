@@ -19,8 +19,17 @@ try {
     }
 
     Write-Host "Running Chrome installer: ${installerPath}"
-    & ${installerPath} /silent /install 2>&1 | Tee-Object -FilePath ${logFile}
-    ${installerExit} = ${LASTEXITCODE}
+    # Avoid piping native stderr through PowerShell with ErrorAction Stop; Chrome's stub logs
+    # VERBOSE lines to stderr which become ErrorRecord and terminate before we can check chrome.exe.
+    ${stderrLog} = Join-Path ${logDir} "chrome-install-stderr.log"
+    ${p} = Start-Process -FilePath ${installerPath} -ArgumentList @('/silent', '/install') -PassThru -Wait -WindowStyle Hidden `
+        -RedirectStandardOutput ${logFile} -RedirectStandardError ${stderrLog}
+    try { ${p}.Refresh() } catch {}
+    ${installerExit} = ${p}.ExitCode
+    if (Test-Path -LiteralPath ${stderrLog}) {
+        Add-Content -LiteralPath ${logFile} -Encoding UTF8 -Value '--- native stderr ---'
+        Get-Content -LiteralPath ${stderrLog} -ErrorAction SilentlyContinue | Add-Content -LiteralPath ${logFile} -Encoding UTF8
+    }
 
     # The online stub may exit non-zero even when Chrome installs successfully.
     # Treat presence of chrome.exe as the authoritative success criterion.

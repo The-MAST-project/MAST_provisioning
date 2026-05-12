@@ -37,7 +37,11 @@ if (-not (Test-Path ${mastLogDot})) { throw "mast-log.ps1 not found (expected in
 try {
   ${provLocal} = Join-Path ${PSScriptRoot} 'provisioning.psm1'
   ${provGlobal} = 'C:\ProgramData\MAST\provisioning.psm1'
-  Import-Module (Test-Path ${provLocal} ? ${provLocal} : ${provGlobal}) -Force -DisableNameChecking
+  if (Test-Path ${provLocal}) {
+    Import-Module ${provLocal} -Force -DisableNameChecking
+  } else {
+    Import-Module ${provGlobal} -Force -DisableNameChecking
+  }
 } catch { Write-Warning "provisioning.psm1 import failed: $($_.Exception.Message)" }
 
 function Show-Help {
@@ -101,7 +105,8 @@ function Invoke-Command {
   param([string]${FilePath}, [string]${Arguments}, [int[]]${OkCodes} = @(0), [string]${Tag} = "proc")
   Write-Verbose "${Tag}: ${FilePath} ${Arguments}"
   ${p} = Start-Process -FilePath ${FilePath} -ArgumentList ${Arguments} -PassThru -Wait -WindowStyle Hidden
-  if (${OkCodes} -notcontains ${p}.ExitCode) { throw "${Tag} exit code ${p.ExitCode}" }
+  try { ${p}.Refresh() } catch {}
+  if ($null -ne ${p}.ExitCode -and ${OkCodes} -notcontains ${p}.ExitCode) { throw "${Tag} exit code ${p.ExitCode}" }
 }
 
 # --- Locate assets ---

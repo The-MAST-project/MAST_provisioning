@@ -44,6 +44,7 @@ MAST_provisioning/
 |   |-- bootstrap-winrm.ps1           # First-time unit setup: mast user, WinRM HTTP
 |   |-- prepare-mast-client.ps1       # Second-stage: hostname, WinRM HTTPS, WU policy
 |   |-- execute-mast-provisioning.ps1 # Runs on the unit; iterates through commands.json
+|   |-- run-verify-only.ps1           # Runs on the unit; *-verify steps only (see below)
 |   `-- onboard-mast-unit.ps1         # One-shot Stages 0-5 bootstrap for a new unit
 |-- server/
 |   |-- lib/mast-log.ps1              # Canonical log path definitions (unit + prov server)
@@ -86,6 +87,17 @@ MAST_provisioning/
 | Dev test cycles (run-prov-test.py) | `C:\MAST\logs\dev\<timestamp>-cycle<N>\` |
 
 All paths are defined in `server/lib/mast-log.ps1`; scripts import it rather than duplicating the base path.
+
+### Verify-only (re-run checks without installers)
+
+After you have a current `01-provisioning` folder on the unit (for example `C:\mast-staging` after a WinRM copy from `staging\<host>\01-provisioning\`):
+
+```powershell
+Set-Location C:\mast-staging
+powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File .\run-verify-only.ps1 -StagingPath .
+```
+
+This reads `commands.json`, runs only commands whose `module` name ends with `-verify`, and exits `1` if any step fails. Logs go under `C:\MAST\logs\sessions\<timestamp>\provisioning-verify-only.log`. It does not take the `execute.lock` used by full provisioning, so avoid running it at the same time as `execute-mast-provisioning.ps1`.
 
 ## Module execution order
 
@@ -279,6 +291,9 @@ python .\vm\run-prov-test.py --host-unit mast01 --hostname mast01
 # Just the build (no transfer / execute):
 python .\vm\run-prov-test.py --host-unit mast01 --hostname mast01 --build-only
 
+# Build, HTTP transfer to C:\mast-staging, then run *-verify steps only (no installers):
+python .\vm\run-prov-test.py --host-unit mast01 --hostname mast01 --build-transfer-verify
+
 # Three cycles, restoring the post-prepare snapshot between each:
 python .\vm\run-prov-test.py --host-unit mast01 --hostname mast01 --repeat 3
 
@@ -318,7 +333,7 @@ Cycle logs land in `C:\MAST\logs\dev\<timestamp>-cycle<N>\results.json`.
 3. Drop binary assets into `server/providers/<module>/assets/`.
 4. Add the module name to `unit-registry.json` `modules` lists (or it gets the default).
 
-No edit to `build-mast.ps1` or `execute-mast-provisioning.ps1` is required.
+No edit to `execute-mast-provisioning.ps1` is required. `build-mast.ps1` copies `client/run-verify-only.ps1` into each staged `01-provisioning` folder for verify-only reruns.
 
 ---
 

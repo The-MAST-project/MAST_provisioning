@@ -7,5 +7,5 @@
     "provide-python.ps1",
     "assets/python-3.12.0-amd64.exe"
   ],
-  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -Command \"$py = 'C:\\Python312\\python.exe'; $log = Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\verify\\python-verify.log'; if (Test-Path $py) { & $py --version | Out-File -FilePath $log -Encoding UTF8; & $py -m virtualenv --version | Out-File -FilePath $log -Append -Encoding UTF8; Set-Content -Path (Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\smoke\\python-smoke.txt') -Value 'python_ok' } else { 'python.exe not found' | Out-File -FilePath $log -Encoding UTF8 }\""
+  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -Command \"$py = 'C:\\Python312\\python.exe'; $log = Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\verify\\python-verify.log'; if (Test-Path $py) { & $py --version | Out-File -FilePath $log -Encoding UTF8; & $py -m virtualenv --version | Out-File -FilePath $log -Append -Encoding UTF8; Set-Content -Path (Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\smoke\\python-smoke.txt') -Value 'python_ok' } else { 'python.exe not found' | Out-File -FilePath $log -Encoding UTF8; exit 1 }\""
 }

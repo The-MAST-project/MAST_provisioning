@@ -147,11 +147,24 @@ current.
   "built_at": "2026-05-05T12:00:00Z",
   "git_sha": "abc1234",
   "payload_hash": "<sha256 of commands.json + all asset checksums>",
-  "modules": ["python", "ascom", "cygwin", "mast", "..."]
+  "modules": ["python", "ascom", "cygwin", "mast", "..."],
+  "module_versions": {
+    "python":  "3.12.0",
+    "ascom":   "7.1.0",
+    "cygwin":  "3.5.3",
+    "mast":    "abc1234",
+    "mongodb": "7.0.8"
+  }
 }
 ```
 
 `build-mast.ps1` writes this to `staging\<hostname>\build-manifest.json` at build time.
+The `module_versions` map is populated from the `version` field in each provider's
+`module.json`. It is the authoritative record of what version of each package was staged
+for a given build, and is carried through to `installed-manifest.json` on the unit after
+a successful provisioning run. This makes it possible to answer "what version of python
+is on mast03?" without logging into the unit, and to correlate timing regressions or
+failures with specific version bumps.
 
 #### 3. Installed / effective state (on each unit) **[PARTIAL]**
 
@@ -885,6 +898,7 @@ in run logs) are the remaining gap.
 |------|---------|-----------|
 | `run-<timestamp>.log` | Full per-run detail log (see below) | Keep last 30 runs |
 | `activity.csv` | One-line summary per unit per run | Rolling, keep 90 days |
+| `package-timings.csv` | One row per package per provisioning run; basis for statistics | Rolling, keep 90 days |
 | `current-run.log` | Symlink / copy of the active run log; overwritten each run | Always present |
 | `last-error.log` | Verbatim copy of the last run that ended in error | Overwritten on each error |
 
@@ -903,7 +917,11 @@ Each run appends structured entries:
 [2026-05-05T14:01:31Z] TRANSFER_START  unit=mast02 files=41 bytes=1362534400
 [2026-05-05T14:09:15Z] TRANSFER_OK     unit=mast02 duration_s=464
 [2026-05-05T14:09:16Z] EXECUTE_START   unit=mast02
-[2026-05-05T14:55:00Z] EXECUTE_OK      unit=mast02 duration_s=2744 exit_code=0
+[2026-05-05T14:09:17Z] PKG_START       unit=mast02 module=python order=20 version=3.12.0
+[2026-05-05T14:11:42Z] PKG_OK          unit=mast02 module=python order=20 version=3.12.0 duration_s=145
+[2026-05-05T14:11:42Z] PKG_START       unit=mast02 module=ascom  order=30 version=7.1.0
+[2026-05-05T14:55:00Z] PKG_FAIL        unit=mast02 module=ascom  order=30 version=7.1.0 duration_s=2598 exit_code=1
+[2026-05-05T14:55:00Z] EXECUTE_FAIL    unit=mast02 duration_s=2744 exit_code=1 failed_module=ascom
 [2026-05-05T14:55:01Z] SMOKE_START     unit=mast02
 [2026-05-05T14:55:05Z] SMOKE_RESULT    unit=mast02 module=python status=OK
 [2026-05-05T14:55:05Z] SMOKE_RESULT    unit=mast02 module=ascom  status=FAIL reason=smoke_file_missing
@@ -916,6 +934,9 @@ Key design rules:
   `grep`-able and machine-parseable.
 - `EXECUTE_START` / `EXECUTE_OK` / `EXECUTE_FAIL` bracket the long-running provisioning
   step so you can see exactly where time is spent.
+- `PKG_START` / `PKG_OK` / `PKG_FAIL` bracket each individual package installation.
+  `PKG_FAIL` always names the failing module and its `duration_s` so a stuck or
+  slow installer is immediately identifiable without parsing full transcripts.
 - `TRANSFER_START` logs the total file count and byte count so stalls are immediately visible.
 - Each `SMOKE_RESULT` line names the module and the failure reason.
 - `UNIT_SKIP` / `UNIT_FAIL` / `UNIT_OK` give a machine-readable per-unit outcome.
@@ -931,6 +952,43 @@ timestamp_utc, run_id, unit, outcome, reason, duration_s, payload_hash, git_sha
 
 `outcome` is one of: `OK`, `SKIP`, `FAIL`, `UNREACHABLE`, `BUILD_FAIL`, `TRANSFER_FAIL`,
 `EXECUTE_FAIL`.
+
+#### `package-timings.csv` schema
+
+One row is written per package per provisioning run by `execute-mast-provisioning.ps1`
+on the unit and relayed to the prov server (or written directly if the prov server polls
+the unit). This file is the primary source for installation time statistics.
+
+```
+timestamp_utc, run_id, unit, module, version, order, outcome, duration_s, exit_code
+2026-05-05T14:11:42Z, run-20260505-140000, mast02, python,  3.12.0, 20, OK,   145, 0
+2026-05-05T14:55:00Z, run-20260505-140000, mast02, ascom,   7.1.0,  30, FAIL, 2598, 1
+```
+
+`outcome` per row is `OK`, `FAIL`, or `TIMEOUT`. `duration_s` is wall-clock seconds from
+`PKG_START` to `PKG_OK` / `PKG_FAIL`, including any installer UI wait or subprocess.
+`version` is read from `module_versions` in `build-manifest.json` at the time the run
+is staged -- it reflects the version that was attempted, even if installation failed.
+
+**Use cases:**
+- Identify stuck or unexpectedly slow installers across runs and units by sorting on
+  `duration_s` per module.
+- Track installation time trends over software version bumps (e.g. python 3.12 -> 3.13
+  takes N% longer) by grouping on `version`.
+- Correlate failures or timeouts with a specific version: if `ascom 7.1.0` started
+  failing across units after a version bump, the version column makes that immediately
+  visible without cross-referencing git history.
+- Confirm a rollback landed: after rolling back to a prior version, the `version` column
+  in subsequent runs should reflect the older version on all units.
+- Set per-package timeout thresholds in `module.json`; flag runs where `duration_s`
+  exceeds the threshold as `TIMEOUT` even if the installer eventually returned 0.
+- Aggregate mean and p95 install time per module and version across the fleet for
+  capacity planning and regression detection.
+
+**Per-package timeout:** `module.json` should support an optional `timeout_s` field. If
+the package installer has not completed within that threshold, `execute-mast-provisioning.ps1`
+terminates the process, logs `PKG_FAIL ... outcome=TIMEOUT`, and fails the run for that
+unit. This prevents a single hung installer from blocking the provisioning slot indefinitely.
 
 ---
 
@@ -1004,14 +1062,66 @@ Pick one or combine:
 
 - **Gauge or info-style metrics:** `mast_payload_hash` as an info metric with labels for
   git SHA and payload hash.
-- **Per-module signals:** `mast_module_present{module="..."} == 1`, optional
-  `mast_module_version_info{module="...", version="..."} == 1` where versions are known.
+- **Per-module signals:** `mast_module_present{unit, module} == 1` and
+  `mast_module_version_info{unit, module, version} == 1`. The `version` label is
+  **required** (not optional) -- it is sourced from `module_versions` in
+  `installed-manifest.json` so the dashboard always shows what version is actually on
+  each unit, not just whether the module is present.
 - **Drift vs build:** If the prov server publishes the **current** `build-manifest` hash
-  for that unit's module set, the dashboard can compare **effective** vs **desired**
-  in one place.
+  and `module_versions` for that unit's module set, the dashboard can compare
+  **effective** vs **desired** version per module in one place -- making it immediately
+  visible when a unit is running an old version after a failed or pending upgrade.
 
 Goal: the central dashboard shows a **table or stat panel per unit**: expected vs effective
-hash, module checklist, and age of last successful alignment.
+hash, per-module installed version vs desired version, and age of last successful
+alignment.
+
+#### Package installation timing and statistics
+
+`package-timings.csv` (see **Log files** above) is the raw data source. The prov server
+or a scrape-time aggregator exposes timing history as Prometheus metrics so the Grafana
+dashboard can surface slowness and regressions without log-file parsing.
+
+**Metrics to expose (sourced from `package-timings.csv` on the prov server):**
+
+- `mast_pkg_install_duration_seconds{unit, module, version, outcome}` -- gauge of the
+  most recent install duration for each unit+module combination. The `version` label
+  makes it possible to compare install time for the same module across versions directly
+  in Prometheus without joining against another data source.
+- `mast_pkg_install_duration_seconds_hist{module, version}` -- histogram (or summary)
+  across all units and recent runs, for p50/p95 per-module per-version fleet-wide install
+  time. Helps set realistic timeout thresholds in `module.json` and detect regressions
+  introduced by a specific version bump.
+- `mast_pkg_timeout_total{unit, module, version}` -- counter incremented each time a
+  package install hits its `timeout_s` limit. An increasing counter on a specific
+  module+version is an early signal of a broken installer or environment regression
+  introduced by that version.
+- `mast_pkg_last_outcome{unit, module, version}` -- 1 if the most recent install of that
+  module on that unit was `OK`, 0 if `FAIL` or `TIMEOUT`. The `version` label means the
+  dashboard can show "mast02 is running ascom 7.0.0 (OK) while the fleet is on 7.1.0
+  (FAIL)" without a separate query.
+
+**Alerting rules:**
+
+- Fire when `mast_pkg_install_duration_seconds{module}` for any unit exceeds 2x the
+  fleet p95 for that module on the previous N runs (likely hung installer).
+- Fire when `mast_pkg_last_outcome == 0` for any module persists across two consecutive
+  provisioning cycles (persistent install failure, not a transient glitch).
+- Fire when `mast_pkg_timeout_total` increments for any unit+module (any timeout is
+  worth an immediate alert).
+
+**Grafana panels:**
+
+- **Package timing heatmap:** rows = modules, columns = recent runs, cell colour = install
+  duration, cell label = version. Regressions from a version bump are immediately visible
+  as a colour shift on the affected module row, annotated with the version that caused it.
+- **Per-unit package status table:** one row per unit, columns per module, cell shows
+  installed version and green/red from `mast_pkg_last_outcome`. A unit running a
+  different version than the fleet target is highlighted. Replaces manual log inspection
+  to confirm a fleet-wide deploy or rollback landed cleanly.
+- **Fleet install time trends:** line chart of p50 and p95 install duration per module,
+  with version changes marked as annotations. Reference baseline for setting `timeout_s`
+  values and spotting install time regressions introduced by specific version bumps.
 
 #### Running MAST services manifest
 
@@ -1047,17 +1157,21 @@ The **primary** operations UI:
   outcome.
 - **Drill-down:** per-unit panels for **manifest** (hash, modules), **services grid**,
   **heartbeats**, **recent prov events**.
-- **Prov server:** panels for scheduler health, LFS/git freshness if exposed, and
-  aggregate failure rates.
+- **Package timing panels:** heatmap of install duration per module across recent runs;
+  per-unit package status table (green/red per module from `mast_pkg_last_outcome`);
+  fleet-wide p50/p95 trend lines per module. See **Package installation timing and
+  statistics** above for the full panel list.
+- **Prov server:** panels for scheduler health, LFS/git freshness if exposed, aggregate
+  failure rates, and package timeout counter trends.
 
-Document **standard dashboard UIDs**, template variables (`hostname`, `site`), and which
-metrics are **SLI**-grade.
+Document **standard dashboard UIDs**, template variables (`hostname`, `site`, `module`),
+and which metrics are **SLI**-grade.
 
 #### Relation to logs
 
-Logs (`activity.csv`, remote-run transcripts, prov run logs) remain the **deep dive** for
-incidents. Prometheus and the central dashboard provide **continuous, queryable, alertable**
-summaries; they do not replace structured logging.
+Logs (`activity.csv`, `package-timings.csv`, remote-run transcripts, prov run logs)
+remain the **deep dive** for incidents. Prometheus and the central dashboard provide
+**continuous, queryable, alertable** summaries; they do not replace structured logging.
 
 ---
 

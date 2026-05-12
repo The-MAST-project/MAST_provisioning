@@ -19,6 +19,9 @@
 .PARAMETER InstallDir
   Base folder where NoMachine typically installs. Only used for detection/help; installer sets its own path.
 
+.PARAMETER RequireLicense
+  Fail if no nomachine.lic is found under AssetsRoot (or script root fallback).
+
 .PARAMETER Help
   Show usage.
 
@@ -30,6 +33,7 @@
 param(
   [string]${AssetsRoot} = ${PSScriptRoot},
   [string]${InstallDir} = 'C:\Program Files\NoMachine',
+  [switch]${RequireLicense},
   [switch]${Help}
 )
 
@@ -41,7 +45,11 @@ if (-not (Test-Path ${mastLogDot})) { throw "mast-log.ps1 not found (expected in
 try {
   ${provLocal} = Join-Path ${PSScriptRoot} 'provisioning.psm1'
   ${provGlobal} = 'C:\ProgramData\MAST\provisioning.psm1'
-  Import-Module (Test-Path ${provLocal} ? ${provLocal} : ${provGlobal}) -Force -DisableNameChecking
+  if (Test-Path ${provLocal}) {
+    Import-Module ${provLocal} -Force -DisableNameChecking
+  } else {
+    Import-Module ${provGlobal} -Force -DisableNameChecking
+  }
 } catch { Write-Warning "provisioning.psm1 import failed: $($_.Exception.Message)" }
 
 function Show-Help {
@@ -49,12 +57,12 @@ function Show-Help {
 provide-nomachine.ps1
 
 USAGE:
-  .\provide-nomachine.ps1 [-AssetsRoot <path>] [-InstallDir <dir>] [-Verbose] [-Help]
+  .\provide-nomachine.ps1 [-AssetsRoot <path>] [-InstallDir <dir>] [-RequireLicense] [-Verbose] [-Help]
 
-FILES (under ${AssetsRoot}):
+FILES (under ${AssetsRoot}, preferably nomachine\assets):
   nomachine-enterprise-client_9.0.188_11_x64.exe
   nomachine-enterprise-desktop_9.0.188_11_x64.exe
-  nomachine.lic
+  nomachine.lic (optional unless -RequireLicense)
 "@ | Write-Host
 }
 if (${Help}) { Show-Help; return }
@@ -67,14 +75,47 @@ Start-Transcript -Path ${LogFile} -Append | Out-Null
 Write-Verbose "Log: ${LogFile}"
 
 # --- Paths & Inputs ---
-${assets}     = ${AssetsRoot}
-${clientExe}  = Join-Path ${assets} 'nomachine-enterprise-client_9.0.188_11_x64.exe'
-${serverExe}  = Join-Path ${assets} 'nomachine-enterprise-desktop_9.0.188_11_x64.exe'
-${licFile} = Join-Path ${PSScriptRoot} "nomachine.lic"
+${assets} = ${AssetsRoot}
+${nmAssets} = Join-Path ${assets} 'nomachine\assets'
 
-if (-not (Test-Path ${assets}))    { Stop-Transcript | Out-Null; throw "Assets not found: ${assets}" }
-if (-not (Test-Path ${clientExe})) { Stop-Transcript | Out-Null; throw "Missing Enterprise Client: ${clientExe}" }
-if (-not (Test-Path ${serverExe})) { Stop-Transcript | Out-Null; throw "Missing Enterprise Desktop: ${serverExe}" }
+${clientExe} = $null
+foreach (${c} in @(
+    (Join-Path ${nmAssets} 'nomachine-enterprise-client_9.0.188_11_x64.exe'),
+    (Join-Path ${assets} 'nomachine-enterprise-client_9.0.188_11_x64.exe')
+  )) {
+  if (Test-Path -LiteralPath ${c}) { ${clientExe} = ${c}; break }
+}
+
+${serverExe} = $null
+foreach (${c} in @(
+    (Join-Path ${nmAssets} 'nomachine-enterprise-desktop_9.0.188_11_x64.exe'),
+    (Join-Path ${assets} 'nomachine-enterprise-desktop_9.0.188_11_x64.exe')
+  )) {
+  if (Test-Path -LiteralPath ${c}) { ${serverExe} = ${c}; break }
+}
+
+${licFile} = $null
+foreach (${c} in @(
+    (Join-Path ${nmAssets} 'nomachine.lic'),
+    (Join-Path ${assets} 'nomachine.lic'),
+    (Join-Path ${PSScriptRoot} 'nomachine.lic')
+  )) {
+  if (Test-Path -LiteralPath ${c}) { ${licFile} = ${c}; break }
+}
+
+if (-not (Test-Path ${assets})) { Stop-Transcript | Out-Null; throw "Assets not found: ${assets}" }
+if (-not ${clientExe}) {
+  Stop-Transcript | Out-Null
+  throw "Missing Enterprise Client under ${nmAssets} or ${assets}"
+}
+if (-not ${serverExe}) {
+  Stop-Transcript | Out-Null
+  throw "Missing Enterprise Desktop under ${nmAssets} or ${assets}"
+}
+if (${RequireLicense} -and -not ${licFile}) {
+  Stop-Transcript | Out-Null
+  throw "NoMachine license required (-RequireLicense) but not found under ${nmAssets}, ${assets}, or ${PSScriptRoot}."
+}
 
 # --- Helpers ---
 function Try-InstallExe {
@@ -87,7 +128,8 @@ function Try-InstallExe {
     try {
       Write-Host "${Tag}: ${FilePath} ${a}"
       ${p} = Start-Process -FilePath ${FilePath} -ArgumentList ${a} -PassThru -Wait -WindowStyle Hidden
-      if (${p}.ExitCode -eq 0) { return $true }
+      try { ${p}.Refresh() } catch {}
+      if ($null -eq ${p}.ExitCode -or ${p}.ExitCode -eq 0) { return $true }
       Write-Warning "${Tag}: exit code $(${p}.ExitCode) with args '${a}'"
     } catch {
       Write-Warning "${Tag}: ${FilePath} '${a}' failed: $($_.Exception.Message)"
@@ -98,16 +140,25 @@ function Try-InstallExe {
 
 function Install-License {
   param([Parameter(Mandatory)][string]${SourceLicPath})
+  if (-not (Test-Path -LiteralPath ${SourceLicPath})) {
+    Write-Warning "Install-License: missing source file (${SourceLicPath})."
+    return
+  }
   ${targetDir} = Join-Path ${InstallDir} 'etc'
+  if (-not (Test-Path -LiteralPath ${targetDir})) {
+    New-Item -ItemType Directory -Path ${targetDir} -Force | Out-Null
+  }
   ${targetPath} = Join-Path ${targetDir} "server.lic"
-  Copy-Item -Path ${licFile} -Destination ${targetPath} -Force
+  Copy-Item -LiteralPath ${SourceLicPath} -Destination ${targetPath} -Force
   Write-Host "License installed to ${targetPath}"
-  # Try to restart a NoMachine service if present so new license is read
   try {
-    ${svc} = Get-Service | Where-Object { $_.Name -match 'NoMachine|nx' -or $_.DisplayName -match 'NoMachine' } | Select-Object -First 1
-    if (${svc}) {
+    ${svc} = Get-Service -ErrorAction SilentlyContinue |
+      Where-Object { $_.Name -match 'NoMachine|nx' -or $_.DisplayName -match 'NoMachine' } |
+      Select-Object -First 1
+    if ($null -ne ${svc}) {
+      ${svcName} = ${svc}.Name
       Restart-Service -InputObject ${svc} -Force -ErrorAction SilentlyContinue
-      Write-Host "Restarted service: ${svc.Name}"
+      Write-Host "Restarted service: ${svcName}"
     } else {
       Write-Verbose "No NoMachine service detected to restart."
     }
@@ -123,7 +174,11 @@ if (-not (Try-InstallExe -FilePath ${clientExe} -Tag 'NoMachine Client')) {
 if (-not (Try-InstallExe -FilePath ${serverExe} -Tag 'NoMachine Enterprise Desktop')) {
   Write-Warning "NoMachine Enterprise Desktop (server) install may have failed. Check logs."
 }
-Install-License -SourceLicPath ${licFile}
+if (${licFile}) {
+  Install-License -SourceLicPath ${licFile}
+} else {
+  Write-Warning "NoMachine license file not found; skipping license install (use -RequireLicense to fail if missing)."
+}
 
 # --- Quick verification ---
 try {

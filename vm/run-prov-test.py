@@ -9,12 +9,13 @@ driver) is working - see autonomous-provisioning.md.
 Drives a full MAST provisioning cycle:
   1. BUILD    - host runs build-mast.ps1 locally (no VM, no WinRM)
   2. TRANSFER - staged payload pushed to the unit VM via HTTP pull
-  3. EXECUTE  - unit runs execute-mast-provisioning.ps1
-  4. VERIFY   - smoke-test markers and pass criteria checked
+  3. EXECUTE  - unit runs execute-mast-provisioning.ps1 (skipped with --build-transfer-verify)
+  3b. VERIFY-RUN (optional) - with --build-transfer-verify, unit runs run-verify-only.ps1 instead
+  4. VERIFY   - smoke-test markers and pass criteria checked (criteria differ in verify-only mode)
   5. RESET    - unit VM stopped, snapshot restored, restarted
 
 Usage (Windows PowerShell, run from anywhere):
-    python MAST_provisioning\\run-prov-test.py ^
+    python MAST_provisioning\\vm\\run-prov-test.py ^
         --host-unit mast01 ^
         --hostname  mast01 ^
         [--modules python,ascom,mast] ^
@@ -22,6 +23,7 @@ Usage (Windows PowerShell, run from anywhere):
         [--rebuild] ^
         [--build-only] ^
         [--execute-only] ^
+        [--build-transfer-verify] ^
         [--vbox-vm mast-unit] ^
         [--snapshot post-prepare]
 
@@ -80,6 +82,7 @@ WINRM_CALL_TIMEOUT_S = 30 * 60
 WINRM_BOOT_TIMEOUT_S = 15 * 60
 HEARTBEAT_INTERVAL_S = 30
 EXECUTE_POLL_INTERVAL_S = 20
+VERIFY_ONLY_TIMEOUT_S = 30 * 60
 
 EXPECTED_PYTHON = "C:\\Python312\\python.exe"
 EXPECTED_REPOS_ROOT = "C:\\MAST\\repos"
@@ -88,7 +91,7 @@ SMOKE_LOG_DIR = f"{MAST_LOGS_BASE}\\smoke"
 VERIFY_LOG_DIR = f"{MAST_LOGS_BASE}\\verify"
 
 ALL_MODULES = [
-    "ascom", "chrome", "cygwin", "mast", "mongodb", "nomachine",
+    "ascom", "chrome", "cygwin", "git", "mast", "mongodb", "nomachine",
     "nssm", "phd2", "planewave", "python", "stage",
     "sysinternals", "vscode", "wireshark", "zwo",
 ]
@@ -414,11 +417,17 @@ def setup_log_dir(cycle: int) -> Path:
 # ---------------------------------------------------------------------------
 
 class ExecuteLogPoller:
-    """Background thread that polls provisioning-execute.log on the unit
-    and prints new lines to the local console during the execute phase."""
+    """Background thread that polls a provisioning session log on the unit
+    and prints new lines to the local console during execute or verify-only."""
 
-    def __init__(self, host: str, cred: dict[str, str]) -> None:
+    def __init__(
+        self,
+        host: str,
+        cred: dict[str, str],
+        log_filename: str = "provisioning-execute.log",
+    ) -> None:
         self._session = winrm_session(host, cred)
+        self._log_filename = log_filename
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._lines_seen = 0
@@ -448,7 +457,7 @@ class ExecuteLogPoller:
                     "  $d = Get-ChildItem -LiteralPath $b -Directory "
                     "    -ErrorAction SilentlyContinue | Sort-Object Name -Descending | "
                     "    Select-Object -First 1; "
-                    "  if ($d) { $p = Join-Path $d.FullName 'provisioning-execute.log' } "
+                    f"  if ($d) {{ $p = Join-Path $d.FullName '{self._log_filename}' }} "
                     "}; $p"
                 )
                 path = (r0.std_out or b"").decode(errors="replace").strip()
@@ -686,7 +695,41 @@ def phase_execute(unit: winrm.Session, host_unit: str, unit_cred: dict[str, str]
         return r
 
 
-def _fetch_execute_log_tail(unit: winrm.Session, lines: int = 40) -> None:
+def phase_run_verify_only(
+    unit: winrm.Session, host_unit: str, unit_cred: dict[str, str]
+) -> winrm.Response:
+    """Run run-verify-only.ps1 on the unit (expects staging at C:\\mast-staging)."""
+    with timed("VERIFY-RUN PHASE"):
+        log("Starting run-verify-only.ps1 on unit (no execute-mast-provisioning.ps1)...")
+        log(
+            f"Streaming provisioning-verify-only.log under {MAST_LOGS_BASE}\\sessions "
+            f"from unit every {EXECUTE_POLL_INTERVAL_S}s..."
+        )
+
+        poller = ExecuteLogPoller(
+            host_unit, unit_cred, log_filename="provisioning-verify-only.log"
+        )
+        poller.start()
+        try:
+            verify_cmd = (
+                "Set-ExecutionPolicy Bypass -Scope Process -Force; "
+                "& 'C:\\mast-staging\\run-verify-only.ps1' "
+                "-StagingPath 'C:\\mast-staging'"
+            )
+            r = run_ps(unit, verify_cmd, label="verify-only", timeout_s=VERIFY_ONLY_TIMEOUT_S)
+        finally:
+            poller.stop()
+
+        if r.status_code != 0:
+            log(
+                f"run-verify-only exited with code {r.status_code} - fetching log tail..."
+            )
+            _fetch_session_log_tail(unit, "provisioning-verify-only.log")
+
+        return r
+
+
+def _fetch_session_log_tail(unit: winrm.Session, log_filename: str, lines: int = 40) -> None:
     try:
         r0 = unit.run_ps(
             "$b = Join-Path $env:SystemDrive 'MAST\\logs\\sessions'; "
@@ -695,23 +738,27 @@ def _fetch_execute_log_tail(unit: winrm.Session, lines: int = 40) -> None:
             "  $d = Get-ChildItem -LiteralPath $b -Directory "
             "    -ErrorAction SilentlyContinue | Sort-Object Name -Descending | "
             "    Select-Object -First 1; "
-            "  if ($d) { $p = Join-Path $d.FullName 'provisioning-execute.log' } "
+            f"  if ($d) {{ $p = Join-Path $d.FullName '{log_filename}' }} "
             "}; $p"
         )
         path = (r0.std_out or b"").decode(errors="replace").strip()
         if not path:
-            log("--- provisioning-execute.log not found under sessions ---")
+            log(f"--- {log_filename} not found under sessions ---")
             return
         r = unit.run_ps(
             f"Get-Content -LiteralPath '{path}' -ErrorAction SilentlyContinue "
             f"| Select-Object -Last {lines}"
         )
         if r.std_out:
-            log(f"--- Last {lines} lines of provisioning-execute.log ---")
+            log(f"--- Last {lines} lines of {log_filename} ---")
             log_raw(r.std_out.decode(errors="replace").rstrip())
             log("--- end ---")
     except Exception as e:
-        log(f"Could not fetch execute log: {e}")
+        log(f"Could not fetch {log_filename}: {e}")
+
+
+def _fetch_execute_log_tail(unit: winrm.Session, lines: int = 40) -> None:
+    _fetch_session_log_tail(unit, "provisioning-execute.log", lines)
 
 
 def _fetch_diagnostics(unit: winrm.Session) -> None:
@@ -742,13 +789,23 @@ def _fetch_diagnostics(unit: winrm.Session) -> None:
 def phase_verify(
     unit: winrm.Session,
     modules: list[str],
-    execute_rc: int,
+    run_rc: int,
+    *,
+    verify_only: bool = False,
 ) -> dict[str, Any]:
     with timed("VERIFY PHASE"):
         results: dict[str, Any] = {}
+        results["verify_only"] = verify_only
 
-        results["execute_exit_code"] = execute_rc
-        results["execute_ok"] = execute_rc == 0
+        results["execute_exit_code"] = run_rc
+        results["execute_ok"] = run_rc == 0
+
+        if verify_only:
+            results["python_ok"] = True
+            results["python_version"] = "(skipped in verify-only mode)"
+            results["repos_root_ok"] = True
+            results["smoke"] = {}
+            return results
 
         r = run_ps(unit, f'& "{EXPECTED_PYTHON}" --version', label="python-check")
         results["python_ok"] = r.status_code == 0
@@ -777,6 +834,14 @@ def phase_verify(
 
 def print_results(results: dict[str, Any], cycle: int) -> bool:
     log(f"\n--- Cycle {cycle} Results ---")
+    if results.get("verify_only"):
+        log("  mode              : BUILD + TRANSFER + VERIFY-RUN (run-verify-only.ps1)")
+        log(f"  verify-only exit  : {results['execute_exit_code']}")
+        log(f"  verify-only OK    : {'OK' if results['execute_ok'] else 'FAIL'}")
+        passed = bool(results["execute_ok"])
+        log(f"\n  Cycle {cycle}: {'PASS' if passed else 'FAIL'}")
+        return passed
+
     log(f"  execute exit code : {results['execute_exit_code']}")
     log(
         f"  python check      : {'OK' if results['python_ok'] else 'FAIL'}"
@@ -838,6 +903,12 @@ def parse_args() -> argparse.Namespace:
         help="Skip build and transfer; WinRM to the unit and run execute-mast-provisioning.ps1 only "
         "(expects payload already at C:\\mast-staging)",
     )
+    p.add_argument(
+        "--build-transfer-verify",
+        action="store_true",
+        help="After transfer, run run-verify-only.ps1 instead of execute-mast-provisioning.ps1 "
+        "(BUILD + TRANSFER + staged *-verify checks only).",
+    )
     p.add_argument("--vbox-vm", default="mast-unit", help="VirtualBox VM name (default: 'mast-unit')")
     p.add_argument("--snapshot", default="post-prepare", help="Snapshot name to restore between cycles (default: 'post-prepare')")
     p.add_argument("--no-reset", action="store_true", help="Do not reset the VM between cycles (debug)")
@@ -853,8 +924,11 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    if args.build_only and args.execute_only:
-        sys.exit("ERROR: --build-only and --execute-only cannot be used together.")
+    mode_flags = int(args.build_only) + int(args.execute_only) + int(args.build_transfer_verify)
+    if mode_flags > 1:
+        sys.exit(
+            "ERROR: use at most one of --build-only, --execute-only, --build-transfer-verify."
+        )
     modules = args.modules.split(",") if args.modules else ALL_MODULES
     creds = load_creds()
     if "unit" not in creds:
@@ -872,6 +946,8 @@ def main() -> None:
         log(f"VM:      {args.vbox_vm}  (snapshot: {args.snapshot})")
         log(f"Unit WinRM target: {args.host_unit}")
         log(f"WinRM wait: {args.winrm_wait_seconds}s")
+        if args.build_transfer_verify:
+            log("Mode:    --build-transfer-verify (run-verify-only.ps1 after transfer)")
 
         cycle_results: list[bool] = []
         built = False
@@ -903,9 +979,21 @@ def main() -> None:
                     else:
                         phase_transfer(unit_session, args.hostname)
 
-                    execute_response = phase_execute(unit_session, args.host_unit, creds["unit"])
+                    if args.build_transfer_verify:
+                        run_response = phase_run_verify_only(
+                            unit_session, args.host_unit, creds["unit"]
+                        )
+                    else:
+                        run_response = phase_execute(
+                            unit_session, args.host_unit, creds["unit"]
+                        )
 
-                    results = phase_verify(unit_session, modules, execute_response.status_code)
+                    results = phase_verify(
+                        unit_session,
+                        modules,
+                        run_response.status_code,
+                        verify_only=args.build_transfer_verify,
+                    )
 
                     (log_dir / "results.json").write_text(json.dumps(results, indent=2))
 

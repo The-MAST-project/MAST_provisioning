@@ -52,8 +52,9 @@ try {
         try { ${p}.Kill() } catch {}
         throw ("VS Code installer timed out after 30 minutes (killed). See Inno log: {0}" -f ${innoLog})
     }
+    try { ${p}.Refresh() } catch {}
     Write-VscodeLog ("VS Code setup exit code: {0}" -f ${p}.ExitCode)
-    if (${p}.ExitCode -ne 0) {
+    if ($null -ne ${p}.ExitCode -and ${p}.ExitCode -ne 0) {
         throw ("VS Code setup failed with exit code {0}. See Inno log: {1}" -f ${p}.ExitCode, ${innoLog})
     }
 

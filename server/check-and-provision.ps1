@@ -149,8 +149,8 @@ if (-not (Test-Path $VaultCreds)) {
     exit 2
 }
 
-$units = Get-Content $UnitRegistry -Raw | ConvertFrom-Json |
-            Where-Object { -not $_._comment }
+$units = @(Get-Content $UnitRegistry -Raw | ConvertFrom-Json) |
+    Where-Object { $_ -and $_.hostname }
 $creds = Get-Content $VaultCreds -Raw | ConvertFrom-Json
 if (-not $creds.unit) {
     Log-Event 'FATAL' @{ reason='creds_unit_missing' }

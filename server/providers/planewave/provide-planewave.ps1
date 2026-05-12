@@ -40,8 +40,9 @@ try {
         ('/LOG="{0}"' -f ${innoLog})
     )
     ${p} = Start-Process -FilePath ${pwi4InstallerPath} -ArgumentList ${argList} -PassThru -Wait -NoNewWindow
+    try { ${p}.Refresh() } catch {}
     Write-MastPwLog ("Setup_PWI_4.1.8_Final.exe exit code: {0}" -f ${p}.ExitCode)
-    if (${p}.ExitCode -ne 0) {
+    if ($null -ne ${p}.ExitCode -and ${p}.ExitCode -ne 0) {
         throw ("PWI4 installer exited with code {0}. See Inno log: {1}" -f ${p}.ExitCode, ${innoLog})
     }
     Start-Sleep -Seconds 5

@@ -16,6 +16,7 @@ param(
     'ascom',
     'chrome',
     'cygwin',
+    'git',
     'mast',
     'mongodb',
     'nomachine',
@@ -300,6 +301,22 @@ if (Test-Path ${executeScript}) {
     Write-Host " Staged execute-mast-provisioning.ps1"
 } else {
     Write-Warning "execute-mast-provisioning.ps1 not found at ${executeScript}"
+}
+
+${invokeChildScript} = Join-Path ${clientRoot} 'mast-invoke-child.ps1'
+if (Test-Path ${invokeChildScript}) {
+    Copy-Item -Force ${invokeChildScript} (Join-Path ${staging} 'mast-invoke-child.ps1')
+    Write-Host " Staged mast-invoke-child.ps1"
+} else {
+    Write-Warning "mast-invoke-child.ps1 not found at ${invokeChildScript}"
+}
+
+${verifyOnlyScript} = Join-Path ${clientRoot} 'run-verify-only.ps1'
+if (Test-Path ${verifyOnlyScript}) {
+    Copy-Item -Force ${verifyOnlyScript} (Join-Path ${staging} 'run-verify-only.ps1')
+    Write-Host " Staged run-verify-only.ps1"
+} else {
+    Write-Warning "run-verify-only.ps1 not found at ${verifyOnlyScript}"
 }
 
 # Copy CommandFiles of each module into staging (flatten)
