@@ -11,41 +11,45 @@ ${logDir} = Get-MastLogSessionDir
 New-Item -ItemType Directory -Path ${logDir} -Force | Out-Null
 ${logFile} = Join-Path ${logDir} "sysinternals-install.log"
 
-try {
-    Write-Host "Starting Sysinternals installation..."
+function Write-SysLog {
+    param([string]${Line})
+    ${ts} = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+    Add-Content -LiteralPath ${logFile} -Encoding UTF8 -Value ("[{0}] {1}" -f ${ts}, ${Line})
+    Write-Host ${Line}
+}
 
+Set-Content -LiteralPath ${logFile} -Encoding UTF8 -Value ("[{0}] provide-sysinternals.ps1 started." -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))
+
+try {
     ${zipPath} = Join-Path ${AssetsRoot} "SysinternalsSuite.zip"
     if (-not (Test-Path ${zipPath})) {
         throw "Sysinternals archive not found at ${zipPath}"
     }
 
-    # Create install directory
     New-Item -ItemType Directory -Path ${InstallRoot} -Force | Out-Null
+    Write-SysLog ("Extracting Sysinternals archive to {0}" -f ${InstallRoot})
+    Expand-Archive -Path ${zipPath} -DestinationPath ${InstallRoot} -Force
+    Write-SysLog "Extraction complete."
 
-    Write-Host "Extracting Sysinternals archive to ${InstallRoot}"
-    Expand-Archive -Path ${zipPath} -DestinationPath ${InstallRoot} -Force 2>&1 | Tee-Object -FilePath ${logFile}
-
-    # Add Sysinternals to PATH
     ${pathKey} = "HKLM:\System\CurrentControlSet\Control\Session Manager\Environment"
     ${currentPath} = (Get-ItemProperty -Path ${pathKey} -Name "Path").Path
-
-    if (${currentPath} -notlike "*${InstallRoot}*") {
-        ${newPath} = "${currentPath};${InstallRoot}"
-        Set-ItemProperty -Path ${pathKey} -Name "Path" -Value ${newPath}
-        Write-Host "Added Sysinternals to PATH" | Tee-Object -FilePath ${logFile} -Append
+    if (${currentPath} -notlike ("*{0}*" -f ${InstallRoot})) {
+        Set-ItemProperty -Path ${pathKey} -Name "Path" -Value ("${currentPath};${InstallRoot}")
+        Write-SysLog ("Added to PATH: {0}" -f ${InstallRoot})
+    } else {
+        Write-SysLog "PATH already contains Sysinternals directory."
     }
 
-    # Verify installation
     if (-not (Test-Path ${InstallRoot})) {
         throw "Sysinternals directory not created after extraction"
     }
 
-    Write-Host "Sysinternals installation completed successfully" | Tee-Object -FilePath ${logFile} -Append
+    Write-SysLog "Sysinternals installation completed successfully."
     exit 0
 }
 catch {
-    ${errorMsg} = "Sysinternals installation failed: $_"
+    ${errorMsg} = ("Sysinternals installation failed: {0}" -f $_)
     Write-Host ${errorMsg}
-    ${errorMsg} | Out-File -FilePath ${logFile} -Append -Encoding UTF8
+    Add-Content -LiteralPath ${logFile} -Encoding UTF8 -Value ${errorMsg}
     exit 1
 }

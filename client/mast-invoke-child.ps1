@@ -119,16 +119,30 @@ function Invoke-MastChildCommandLine {
         }
     }
 
-    ${argList} = @()
+    # Re-quote argv elements that contain spaces so Start-Process passes them as single tokens.
+    # Start-Process -ArgumentList with a string[] joins with spaces and does NOT re-quote,
+    # so "C:\Program Files\Foo" would arrive as two separate tokens. Passing a single
+    # pre-quoted string avoids this.
+    ${argStr} = ''
     if (${argv}.Length -gt 1) {
-        ${argList} = ${argv}[1..(${argv}.Length - 1)]
+        ${argStr} = (${argv}[1..(${argv}.Length - 1)] | ForEach-Object {
+            if ($_ -match '[ \t"]') { '"' + ($_ -replace '"', '\"') + '"' } else { $_ }
+        }) -join ' '
     }
 
     ${so} = Join-Path ${env:TEMP} ("mast-child-out-{0}.txt" -f ([guid]::NewGuid().ToString('n')))
     ${se} = Join-Path ${env:TEMP} ("mast-child-err-{0}.txt" -f ([guid]::NewGuid().ToString('n')))
     try {
-        ${p} = Start-Process -FilePath ${exePath} -ArgumentList ${argList} -Wait -PassThru -NoNewWindow `
-            -RedirectStandardOutput ${so} -RedirectStandardError ${se}
+        ${startArgs} = @{
+            FilePath               = ${exePath}
+            Wait                   = $true
+            PassThru               = $true
+            NoNewWindow            = $true
+            RedirectStandardOutput = ${so}
+            RedirectStandardError  = ${se}
+        }
+        if (${argStr} -ne '') { ${startArgs}['ArgumentList'] = ${argStr} }
+        ${p} = Start-Process @startArgs
         try { ${p}.Refresh() } catch {}
         ${merged} = New-Object System.Collections.ArrayList
         if (Test-Path -LiteralPath ${so}) {

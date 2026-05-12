@@ -10,10 +10,16 @@ ${logDir} = Get-MastLogSessionDir
 New-Item -ItemType Directory -Path ${logDir} -Force | Out-Null
 ${logFile} = Join-Path ${logDir} "imdisk-install.log"
 
-try {
-    Write-Host "Starting ImDisk installation..."
+function Write-ImDiskLog {
+    param([string]${Line})
+    ${ts} = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+    Add-Content -LiteralPath ${logFile} -Encoding UTF8 -Value ("[{0}] {1}" -f ${ts}, ${Line})
+    Write-Host ${Line}
+}
 
-    # Extract ImDisk archive
+Set-Content -LiteralPath ${logFile} -Encoding UTF8 -Value ("[{0}] provide-imdisk.ps1 started." -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))
+
+try {
     ${zipPath} = Join-Path ${AssetsRoot} "ImDiskTk-x64.zip"
     if (-not (Test-Path ${zipPath})) {
         throw "ImDisk archive not found at ${zipPath}"
@@ -22,70 +28,62 @@ try {
     ${extractDir} = Join-Path ${env:TEMP} "imdisk-install"
     New-Item -ItemType Directory -Path ${extractDir} -Force | Out-Null
 
-    Write-Host "Extracting ImDisk archive to ${extractDir}" | Tee-Object -FilePath ${logFile}
+    Write-ImDiskLog ("Extracting ImDisk archive to {0}" -f ${extractDir})
     Expand-Archive -Path ${zipPath} -DestinationPath ${extractDir} -Force
+    Write-ImDiskLog "Extraction complete."
 
-    # Find the subfolder (ImDiskTk20240113 or similar)
-    ${subfolders} = Get-ChildItem -Path ${extractDir} -Directory | Where-Object { $_.Name -like "ImDiskTk*" }
-    if (-not ${subfolders}) {
+    ${subfolders} = @(Get-ChildItem -Path ${extractDir} -Directory | Where-Object { $_.Name -like "ImDiskTk*" })
+    if (${subfolders}.Count -eq 0) {
         throw "ImDiskTk subfolder not found in extracted archive"
     }
+    ${installDir} = ${subfolders}[0].FullName
+    Write-ImDiskLog ("Found ImDisk folder: {0}" -f ${subfolders}[0].Name)
 
-    ${installDir} = $subfolders[0].FullName
-    Write-Host "Found ImDisk folder: $($subfolders[0].Name)" | Tee-Object -FilePath ${logFile} -Append
-
-    # Run install.bat from subfolder
     ${installBat} = Join-Path ${installDir} "install.bat"
     if (-not (Test-Path ${installBat})) {
-        throw "install.bat not found at ${installBat}"
+        throw ("install.bat not found at {0}" -f ${installBat})
     }
 
-    Write-Host "Running install.bat" | Tee-Object -FilePath ${logFile} -Append
-    & cmd.exe /c "${installBat} /silent" 2>&1 | Tee-Object -FilePath ${logFile} -Append
-
+    Write-ImDiskLog ("Running install.bat /silent from {0}" -f ${installDir})
+    ${batOut} = & cmd.exe /c ("`"{0}`" /silent" -f ${installBat}) 2>&1
+    if (${batOut}) {
+        foreach (${line} in ${batOut}) {
+            Add-Content -LiteralPath ${logFile} -Encoding UTF8 -Value ("[bat] {0}" -f ${line})
+        }
+    }
+    Write-ImDiskLog ("install.bat exit code: {0}" -f ${LASTEXITCODE})
     if (${LASTEXITCODE} -ne 0) {
-        Write-Host "WARNING: install.bat exited with code ${LASTEXITCODE}" | Tee-Object -FilePath ${logFile} -Append
+        Write-ImDiskLog ("WARNING: install.bat exited with code {0}" -f ${LASTEXITCODE})
     }
 
-    # Verify ImDisk is available at System32
     ${imdiskExe} = "C:\Windows\System32\imdisk.exe"
     if (-not (Test-Path ${imdiskExe})) {
-        throw "ImDisk executable not found at ${imdiskExe}"
+        throw ("ImDisk executable not found at {0}" -f ${imdiskExe})
     }
+    Write-ImDiskLog ("ImDisk found at: {0}" -f ${imdiskExe})
 
-    Write-Host "ImDisk found at: ${imdiskExe}" | Tee-Object -FilePath ${logFile} -Append
-
-    # Create scheduled task for ramdisk activation at boot
-    Write-Host "Creating boot-time ramdisk activation task" | Tee-Object -FilePath ${logFile} -Append
-
+    Write-ImDiskLog "Creating boot-time ramdisk activation scheduled task..."
     ${taskName} = "MAST-ImDisk-Ramdisk"
-    ${taskDescription} = "Create ImDisk 10GB ramdisk at D: on system startup"
-    # TBD: give imdisk.exe parameter with the pre-populated image file
     ${taskAction} = New-ScheduledTaskAction -Execute ${imdiskExe} -Argument "-a -t vm -s 10G -m D: -p `"/fs:ntfs /q /y`""
     ${taskTrigger} = New-ScheduledTaskTrigger -AtStartup
     ${taskPrincipal} = New-ScheduledTaskPrincipal -UserID "NT AUTHORITY\SYSTEM" -LogonType ServiceAccount -RunLevel Highest
-
-    # Remove existing task if it exists
     Unregister-ScheduledTask -TaskName ${taskName} -ErrorAction SilentlyContinue -Confirm:$false
-
     Register-ScheduledTask -TaskName ${taskName} `
-        -Description ${taskDescription} `
+        -Description "Create ImDisk 10GB ramdisk at D: on system startup" `
         -Action ${taskAction} `
         -Trigger ${taskTrigger} `
         -Principal ${taskPrincipal} `
         -ErrorAction Stop | Out-Null
+    Write-ImDiskLog ("Scheduled task created: {0}" -f ${taskName})
 
-    Write-Host "Scheduled task created: ${taskName}" | Tee-Object -FilePath ${logFile} -Append
-
-    # Cleanup temp directory
     Remove-Item -Path ${extractDir} -Recurse -Force -ErrorAction SilentlyContinue
 
-    Write-Host "ImDisk installation completed successfully" | Tee-Object -FilePath ${logFile} -Append
+    Write-ImDiskLog "ImDisk installation completed successfully."
     exit 0
 }
 catch {
-    ${errorMsg} = "ImDisk installation failed: $_"
+    ${errorMsg} = ("ImDisk installation failed: {0}" -f $_)
     Write-Host ${errorMsg}
-    ${errorMsg} | Out-File -FilePath ${logFile} -Append -Encoding UTF8
+    Add-Content -LiteralPath ${logFile} -Encoding UTF8 -Value ${errorMsg}
     exit 1
 }

@@ -236,6 +236,30 @@ try {
         Remove-Item -Recurse -Force -ErrorAction SilentlyContinue ${targetDir}
         Invoke-MastGitCloneObserved -GitExe ${gitExe} -CloneUrl ${cloneUrlUse} -UrlForLog ${logUrlUse} -TargetDir ${targetDir} -RepoLabel ${repoName} -LogDir ${CloneRoot}
 
+        # --- Pull git submodules if .gitmodules is present ---
+        ${gitModulesFile} = Join-Path ${targetDir} '.gitmodules'
+        if (Test-Path -LiteralPath ${gitModulesFile}) {
+            Write-MastProvisionEvent ("git submodule update BEGIN repo={0}" -f ${repoName})
+            ${subArgs} = @('-C', ${targetDir}, 'submodule', 'update', '--init', '--recursive')
+            ${subOut} = Join-Path ${CloneRoot} ("{0}.submodule.stdout.log" -f ${repoName})
+            ${subErr} = Join-Path ${CloneRoot} ("{0}.submodule.stderr.log" -f ${repoName})
+            ${prevPrompt2} = ${env:GIT_TERMINAL_PROMPT}
+            ${env:GIT_TERMINAL_PROMPT} = '0'
+            try {
+                ${ps2} = Start-Process -FilePath ${gitExe} -ArgumentList ${subArgs} -PassThru -Wait -WindowStyle Hidden `
+                    -RedirectStandardOutput ${subOut} -RedirectStandardError ${subErr}
+                try { ${ps2}.Refresh() } catch {}
+                if ($null -ne ${ps2}.ExitCode -and ${ps2}.ExitCode -ne 0) {
+                    ${tailErr2} = ((Get-Content -LiteralPath ${subErr} -ErrorAction SilentlyContinue) | Select-Object -Last 20) -join [Environment]::NewLine
+                    throw ("git submodule update failed exitCode={0}:{1}{2}" -f ${ps2}.ExitCode, [Environment]::NewLine, ${tailErr2})
+                }
+            }
+            finally {
+                if ($null -ne ${prevPrompt2}) { ${env:GIT_TERMINAL_PROMPT} = ${prevPrompt2} } else { Remove-Item Env:\GIT_TERMINAL_PROMPT -ErrorAction SilentlyContinue }
+            }
+            Write-MastProvisionEvent ("git submodule update DONE repo={0}" -f ${repoName})
+        }
+
         # --- Create a per-repo virtualenv at <repo>\.venv ---
         ${venvPath}    = Join-Path ${targetDir} '.venv'
         ${venvPython}  = Join-Path ${venvPath} 'Scripts\python.exe'
@@ -273,6 +297,36 @@ try {
             Write-MastProvisionEvent ("pip SKIP (no requirements.txt) name={0}" -f ${repoName})
             Write-Host "No requirements.txt in ${repoName}, skipping pip install."
         }
+        # --- Register MAST_unit as a Windows service via NSSM ---
+        if (${repoName} -like 'MAST_unit*') {
+            ${nssmExe} = 'C:\Program Files\nssm\nssm.exe'
+            ${serviceName} = 'MAST_unit'
+            # Entry point: adjust if the unit script lives elsewhere in the repo.
+            ${unitEntryPoint} = Join-Path ${targetDir} 'unit\unit.py'
+            ${venvPythonSvc} = Join-Path ${venvPath} 'Scripts\python.exe'
+            if (-not (Test-Path -LiteralPath ${nssmExe})) {
+                Write-Warning "NSSM not found at ${nssmExe}; skipping MAST_unit service registration."
+            } elseif (-not (Test-Path -LiteralPath ${unitEntryPoint})) {
+                Write-Warning ("MAST_unit entry point not found at {0}; skipping service registration." -f ${unitEntryPoint})
+            } else {
+                ${existingSvc} = Get-Service -Name ${serviceName} -ErrorAction SilentlyContinue
+                if ($null -eq ${existingSvc}) {
+                    Write-MastProvisionEvent ("NSSM service register BEGIN name={0}" -f ${serviceName})
+                    & ${nssmExe} install ${serviceName} ${venvPythonSvc} ${unitEntryPoint}
+                    & ${nssmExe} set ${serviceName} AppDirectory ${targetDir}
+                    & ${nssmExe} set ${serviceName} Start SERVICE_AUTO_START
+                    & ${nssmExe} set ${serviceName} AppStdout 'C:\MAST\logs\mast_unit_stdout.log'
+                    & ${nssmExe} set ${serviceName} AppStderr 'C:\MAST\logs\mast_unit_stderr.log'
+                    & ${nssmExe} set ${serviceName} AppRotateFiles 1
+                    & ${nssmExe} set ${serviceName} AppRotateBytes 10485760
+                    Start-Service -Name ${serviceName} -ErrorAction SilentlyContinue
+                    Write-MastProvisionEvent ("NSSM service register DONE name={0}" -f ${serviceName})
+                } else {
+                    Write-MastProvisionEvent ("NSSM service SKIP (already registered) name={0}" -f ${serviceName})
+                }
+            }
+        }
+
         Write-MastProvisionEvent ("repo phase DONE name={0}" -f ${repoName})
     }
 

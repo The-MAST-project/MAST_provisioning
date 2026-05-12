@@ -269,6 +269,8 @@ try {
     } catch { }
 
     Enable-PSRemoting -Force -SkipNetworkProfileCheck
+    Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope LocalMachine -Force
+    Write-BootstrapMsg '  ExecutionPolicy set to RemoteSigned (LocalMachine).' 'Green'
     Set-Item WSMan:\localhost\Service\Auth\Basic -Value $true -Force
     try {
         Set-Item WSMan:\localhost\Service\AllowUnencrypted -Value $true -Force

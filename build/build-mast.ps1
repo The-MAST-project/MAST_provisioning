@@ -16,6 +16,7 @@ param(
     'ascom',
     'chrome',
     'cygwin',
+    'diagnostics',
     'git',
     'mast',
     'mongodb',
@@ -26,6 +27,7 @@ param(
     'python',
     'stage',
     'sysinternals',
+    'vcredist2013',
     'vscode',
     'wireshark',
     'zwo'
