@@ -4,7 +4,6 @@ vault/*
 !vault/README.md
 !vault/creds.json.template
 !vault/.gitkeep
-test-runs/
 
 # Huge (30GB) file
 server/providers/cygwin/assets/astrometry.tgz

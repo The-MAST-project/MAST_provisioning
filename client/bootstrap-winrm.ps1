@@ -55,7 +55,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$script:BootstrapLogDir = Join-Path $env:ProgramData 'MAST\logs'
+$script:BootstrapLogDir = Join-Path $env:SystemDrive 'MAST\logs'
 $script:BootstrapLog = Join-Path $script:BootstrapLogDir 'bootstrap-winrm.log'
 $script:RebootRecommended = $false
 $script:AllowUnencryptedOk = $false

@@ -62,9 +62,9 @@ except ImportError:
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-REPO_ROOT = Path(__file__).parent
+REPO_ROOT = Path(__file__).parent.parent
 VAULT_CREDS = REPO_ROOT / "vault" / "creds.json"
-LOG_ROOT = REPO_ROOT / "test-runs"
+LOG_ROOT = Path(r"C:\MAST\logs\dev")
 
 VBOXMANAGE = Path(r"C:\Program Files\Oracle\VirtualBox\VBoxManage.exe")
 

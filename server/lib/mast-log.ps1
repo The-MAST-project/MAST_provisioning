@@ -43,3 +43,36 @@ function Get-MastVerifyDir {
     $null = New-Item -ItemType Directory -Path $d -Force -ErrorAction SilentlyContinue
     return $d
 }
+
+# ---------------------------------------------------------------------------
+# Provisioning-server log paths (C:\MAST\logs\prov\)
+# Dot-source this file in check-and-provision.ps1 instead of duplicating paths.
+# ---------------------------------------------------------------------------
+
+function Get-MastProvLogsBase {
+    [CmdletBinding()]
+    param()
+    $d = Join-Path (Get-MastLogsBase) 'prov'
+    $null = New-Item -ItemType Directory -Path $d -Force -ErrorAction SilentlyContinue
+    return $d
+}
+
+function Get-MastProvSessionDir {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$RunId)
+    $d = Join-Path (Get-MastProvLogsBase) ('sessions\' + $RunId)
+    $null = New-Item -ItemType Directory -Path $d -Force -ErrorAction SilentlyContinue
+    return $d
+}
+
+function Get-MastProvActivityCsv {
+    [CmdletBinding()]
+    param()
+    return (Join-Path (Get-MastProvLogsBase) 'activity.csv')
+}
+
+function Get-MastProvLastErrLog {
+    [CmdletBinding()]
+    param()
+    return (Join-Path (Get-MastProvLogsBase) 'last-error.log')
+}

@@ -39,36 +39,53 @@ pipeline against a single VirtualBox VM on the same host.
 ```
 MAST_provisioning/
 |-- build/
-|   |-- build-mast.ps1                # Builds staging\<host>\01-provisioning\
-|   |-- run-build.ps1                 # Convenience wrapper
-|   `-- make-wcd-package.ps1          # Offline (Windows Configuration Designer) package
+|   `-- build-mast.ps1                # Assembles staging\<host>\01-provisioning\
 |-- client/
-|   |-- bootstrap-winrm.cmd         # Run as Administrator: starts bootstrap (avoids Notepad on .ps1)
-|   |-- bootstrap-winrm.ps1         # Manual first-time: mast user, WinRM, computer name
-|   |-- prepare-mast-client.ps1       # Run after bootstrap (hostname, HTTPS, WU policy)
+|   |-- bootstrap-winrm.ps1           # First-time unit setup: mast user, WinRM HTTP
+|   |-- prepare-mast-client.ps1       # Second-stage: hostname, WinRM HTTPS, WU policy
 |   |-- execute-mast-provisioning.ps1 # Runs on the unit; iterates through commands.json
 |   `-- onboard-mast-unit.ps1         # One-shot Stages 0-5 bootstrap for a new unit
 |-- server/
+|   |-- lib/mast-log.ps1              # Canonical log path definitions (unit + prov server)
 |   |-- lib/provisioning.psm1         # Shared PS helpers
 |   |-- providers/<module>/...        # Per-module install logic + assets
 |   |-- check-and-provision.ps1       # Autonomous loop -- the production driver
 |   |-- install-scheduled-task.ps1    # Wires check-and-provision.ps1 into Task Scheduler
 |   `-- unit-registry.json.template   # Per-unit metadata, copy to unit-registry.json
 |-- tools/
-|   `-- unit/vm-fix-winrm.ps1         # Break-glass WinRM recovery (run locally on unit)
+|   `-- run-remote-script-winrm.py    # Ad hoc remote PS1 runner via WinRM HTTP Basic
+|-- vm/                               # VirtualBox and dev-host helpers (dev/test only)
+|   |-- admin-prep.ps1                # One-time elevated host prep (PATH, ICMP firewall)
+|   |-- build-autounattend-iso.ps1    # Builds autounattend ISO for unattended Windows install
+|   |-- run-prov-test.py              # Dev-cycle test orchestrator (not the production driver)
+|   |-- sync-dev-unit-hosts.ps1       # Update Windows hosts file for VirtualBox DHCP guest
+|   |-- vbox-create-unit.ps1          # Create the dev VirtualBox VM
+|   |-- vbox-recreate-unit.ps1        # Full VM teardown and rebuild
+|   `-- vm-fix-winrm.ps1              # Break-glass WinRM recovery (run locally on unit)
 |-- vault/                            # Secrets, gitignored
 |   |-- creds.json                    # WinRM credentials for units
 |   |-- tokens/mast_github.txt        # GitHub PAT
 |   `-- nomachine-licenses/*.lic
 |-- staging/<host>/01-provisioning/   # Build output, gitignored
-|-- admin-prep.ps1                    # One-time elevated host prep (PATH, firewall)
-|-- vbox-create-unit.ps1              # Helper to create the dev VirtualBox VM
-|-- build-autounattend-iso.ps1        # Builds an Autounattend ISO for unattended Windows install
-|-- run-prov-test.py                  # Throwaway test orchestrator (dev only)
 |-- DECISIONS.md
-|-- autonomous-provisioning.md
+|-- autonomous-provisioning-requirements.md
 `-- README.md
 ```
+
+### Log locations
+
+| Who writes | Where |
+|------------|-------|
+| Unit provisioning execution | `C:\MAST\logs\sessions\<timestamp>\` |
+| Unit smoke markers | `C:\MAST\logs\smoke\` |
+| Unit verify markers | `C:\MAST\logs\verify\` |
+| Unit remote-run transcripts | `C:\MAST\logs\remote-runs\<timestamp>_<run_id>\` |
+| Unit onboarding | `C:\MAST\logs\onboarding\` |
+| Prov server autonomous loop | `C:\MAST\logs\prov\sessions\run-<timestamp>\` |
+| Prov server activity history | `C:\MAST\logs\prov\activity.csv` |
+| Dev test cycles (run-prov-test.py) | `C:\MAST\logs\dev\<timestamp>-cycle<N>\` |
+
+All paths are defined in `server/lib/mast-log.ps1`; scripts import it rather than duplicating the base path.
 
 ## Module execution order
 
@@ -149,8 +166,9 @@ contract, maintenance windows).
 
 ## Dev/test loop (Windows host + VirtualBox VM)
 
-This is the bring-up loop used while debugging modules; the throwaway Python
-orchestrator (`run-prov-test.py`) drives it.
+This is the bring-up loop used while debugging modules. The Python orchestrator
+`vm/run-prov-test.py` drives it. It is **dev-only**; the production driver is
+`server/check-and-provision.ps1` running under Task Scheduler.
 
 ### One-time host setup
 
@@ -160,7 +178,7 @@ winget install Python.Python.3.12   # if not already installed
 pip install pywinrm
 
 # Elevated (once):
-.\admin-prep.ps1                     # adds VBox + Python to Machine PATH, opens ICMP
+.\vm\admin-prep.ps1                  # adds VBox + Python to Machine PATH, opens ICMP
 ```
 
 Then create `vault/creds.json` from `vault/creds.json.template`:
@@ -180,13 +198,13 @@ Two paths: an unattended path (recommended) and a manual path.
 ```powershell
 # 1) Build a small autounattend ISO (~1 MB). It contains Autounattend.xml plus
 #    bootstrap-winrm.cmd + bootstrap-winrm.ps1 on the ISO root (not executed automatically).
-.\build-autounattend-iso.ps1
+.\vm\build-autounattend-iso.ps1
 # Optional: target ARM64 IoT LTSC and pick a specific edition
-# .\build-autounattend-iso.ps1 -Architecture arm64 -WindowsEdition "Windows 11 IoT Enterprise LTSC"
+# .\vm\build-autounattend-iso.ps1 -Architecture arm64 -WindowsEdition "Windows 11 IoT Enterprise LTSC"
 
 # 2) Create the VM with both ISOs mounted:
-.\vbox-create-unit.ps1 -IsoPath C:\path\to\Win11_or_IoTLTSC.iso `
-                       -AutounattendIso .\autounattend-mast.iso
+.\vm\vbox-create-unit.ps1 -IsoPath C:\path\to\Win11_or_IoTLTSC.iso `
+                          -AutounattendIso .\autounattend-mast.iso
 
 # 3) Start with GUI and wait ~15-25 min for Windows to finish:
 VBoxManage startvm mast-unit --type gui
@@ -201,7 +219,7 @@ VBoxManage startvm mast-unit --type gui
 #    Confirm the script prints [OK] before you continue.
 
 # 5) After reboot if prompted, log in as mast / physics. On the VirtualBox host (elevated):
-.\tools\sync-dev-unit-hosts.ps1
+.\vm\sync-dev-unit-hosts.ps1
 
 # 6) Confirm reachability (use the same mastNN as in step 4):
 Test-NetConnection mast05 -Port 5985
@@ -213,7 +231,7 @@ Invoke-Command -ComputerName mast05 -Credential $cred `
     -ArgumentList @{HostName='mast05'; Provider='192.168.56.1'}
 
 # 8) Power off, snapshot:
-.\vbox-create-unit.ps1 -SnapshotOnly
+.\vm\vbox-create-unit.ps1 -SnapshotOnly
 ```
 
 Defaults baked into the answer file for the first local account: `user` / `password1`
@@ -226,7 +244,7 @@ timezone default to `en-US` and `Israel Standard Time` unless overridden on
 
 ```powershell
 # Create the VM (no Windows install yet):
-.\vbox-create-unit.ps1 -IsoPath C:\path\to\Win11_or_IoTLTSC.iso
+.\vm\vbox-create-unit.ps1 -IsoPath C:\path\to\Win11_or_IoTLTSC.iso
 
 # Start it and walk through Windows setup interactively:
 VBoxManage startvm mast-unit --type gui
@@ -245,7 +263,7 @@ VBoxManage startvm mast-unit --type gui
 #   3) Power off cleanly.
 
 # Take the snapshots:
-.\vbox-create-unit.ps1 -SnapshotOnly
+.\vm\vbox-create-unit.ps1 -SnapshotOnly
 ```
 
 Either path produces two snapshots: `clean-state` (post-Windows install, before or
@@ -256,19 +274,19 @@ after manual bootstrap depending when you snapshot) and `post-prepare` (after
 
 ```powershell
 # Single cycle, all modules (--host-unit is the WinRM target: hostname preferred):
-python .\run-prov-test.py --host-unit mast01 --hostname mast01
+python .\vm\run-prov-test.py --host-unit mast01 --hostname mast01
 
 # Just the build (no transfer / execute):
-python .\run-prov-test.py --host-unit mast01 --hostname mast01 --build-only
+python .\vm\run-prov-test.py --host-unit mast01 --hostname mast01 --build-only
 
 # Three cycles, restoring the post-prepare snapshot between each:
-python .\run-prov-test.py --host-unit mast01 --hostname mast01 --repeat 3
+python .\vm\run-prov-test.py --host-unit mast01 --hostname mast01 --repeat 3
 
 # Subset of modules (faster iteration on a single problem):
-python .\run-prov-test.py --host-unit mast01 --hostname mast01 --modules python,mast
+python .\vm\run-prov-test.py --host-unit mast01 --hostname mast01 --modules python,mast
 ```
 
-Logs land in `test-runs/<timestamp>-cycle<N>/results.json`.
+Cycle logs land in `C:\MAST\logs\dev\<timestamp>-cycle<N>\results.json`.
 
 ---
 
@@ -314,4 +332,4 @@ Never commit secrets, tokens, or `.lic` files.
 ## See also
 
 - [DECISIONS.md](DECISIONS.md) - architecture decisions, in chronological order
-- [autonomous-provisioning.md](autonomous-provisioning.md) - design of the autonomous loop
+- [autonomous-provisioning-requirements.md](autonomous-provisioning-requirements.md) - design of the autonomous loop
