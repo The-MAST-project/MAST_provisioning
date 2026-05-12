@@ -132,6 +132,10 @@ manifest** below.
 ]
 ```
 
+The per-unit `modules` array is the seed for future profile-based provisioning: different
+units can already receive different module sets by editing their registry entry. See
+**Unit profiles (future hardware variation)** in Phase 2 for the fuller design.
+
 #### 2. Build Manifest (`build-manifest.json`) **[DONE]**
 
 Written by `build-mast.ps1` after a successful build. Contains a content hash (or version
@@ -181,8 +185,8 @@ for each unit in unit-registry.json:
   3. Query the unit's installed-manifest.json via WinRM
      - if payload_hash matches -> log "up to date", skip
 
-  4. Transfer staging payload to unit via WinRM
-     - Invoke-Command + Copy-Item -ToSession
+  4. Transfer staging payload to unit via SMB pull
+     - Invoke-Command -> net use \\prov-server\mast-staging + robocopy
 
   5. Execute provisioning on unit
      - Invoke-Command -> execute-mast-provisioning.ps1
@@ -206,18 +210,32 @@ installed and activated on the provisioning server; this is blocked on Phase 1 w
 
 `check-and-provision.ps1` currently uses `Copy-Item -ToSession` (WinRM push). This works
 in the dev/test environment but requires `TrustedHosts` configuration on the provisioning
-server (an elevated operation -- see Phase 1).
+server (an elevated operation). **The production mechanism is SMB pull** (see below);
+the WinRM push is a dev-only shortcut to be retired.
 
-**Options for production:**
+**Production transfer: unit pulls from prov server SMB share**
 
-- **Option A**: CredSSP on prov server (`Enable-WSManCredSSP -Role Client`) -- allows
-  credential delegation; unit receives pushes via `Copy-Item -ToSession`.
-- **Option B (recommended)**: Unit pulls from prov server's SMB share (reverse direction,
-  no double-hop) -- prov server exposes `\\prov-server\mast-staging`; unit runs
-  `net use` + `xcopy` triggered via a short WinRM command.
-- **Option C**: Unit pulls via HTTP from prov server.
+The provisioning server exposes `\\<prov-server>\mast-staging` as an SMB share (created
+by `build-mast.ps1`). The orchestrator sends a short WinRM command to the unit triggering
+`net use` + `robocopy` (or `xcopy`) to pull the staged payload. No credential forwarding
+or CredSSP is required on the unit side; the share credential is passed explicitly in the
+`net use` call.
 
-Migration to Option B is tracked under **Phase 1 - Provisioning server privilege model**.
+**Credential handling:** the SMB share requires authenticated access. The provisioning
+service account credentials (or a dedicated read-only share account) must be stored
+securely on the unit side or passed at call time via the WinRM command. This is more
+involved than a public HTTP endpoint but avoids the double-hop problem and keeps the
+prov server's WinRM client unprivileged.
+
+**Required setup on prov server:**
+- SMB share `mast-staging` pointing at the staging output directory (already created by
+  `build-mast.ps1` when not run with `-SkipSmbShare`).
+- Share and NTFS permissions scoped to the unit service account or a dedicated
+  `mast-transfer` account.
+- Firewall rule allowing TCP 445 inbound from the unit subnet.
+
+Migration from `Copy-Item -ToSession` to SMB pull is tracked under **Phase 1 -
+Provisioning server privilege model**.
 
 ---
 
@@ -430,19 +448,17 @@ required for core operation.
    or `Enable-PSRemoting` on the orchestrator machine. This repo already includes
    **`tools/run-remote-script-winrm.py`** for this purpose.
 
-3. **Large payload delivery (`staging/` artifacts)** should follow a **reverse pull** or
-   **already-open share** model:
-   - **Unit pulls** via **HTTP** or **SMB** from the provisioning server; orchestrator
-     only sends a **short** remote command (achievable via `pywinrm`).
-   - Avoid requiring **CredSSP** or machine-wide **TrustedHosts** on the server unless
-     explicitly accepted as an operational cost.
+3. **Large payload delivery (`staging/` artifacts)** uses **SMB pull**: the unit connects
+   to `\\<prov-server>\mast-staging` and copies its payload using `net use` + `robocopy`.
+   The orchestrator sends only a short WinRM command to trigger the pull; no credential
+   forwarding or CredSSP is required on the provisioning server side. See **Transfer:
+   Prov Server -> Unit** for share setup and credential handling.
 
 4. **`check-and-provision.ps1` today** uses **`New-PSSession`** and
-   **`Copy-Item -ToSession`**. **Migration requirement:** either migrate this driver to
-   **Basic HTTP WinRM** (same auth model as `run-remote-script-winrm.py`) plus pull-based
-   file transfer, or document and automate **one-time** elevated server prep -- but the
-   **target end state** is **non-elevated service + hostname-based WinRM Basic + pull or
-   chunked transfer**.
+   **`Copy-Item -ToSession`**. **Migration requirement:** replace the push transfer with
+   an SMB pull triggered via a short WinRM command, and migrate remote control commands
+   to **WinRM Basic HTTP** (same model as `run-remote-script-winrm.py`). The target end
+   state is **non-elevated service + hostname-based WinRM Basic + SMB pull transfer**.
 
 ---
 
@@ -527,14 +543,17 @@ While stabilizing the end-to-end flow against a disposable VirtualBox VM, the re
 on several **test-mode exceptions**. These must be eliminated before the autonomous
 provisioning system is declared production-ready for physical units.
 
-#### 1. No SMB share required (dev/test)
+#### 1. SMB share bypassed in dev/test
 
 - **Current exception:** `build-mast.ps1` can run non-elevated with `-SkipSmbShare` (and
-  `check-and-provision.ps1` passes it by default), relying on WinRM `Copy-Item -ToSession` push.
-- **Why it's a blocker:** production may still need an alternate transfer mode (SMB pull,
-  BITS/robocopy, etc.) for large fleets or when WinRM copy is slow/fragile.
-- **Exit criteria:** choose and harden the production transfer mechanism; remove reliance
-  on "non-elevated build" as an implicit assumption.
+  `check-and-provision.ps1` passes it by default), falling back to WinRM
+  `Copy-Item -ToSession` push.
+- **Why it's a blocker:** production transfer is SMB pull. The share must exist, be
+  permissioned, and be reachable from the unit. `-SkipSmbShare` must not be used in
+  production runs.
+- **Exit criteria:** `build-mast.ps1` always creates the SMB share in production mode;
+  share account credentials are provisioned and stored securely; `check-and-provision.ps1`
+  triggers SMB pull via a short WinRM command instead of pushing via `Copy-Item -ToSession`.
 
 #### 2. Paid / sensitive artifacts skipped (licenses)
 
@@ -610,6 +629,27 @@ shutdown, port reuse) and **cleanup** semantics compatible with an always-on hos
 ---
 
 ### Package lifecycle, MAST version pinning, rollback, and observability
+
+#### Dropping in a newer package version
+
+Upgrading a package must require **no code changes** -- only replacing the installer asset
+and bumping the version reference:
+
+1. Drop the new installer (EXE, MSI, ZIP, TGZ, etc.) into the provider's `assets/`
+   directory, replacing or alongside the old file.
+2. Update the version reference in `module.json` (or a dedicated version field) to point
+   at the new asset.
+3. Run `build-mast.ps1` -- the new asset is staged, the `payload_hash` changes, and on
+   the next provisioning cycle every unit that does not yet have the new hash will be
+   updated automatically.
+
+No other script changes should be necessary for a routine version bump. A provider's
+`provide-<name>.ps1` must therefore **not** hard-code installer filenames or version
+strings; it must read them from `module.json` or derive them from the asset present in
+`AssetsRoot` (e.g. by glob pattern). This also means adding a brand-new package to the
+fleet is the same operation: add a provider directory with `module.json` and
+`provide-<name>.ps1`, drop in the asset, add the module name to the relevant entries in
+`unit-registry.json`, and the next build+provision cycle picks it up.
 
 #### Per-package uninstall and reinstall
 
@@ -765,6 +805,44 @@ retried on the next day's maintenance run.
 | Reboot (if required) | Inside maintenance window, >= 30 min remaining |
 | Smoke test re-run post-reboot | Immediately after reboot completes |
 | Hash check, skip-if-current | Any time |
+
+---
+
+### Unit profiles (future hardware variation) -- placeholder
+
+**Current state:** All fleet units are identical hardware running the same module set.
+Every entry in `unit-registry.json` receives the same `modules` list and no
+hardware-specific configuration exists.
+
+**Future requirement:** As the fleet grows, hardware may diverge -- different camera
+models, mount types, focusers, or other attached instruments. When that happens, a single
+flat module list per unit will not be sufficient; the provisioning system must be able to
+assign a **profile** to each unit that determines which packages are installed, which
+configuration values are applied, and which smoke checks are expected.
+
+**Design constraints to keep in mind now** (no implementation required today):
+
+- The `modules` array per unit in `unit-registry.json` is already the right primitive.
+  Do not collapse it into a fleet-wide default that every unit inherits -- per-unit
+  module lists must remain first-class.
+- A future `profile` field (e.g. `"profile": "standard-scope"`) could map to a named
+  module set and configuration block defined elsewhere, so `unit-registry.json` stays
+  concise while the profile definition lives in a separate file.
+- Provider scripts (`provide-<name>.ps1`) must not hard-code assumptions that all units
+  share the same hardware. Any hardware-specific configuration (driver paths, COM port
+  assignments, camera serial numbers) should be injectable via parameters or a per-unit
+  config block, not baked into the script.
+- Build and drift-detection logic must remain correct when two units have different module
+  sets: the `payload_hash` for `mast01` and `mast02` may legitimately differ if they
+  carry different profiles, and the provisioning server must not treat that as an error.
+- Smoke checks are profile-specific: a unit without a ZWO camera should not be expected
+  to pass a ZWO smoke check. The smoke check set must be derived from the unit's actual
+  module list, not a global list.
+
+**When this becomes active work:** when the first unit is onboarded with a hardware
+configuration that differs from the standard setup. At that point, promote this
+placeholder into a concrete implementation plan, add a `profile` schema to
+`unit-registry.json`, and audit all provider scripts for hard-coded hardware assumptions.
 
 ---
 
@@ -991,7 +1069,7 @@ summaries; they do not replace structured logging.
 | 2 | `payload_hash` generation in `build-mast.ps1` -> write `build-manifest.json` with git ref fields | **[DONE]** |
 | 3 | Unit-side effective state: inspection-based probe (or hardened `installed-manifest.json`) | **Phase 1** |
 | 4 | Per-module uninstall/reinstall paths; `build-mast.ps1` support for pinned git refs and rollback | **Phase 2** |
-| 5 | Migrate `check-and-provision.ps1` to non-elevated WinRM Basic + pull-based file transfer | **Phase 1** |
+| 5 | Migrate `check-and-provision.ps1` to non-elevated WinRM Basic + SMB pull transfer (retire `Copy-Item -ToSession`; provision share credentials) | **Phase 1** |
 | 6 | Confirm `git lfs pull` works on prov server (deploy key or stored credential) | **Phase 1** |
 | 7 | Task Scheduler trigger (or service wrapper) on the prov server | **[PARTIAL]** - installer script exists; task not yet active |
 | 8 | Manual dry-runs (`check-and-provision.ps1 -DryRun`) to validate discovery + hash logic | **Phase 1** |
