@@ -83,7 +83,8 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$RepoRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
+$ScriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
+$RepoRoot = $ScriptDir
 
 $totalSw = [System.Diagnostics.Stopwatch]::StartNew()
 $phaseSw = [System.Diagnostics.Stopwatch]::StartNew()

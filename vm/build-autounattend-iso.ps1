@@ -104,11 +104,12 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$RepoRoot = if ($PSScriptRoot) { $PSScriptRoot }
-            elseif ($PSCommandPath) { Split-Path -Parent $PSCommandPath }
-            elseif ($MyInvocation.MyCommand.Path) { Split-Path -Parent $MyInvocation.MyCommand.Path }
-            else { (Get-Location).Path }
-if (-not $OutputIso) { $OutputIso = Join-Path $RepoRoot 'autounattend-mast.iso' }
+$ScriptDir = if ($PSScriptRoot) { $PSScriptRoot }
+             elseif ($PSCommandPath) { Split-Path -Parent $PSCommandPath }
+             elseif ($MyInvocation.MyCommand.Path) { Split-Path -Parent $MyInvocation.MyCommand.Path }
+             else { (Get-Location).Path }
+$RepoRoot = Split-Path -Parent $ScriptDir
+if (-not $OutputIso) { $OutputIso = Join-Path $ScriptDir 'autounattend-mast.iso' }
 
 function Write-Headline($msg) { Write-Host "`n=== $msg ===" -ForegroundColor Cyan }
 
