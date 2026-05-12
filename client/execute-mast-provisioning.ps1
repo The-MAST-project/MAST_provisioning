@@ -19,13 +19,29 @@ New-Item -ItemType Directory -Path ${logDir} -Force | Out-Null
 ${smokeDir} = Get-MastSmokeDir
 ${logFile} = Join-Path ${logDir} "provisioning-execute.log"
 
+# State under <SystemDrive>\MAST (same tree as logs); avoid ProgramData for execute lock.
+${mastRoot} = Join-Path ${env:SystemDrive} "MAST"
+${null} = New-Item -ItemType Directory -Path ${mastRoot} -Force -ErrorAction SilentlyContinue
+
+# Remove stale lock from previous layout (ProgramData) so a path change does not block forever.
+${legacyLock} = Join-Path ${env:ProgramData} "MAST\execute.lock"
+if (Test-Path ${legacyLock}) {
+    try {
+        Remove-Item -Force ${legacyLock} -ErrorAction Stop
+    } catch {
+        Write-Warning "Could not remove legacy lock at ${legacyLock}: $($_.Exception.Message)"
+    }
+}
+
 # Prevent overlapping provisioning runs on the same unit.
-${lockPath} = Join-Path ${env:ProgramData} "MAST\execute.lock"
+${lockPath} = Join-Path ${mastRoot} "execute.lock"
 if (Test-Path ${lockPath}) {
     ${lockInfo} = ''
-    try { ${lockInfo} = Get-Content ${lockPath} -Raw -ErrorAction SilentlyContinue } catch {}
-    Write-Error "Another provisioning run appears to be in progress (lock file exists at ${lockPath}). ${lockInfo}"
-    exit 2
+    try { ${lockInfo} = (Get-Content ${lockPath} -Raw -ErrorAction SilentlyContinue).Trim() } catch {}
+    if (${lockInfo}) {
+        ${lockInfo} = (${lockInfo} -replace "`r`n", ' ' -replace "`n", ' ').Trim()
+    }
+    throw "Another provisioning run is in progress (lock: ${lockPath}). If no run is active, delete that file. Details: ${lockInfo}"
 }
 try {
     "pid=$PID`nstarted=$(Get-Date -Format s)`nstaging=${StagingPath}" | Out-File -FilePath ${lockPath} -Encoding UTF8 -Force
@@ -138,8 +154,7 @@ try {
         # Only written on a fully-clean run (failCount == 0).
         # ---------------------------------------------------------------
         ${buildManifest}     = Join-Path ${StagingPath} "build-manifest.json"
-        ${mastDataRoot}      = Join-Path ${env:ProgramData} "MAST"
-        ${installedManifest} = Join-Path ${mastDataRoot} "installed-manifest.json"
+        ${installedManifest} = Join-Path ${mastRoot} "installed-manifest.json"
         if (Test-Path ${buildManifest}) {
             try {
                 ${m} = Get-Content ${buildManifest} -Raw | ConvertFrom-Json

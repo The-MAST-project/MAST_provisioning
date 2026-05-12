@@ -136,7 +136,7 @@ Each run:
 1. Reads `server/unit-registry.json` for the unit list.
 2. For every reachable unit: builds the latest staging payload, compares its
    `build-manifest.json` `payload_hash` against the unit's
-   `C:\ProgramData\MAST\installed-manifest.json`, and skips if matching.
+   `C:\MAST\installed-manifest.json`, and skips if matching.
 3. Otherwise WinRM-pushes the staged payload to `C:\mast-staging` on the unit
    and runs `execute-mast-provisioning.ps1`.
 4. Verifies smoke markers and writes structured logs to
@@ -278,7 +278,7 @@ Logs land in `test-runs/<timestamp>-cycle<N>/results.json`.
 - `C:\Python312\python.exe --version` succeeds
 - `C:\MAST\repos\` exists and has cloned repos with virtualenvs
 - Every module wrote a non-empty `C:\MAST\logs\smoke\<module>-smoke.txt`
-- `C:\ProgramData\MAST\installed-manifest.json` exists and matches the build's
+- `C:\MAST\installed-manifest.json` exists and matches the build's
   `payload_hash`
 
 ---

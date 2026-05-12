@@ -4,7 +4,8 @@
 
 .DESCRIPTION
   - Looks for installers under .\ascom\assets by default (override with -AssetsRoot).
-  - Enables NetFx3 using DISM/Enable-WindowsOptionalFeature.
+  - Enables NetFx3 using Enable-WindowsOptionalFeature, then (if that fails under WinRM)
+    a one-shot scheduled task running dism.exe as SYSTEM, then in-session DISM with media sources.
   - Installs:
       * ASCOMPlatform710.4707.exe
       * AscomDeveloper662.4294.NewCertificate (exe or msi; extension optional)
@@ -120,34 +121,90 @@ function Invoke-Proc {
   }
 }
 
+function Invoke-DismViaSystemTask {
+  param(
+    [Parameter(Mandatory)][string]$Arguments,
+    [int]$TimeoutMinutes = 45
+  )
+  # WinRM often returns "Access is denied" for Enable-WindowsOptionalFeature even for local
+  # Administrators. A one-shot scheduled task running dism.exe as SYSTEM usually succeeds.
+  $taskName = 'MAST-NetFx3-' + ([guid]::NewGuid().ToString('N').Substring(0, 12))
+  $dismExe = Join-Path $env:SystemRoot 'System32\dism.exe'
+  if (-not (Test-Path -LiteralPath $dismExe)) { $dismExe = 'dism.exe' }
+  $action = New-ScheduledTaskAction -Execute $dismExe -Argument $Arguments
+  $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+  $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+    -ExecutionTimeLimit ([TimeSpan]::FromHours(2)) -MultipleInstances IgnoreNew
+  try {
+    Register-ScheduledTask -TaskName $taskName -Action $action -Principal $principal -Settings $settings -Force | Out-Null
+  } catch {
+    Write-Warning "Could not register SYSTEM DISM task: $($_.Exception.Message)"
+    return -1
+  }
+  try {
+    Start-ScheduledTask -TaskName $taskName
+    $deadline = (Get-Date).AddMinutes($TimeoutMinutes)
+    while ((Get-Date) -lt $deadline) {
+      $st = Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
+      if ($st.State -ne 'Running') { break }
+      Start-Sleep -Seconds 4
+    }
+    $st = Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
+    if ($st.State -eq 'Running') {
+      Write-Warning "SYSTEM DISM task still Running after ${TimeoutMinutes}m."
+      return -2
+    }
+    return [int](Get-ScheduledTaskInfo -TaskName $taskName).LastTaskResult
+  } finally {
+    try { Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue } catch { }
+    Start-Sleep -Milliseconds 500
+    Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
+  }
+}
+
 function Enable-NetFx3Feature {
   param([string]$FoDSource)
   Write-Host "Enabling .NET Framework 3.5 (NetFx3)..."
   try {
-    # First attempt: standard Enable-WindowsOptionalFeature online
     Enable-WindowsOptionalFeature -Online -FeatureName NetFx3 -All -NoRestart -ErrorAction Stop | Out-Null
-    Write-Host "NetFx3 enabled (online)."
+    Write-Host "NetFx3 enabled (Enable-WindowsOptionalFeature online)."
     return $true
   } catch {
-    Write-Warning "Online enable failed: $($_.Exception.Message)"
+    Write-Warning "Enable-WindowsOptionalFeature failed: $($_.Exception.Message)"
   }
 
   $candidateSources = @()
   if ($FoDSource) { $candidateSources += $FoDSource }
-  $candidateSources += @("A:\sources\sxs","D:\sources\sxs","E:\sources\sxs","F:\sources\sxs","G:\sources\sxs")
+  $candidateSources += @('A:\sources\sxs', 'D:\sources\sxs', 'E:\sources\sxs', 'F:\sources\sxs', 'G:\sources\sxs')
 
-  foreach ($src in $candidateSources | Get-Unique) {
-    if (Test-Path $src) {
-      Write-Host "Trying NetFx3 with source: $src"
+  $dismTries = @('/Online /Enable-Feature /FeatureName:NetFx3 /All /NoRestart /Quiet')
+  foreach ($src in ($candidateSources | Get-Unique)) {
+    if (Test-Path -LiteralPath $src) {
+      $dismTries += "/Online /Enable-Feature /FeatureName:NetFx3 /All /NoRestart /LimitAccess /Source:$src /Quiet"
+    }
+  }
+
+  foreach ($dismArgs in $dismTries) {
+    Write-Host "Trying NetFx3 via SYSTEM scheduled task: dism.exe $dismArgs"
+    $rc = Invoke-DismViaSystemTask -Arguments $dismArgs
+    if ($rc -eq 0 -or $rc -eq 3010) {
+      if ($rc -eq 3010) { Write-Warning "NetFx3: DISM reported success with exit 3010 (reboot may be required)." }
+      else { Write-Host "NetFx3 enabled (SYSTEM DISM)." }
+      return $true
+    }
+    Write-Warning "SYSTEM DISM exit $rc for: $dismArgs"
+  }
+
+  foreach ($src in ($candidateSources | Get-Unique)) {
+    if (Test-Path -LiteralPath $src) {
+      Write-Host "Trying NetFx3 in-session DISM with source: $src"
       try {
-        # DISM with source (and LimitAccess to avoid WU)
         & dism.exe /Online /Enable-Feature /FeatureName:NetFx3 /All /LimitAccess /Source:$src | Out-Null
-        if ($LASTEXITCODE -eq 0) {
-          Write-Host "NetFx3 enabled from source: $src"
+        if ($LASTEXITCODE -eq 0 -or $LASTEXITCODE -eq 3010) {
+          Write-Host "NetFx3 enabled from source (in-session): $src"
           return $true
-        } else {
-          Write-Warning "DISM returned $LASTEXITCODE for source $src"
         }
+        Write-Warning "DISM returned $LASTEXITCODE for source $src"
       } catch {
         Write-Warning "DISM exception for ${src}: $($_.Exception.Message)"
       }

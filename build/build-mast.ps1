@@ -390,7 +390,7 @@ if (${Modules} -contains 'mast') {
 # ---------------------------------------------------------------------------
 # build-manifest.json - payload fingerprint for autonomous drift detection.
 # Consumed by check-and-provision.ps1 to decide whether a unit needs an update,
-# and copied to C:\ProgramData\MAST\installed-manifest.json on the unit by
+# and copied to C:\MAST\installed-manifest.json on the unit by
 # execute-mast-provisioning.ps1 once provisioning succeeds.
 # ---------------------------------------------------------------------------
 function Get-PayloadHash {

@@ -228,7 +228,7 @@ foreach ($unit in $units) {
             # 3. Read installed-manifest.json (if any)
             # ---------------------------------------------------------------
             $installed = Invoke-Command -Session $session -ScriptBlock {
-                $p = 'C:\ProgramData\MAST\installed-manifest.json'
+                $p = 'C:\MAST\installed-manifest.json'
                 if (Test-Path $p) { Get-Content $p -Raw | ConvertFrom-Json } else { $null }
             }
             $installedHash = if ($installed) { $installed.payload_hash } else { $null }

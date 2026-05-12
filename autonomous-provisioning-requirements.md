@@ -81,6 +81,78 @@ No Mac host involvement at runtime. The Mac is only used to:
 
 ---
 
+## Single provisioning server
+
+**Requirement:** The fleet uses **exactly one** long-lived Windows provisioning machine. There is
+no multi-master orchestration problem to solve at the control-plane layer; autonomous design,
+credentials, logging, and operational runbooks should assume **one** authoritative host runs
+the scheduled provisioning loop (`check-and-provision.ps1` or its successor). Other machines may
+still push git changes or view logs, but **only this provisioning server** drives unit updates on
+cadence.
+
+---
+
+## Unit-side provisioning execution control (replace lock-file liability)
+
+`client/execute-mast-provisioning.ps1` (**implemented today**) uses a simple **lock file**
+(`C:\MAST\execute.lock`) to prevent overlapping provisioning runs on the same unit.
+That pattern is a **liability** for steady-state operations:
+
+- A crashed guest process, dropped WinRM session, or forced reboot can leave the lock file in
+  place and **block all future provisioning** until someone deletes it manually.
+- It does not record **lease expiry**, **correlation IDs**, or **which orchestrator run** owns
+  the critical section, which hurts debugging and observability.
+- It does not compose cleanly with maintenance windows, intentional operator takeover, or
+  fleet-wide status surfaces described elsewhere in this document.
+
+**Requirement:** Replace reliance on a sticky lock file with a **more elegant and robust**
+mechanism on each unit that still guarantees **at most one** provisioning execution mutating the
+machine at a time. Because there is **only one provisioning server**, mutual exclusion is for
+**serializing** autonomous runs, **ad hoc remote scripts**, and **operator-initiated** installs ---
+not for distributed leader election across multiple prov hosts.
+
+Acceptable directions (pick one coherent approach and document it; combinations must stay simple):
+
+- A **Windows scheduled task** or small **Windows service** that **owns** the provisioning
+  execution slot (queue depth 1, explicit states, timeouts, and structured logs).
+- A **kernel-backed mutex or named semaphore** with **timeouts** and stale-holder detection
+  (for example tied to PID + heartbeat file updated by the owning process).
+- A **lease record** under `C:\ProgramData\MAST\status\` written **atomically** (temp file then
+  rename), carrying **TTL**, **run_id**, **started_utc**, and optional **held_by** identity so the
+  sole provisioning server can **poll**, **expire stale leases**, or follow a documented break-glass
+  procedure without guessing.
+
+Whatever replaces the lock must: **prevent overlapping installs**; **recover without manual SSH
+or RDP** after typical failure modes (or bounded operator steps if recovery is impossible); remain
+correct when **only one** provisioning machine drives automation; and expose enough state for
+**logs and metrics** (aligned with **Observability**).
+
+---
+
+## Long-lived hosts and no resource leaks
+
+**Requirement:** The **provisioning server** and every **unit machine** are expected to stay up
+for long stretches (weeks to years) as normal operations. Provisioning automation, modules,
+helpers, and observability plumbing must be written so these hosts **do not leak resources** over
+time: repeated scheduled runs and remote sessions must leave the system in a **bounded** state.
+
+Non-exhaustive expectations:
+
+- **Provisioning server:** Close or dispose **WinRM / PowerShell sessions** reliably; avoid unbounded
+  growth of **staging directories**, **temp folders**, **log files**, and **CSV/history** artifacts
+  (explicit retention, rotation, or cleanup policies where writes recur each cycle).
+- **Units:** Same discipline for **remote-run transcripts**, **staging paths**, **partial download**
+  debris, and **child processes** launched during provisioning (installers must finish or be
+  bounded; no accumulating orphan tasks).
+- **Design reviews:** Treat monotonic growth (handles, threads, disk, registry clutter from
+  duplicate firewall rules, etc.) as **bugs**, not operational trivia.
+
+Dev-only shortcuts (for example short-lived HTTP servers on a workstation) must **not** become
+silent production defaults unless they include explicit **lifecycle** (startup, shutdown, port reuse)
+and **cleanup** semantics compatible with an always-on host.
+
+---
+
 ## Fleet SSH server (operator remote access) (**target**)
 
 **Requirement:** Every MAST unit in the fleet must ship with an **SSH server** enabled for
@@ -930,24 +1002,27 @@ provisioning stage.
 
 Work remaining to reach the **target** autonomous loop (partial progress may already exist in tree):
 
-1. Add or complete `payload_hash` generation in `build-mast.ps1` → write `build-manifest.json`
+1. Replace `execute.lock` with the **unit-side provisioning execution control** mechanism described
+   under **Unit-side provisioning execution control (replace lock-file liability)** (timeouts,
+   stale recovery, correlation IDs, observability).
+2. Add or complete `payload_hash` generation in `build-mast.ps1` → write `build-manifest.json`
    (include **git ref** fields when pinning by tag/commit is implemented)
-2. Implement unit-side **effective** state: computed manifest and/or `installed-manifest.json`
+3. Implement unit-side **effective** state: computed manifest and/or `installed-manifest.json`
    consistent with **Unit provisioning manifest (source of truth)** (inspection-based probe)
-3. Per-module **uninstall/reinstall** (or equivalent) paths for clean upgrades; **build-mast** /
+4. Per-module **uninstall/reinstall** (or equivalent) paths for clean upgrades; **build-mast** /
    driver support for **pinned git refs** and rollback deploys — see **Package lifecycle, MAST
    version pinning, rollback, and observability**
-4. Extend `server/check-and-provision.ps1` (and related scripts) until they match the loop and
+5. Extend `server/check-and-provision.ps1` (and related scripts) until they match the loop and
    observability described above — not a greenfield “write from scratch” unless the driver is
    replaced deliberately
-5. Ensure `git lfs pull` works on the prov server (deploy key or stored credential)
-6. Set up Task Scheduler trigger (or service wrapper) on the prov server
-7. Run manual dry-runs (`check-and-provision.ps1 -DryRun`) to validate discovery + hash logic
-8. Enable live runs; monitor logs / CSV for a week before treating as production
-9. Stand up Prometheus scrape targets on units and the prov server (manifest, services,
-   heartbeats); wire Grafana (or equivalent) **central command** dashboards and Alertmanager
-   rules aligned with **Prometheus scrape targets and central command dashboard** above
-10. Install and harden **OpenSSH Server** on fleet units; document firewall, auth, and smoke checks
+6. Ensure `git lfs pull` works on the prov server (deploy key or stored credential)
+7. Set up Task Scheduler trigger (or service wrapper) on the prov server
+8. Run manual dry-runs (`check-and-provision.ps1 -DryRun`) to validate discovery + hash logic
+9. Enable live runs; monitor logs / CSV for a week before treating as production
+10. Stand up Prometheus scrape targets on units and the prov server (manifest, services,
+    heartbeats); wire Grafana (or equivalent) **central command** dashboards and Alertmanager
+    rules aligned with **Prometheus scrape targets and central command dashboard** above
+11. Install and harden **OpenSSH Server** on fleet units; document firewall, auth, and smoke checks
     per **Fleet SSH server (operator remote access)**
 
 ---

@@ -174,6 +174,16 @@ def winrm_session(host: str, cred: dict[str, str]) -> winrm.Session:
     )
 
 
+def _dispose_winrm_session(sess: winrm.Session | None) -> None:
+    """Close pooled HTTP connections for a pywinrm Session (best-effort)."""
+    if sess is None:
+        return
+    try:
+        sess.protocol.transport.close_session()
+    except Exception:
+        pass
+
+
 def _candidate_users(host: str, raw_user: str) -> list[str]:
     # vault/creds.json user may be '.\\mast'. pywinrm on some hosts accepts 'mast' instead.
     # Try a small set of common equivalences without guessing domains.
@@ -230,6 +240,43 @@ def _run_with_heartbeat(
     return result[0]
 
 
+def _unescape_clixml_fragment(s: str) -> str:
+    s = s.replace("_x000D__x000A_", " ").replace("_x000A_", " ").replace("_x000D_", " ")
+    return " ".join(s.split())
+
+
+def _format_winrm_stderr(text: str, max_len: int = 900) -> str:
+    """Turn noisy WinRM / CLIXML stderr into one readable line for the host log."""
+    t = text.strip()
+    if not t:
+        return ""
+    # Remote PowerShell often prefixes the CLIXML envelope on stderr.
+    t = re.sub(r"^#<\s*CLIXML\s*", "", t, flags=re.IGNORECASE).strip()
+    if not t:
+        return ""
+
+    if "<Objs" in t:
+        chunks: list[str] = []
+        for tag in ("Error", "Warning"):
+            for m in re.findall(rf'<S S="{tag}">(.*?)</S>', t, flags=re.DOTALL):
+                chunks.append(_unescape_clixml_fragment(m))
+        if chunks:
+            t = " ".join(chunks)
+        else:
+            # Progress / Information CLIXML on stderr (no Error or Warning stream).
+            # It duplicates normal host messages and floods the log; drop it.
+            return ""
+
+    for marker in ("At line:", "At ", "    + CategoryInfo", "    + FullyQualifiedErrorId"):
+        if marker in t:
+            t = t.split(marker)[0].rstrip()
+            break
+    t = " ".join(t.split())
+    if len(t) > max_len:
+        return t[: max_len - 3] + "..."
+    return t
+
+
 def run_ps(
     session: winrm.Session,
     script: str,
@@ -250,14 +297,9 @@ def run_ps(
     if r.std_out:
         log_raw(r.std_out.decode(errors="replace").rstrip())
     if r.std_err:
-        stderr_text = r.std_err.decode(errors="replace").rstrip()
-        if "<Objs" in stderr_text:
-            import re as _re
-            msgs = _re.findall(r"<S S=\"Error\">(.*?)</S>", stderr_text)
-            if msgs:
-                log_raw(f"[stderr] {''.join(msgs)[:500]}")
-        else:
-            log_raw(f"[stderr] {stderr_text[:500]}")
+        brief = _format_winrm_stderr(r.std_err.decode(errors="replace"))
+        if brief:
+            log_raw(f"[stderr] {brief}")
     return r
 
 
@@ -282,6 +324,7 @@ def wait_for_winrm(host: str, cred: dict[str, str], timeout: int = WINRM_BOOT_TI
         auth_errors: list[str] = []
         if tcp_ok:
             for usr in users or [cred.get("user", "")]:
+                s: winrm.Session | None = None
                 try:
                     s = winrm.Session(
                         f"http://{host}:{WINRM_PORT}/wsman",
@@ -298,6 +341,8 @@ def wait_for_winrm(host: str, cred: dict[str, str], timeout: int = WINRM_BOOT_TI
                 except Exception as e:
                     auth_errors.append(f"{usr!r}:{type(e).__name__}")
                     continue
+                finally:
+                    _dispose_winrm_session(s)
 
         now = time.monotonic()
         if now - last_diag >= 60:
@@ -383,7 +428,15 @@ class ExecuteLogPoller:
 
     def stop(self) -> None:
         self._stop.set()
-        self._thread.join(timeout=10)
+        self._thread.join(timeout=15)
+        if self._thread.is_alive():
+            log(
+                "WARNING: ExecuteLogPoller did not stop in time; "
+                "leaving poller WinRM session open to avoid races."
+            )
+            return
+        _dispose_winrm_session(self._session)
+        self._session = None  # type: ignore[assignment]
 
     def _run(self) -> None:
         while not self._stop.wait(timeout=EXECUTE_POLL_INTERVAL_S):
@@ -460,14 +513,16 @@ class _FileServer(http.server.SimpleHTTPRequestHandler):
         pass
 
 
-def _start_file_server(root: Path) -> http.server.HTTPServer:
+def _start_file_server(root: Path) -> tuple[http.server.HTTPServer, threading.Thread]:
+    # Bind only to the host-only address so Windows Firewall can scope to 192.168.56.0/24
+    # and we do not listen on the public NIC for the same port.
     server = http.server.HTTPServer(
-        ("", HTTP_TRANSFER_PORT),
+        (HOST_TRANSFER_HOST, HTTP_TRANSFER_PORT),
         lambda *a, **kw: _FileServer(*a, directory=str(root), **kw),
     )
     t = threading.Thread(target=server.serve_forever, daemon=True)
     t.start()
-    return server
+    return server, t
 
 
 def _collect_transfer_files(hostname: str) -> list[tuple[Path, str]]:
@@ -544,7 +599,7 @@ def phase_transfer(unit: winrm.Session, hostname: str) -> None:
                         _shutil.copy2(local, dest)
 
             log(f"Starting HTTP file server on port {HTTP_TRANSFER_PORT}...")
-            server = _start_file_server(serve_root)
+            server, serve_thread = _start_file_server(serve_root)
             try:
                 log("Clearing C:\\mast-staging on unit...")
                 r = run_ps(
@@ -588,7 +643,20 @@ def phase_transfer(unit: winrm.Session, hostname: str) -> None:
                     bytes_done += local.stat().st_size
             finally:
                 log("Shutting down HTTP file server.")
-                server.shutdown()
+                try:
+                    server.shutdown()
+                except Exception as ex:
+                    log(f"HTTP server shutdown: {ex}")
+                try:
+                    server.server_close()
+                except Exception:
+                    pass
+                serve_thread.join(timeout=30)
+                if serve_thread.is_alive():
+                    log(
+                        "WARNING: HTTP staging thread still running after shutdown; "
+                        "port may stay busy until the process exits."
+                    )
 
 
 def phase_execute(unit: winrm.Session, host_unit: str, unit_cred: dict[str, str]) -> winrm.Response:
@@ -809,61 +877,66 @@ def main() -> None:
         built = False
         unit_session: winrm.Session | None = None
 
-        for cycle in range(1, args.repeat + 1):
-            log(f"\n{'='*60}")
-            log(f"CYCLE {cycle}/{args.repeat}")
-            log(f"{'='*60}")
-            log_dir = setup_log_dir(cycle)
+        try:
+            for cycle in range(1, args.repeat + 1):
+                log(f"\n{'='*60}")
+                log(f"CYCLE {cycle}/{args.repeat}")
+                log(f"{'='*60}")
+                log_dir = setup_log_dir(cycle)
 
-            try:
-                if not args.execute_only and (not built or args.rebuild):
-                    phase_build(args.hostname, modules)
-                    built = True
+                try:
+                    if not args.execute_only and (not built or args.rebuild):
+                        phase_build(args.hostname, modules)
+                        built = True
 
-                if args.build_only:
-                    log("--build-only specified; stopping after build.")
-                    break
+                    if args.build_only:
+                        log("--build-only specified; stopping after build.")
+                        break
 
-                if unit_session is None:
-                    with timed("WAIT FOR WINRM"):
-                        wait_for_winrm(args.host_unit, creds["unit"], timeout=args.winrm_wait_seconds)
-                    unit_session = winrm_session(args.host_unit, creds["unit"])
+                    if unit_session is None:
+                        with timed("WAIT FOR WINRM"):
+                            wait_for_winrm(args.host_unit, creds["unit"], timeout=args.winrm_wait_seconds)
+                        unit_session = winrm_session(args.host_unit, creds["unit"])
 
-                if args.execute_only:
-                    log("--execute-only: skipping build and transfer.")
-                else:
-                    phase_transfer(unit_session, args.hostname)
+                    if args.execute_only:
+                        log("--execute-only: skipping build and transfer.")
+                    else:
+                        phase_transfer(unit_session, args.hostname)
 
-                execute_response = phase_execute(unit_session, args.host_unit, creds["unit"])
+                    execute_response = phase_execute(unit_session, args.host_unit, creds["unit"])
 
-                results = phase_verify(unit_session, modules, execute_response.status_code)
+                    results = phase_verify(unit_session, modules, execute_response.status_code)
 
-                (log_dir / "results.json").write_text(json.dumps(results, indent=2))
+                    (log_dir / "results.json").write_text(json.dumps(results, indent=2))
 
-                passed = print_results(results, cycle)
-                cycle_results.append(passed)
+                    passed = print_results(results, cycle)
+                    cycle_results.append(passed)
 
-                if not passed:
-                    _fetch_diagnostics(unit_session)
-
-            except Exception as exc:
-                log(f"\nCycle {cycle} ERROR: {exc}")
-                cycle_results.append(False)
-                if unit_session is not None:
-                    try:
-                        _fetch_execute_log_tail(unit_session)
+                    if not passed:
                         _fetch_diagnostics(unit_session)
-                    except Exception:
-                        pass
 
-            if cycle < args.repeat and not args.no_reset:
-                unit_session = phase_reset(
-                    args.vbox_vm,
-                    args.snapshot,
-                    args.host_unit,
-                    creds["unit"],
-                    winrm_wait_s=args.winrm_wait_seconds,
-                )
+                except Exception as exc:
+                    log(f"\nCycle {cycle} ERROR: {exc}")
+                    cycle_results.append(False)
+                    if unit_session is not None:
+                        try:
+                            _fetch_execute_log_tail(unit_session)
+                            _fetch_diagnostics(unit_session)
+                        except Exception:
+                            pass
+
+                if cycle < args.repeat and not args.no_reset:
+                    prev = unit_session
+                    unit_session = phase_reset(
+                        args.vbox_vm,
+                        args.snapshot,
+                        args.host_unit,
+                        creds["unit"],
+                        winrm_wait_s=args.winrm_wait_seconds,
+                    )
+                    _dispose_winrm_session(prev)
+        finally:
+            _dispose_winrm_session(unit_session)
 
         log(
             f"[TIMING] Total run (run-prov-test.py): "
