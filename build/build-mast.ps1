@@ -19,7 +19,7 @@ param(
     'diagnostics',
     'git',
     'mast',
-    'mongodb',
+    'mongodb-client',
     'nomachine',
     'nssm',
     'phd2',

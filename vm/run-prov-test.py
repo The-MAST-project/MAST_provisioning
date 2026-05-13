@@ -91,7 +91,7 @@ SMOKE_LOG_DIR = f"{MAST_LOGS_BASE}\\smoke"
 VERIFY_LOG_DIR = f"{MAST_LOGS_BASE}\\verify"
 
 ALL_MODULES = [
-    "ascom", "chrome", "cygwin", "git", "mast", "mongodb", "nomachine",
+    "ascom", "chrome", "cygwin", "git", "mast", "mongodb-client", "nomachine",
     "nssm", "phd2", "planewave", "python", "stage",
     "sysinternals", "vscode", "wireshark", "zwo",
 ]
