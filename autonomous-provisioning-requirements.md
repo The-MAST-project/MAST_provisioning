@@ -1175,6 +1175,24 @@ remain the **deep dive** for incidents. Prometheus and the central dashboard pro
 
 ---
 
+## Phase 2 additions (future work)
+
+### Xilabs driver provisioning
+
+**Future requirement:** Add a `xilabs` provider module to the provisioning pipeline for the
+Xilabs (Spectral Instruments) camera driver. The provider must:
+
+1. Stage the Xilabs driver installer as an offline asset.
+2. Install the driver silently and add any required PATH or registry entries.
+3. Register a `verify` smoke check (e.g. confirm the expected DLL or service is present).
+4. Add `xilabs` to the `modules` list in `unit-registry.json` for units that carry the
+   Xilabs camera.
+
+**Exit criteria:** Xilabs-equipped units pass the driver smoke check after provisioning,
+and the MAST application can enumerate the camera without a manual driver install.
+
+---
+
 ## Rollout Steps
 
 | # | Task | Status |
