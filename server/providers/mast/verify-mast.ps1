@@ -33,7 +33,7 @@ if (-not (Test-Path -LiteralPath ${CloneRoot})) {
 }
 
 foreach (${spec} in ${repoSpecs}) {
-    ${name} = Split-Path ${spec} -Leaf
+    ${name} = Split-Path ${spec}.RepoSpec -Leaf
     ${repoDir} = Join-Path ${CloneRoot} ${name}
     ${gitDir} = Join-Path ${repoDir} '.git'
     ${venvPy} = Join-Path ${repoDir} '.venv\Scripts\python.exe'

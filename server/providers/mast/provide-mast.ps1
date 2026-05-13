@@ -107,8 +107,11 @@ function Invoke-MastGitCloneObserved {
         [Parameter(Mandatory)][string]${UrlForLog},
         [Parameter(Mandatory)][string]${TargetDir},
         [Parameter(Mandatory)][string]${RepoLabel},
-        [Parameter(Mandatory)][string]${LogDir}
+        [Parameter(Mandatory)][string]${LogDir},
+        [string]${Ref} = ''
     )
+    # Commit hashes (7-40 hex chars) cannot be passed to --branch; clone default then checkout.
+    ${isCommitHash} = (${Ref} -and ${Ref} -match '^[0-9a-fA-F]{7,40}$')
     ${stderrLog} = Join-Path ${LogDir} ("{0}.git-clone.stderr.log" -f ${RepoLabel})
     ${stdoutLog} = Join-Path ${LogDir} ("{0}.git-clone.stdout.log" -f ${RepoLabel})
     Remove-Item -LiteralPath ${stderrLog} -Force -ErrorAction SilentlyContinue
@@ -129,12 +132,16 @@ function Invoke-MastGitCloneObserved {
         ${sw} = [System.Diagnostics.Stopwatch]::StartNew()
         # credential.interactive=never: fail instead of waiting for GCM UI.
         # http.lowSpeed*: abort if the HTTP layer stalls (common misread as hang).
-        ${argList} = @(
+        ${baseArgs} = @(
             '-c', 'credential.interactive=never',
             '-c', 'http.lowSpeedLimit=100',
             '-c', 'http.lowSpeedTime=120',
-            'clone', '--progress', ${CloneUrl}, ${TargetDir}
+            'clone'
         )
+        if (${Ref} -and -not ${isCommitHash}) {
+            ${baseArgs} += @('--branch', ${Ref})
+        }
+        ${argList} = ${baseArgs} + @('--progress', ${CloneUrl}, ${TargetDir})
         ${p} = Start-Process -FilePath ${GitExe} -ArgumentList ${argList} -PassThru -Wait -WindowStyle Hidden `
             -RedirectStandardError ${stderrLog} -RedirectStandardOutput ${stdoutLog}
         try { ${p}.Refresh() } catch {}
@@ -167,6 +174,22 @@ function Invoke-MastGitCloneObserved {
             }
             catch { }
             if (${head}) { Write-MastProvisionEvent ("git rev-parse HEAD repo={0} => {1}" -f ${RepoLabel}, ${head}) }
+        }
+        if (${isCommitHash}) {
+            Write-MastProvisionEvent ("git checkout BEGIN repo={0} ref={1}" -f ${RepoLabel}, ${Ref})
+            ${coOut} = Join-Path ${LogDir} ("{0}.git-checkout.stdout.log" -f ${RepoLabel})
+            ${coErr} = Join-Path ${LogDir} ("{0}.git-checkout.stderr.log" -f ${RepoLabel})
+            Remove-Item -LiteralPath ${coOut} -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath ${coErr} -Force -ErrorAction SilentlyContinue
+            ${pc} = Start-Process -FilePath ${GitExe} -ArgumentList @('-C', ${TargetDir}, 'checkout', ${Ref}) `
+                -PassThru -Wait -WindowStyle Hidden `
+                -RedirectStandardOutput ${coOut} -RedirectStandardError ${coErr}
+            try { ${pc}.Refresh() } catch {}
+            if ($null -ne ${pc}.ExitCode -and ${pc}.ExitCode -ne 0) {
+                ${tailErrCo} = ((Get-Content -LiteralPath ${coErr} -ErrorAction SilentlyContinue) | Select-Object -Last 20) -join [Environment]::NewLine
+                throw ("git checkout {0} failed exitCode={1}:{2}{3}" -f ${Ref}, ${pc}.ExitCode, [Environment]::NewLine, ${tailErrCo})
+            }
+            Write-MastProvisionEvent ("git checkout DONE repo={0} ref={1}" -f ${RepoLabel}, ${Ref})
         }
     }
     finally {
@@ -216,7 +239,7 @@ try {
 
     ${PythonExe} = "C:\Python312\python.exe"
     foreach (${repo} in ${repos}) {
-        ${repoName} = Split-Path ${repo} -Leaf
+        ${repoName} = Split-Path ${repo}.RepoSpec -Leaf
         ${targetDir} = Join-Path ${CloneRoot} ${repoName}
         Write-MastProvisionEvent ("repo phase START name={0} targetDir={1}" -f ${repoName}, ${targetDir})
         ${gitDirMarker} = Join-Path ${targetDir} '.git'
@@ -230,11 +253,11 @@ try {
             Remove-Item -LiteralPath ${targetDir} -Recurse -Force -ErrorAction SilentlyContinue
         }
 
-        ${urls} = Get-MastGitHubHttpsCloneUrls -RepoSpec ${repo} -Token ${token}
+        ${urls} = Get-MastGitHubHttpsCloneUrls -RepoSpec ${repo}.RepoSpec -Token ${token}
         ${cloneUrlUse} = ${urls}['CloneUrl']
         ${logUrlUse} = ${urls}['LogUrl']
         Remove-Item -Recurse -Force -ErrorAction SilentlyContinue ${targetDir}
-        Invoke-MastGitCloneObserved -GitExe ${gitExe} -CloneUrl ${cloneUrlUse} -UrlForLog ${logUrlUse} -TargetDir ${targetDir} -RepoLabel ${repoName} -LogDir ${CloneRoot}
+        Invoke-MastGitCloneObserved -GitExe ${gitExe} -CloneUrl ${cloneUrlUse} -UrlForLog ${logUrlUse} -TargetDir ${targetDir} -RepoLabel ${repoName} -LogDir ${CloneRoot} -Ref ${repo}.Ref
 
         # --- Pull git submodules if .gitmodules is present ---
         ${gitModulesFile} = Join-Path ${targetDir} '.gitmodules'
