@@ -49,6 +49,15 @@ foreach (${spec} in ${repoSpecs}) {
     if (-not (Test-Path -LiteralPath ${venvPy})) {
         [void]${issues}.Add("Per-repo venv missing: ${venvPy}")
     }
+
+    if (${name} -like 'MAST_unit*') {
+        ${svc} = Get-Service -Name 'MAST_unit' -ErrorAction SilentlyContinue
+        if ($null -eq ${svc}) {
+            [void]${issues}.Add("MAST_unit service not registered")
+        } elseif (${svc}.Status -ne 'Running') {
+            [void]${issues}.Add(("MAST_unit service registered but not running (status={0})" -f ${svc}.Status))
+        }
+    }
 }
 
 ${null} = New-Item -ItemType Directory -Force -Path (Split-Path -Parent ${verifyLog}) -ErrorAction SilentlyContinue

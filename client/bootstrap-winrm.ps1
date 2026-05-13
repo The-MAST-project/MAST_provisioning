@@ -39,6 +39,12 @@
 
 .PARAMETER FactoryUser, MastUser, MastPassword, ProvServerIP
     Same defaults as factory unattend (user -> mast, physics, prov host for prepare example text).
+
+.PARAMETER VmTestRun
+    *** VM TESTING ONLY - DO NOT USE IN PRODUCTION ***
+    Adds a hosts file entry mapping mast-wis-control -> 192.168.56.1 (the VirtualBox host-only
+    host IP) so the MongoDB client inside the VM connects to the host machine's MongoDB instance.
+    The entry is marked with # MAST-VM-TEST-ONLY for easy identification and removal.
 #>
 
 param(
@@ -49,7 +55,8 @@ param(
     [string]$MastHostName = '',
     [switch]$NonInteractive,
     [switch]$RebootAfterBootstrap,
-    [switch]$SkipComputerRename
+    [switch]$SkipComputerRename,
+    [switch]$VmTestRun
 )
 
 Set-StrictMode -Version Latest
@@ -400,6 +407,34 @@ try {
         }
     } else {
         Write-BootstrapMsg '  Skipped computer rename (-SkipComputerRename).' 'Yellow'
+    }
+
+    # --- VM test: route mast-wis-control to host machine ---
+    if ($VmTestRun) {
+        Write-BootstrapMsg '' 'Cyan'
+        Write-BootstrapMsg '--- *** VM TEST ONLY: mast-wis-control hosts entry *** ---' 'Yellow'
+        $hostsFile = Join-Path $env:SystemRoot 'System32\drivers\etc\hosts'
+        $marker = '# MAST-VM-TEST-ONLY'
+        $entry = "192.168.56.1  mast-wis-control  $marker"
+        $hostsContent = Get-Content -LiteralPath $hostsFile -ErrorAction SilentlyContinue
+        $alreadyPresent = $false
+        if ($hostsContent) {
+            foreach ($line in $hostsContent) {
+                if ($line -match [regex]::Escape($marker)) {
+                    $alreadyPresent = $true
+                    break
+                }
+            }
+        }
+        if ($alreadyPresent) {
+            Write-BootstrapMsg '  VM test hosts entry already present (skipped).' 'DarkGray'
+        } else {
+            Add-Content -LiteralPath $hostsFile -Encoding ASCII -Value ''
+            Add-Content -LiteralPath $hostsFile -Encoding ASCII -Value '# *** MAST VM TEST ONLY - NOT FOR PRODUCTION USE - REMOVE BEFORE PRODUCTION DEPLOY ***'
+            Add-Content -LiteralPath $hostsFile -Encoding ASCII -Value $entry
+            Write-BootstrapMsg "  Added: $entry" 'Yellow'
+            Write-BootstrapMsg '  [WARN] Remove this entry before promoting this VM to production.' 'Red'
+        }
     }
 
     # --- Verification ---

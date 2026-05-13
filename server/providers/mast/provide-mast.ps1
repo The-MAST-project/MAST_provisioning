@@ -301,8 +301,7 @@ try {
         if (${repoName} -like 'MAST_unit*') {
             ${nssmExe} = 'C:\Program Files\nssm\nssm.exe'
             ${serviceName} = 'MAST_unit'
-            # Entry point: adjust if the unit script lives elsewhere in the repo.
-            ${unitEntryPoint} = Join-Path ${targetDir} 'unit\unit.py'
+            ${unitEntryPoint} = Join-Path ${targetDir} 'src\app.py'
             ${venvPythonSvc} = Join-Path ${venvPath} 'Scripts\python.exe'
             if (-not (Test-Path -LiteralPath ${nssmExe})) {
                 Write-Warning "NSSM not found at ${nssmExe}; skipping MAST_unit service registration."
@@ -312,12 +311,16 @@ try {
                 ${existingSvc} = Get-Service -Name ${serviceName} -ErrorAction SilentlyContinue
                 if ($null -eq ${existingSvc}) {
                     Write-MastProvisionEvent ("NSSM service register BEGIN name={0}" -f ${serviceName})
+                    ${svcLogDir} = 'C:\MAST\logs\mast-unit'
+                    Confirm-Dir ${svcLogDir}
                     & ${nssmExe} install ${serviceName} ${venvPythonSvc} ${unitEntryPoint}
                     & ${nssmExe} set ${serviceName} AppDirectory ${targetDir}
                     & ${nssmExe} set ${serviceName} Start SERVICE_AUTO_START
-                    & ${nssmExe} set ${serviceName} AppStdout 'C:\MAST\logs\mast_unit_stdout.log'
-                    & ${nssmExe} set ${serviceName} AppStderr 'C:\MAST\logs\mast_unit_stderr.log'
+                    & ${nssmExe} set ${serviceName} AppDependencies PWI4
+                    & ${nssmExe} set ${serviceName} AppStdout (Join-Path ${svcLogDir} 'stdout.log')
+                    & ${nssmExe} set ${serviceName} AppStderr (Join-Path ${svcLogDir} 'stderr.log')
                     & ${nssmExe} set ${serviceName} AppRotateFiles 1
+                    & ${nssmExe} set ${serviceName} AppRotateOnline 1
                     & ${nssmExe} set ${serviceName} AppRotateBytes 10485760
                     Start-Service -Name ${serviceName} -ErrorAction SilentlyContinue
                     Write-MastProvisionEvent ("NSSM service register DONE name={0}" -f ${serviceName})

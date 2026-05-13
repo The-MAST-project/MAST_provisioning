@@ -56,6 +56,31 @@ try {
     }
     Write-MastPwLog ("Found pwi4.exe at: {0}" -f ${pwi4ExePath})
 
+    # Register PWI4 as an NSSM service so it is running before MAST_unit starts.
+    # PWI4 is a GUI app; SERVICE_INTERACTIVE_PROCESS allows it to initialise in
+    # session 0 on headless units (same pattern used for PHD2).
+    ${nssmExe} = 'C:\Program Files\nssm\nssm.exe'
+    if (Test-Path -LiteralPath ${nssmExe}) {
+        ${pwi4SvcName} = 'PWI4'
+        ${existingPwi4Svc} = Get-Service -Name ${pwi4SvcName} -ErrorAction SilentlyContinue
+        if ($null -eq ${existingPwi4Svc}) {
+            Write-MastPwLog "Registering PWI4 as NSSM service..."
+            & ${nssmExe} install ${pwi4SvcName} ${pwi4ExePath}
+            & ${nssmExe} set ${pwi4SvcName} Start SERVICE_AUTO_START
+            & ${nssmExe} set ${pwi4SvcName} Type SERVICE_INTERACTIVE_PROCESS
+            & ${nssmExe} set ${pwi4SvcName} AppStdout 'C:\MAST\logs\pwi4_stdout.log'
+            & ${nssmExe} set ${pwi4SvcName} AppStderr 'C:\MAST\logs\pwi4_stderr.log'
+            & ${nssmExe} set ${pwi4SvcName} AppRotateFiles 1
+            & ${nssmExe} set ${pwi4SvcName} AppRotateBytes 10485760
+            Start-Service -Name ${pwi4SvcName} -ErrorAction SilentlyContinue
+            Write-MastPwLog "PWI4 service registered and started."
+        } else {
+            Write-MastPwLog "PWI4 service already registered -- skipping."
+        }
+    } else {
+        Write-MastPwLog "NSSM not found; skipping PWI4 service registration."
+    }
+
     # Extract PS3 CLI tools
     ${ps3cliZipPath} = Join-Path ${AssetsRoot} "ps3cli.zip"
     if (-not (Test-Path ${ps3cliZipPath})) {

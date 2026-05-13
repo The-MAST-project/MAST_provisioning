@@ -12,6 +12,10 @@
     .cmd so Windows runs PowerShell instead of Notepad (default .ps1 association).
     They are not executed from FirstLogonCommands. After bootstrap succeeds, the
     prov server may run prepare-mast-client.ps1 over WinRM.
+  - client\bootstrap-winrm-vmtest.cmd at the ISO root: identical to
+    bootstrap-winrm.cmd but passes -VmTestRun, which adds a hosts entry routing
+    mast-wis-control -> 192.168.56.1 (the VirtualBox host-only host IP).
+    *** VM TESTING ONLY - do not run on production units. ***
 
   Mount this ISO as a second DVD drive in the unit VM (vbox-create-unit.ps1
   does this automatically when -AutounattendIso is supplied), then start
@@ -151,11 +155,15 @@ if ([string]::IsNullOrWhiteSpace($FactoryComputerName)) {
 
 $bootstrapPath = Join-Path $RepoRoot 'client\bootstrap-winrm.ps1'
 $bootstrapCmdPath = Join-Path $RepoRoot 'client\bootstrap-winrm.cmd'
+$bootstrapVmTestCmdPath = Join-Path $RepoRoot 'client\bootstrap-winrm-vmtest.cmd'
 if (-not (Test-Path $bootstrapPath)) {
     throw "bootstrap-winrm.ps1 not found at $bootstrapPath"
 }
 if (-not (Test-Path $bootstrapCmdPath)) {
     throw "bootstrap-winrm.cmd not found at $bootstrapCmdPath"
+}
+if (-not (Test-Path $bootstrapVmTestCmdPath)) {
+    throw "bootstrap-winrm-vmtest.cmd not found at $bootstrapVmTestCmdPath"
 }
 
 $resolvedExtras = @()
@@ -328,6 +336,8 @@ try {
     Write-Host "  Staged bootstrap-winrm.ps1"
     Copy-Item -Force $bootstrapCmdPath (Join-Path $staging 'bootstrap-winrm.cmd')
     Write-Host "  Staged bootstrap-winrm.cmd"
+    Copy-Item -Force $bootstrapVmTestCmdPath (Join-Path $staging 'bootstrap-winrm-vmtest.cmd')
+    Write-Host "  Staged bootstrap-winrm-vmtest.cmd"
 
     foreach ($extra in $resolvedExtras) {
         $name = Split-Path $extra -Leaf
