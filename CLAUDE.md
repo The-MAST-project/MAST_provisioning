@@ -33,3 +33,13 @@ Unit and host provisioning is executed under **`powershell.exe` (Desktop edition
 
 - Do **not** use PowerShell 7+-only features in `*.ps1` / `*.psm1` consumed on the unit, including: **ternary** `condition ? a : b`, **null-coalescing** `??` / `??=`, **null-conditional** `?.`, or **pipeline chain** `&&` / `||` (those operators are not available in Windows PowerShell 5.1 the same way).
 - Do **not** assume `pwsh`, `$PSVersionTable.PSEdition -eq 'Core'`, or modules that only ship for PowerShell 7 without a 5.1 fallback.
+- Do **not** use `if` as an inline expression inside bare parentheses `(if (...) {...} else {...})`. In 5.1, `if` inside `()` is parsed as a command name and throws `"The term 'if' is not recognized as the name of a cmdlet"`. Use the subexpression operator instead: `$(if (...) {...} else {...})`. This applies anywhere `if` appears inside a `-f` format string argument, a function call argument, or any other expression context.
+
+## Do not edit the staging area
+
+Do **not** make edits to files under `staging/`. That directory is generated automatically by the build process and any manual changes will be overwritten.
+
+Always make changes in the canonical source locations:
+- Provider scripts: `server/providers/<name>/`
+- Client scripts: `client/`
+- Shared lib: `server/lib/`

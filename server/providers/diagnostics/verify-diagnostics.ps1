@@ -78,7 +78,7 @@ try {
         try {
             if (-not ${p}.HasExited) { ${p}.Kill() }
         } catch {}
-        Add-DiagResult -Name 'ASCOM-diagnostics' -Ok ${started} -Detail ("exe={0} pid={1}" -f ${ascomDiagExe}, (if (${started}) { ${p}.Id } else { 'none' }))
+        Add-DiagResult -Name 'ASCOM-diagnostics' -Ok ${started} -Detail ("exe={0} pid={1}" -f ${ascomDiagExe}, $(if (${started}) { ${p}.Id } else { 'none' }))
     }
 } catch {
     Add-DiagResult -Name 'ASCOM-diagnostics' -Ok $false -Detail ("exception: {0}" -f $_.Exception.Message)
@@ -106,7 +106,7 @@ try {
         ${started} = $null -ne ${p} -and ${p}.Id -gt 0
         Start-Sleep -Seconds 5
         try { if (-not ${p}.HasExited) { ${p}.Kill() } } catch {}
-        Add-DiagResult -Name 'ASIStudio-launch' -Ok ${started} -Detail ("exe={0} pid={1}" -f ${asiExe}, (if (${started}) { ${p}.Id } else { 'none' }))
+        Add-DiagResult -Name 'ASIStudio-launch' -Ok ${started} -Detail ("exe={0} pid={1}" -f ${asiExe}, $(if (${started}) { ${p}.Id } else { 'none' }))
     }
 } catch {
     Add-DiagResult -Name 'ASIStudio-launch' -Ok $false -Detail ("exception: {0}" -f $_.Exception.Message)
@@ -134,7 +134,7 @@ try {
         ${started} = $null -ne ${p} -and ${p}.Id -gt 0
         Start-Sleep -Seconds 5
         try { if (-not ${p}.HasExited) { ${p}.Kill() } } catch {}
-        Add-DiagResult -Name 'PWI4-launch' -Ok ${started} -Detail ("exe={0} pid={1}" -f ${pwiExe}, (if (${started}) { ${p}.Id } else { 'none' }))
+        Add-DiagResult -Name 'PWI4-launch' -Ok ${started} -Detail ("exe={0} pid={1}" -f ${pwiExe}, $(if (${started}) { ${p}.Id } else { 'none' }))
     }
 } catch {
     Add-DiagResult -Name 'PWI4-launch' -Ok $false -Detail ("exception: {0}" -f $_.Exception.Message)
@@ -162,7 +162,7 @@ try {
         ${started} = $null -ne ${p} -and ${p}.Id -gt 0
         Start-Sleep -Seconds 5
         try { if (-not ${p}.HasExited) { ${p}.Kill() } } catch {}
-        Add-DiagResult -Name 'XILabs-launch' -Ok ${started} -Detail ("exe={0} pid={1}" -f ${xlabExe}, (if (${started}) { ${p}.Id } else { 'none' }))
+        Add-DiagResult -Name 'XILabs-launch' -Ok ${started} -Detail ("exe={0} pid={1}" -f ${xlabExe}, $(if (${started}) { ${p}.Id } else { 'none' }))
     }
 } catch {
     Add-DiagResult -Name 'XILabs-launch' -Ok $false -Detail ("exception: {0}" -f $_.Exception.Message)
@@ -204,7 +204,7 @@ try {
         ${resp} = Invoke-WebRequest -Uri ${heartbeatUrl} -UseBasicParsing -TimeoutSec 10 -ErrorAction Stop
     } catch {}
     ${hbOk} = $null -ne ${resp} -and ${resp}.StatusCode -ge 200 -and ${resp}.StatusCode -lt 300
-    Add-DiagResult -Name 'MAST_unit-heartbeat' -Ok ${hbOk} -Detail ("url={0} status={1}" -f ${heartbeatUrl}, (if ($null -ne ${resp}) { ${resp}.StatusCode } else { 'no-response' }))
+    Add-DiagResult -Name 'MAST_unit-heartbeat' -Ok ${hbOk} -Detail ("url={0} status={1}" -f ${heartbeatUrl}, $(if ($null -ne ${resp}) { ${resp}.StatusCode } else { 'no-response' }))
 } catch {
     Add-DiagResult -Name 'MAST_unit-heartbeat' -Ok $false -Detail ("exception: {0}" -f $_.Exception.Message)
 }

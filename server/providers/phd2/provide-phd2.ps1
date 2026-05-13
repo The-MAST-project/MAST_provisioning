@@ -62,7 +62,7 @@ try {
             Write-Phd2Log "Registering PHD2 as NSSM service..."
             & ${nssmExe} install ${svcName} ${phd2Exe}
             & ${nssmExe} set ${svcName} Start SERVICE_AUTO_START
-            & ${nssmExe} set ${svcName} Type 16
+            & ${nssmExe} set ${svcName} Type SERVICE_INTERACTIVE_PROCESS
             & ${nssmExe} set ${svcName} AppStdout 'C:\MAST\logs\phd2_stdout.log'
             & ${nssmExe} set ${svcName} AppStderr 'C:\MAST\logs\phd2_stderr.log'
             & ${nssmExe} set ${svcName} AppRotateFiles 1

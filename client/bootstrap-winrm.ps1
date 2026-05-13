@@ -127,6 +127,11 @@ function Show-BootstrapUserFixNetwork {
 }
 
 function Show-BootstrapNextSteps([string]$HostNm) {
+    Write-BootstrapMsg '' 'Yellow'
+    Write-BootstrapMsg '--- MANUAL STEP: set ExecutionPolicy ---' 'Yellow'
+    Write-BootstrapMsg '  Run this once in an elevated PowerShell on this machine:' 'Yellow'
+    Write-BootstrapMsg '    Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope LocalMachine' 'White'
+    Write-BootstrapMsg '  Answer [Y] at the confirmation prompt.' 'Yellow'
     Write-BootstrapMsg '' 'Green'
     Write-BootstrapMsg '--- NEXT: hand off to provisioning server ---' 'Green'
     Write-BootstrapMsg "  1) Ensure this PC resolves $HostNm (DNS or hosts on the prov server)." 'Green'
@@ -228,6 +233,86 @@ try {
     Set-Service wuauserv -StartupType Disabled
     Write-BootstrapMsg '  Windows Update service disabled for AUOptions=1.' 'Green'
 
+    # --- Suppress Windows popup notifications ---
+    Write-BootstrapMsg '' 'Cyan'
+    Write-BootstrapMsg '--- Suppressing Windows popup notifications ---' 'Cyan'
+
+    # Machine-wide: disable consumer cloud content / "Get even more out of Windows" nags
+    $ccPath = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\CloudContent'
+    New-Item -Path $ccPath -Force -ErrorAction SilentlyContinue | Out-Null
+    Set-ItemProperty -Path $ccPath -Name 'DisableWindowsConsumerFeatures' -Value 1 -Type DWord -Force
+
+    # Machine-wide: disable Windows Backup scheduled tasks that trigger backup reminder popups
+    foreach ($taskName in @('Automatic Backup', 'ConfigNotification')) {
+        try {
+            $t = Get-ScheduledTask -TaskPath '\Microsoft\Windows\WindowsBackup\' `
+                -TaskName $taskName -ErrorAction SilentlyContinue
+            if ($t) {
+                Disable-ScheduledTask -TaskPath '\Microsoft\Windows\WindowsBackup\' `
+                    -TaskName $taskName -ErrorAction SilentlyContinue | Out-Null
+                Write-BootstrapMsg ("  Disabled backup task: {0}" -f $taskName) 'Green'
+            }
+        } catch { }
+    }
+
+    # Apply HKCU notification suppressions for the mast user.
+    # Load the hive if mast is not the current user (bootstrap typically runs as a different user).
+    $mastProfilePath = ''
+    try {
+        $mastProfilePath = (Get-LocalUser -Name $MastUser -ErrorAction Stop |
+            ForEach-Object {
+                $sid = $_.SID.Value
+                $p = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\$sid"
+                if (Test-Path $p) { (Get-ItemProperty -Path $p).ProfileImagePath } else { '' }
+            })
+    } catch { }
+
+    $hiveLoaded = $false
+    $hivePath = ''
+    if ($mastProfilePath -and (Test-Path (Join-Path $mastProfilePath 'NTUSER.DAT'))) {
+        $hivePath = Join-Path $mastProfilePath 'NTUSER.DAT'
+        $hiveKey = 'HKU\MAST_BOOTSTRAP_HIVE'
+        try {
+            & reg.exe load $hiveKey $hivePath 2>&1 | Out-Null
+            if ($LASTEXITCODE -eq 0) { $hiveLoaded = $true }
+        } catch { }
+    }
+
+    # Helper: set a DWORD in either HKU hive (if loaded) or HKCU (if running as mast already)
+    function Set-MastHkcu {
+        param([string]$SubKey, [string]$Name, [int]$Value)
+        $fullPath = if ($hiveLoaded) { "Registry::HKU\MAST_BOOTSTRAP_HIVE\$SubKey" } else { "HKCU:\$SubKey" }
+        try {
+            New-Item -Path $fullPath -Force -ErrorAction SilentlyContinue | Out-Null
+            Set-ItemProperty -Path $fullPath -Name $Name -Value $Value -Type DWord -Force -ErrorAction Stop
+        } catch {
+            Write-BootstrapMsg ("  WARN: could not set HKCU\{0}\{1}: {2}" -f $SubKey, $Name, $_.Exception.Message) 'Yellow'
+        }
+    }
+
+    # Disable toast notifications
+    Set-MastHkcu 'Software\Microsoft\Windows\CurrentVersion\PushNotifications' 'ToastEnabled' 0
+
+    # Disable tips, "Get started", spotlight, content delivery subscriptions
+    $cdm = 'Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'
+    Set-MastHkcu $cdm 'SoftLandingEnabled'                  0
+    Set-MastHkcu $cdm 'SubscribedContent-338389Enabled'     0
+    Set-MastHkcu $cdm 'SubscribedContent-310093Enabled'     0
+    Set-MastHkcu $cdm 'SubscribedContent-338388Enabled'     0
+    Set-MastHkcu $cdm 'RotatingLockScreenEnabled'           0
+    Set-MastHkcu $cdm 'OemPreInstalledAppsEnabled'          0
+    Set-MastHkcu $cdm 'PreInstalledAppsEnabled'             0
+    Set-MastHkcu $cdm 'SilentInstalledAppsEnabled'          0
+    Set-MastHkcu $cdm 'SystemPaneSuggestionsEnabled'        0
+
+    if ($hiveLoaded) {
+        try {
+            & reg.exe unload 'HKU\MAST_BOOTSTRAP_HIVE' 2>&1 | Out-Null
+        } catch { }
+    }
+
+    Write-BootstrapMsg '  Windows popup/notification suppressions applied.' 'Green'
+
     # --- WinRM ---
     Write-BootstrapMsg '' 'Cyan'
     Write-BootstrapMsg '--- Enabling WinRM (HTTP, Basic) ---' 'Cyan'
@@ -269,8 +354,6 @@ try {
     } catch { }
 
     Enable-PSRemoting -Force -SkipNetworkProfileCheck
-    Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope LocalMachine -Force
-    Write-BootstrapMsg '  ExecutionPolicy set to RemoteSigned (LocalMachine).' 'Green'
     Set-Item WSMan:\localhost\Service\Auth\Basic -Value $true -Force
     try {
         Set-Item WSMan:\localhost\Service\AllowUnencrypted -Value $true -Force

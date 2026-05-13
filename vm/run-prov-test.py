@@ -77,7 +77,7 @@ HTTP_TRANSFER_PORT = 18080
 
 WINRM_PORT = 5985
 WINRM_TIMEOUT_S = 90 * 60
-WINRM_CALL_TIMEOUT_S = 30 * 60
+WINRM_CALL_TIMEOUT_S = 60 * 60
 # First cycle often waits for the unit after snapshot restore or reboot; auth can lag TCP.
 WINRM_BOOT_TIMEOUT_S = 15 * 60
 HEARTBEAT_INTERVAL_S = 30
@@ -140,6 +140,12 @@ def _format_elapsed(seconds: float) -> str:
     if seconds >= 60:
         return f"{seconds / 60:.2f} min ({seconds:.1f}s)"
     return f"{seconds:.2f}s"
+
+
+def _fmt_mmss(seconds: int) -> str:
+    if seconds < 60:
+        return f"{seconds}s"
+    return f"{seconds // 60:02d}:{seconds % 60:02d}"
 
 
 @contextmanager
@@ -228,12 +234,16 @@ def _run_with_heartbeat(
 
     t = threading.Thread(target=worker, daemon=True)
     start = time.monotonic()
+    last_beat = start
     t.start()
     while t.is_alive():
         t.join(timeout=HEARTBEAT_INTERVAL_S)
         if t.is_alive():
-            elapsed = int(time.monotonic() - start)
-            log(f"  ... {label} still running ({elapsed}s elapsed)")
+            now = time.monotonic()
+            elapsed = int(now - start)
+            step = int(now - last_beat)
+            last_beat = now
+            log(f"  ... {label} still running ({_fmt_mmss(elapsed)} elapsed, step {_fmt_mmss(step)})")
             if elapsed >= timeout_s:
                 raise TimeoutError(
                     f"{label} exceeded {timeout_s}s timeout - likely hung"
@@ -420,17 +430,31 @@ class ExecuteLogPoller:
     """Background thread that polls a provisioning session log on the unit
     and prints new lines to the local console during execute or verify-only."""
 
+    # Timeout for each individual poller WinRM call (short - just reading a log file).
+    _CALL_TIMEOUT_S = 45
+
     def __init__(
         self,
         host: str,
         cred: dict[str, str],
         log_filename: str = "provisioning-execute.log",
     ) -> None:
-        self._session = winrm_session(host, cred)
+        self._host = host
+        self._cred = cred
+        self._session = self._new_session()
         self._log_filename = log_filename
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._lines_seen = 0
+
+    def _new_session(self) -> winrm.Session:
+        return winrm.Session(
+            f"http://{self._host}:{WINRM_PORT}/wsman",
+            auth=(self._cred["user"], self._cred["pass"]),
+            transport="basic",
+            read_timeout_sec=self._CALL_TIMEOUT_S + 10,
+            operation_timeout_sec=self._CALL_TIMEOUT_S,
+        )
 
     def start(self) -> None:
         self._thread.start()
@@ -448,6 +472,7 @@ class ExecuteLogPoller:
         self._session = None  # type: ignore[assignment]
 
     def _run(self) -> None:
+        consecutive_errors = 0
         while not self._stop.wait(timeout=EXECUTE_POLL_INTERVAL_S):
             try:
                 r0 = self._session.run_ps(
@@ -462,6 +487,7 @@ class ExecuteLogPoller:
                 )
                 path = (r0.std_out or b"").decode(errors="replace").strip()
                 if not path:
+                    consecutive_errors = 0
                     continue
                 r = self._session.run_ps(
                     f"$lines = Get-Content -LiteralPath '{path}' -ErrorAction SilentlyContinue; "
@@ -474,8 +500,18 @@ class ExecuteLogPoller:
                         for line in new_lines:
                             log_raw(f"  [unit] {line}")
                         self._lines_seen += len(new_lines)
+                consecutive_errors = 0
             except Exception as e:
-                log(f"  [poller] warning: {e}")
+                consecutive_errors += 1
+                log(f"  [poller] warning ({consecutive_errors}): {e}")
+                _dispose_winrm_session(self._session)
+                self._session = None  # type: ignore[assignment]
+                try:
+                    self._session = self._new_session()
+                    log("  [poller] reconnected.")
+                except Exception as re:
+                    log(f"  [poller] reconnect failed: {re}")
+                    self._session = self._new_session()  # will retry next iteration
 
 
 # ---------------------------------------------------------------------------
