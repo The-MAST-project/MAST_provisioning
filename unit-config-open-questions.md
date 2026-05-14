@@ -146,19 +146,3 @@ that fall back to the common base. Rename `camera` to `imager` at the same time.
 - MAST_unit health check (`phase_wait_for_unit_health`) added to `run-prov-test.py`
   -- polls `http://<unit>:8000/mast/api/v1/unit/status` post-start.
 
-## Temp debug scripts to clean up
-
-The following files were created during diagnosis and should be deleted:
-
-- `C:\Users\labcomp2\Desktop\MAST\_open_fw.py`
-- `C:\Users\labcomp2\Desktop\MAST\_check_svc.py`
-- `C:\Users\labcomp2\Desktop\MAST\_get_logs.py`
-- `C:\Users\labcomp2\Desktop\MAST\_check_config.py`
-- `C:\Users\labcomp2\Desktop\MAST\_check_config2.py`
-- `C:\Users\labcomp2\Desktop\MAST\_check_config3.py`
-- `C:\Users\labcomp2\Desktop\MAST\_mongo_check.py`
-- `C:\Users\labcomp2\Desktop\MAST\_mongo_seed_mast01.py`
-- `C:\Users\labcomp2\Desktop\MAST\_mongo_inspect.py`
-- `C:\Users\labcomp2\Desktop\MAST\_mongo_common.py`
-- `C:\Users\labcomp2\Desktop\MAST\_restart_unit.py`
-- `C:\Users\labcomp2\Desktop\MAST\_check_json_config.py`
