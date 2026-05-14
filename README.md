@@ -129,25 +129,29 @@ Order numbers leave gaps so new modules can be inserted without renumbering.
 
 This is the only path operators run by hand. Everything else is autonomous.
 
-1. Plug the unit machine in, install Windows IoT, complete OOBE.
-2. Copy `client/onboard-mast-unit.ps1` plus `vault/creds.json` to the unit
-   (USB drive or temporary share).
-3. On the unit, in an elevated PowerShell:
+1. Install Windows IoT on the unit machine and complete OOBE.
+2. Copy `client/bootstrap-winrm.cmd` and `client/bootstrap-winrm.ps1` to the unit
+   via USB thumb drive or a temporary network share. Both files must be in the same
+   folder. (In the VM workflow these files are bundled on the autounattend ISO; for
+   physical units that ISO is not present, so manual copy is required.)
+3. On the unit, open an **elevated Command Prompt** (Run as administrator) and run:
 
-   ```powershell
-   Set-ExecutionPolicy Bypass -Scope Process -Force
-   .\onboard-mast-unit.ps1 -HostName mast05 -ProvServer <prov-ip-or-dns>
+   ```cmd
+   bootstrap-winrm.cmd
    ```
 
-   Ensure `mast05` resolves from the provisioning server (DNS or hosts file). Units use DHCP; identity is the hostname, not a fixed IP.
+   The `.cmd` wrapper enables script execution for the session and invokes the `.ps1`.
+   If you need to pass arguments (e.g. `-MastHostName mast05`), pass them directly:
 
-4. The script runs Stages 0-5 (preflight, bootstrap, prepare, provision, register,
-   handoff) and exits `ONBOARD_OK`. From here on the prov server's Task Scheduler
-   loop manages all updates.
+   ```cmd
+   bootstrap-winrm.cmd -MastHostName mast05
+   ```
 
-If a stage fails, the script prints a `-ResumeFrom <stage>` command for re-runs.
-Logs: `C:\MAST\logs\onboarding\onboarding.log` (mirrored to the prov server
-under `C:\MAST\logs\onboarding\<hostname>.log`).
+   Confirm the script prints `[OK]` before continuing.
+
+4. Once bootstrap completes the unit is reachable over WinRM HTTP on port 5985. From
+   here the provisioning server's Task Scheduler loop picks up the unit automatically
+   and handles all further software installation and updates.
 
 ---
 
