@@ -415,26 +415,20 @@ try {
         Write-BootstrapMsg '--- *** VM TEST ONLY: mast-wis-control hosts entry *** ---' 'Yellow'
         $hostsFile = Join-Path $env:SystemRoot 'System32\drivers\etc\hosts'
         $marker = '# MAST-VM-TEST-ONLY'
-        $entry = "192.168.56.1  mast-wis-control  $marker"
+        $entry = "192.168.56.1  mast-wis-control  mast-wis-control.weizmann.ac.il  $marker"
         $hostsContent = Get-Content -LiteralPath $hostsFile -ErrorAction SilentlyContinue
-        $alreadyPresent = $false
+        $filtered = @()
         if ($hostsContent) {
             foreach ($line in $hostsContent) {
-                if ($line -match [regex]::Escape($marker)) {
-                    $alreadyPresent = $true
-                    break
-                }
+                if ($line -notmatch [regex]::Escape($marker)) { $filtered += $line }
             }
         }
-        if ($alreadyPresent) {
-            Write-BootstrapMsg '  VM test hosts entry already present (skipped).' 'DarkGray'
-        } else {
-            Add-Content -LiteralPath $hostsFile -Encoding ASCII -Value ''
-            Add-Content -LiteralPath $hostsFile -Encoding ASCII -Value '# *** MAST VM TEST ONLY - NOT FOR PRODUCTION USE - REMOVE BEFORE PRODUCTION DEPLOY ***'
-            Add-Content -LiteralPath $hostsFile -Encoding ASCII -Value $entry
-            Write-BootstrapMsg "  Added: $entry" 'Yellow'
-            Write-BootstrapMsg '  [WARN] Remove this entry before promoting this VM to production.' 'Red'
-        }
+        $filtered += ''
+        $filtered += '# *** MAST VM TEST ONLY - NOT FOR PRODUCTION USE - REMOVE BEFORE PRODUCTION DEPLOY ***'
+        $filtered += $entry
+        Set-Content -LiteralPath $hostsFile -Encoding ASCII -Value $filtered
+        Write-BootstrapMsg "  Written: $entry" 'Yellow'
+        Write-BootstrapMsg '  [WARN] Remove this entry before promoting this VM to production.' 'Red'
     }
 
     # --- Verification ---

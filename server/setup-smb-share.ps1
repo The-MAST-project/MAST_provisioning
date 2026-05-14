@@ -164,6 +164,66 @@ Set-Acl -Path $sharePath -AclObject $acl
 Write-Host "NTFS ACL: granted ReadAndExecute to '$smbUser', removed Everyone."
 
 # ---------------------------------------------------------------------------
+# mast-shared: writable share for unit machines to save files back to the server
+# ---------------------------------------------------------------------------
+$sharedRoot    = Join-Path $Top 'shared'
+$sharedName    = "mast-shared"
+$sharedComment = "MAST shared directory (read-write for units)"
+
+if (-not (Test-Path $sharedRoot)) {
+    New-Item -ItemType Directory -Force -Path $sharedRoot | Out-Null
+    Write-Host "Created shared directory: $sharedRoot"
+}
+
+$existingShared = Get-SmbShare -Name $sharedName -ErrorAction SilentlyContinue
+if ($existingShared) {
+    Write-Host "Share '$sharedName' already exists at $($existingShared.Path)"
+    if ($existingShared.Path -ne $sharedRoot) {
+        Write-Warning "Path mismatch ($($existingShared.Path) vs $sharedRoot) -- removing and recreating..."
+        Remove-SmbShare -Name $sharedName -Force
+        $existingShared = $null
+    }
+}
+
+if (-not $existingShared) {
+    New-SmbShare -Name $sharedName `
+                 -Path $sharedRoot `
+                 -FullAccess @("Administrators", "SYSTEM") `
+                 -ChangeAccess @($smbUser) `
+                 -Description $sharedComment `
+                 -ErrorAction Stop | Out-Null
+    Write-Host "Created SMB share: \\$($env:COMPUTERNAME)\$sharedName"
+} else {
+    Grant-SmbShareAccess  -Name $sharedName -AccountName $smbUser `
+                          -AccessRight Change -Force -ErrorAction SilentlyContinue | Out-Null
+    Revoke-SmbShareAccess -Name $sharedName -AccountName "Everyone" `
+                          -Force -ErrorAction SilentlyContinue | Out-Null
+    Write-Host "Updated SMB share permissions for '$smbUser' on '$sharedName'."
+}
+
+# NTFS ACL: grant mast-transfer Modify (create/write/delete) on the shared directory.
+$sharedAcl = Get-Acl $sharedRoot
+$sharedRulesToRemove = $sharedAcl.Access | Where-Object {
+    try {
+        $_.IdentityReference.Translate(
+            [System.Security.Principal.SecurityIdentifier]
+        ).Value -eq $everyoneSid.Value
+    } catch { $false }
+}
+foreach ($r in $sharedRulesToRemove) { $sharedAcl.RemoveAccessRule($r) | Out-Null }
+
+$sharedXferRule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+    $smbUser,
+    "Modify",
+    "ContainerInherit,ObjectInherit",
+    "None",
+    "Allow"
+)
+$sharedAcl.AddAccessRule($sharedXferRule)
+Set-Acl -Path $sharedRoot -AclObject $sharedAcl
+Write-Host "NTFS ACL: granted Modify to '$smbUser' on shared directory, removed Everyone."
+
+# ---------------------------------------------------------------------------
 # Done
 # ---------------------------------------------------------------------------
 Write-Host ""
@@ -173,6 +233,11 @@ Write-Host "  UNC:              \\$($env:COMPUTERNAME)\$shareName"
 Write-Host "  Local path:       $sharePath"
 Write-Host "  Transfer account: $smbUser"
 Write-Host "  Unit pulls from:  \\$($env:COMPUTERNAME)\$shareName\<hostname>\01-provisioning"
+Write-Host ""
+Write-Host "Shared (writable) share ready:"
+Write-Host "  UNC:              \\$($env:COMPUTERNAME)\$sharedName"
+Write-Host "  Local path:       $sharedRoot"
+Write-Host "  Unit maps as:     Z: -> \\$($env:COMPUTERNAME)\$sharedName"
 Write-Host "=========================================="
 Write-Host "Setup complete. Run install-scheduled-task.ps1 to activate the autonomous loop."
 Write-Host "=========================================="

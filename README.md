@@ -153,51 +153,30 @@ under `C:\MAST\logs\onboarding\<hostname>.log`).
 
 ## Autonomous loop on the prov server
 
-### One-time SMB share setup (elevated, run once per provisioning server)
+For complete step-by-step instructions starting from a bare Windows machine,
+see **[docs/provisioning-server-setup.md](docs/provisioning-server-setup.md)**.
 
-Before the autonomous loop can transfer payloads, run `setup-smb-share.ps1` from an
-**elevated** PowerShell (it auto-elevates if needed). This creates the `mast-staging`
-SMB share, the read-only `mast-transfer` local account (password from `vault/creds.json`),
-and the NTFS permissions that allow units to pull their payloads:
+The abbreviated setup sequence is:
 
 ```powershell
+# 1. Clone repo + pull LFS assets, populate vault/creds.json
+# 2. Create server/unit-registry.json from the template
+
+# 3. One-time elevated setup (SMB shares + mast-transfer account):
 .\server\setup-smb-share.ps1
-```
 
-Verify the share is ready:
-
-```powershell
-Get-SmbShare -Name mast-staging | Select Name, Path
-Get-SmbShareAccess -Name mast-staging
-```
-
-This is a one-time step. The Task Scheduler job and all subsequent runs of
-`check-and-provision.ps1` operate non-elevated and use the share as-is.
-
-### Install the Task Scheduler job
-
-After the SMB share is set up, install and enable the job:
-
-```powershell
-# On the prov server, as Administrator:
+# 4. Install the Task Scheduler job (runs check-and-provision.ps1 every 30 min):
 .\server\install-scheduled-task.ps1
-Start-ScheduledTask -TaskName MAST-CheckAndProvision   # run once now
-Get-ScheduledTask    -TaskName MAST-CheckAndProvision | Get-ScheduledTaskInfo
+
+# 5. Trigger the first run and watch logs:
+Start-ScheduledTask -TaskName MAST-CheckAndProvision
+Get-Content C:\MAST\logs\prov\sessions\run-*\*.log -Wait
 ```
 
-Each run:
-1. Reads `server/unit-registry.json` for the unit list.
-2. For every reachable unit: builds the latest staging payload, compares its
-   `build-manifest.json` `payload_hash` against the unit's
-   `C:\MAST\installed-manifest.json`, and skips if matching.
-3. Otherwise sends a short `Invoke-Command` to the unit, which mounts
-   `\\prov-server\mast-staging` (authenticating as `mast-transfer`) and robocopy's
-   its payload to `C:\mast-staging\<run-id>`, then runs `execute-mast-provisioning.ps1`.
-4. Verifies smoke markers and writes structured logs to
-   `C:\MAST\logs\prov\sessions\run-<ts>\run-<ts>.log` and `C:\MAST\logs\prov\activity.csv`.
-
-See `autonomous-provisioning.md` for the full design (log schema, availability
-contract, maintenance windows).
+Each run reads `server/unit-registry.json`, builds a per-unit staging payload,
+compares the payload hash to the unit's installed manifest, and provisions any
+unit whose hash has changed. Results are written to
+`C:\MAST\logs\prov\activity.csv`.
 
 ---
 
@@ -207,29 +186,11 @@ This is the bring-up loop used while debugging modules. The Python orchestrator
 `vm/run-prov-test.py` drives it. It is **dev-only**; the production driver is
 `server/check-and-provision.ps1` running under Task Scheduler.
 
-### One-time host setup
+For the full one-time host setup (prerequisites, vault population, firewall,
+DNS), see **[docs/provisioning-server-setup.md - Dev/test variant](docs/provisioning-server-setup.md#devtest-variant-virtualbox-on-the-same-host)**.
 
-```powershell
-# Non-elevated:
-winget install Python.Python.3.12   # if not already installed
-pip install pywinrm
-
-# Elevated (once):
-.\vm\admin-prep.ps1                  # adds VBox + Python to Machine PATH, opens ICMP
-```
-
-Then create `vault/creds.json` from `vault/creds.json.template`:
-
-```json
-{
-    "unit": { "user": ".\\mast", "pass": "physics" },
-    "smb":  { "user": "mast-transfer", "pass": "<choose a strong password>" }
-}
-```
-
-`unit` is the WinRM credential for connecting to units. `smb` is a read-only local
-account created on the provisioning server; units authenticate with it to pull their
-staging payload over SMB.
+The quick summary: install Python 3.12 + pywinrm, run `vm\admin-prep.ps1`
+(elevated once), and populate `vault\creds.json` from the template.
 
 ### One-time unit VM setup
 
@@ -378,5 +339,7 @@ Never commit secrets, tokens, or `.lic` files.
 
 ## See also
 
-- [DECISIONS.md](DECISIONS.md) - architecture decisions, in chronological order
+- [docs/provisioning-server-setup.md](docs/provisioning-server-setup.md) - full installation guide (bare Windows -> running autonomous loop)
+- [DECISIONS.md](DECISIONS.md) - architecture decisions, in reverse-chronological order
 - [autonomous-provisioning-requirements.md](autonomous-provisioning-requirements.md) - design of the autonomous loop
+- [docs/provisioning-flow.md](docs/provisioning-flow.md) - protocol and privilege flow diagrams

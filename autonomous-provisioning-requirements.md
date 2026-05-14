@@ -136,11 +136,25 @@ The per-unit `modules` array is the seed for future profile-based provisioning: 
 units can already receive different module sets by editing their registry entry. See
 **Unit profiles (future hardware variation)** in Phase 2 for the fuller design.
 
-#### 2. Build Manifest (`build-manifest.json`) **[DONE]**
+#### 2. Build Manifest (`build-manifest.json`) **[PARTIAL]**
 
 Written by `build-mast.ps1` after a successful build. Contains a content hash (or version
 tag) for the staged payload so units can compare what they have installed against what's
 current.
+
+**Current actual schema** (as written by `build-mast.ps1`):
+
+```json
+{
+  "built_at": "2026-05-14T07:51:14Z",
+  "git_sha": "6aeac999502187164b6a97bd4ca0c288a49b1359",
+  "payload_hash": "<sha256>",
+  "hostname": "mast01",
+  "modules": ["ascom", "chrome", "cygwin", "..."]
+}
+```
+
+**Target schema** (adds `module_versions` -- not yet emitted):
 
 ```json
 {
@@ -159,12 +173,11 @@ current.
 ```
 
 `build-mast.ps1` writes this to `staging\<hostname>\build-manifest.json` at build time.
-The `module_versions` map is populated from the `version` field in each provider's
-`module.json`. It is the authoritative record of what version of each package was staged
-for a given build, and is carried through to `installed-manifest.json` on the unit after
-a successful provisioning run. This makes it possible to answer "what version of python
-is on mast03?" without logging into the unit, and to correlate timing regressions or
-failures with specific version bumps.
+The `module_versions` map should be populated from the `version` field in each provider's
+`module.json`, but this field is **not yet emitted**. It is needed to answer "what version
+of python is on mast03?" without logging into the unit, and to correlate timing regressions
+or failures with specific version bumps. Adding it requires that each `module.json` carries
+a `version` field and that `build-mast.ps1` reads and aggregates those fields.
 
 #### 3. Installed / effective state (on each unit) **[PARTIAL]**
 
@@ -180,11 +193,15 @@ the effective hash reported by the unit to decide whether an update is needed.
 
 #### 4. `check-and-provision.ps1` (prov server driver) **[PARTIAL]**
 
-The script exists and can perform provisioning steps when invoked manually. It is **not**
-yet a hardened autonomous driver: it has not been validated end-to-end against a real unit,
-the transfer mechanism requires elevated WinRM client config (see Phase 1), and the
-maintenance window logic is not enforced. The intended control flow once Phase 1 is
-complete:
+The script implements the full provisioning control flow using WinRM Basic HTTP (port 5985,
+no `TrustedHosts` elevation required) and SMB pull for payload transfer. The workflow runs
+end-to-end against a VirtualBox unit. It writes `activity.csv` with the documented schema
+and manages `availability.json` on the unit.
+
+**Remaining gap:** maintenance window enforcement is not yet implemented -- the
+`maintenance_window` / `timezone` fields in `unit-registry.json` are read but disruptive
+steps are never skipped based on them. The task scheduler job (see item 5) is also not
+yet activated on the production server. The intended control flow is:
 
 ```
 for each unit in unit-registry.json:
@@ -219,36 +236,25 @@ installed and activated on the provisioning server; this is blocked on Phase 1 w
 
 ---
 
-### Transfer: Prov Server -> Unit **[PARTIAL]**
+### Transfer: Prov Server -> Unit **[DONE]**
 
-`check-and-provision.ps1` currently uses `Copy-Item -ToSession` (WinRM push). This works
-in the dev/test environment but requires `TrustedHosts` configuration on the provisioning
-server (an elevated operation). **The production mechanism is SMB pull** (see below);
-the WinRM push is a dev-only shortcut to be retired.
-
-**Production transfer: unit pulls from prov server SMB share**
-
-The provisioning server exposes `\\<prov-server>\mast-staging` as an SMB share (created
-by `build-mast.ps1`). The orchestrator sends a short WinRM command to the unit triggering
-`net use` + `robocopy` (or `xcopy`) to pull the staged payload. No credential forwarding
-or CredSSP is required on the unit side; the share credential is passed explicitly in the
-`net use` call.
+`check-and-provision.ps1` uses **SMB pull**: the unit connects to
+`\\<prov-server>\mast-staging` and copies its payload using `net use` + `robocopy` via a
+short WinRM command sent by the orchestrator. `Copy-Item -ToSession` (WinRM push) is no
+longer used. No credential forwarding or CredSSP is required on the provisioning server
+side.
 
 **Credential handling:** the SMB share requires authenticated access. The provisioning
 service account credentials (or a dedicated read-only share account) must be stored
-securely on the unit side or passed at call time via the WinRM command. This is more
-involved than a public HTTP endpoint but avoids the double-hop problem and keeps the
-prov server's WinRM client unprivileged.
+securely on the unit side or passed at call time via the WinRM command. This avoids the
+double-hop problem and keeps the prov server's WinRM client unprivileged.
 
 **Required setup on prov server:**
-- SMB share `mast-staging` pointing at the staging output directory (already created by
-  `build-mast.ps1` when not run with `-SkipSmbShare`).
+- SMB share `mast-staging` pointing at the staging output directory (created by
+  `build-mast.ps1`).
 - Share and NTFS permissions scoped to the unit service account or a dedicated
   `mast-transfer` account.
 - Firewall rule allowing TCP 445 inbound from the unit subnet.
-
-Migration from `Copy-Item -ToSession` to SMB pull is tracked under **Phase 1 -
-Provisioning server privilege model**.
 
 ---
 
@@ -451,27 +457,22 @@ required for core operation.
 1. **PowerShell remoting client (`New-PSSession`, `Invoke-Command`, `Copy-Item -ToSession`)**
    often assumes the WinRM **client** on the server machine is configured (for example
    **TrustedHosts** for workgroup targets). Updating machine-wide WinRM client settings
-   typically requires **administrator** rights on the **provisioning server**. This is the
-   current behavior of `check-and-provision.ps1` and must be migrated.
+   typically requires **administrator** rights on the **provisioning server**.
 
-2. **Target approach for remote execution and script transfer without elevating the prov
-   server:** use **WinRM over HTTP (5985) with Basic authentication**, the same surface
-   enabled by `client/bootstrap-winrm.ps1` on the unit. From Python, **`pywinrm`** issues
-   SOAP to `http://<hostname>:5985/wsman` and does **not** depend on local `TrustedHosts`
-   or `Enable-PSRemoting` on the orchestrator machine. This repo already includes
-   **`tools/run-remote-script-winrm.py`** for this purpose.
+2. **Remote execution without elevating the prov server:** `check-and-provision.ps1` uses
+   **WinRM over HTTP (5985) with Basic authentication** -- the same surface enabled by
+   `client/bootstrap-winrm.ps1` on the unit. This does **not** depend on local
+   `TrustedHosts` or `Enable-PSRemoting` on the orchestrator machine. **[DONE]**
 
 3. **Large payload delivery (`staging/` artifacts)** uses **SMB pull**: the unit connects
    to `\\<prov-server>\mast-staging` and copies its payload using `net use` + `robocopy`.
    The orchestrator sends only a short WinRM command to trigger the pull; no credential
    forwarding or CredSSP is required on the provisioning server side. See **Transfer:
-   Prov Server -> Unit** for share setup and credential handling.
+   Prov Server -> Unit** for share setup and credential handling. **[DONE]**
 
-4. **`check-and-provision.ps1` today** uses **`New-PSSession`** and
-   **`Copy-Item -ToSession`**. **Migration requirement:** replace the push transfer with
-   an SMB pull triggered via a short WinRM command, and migrate remote control commands
-   to **WinRM Basic HTTP** (same model as `run-remote-script-winrm.py`). The target end
-   state is **non-elevated service + hostname-based WinRM Basic + SMB pull transfer**.
+4. **`check-and-provision.ps1`** no longer uses `New-PSSession` with `TrustedHosts` or
+   `Copy-Item -ToSession`. The current implementation achieves the target end state of
+   **non-elevated service + WinRM Basic HTTP + SMB pull transfer**. **[DONE]**
 
 ---
 
@@ -556,17 +557,12 @@ While stabilizing the end-to-end flow against a disposable VirtualBox VM, the re
 on several **test-mode exceptions**. These must be eliminated before the autonomous
 provisioning system is declared production-ready for physical units.
 
-#### 1. SMB share bypassed in dev/test
+#### 1. SMB share / transfer mechanism **[DONE]**
 
-- **Current exception:** `build-mast.ps1` can run non-elevated with `-SkipSmbShare` (and
-  `check-and-provision.ps1` passes it by default), falling back to WinRM
-  `Copy-Item -ToSession` push.
-- **Why it's a blocker:** production transfer is SMB pull. The share must exist, be
-  permissioned, and be reachable from the unit. `-SkipSmbShare` must not be used in
-  production runs.
-- **Exit criteria:** `build-mast.ps1` always creates the SMB share in production mode;
-  share account credentials are provisioned and stored securely; `check-and-provision.ps1`
-  triggers SMB pull via a short WinRM command instead of pushing via `Copy-Item -ToSession`.
+`check-and-provision.ps1` uses SMB pull exclusively; `Copy-Item -ToSession` is no longer
+present. `build-mast.ps1` does not have a `-SkipSmbShare` parameter. Share account
+credentials must still be provisioned and stored securely on the unit for production use,
+but the code path is correct. This exception is resolved.
 
 #### 2. Paid / sensitive artifacts skipped (licenses)
 
@@ -1201,7 +1197,7 @@ and the MAST application can enumerate the camera without a manual driver instal
 | 2 | `payload_hash` generation in `build-mast.ps1` -> write `build-manifest.json` with git ref fields | **[DONE]** |
 | 3 | Unit-side effective state: inspection-based probe (or hardened `installed-manifest.json`) | **Phase 1** |
 | 4 | Per-module uninstall/reinstall paths; `build-mast.ps1` support for pinned git refs and rollback | **Phase 2** |
-| 5 | Migrate `check-and-provision.ps1` to non-elevated WinRM Basic + SMB pull transfer (retire `Copy-Item -ToSession`; provision share credentials) | **Phase 1** |
+| 5 | Migrate `check-and-provision.ps1` to non-elevated WinRM Basic + SMB pull transfer (retire `Copy-Item -ToSession`; provision share credentials) | **[DONE]** |
 | 6 | Confirm `git lfs pull` works on prov server (deploy key or stored credential) | **Phase 1** |
 | 7 | Task Scheduler trigger (or service wrapper) on the prov server | **[PARTIAL]** - installer script exists; task not yet active |
 | 8 | Manual dry-runs (`check-and-provision.ps1 -DryRun`) to validate discovery + hash logic | **Phase 1** |

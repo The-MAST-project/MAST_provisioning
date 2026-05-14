@@ -1,6 +1,9 @@
 [CmdletBinding()]
 param(
-    [string]${StagingPath} = "."
+    [string]${StagingPath} = ".",
+    [string]${ProvServer}  = "",
+    [string]${SmbUser}     = "",
+    [string]${SmbPass}     = ""
 )
 
 ${ErrorActionPreference} = "Stop"
@@ -64,12 +67,52 @@ function Write-Log {
     "${timestamp} | ${Message}" | Tee-Object -FilePath ${logFile} -Append
 }
 
+# Track whether this run mapped Z: so the finally block only unmaps what we mapped.
+${script:MappedSharedDrive} = $false
+
 try {
     Write-Log "=========================================="
     Write-Log "Starting MAST provisioning execution"
     Write-Log "=========================================="
     Write-Log "Staging path: ${StagingPath}"
     Write-Log "Hostname: ${env:COMPUTERNAME}"
+
+    # ---------------------------------------------------------------
+    # Map Z: -> \\<ProvServer>\mast-shared (writable shared directory)
+    # Skip if ProvServer was not passed or if Z: is already in use.
+    # ---------------------------------------------------------------
+    if (-not [string]::IsNullOrWhiteSpace(${ProvServer})) {
+        ${sharedUNC} = "\\${ProvServer}\mast-shared"
+        ${zDrive} = Get-PSDrive -Name 'Z' -ErrorAction SilentlyContinue
+        if (${zDrive}) {
+            Write-Log "Z: drive already mapped (root: $($zDrive.Root)) -- skipping mast-shared mapping."
+        } else {
+            Write-Log "Mapping Z: -> ${sharedUNC}"
+            ${netArgs} = @('use', 'Z:', ${sharedUNC}, '/persistent:no')
+            if (-not [string]::IsNullOrWhiteSpace(${SmbUser})) {
+                ${netArgs} += ${SmbPass}
+                ${netArgs} += "/user:${SmbUser}"
+            }
+            ${netOut} = & net @netArgs 2>&1
+            ${netRc}  = $LASTEXITCODE
+            if (${netRc} -eq 0) {
+                ${script:MappedSharedDrive} = $true
+                Write-Log "Z: mapped OK."
+
+                # Verify the share is writable.
+                ${testFile} = "Z:\mast-write-test-${env:COMPUTERNAME}.tmp"
+                try {
+                    [System.IO.File]::WriteAllText(${testFile}, "write-test")
+                    Remove-Item -Force ${testFile} -ErrorAction SilentlyContinue
+                    Write-Log "Z: write verification: OK"
+                } catch {
+                    Write-Log "[WARN] Z: write verification failed: $($_.Exception.Message)"
+                }
+            } else {
+                Write-Log "[WARN] Z: mapping failed (rc=${netRc}): $(($netOut | Out-String).Trim()) -- continuing without shared drive."
+            }
+        }
+    }
 
     # Verify staging path exists
     if (-not (Test-Path ${StagingPath})) {
@@ -197,6 +240,10 @@ catch {
     exit 1
 }
 finally {
+    if (${script:MappedSharedDrive}) {
+        & net use Z: /delete /yes 2>&1 | Out-Null
+        Write-Log "Z: unmapped."
+    }
     Write-Log "Log file: ${logFile}"
     Remove-Item -Force ${lockPath} -ErrorAction SilentlyContinue
 }

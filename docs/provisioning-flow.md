@@ -27,7 +27,7 @@ flowchart TB
 
   CAP -->|"1. ICMP echo (ping) + TCP WinRM probe"| UNIT
   CAP -->|"2. WinRM session"| UNIT
-  CAP -->|"3. Payload: Copy-Item -ToSession<br/>(WS-Management over the WinRM channel)"| STAGE
+  CAP -->|"3. Payload: unit robocopy from \\prov\mast-staging<br/>(SMB pull; mast-transfer account)"| STAGE
   CAP -->|"4. Invoke remote: execute-mast-provisioning.ps1"| EXEC
 
   NOTE["WinRM transport (check-and-provision -WinRMUseSSL):<br/>- HTTP :5985 + Basic (typical bootstrap / optional)<br/>- HTTPS :5986 + NTLM (recommended steady state)"]
@@ -53,7 +53,8 @@ flowchart TB
 | DNS (or static hosts in dev) | Resolve hostname `mastNN`; units use DHCP. |
 | WinRM TCP **5985** (HTTP, Basic) | Optional / bootstrap; used when not passing `-WinRMUseSSL`. |
 | WinRM TCP **5986** (HTTPS, NTLM) | Recommended steady state when `-WinRMUseSSL` is used. |
-| WS-Management | Control plane and **`Copy-Item -ToSession`** payload transfer share the WinRM session. |
+| SMB TCP **445** | Payload transfer: unit robocopy's its staging payload from `\\prov-server\mast-staging` (pull model, `mast-transfer` account). |
+| WS-Management | Control plane only (WinRM commands to trigger the SMB pull and execute provisioning). |
 
 ---
 
@@ -119,6 +120,9 @@ flowchart LR
 
 ---
 
-## Optional / alternate transfer (design and build flags)
+## Transfer mechanism
 
-`autonomous-provisioning.md` discusses **unit pull** via **SMB** or **HTTP** from the provisioning server for large payloads. **`check-and-provision.ps1` currently uses WinRM `Copy-Item -ToSession`.** `build/build-mast.ps1` can create an **SMB share** when not using `-SkipSmbShare`.
+`check-and-provision.ps1` uses **SMB pull**: the unit connects to
+`\\prov-server\mast-staging` and robocopy's its payload (no `-SkipSmbShare`
+flag; `setup-smb-share.ps1` must be run once on the prov server). `Copy-Item
+-ToSession` is no longer used. See DECISIONS.md (2026-05-14) for the rationale.

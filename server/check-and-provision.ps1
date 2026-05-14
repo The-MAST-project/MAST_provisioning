@@ -388,12 +388,16 @@ foreach ($unit in $units) {
             Log-Event 'EXECUTE_START' @{ unit=$hostname }
             $eStart = Get-Date
             $execResult = Invoke-Command -Session $session -ScriptBlock {
-                param($stagePath)
+                param($stagePath, $provSrv, $smbUsr, $smbPwd)
                 Set-ExecutionPolicy Bypass -Scope Process -Force
                 # Suppress script output so the WinRM return value is just the exit code.
-                $null = & (Join-Path $stagePath 'execute-mast-provisioning.ps1') -StagingPath $stagePath
+                $null = & (Join-Path $stagePath 'execute-mast-provisioning.ps1') `
+                    -StagingPath $stagePath `
+                    -ProvServer   $provSrv `
+                    -SmbUser      $smbUsr `
+                    -SmbPass      $smbPwd
                 return [int]$LASTEXITCODE
-            } -ArgumentList $unitStage
+            } -ArgumentList $unitStage, $provServer, $smbUser, $smbPass
             $execRc = [int]($execResult | Select-Object -Last 1)
             $eDur   = [int]((Get-Date) - $eStart).TotalSeconds
             if ($execRc -ne 0) {

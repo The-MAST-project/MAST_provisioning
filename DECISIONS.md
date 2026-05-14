@@ -2,6 +2,34 @@
 
 ---
 
+## [2026-05-14] mast-shared SMB share: writable Z: drive for unit machines
+
+**Why:** Unit machines need a place to write files back to the provisioning
+server (logs, diagnostics, results) without requiring CredSSP or per-unit
+credentials. The existing mast-transfer account already authenticates units to
+the server; extending it with write access on a separate share keeps the
+credential model simple and avoids widening access on the read-only staging
+share.
+
+**What:**
+- `server/setup-smb-share.ps1`: creates `<RepoTop>/shared/` and exposes it as
+  `\\<server>\mast-shared` with SMB Change and NTFS Modify access for
+  `mast-transfer`. The staging share is unchanged (read-only).
+- `client/execute-mast-provisioning.ps1`: accepts new `-ProvServer`, `-SmbUser`,
+  `-SmbPass` parameters. At startup it maps `Z: -> \\<ProvServer>\mast-shared`
+  (skips gracefully if Z: is already in use) and verifies write access with a
+  probe file. Z: is unmapped in the `finally` block.
+- `server/check-and-provision.ps1`: passes `$provServer`, `$smbUser`,
+  `$smbPass` through the execute invoke scriptblock so the unit receives them.
+
+**Implications:**
+- `setup-smb-share.ps1` must be re-run (once, elevated) on the provisioning
+  server to create the `shared/` directory and the `mast-shared` SMB share.
+- Units provisioned before this change had no Z: drive; they will get it on the
+  next provisioning cycle automatically once the server share is created.
+- If a unit already has Z: mapped to something else when provisioning runs, the
+  mapping is left untouched and a log note is written -- no error is raised.
+
 ## [2026-05-14] Stage module disabled in default build
 
 **Why:** The stage (XILab/Standa mount controller) provisioning step caused
