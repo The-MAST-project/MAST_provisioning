@@ -8,7 +8,7 @@ driver) is working - see autonomous-provisioning.md.
 
 Drives a full MAST provisioning cycle:
   1. BUILD    - host runs build-mast.ps1 locally (no VM, no WinRM)
-  2. TRANSFER - staged payload pushed to the unit VM via HTTP pull
+  2. TRANSFER - staged payload pulled by the unit VM via SMB (net use + robocopy)
   3. EXECUTE  - unit runs execute-mast-provisioning.ps1 (skipped with --build-transfer-verify)
   3b. VERIFY-RUN (optional) - with --build-transfer-verify, unit runs run-verify-only.ps1 instead
   4. VERIFY   - smoke-test markers and pass criteria checked (criteria differ in verify-only mode)
@@ -29,7 +29,8 @@ Usage (Windows PowerShell, run from anywhere):
 
 Credentials read from vault/creds.json (gitignored):
     {
-        "unit": {"user": ".\\\\mast", "pass": "..."}
+        "unit": {"user": ".\\\\mast", "pass": "..."},
+        "smb":  {"user": "mast-transfer", "pass": "..."}
     }
 
 Dependencies:
@@ -39,8 +40,8 @@ Dependencies:
 from __future__ import annotations
 
 import argparse
-import http.server
 import json
+import os
 import re
 import socket
 import subprocess
@@ -70,10 +71,8 @@ LOG_ROOT = Path(r"C:\MAST\logs\dev")
 
 VBOXMANAGE = Path(r"C:\Program Files\Oracle\VirtualBox\VBoxManage.exe")
 
-# The Windows host's address on the host-only adapter - the unit pulls
-# staging files from us over HTTP on this address.
-HOST_TRANSFER_HOST = "192.168.56.1"
-HTTP_TRANSFER_PORT = 18080
+# Hostname of the provisioning server (this machine) as the unit will address it for SMB.
+PROV_SERVER = os.environ.get("COMPUTERNAME") or socket.gethostname()
 
 WINRM_PORT = 5985
 WINRM_TIMEOUT_S = 90 * 60
@@ -222,6 +221,7 @@ def _run_with_heartbeat(
     fn: Any,
     label: str,
     timeout_s: int = WINRM_CALL_TIMEOUT_S,
+    step_timer: list[float] | None = None,
 ) -> Any:
     result: list[Any] = []
     exc: list[BaseException] = []
@@ -234,15 +234,14 @@ def _run_with_heartbeat(
 
     t = threading.Thread(target=worker, daemon=True)
     start = time.monotonic()
-    last_beat = start
     t.start()
     while t.is_alive():
         t.join(timeout=HEARTBEAT_INTERVAL_S)
         if t.is_alive():
             now = time.monotonic()
             elapsed = int(now - start)
-            step = int(now - last_beat)
-            last_beat = now
+            step_start = step_timer[0] if step_timer is not None else start
+            step = int(now - step_start)
             log(f"  ... {label} still running ({_fmt_mmss(elapsed)} elapsed, step {_fmt_mmss(step)})")
             if elapsed >= timeout_s:
                 raise TimeoutError(
@@ -297,6 +296,7 @@ def run_ps(
     label: str = "",
     timeout_s: int = WINRM_CALL_TIMEOUT_S,
     echo: bool = True,
+    step_timer: list[float] | None = None,
 ) -> winrm.Response:
     """Run a PowerShell script via WinRM with heartbeat logging and a hard timeout."""
     tag = f"[{label}] " if label else ""
@@ -306,6 +306,7 @@ def run_ps(
         lambda: session.run_ps(script),
         label=f"{tag}run_ps",
         timeout_s=timeout_s,
+        step_timer=step_timer,
     )
     if r.std_out:
         log_raw(r.std_out.decode(errors="replace").rstrip())
@@ -438,11 +439,13 @@ class ExecuteLogPoller:
         host: str,
         cred: dict[str, str],
         log_filename: str = "provisioning-execute.log",
+        step_timer: list[float] | None = None,
     ) -> None:
         self._host = host
         self._cred = cred
         self._session = self._new_session()
         self._log_filename = log_filename
+        self._step_timer = step_timer
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._lines_seen = 0
@@ -499,6 +502,8 @@ class ExecuteLogPoller:
                         new_lines = new_text.splitlines()
                         for line in new_lines:
                             log_raw(f"  [unit] {line}")
+                            if self._step_timer is not None and "[Order:" in line:
+                                self._step_timer[0] = time.monotonic()
                         self._lines_seen += len(new_lines)
                 consecutive_errors = 0
             except Exception as e:
@@ -532,9 +537,6 @@ def phase_build(hostname: str, modules: list[str]) -> None:
             "-File", str(build_script),
             "-Top", str(REPO_ROOT),
             "-HostName", hostname,
-            # Dev/test: avoid admin-only SMB share creation in build-mast.ps1.
-            # Transfer to the unit happens over the embedded HTTP server in this test harness.
-            "-SkipSmbShare",
             # Dev/test: allow missing large optional assets and license/token material.
             "-TestMode",
             "-AllowMissingNoMachineLicense",
@@ -553,158 +555,67 @@ def phase_build(hostname: str, modules: list[str]) -> None:
             raise RuntimeError(f"BUILD failed with exit code {proc.returncode}")
 
 
-class _FileServer(http.server.SimpleHTTPRequestHandler):
-    def log_message(self, fmt: str, *args: object) -> None:
-        pass
-
-
-def _start_file_server(root: Path) -> tuple[http.server.HTTPServer, threading.Thread]:
-    # Bind only to the host-only address so Windows Firewall can scope to 192.168.56.0/24
-    # and we do not listen on the public NIC for the same port.
-    server = http.server.HTTPServer(
-        (HOST_TRANSFER_HOST, HTTP_TRANSFER_PORT),
-        lambda *a, **kw: _FileServer(*a, directory=str(root), **kw),
-    )
-    t = threading.Thread(target=server.serve_forever, daemon=True)
-    t.start()
-    return server, t
-
-
-def _collect_transfer_files(hostname: str) -> list[tuple[Path, str]]:
-    staging = REPO_ROOT / "staging" / hostname / "01-provisioning"
-    providers = REPO_ROOT / "server" / "providers"
-
-    if not staging.exists():
-        raise RuntimeError(f"Staging directory not found: {staging}")
-
-    files: list[tuple[Path, str]] = []
-    seen: set[str] = set()
-
-    commands_json = staging / "commands.json"
-
-    for f in sorted(staging.iterdir()):
-        if not f.is_file():
-            continue
-        if f.stat().st_size < 500:
-            content = f.read_bytes()
-            if b"git-lfs" in content:
-                continue
-        files.append((f, f.name))
-        seen.add(f.name)
-
-    if commands_json.exists():
-        cmds = json.loads(commands_json.read_text(encoding="utf-8-sig"))
-        modules_seen: set[str] = set()
-        for cmd in cmds:
-            mod = cmd.get("module", "")
-            if not mod or mod in modules_seen:
-                continue
-            modules_seen.add(mod)
-            mod_dir = providers / mod
-            manifest = mod_dir / "module.json"
-            if not manifest.exists():
-                continue
-            mdata = json.loads(manifest.read_text(encoding="utf-8"))
-            for cf in mdata.get("commandfiles", []):
-                name = Path(cf).name
-                if name in seen:
-                    continue
-                src = mod_dir / cf
-                if src.exists() and src.stat().st_size > 500:
-                    files.append((src, name))
-                    seen.add(name)
-
-    return files
-
-
-def phase_transfer(unit: winrm.Session, hostname: str) -> None:
+def phase_transfer(
+    unit: winrm.Session,
+    hostname: str,
+    run_id: str,
+    smb_user: str,
+    smb_pass: str,
+) -> str:
+    """Pull staging payload from the SMB share to the unit. Returns the unit staging path."""
     with timed("TRANSFER PHASE"):
-        transfer_files = _collect_transfer_files(hostname)
-        total_bytes = sum(f.stat().st_size for f, _ in transfer_files)
+        staging_dir = REPO_ROOT / "staging" / hostname / "01-provisioning"
+        if not staging_dir.exists():
+            raise RuntimeError(f"Staging directory not found: {staging_dir}")
+        files = [f for f in staging_dir.iterdir() if f.is_file()]
+        total_bytes = sum(f.stat().st_size for f in files)
+        unit_stage = f"C:\\mast-staging\\{run_id}"
+        src_unc = f"\\\\{PROV_SERVER}\\mast-staging\\{hostname}\\01-provisioning"
+        smb_pass_ps = smb_pass.replace("'", "''")
+
         log(
-            f"{len(transfer_files)} files, {total_bytes / 1_048_576:.1f} MB total  "
-            f"via HTTP from {HOST_TRANSFER_HOST}:{HTTP_TRANSFER_PORT}"
+            f"{len(files)} files, {total_bytes / 1_048_576:.1f} MB  "
+            f"via SMB pull from {src_unc}"
         )
 
-        import tempfile
-        with tempfile.TemporaryDirectory() as tmpdir:
-            serve_root = Path(tmpdir)
-            for local, remote_name in transfer_files:
-                # On Windows, symlinks need either Developer Mode or admin -
-                # fall back to hardlink on the same volume, then copy.
-                dest = serve_root / remote_name
-                try:
-                    dest.symlink_to(local.resolve())
-                except (OSError, NotImplementedError):
-                    try:
-                        import os as _os
-                        _os.link(str(local.resolve()), str(dest))
-                    except OSError:
-                        import shutil as _shutil
-                        _shutil.copy2(local, dest)
+        pull_script = REPO_ROOT / "client" / "mast-pull-staging.ps1"
+        raw = pull_script.read_text(encoding="ascii")
+        # pywinrm base64-encodes the script for -EncodedCommand, which has an ~8192-char
+        # argument limit on the WinRM service. Strip the block comment (.SYNOPSIS) and
+        # blank lines to stay under that limit. check-and-provision.ps1 uses
+        # Invoke-Command -FilePath which sends the full file without this constraint.
+        script_text = re.sub(r'<#.*?#>', '', raw, flags=re.DOTALL)
+        script_text = '\n'.join(ln for ln in script_text.splitlines() if ln.strip())
 
-            log(f"Starting HTTP file server on port {HTTP_TRANSFER_PORT}...")
-            server, serve_thread = _start_file_server(serve_root)
-            try:
-                log("Clearing C:\\mast-staging on unit...")
-                r = run_ps(
-                    unit,
-                    'if (Test-Path "C:\\mast-staging") {'
-                    '  cmd /c "rd /s /q C:\\mast-staging" }'
-                    'New-Item -ItemType Directory -Force "C:\\mast-staging" | Out-Null;'
-                    'Write-Host "mast-staging ready"',
-                    label="clear-staging",
-                    timeout_s=5 * 60,
-                )
-                if r.status_code != 0:
-                    raise RuntimeError("Failed to prepare C:\\mast-staging on unit")
+        ps = (
+            f"$r=&{{\n{script_text}\n}}"
+            f" -ProvServer '{PROV_SERVER}'"
+            f" -UnitHostname '{hostname}'"
+            f" -SmbUser '{smb_user}'"
+            f" -SmbPass '{smb_pass_ps}'"
+            f" -UnitStage '{unit_stage}'"
+            f" -SrcUNC '{src_unc}'\n"
+            f"if(-not $r){{Write-Error 'Transfer: null result from pull script';exit 1}}\n"
+            f"if($r.outcome -ne 'OK'){{\n"
+            f"    Write-Error \"Transfer failed outcome=$($r.outcome) rc=$($r.rc) $($r.detail)\"\n"
+            f"    exit 1\n"
+            f"}}\n"
+            f"Write-Host 'UNIT_STAGE={unit_stage}'\n"
+        )
 
-                base_url = f"http://{HOST_TRANSFER_HOST}:{HTTP_TRANSFER_PORT}"
-                t0 = time.monotonic()
-                bytes_done = 0
-                for idx, (local, remote_name) in enumerate(transfer_files, 1):
-                    url = f"{base_url}/{remote_name}"
-                    dest = f"C:\\mast-staging\\{remote_name}"
-                    size_mb = local.stat().st_size / 1_048_576
-                    elapsed = int(time.monotonic() - t0)
-                    log(
-                        f"  [{idx}/{len(transfer_files)}] {remote_name} "
-                        f"({size_mb:.1f} MB)  -- {bytes_done / 1_048_576:.0f} MB done, {elapsed}s"
-                    )
-                    r = run_ps(
-                        unit,
-                        # WebClient with Proxy=null bypasses any institutional
-                        # proxy that might intercept 192.168.56.x traffic.
-                        f'$wc=[System.Net.WebClient]::new();$wc.Proxy=$null;$wc.DownloadFile("{url}","{dest}")',
-                        label="fetch",
-                        timeout_s=30 * 60,
-                        echo=False,
-                    )
-                    if r.status_code != 0:
-                        raise RuntimeError(
-                            f"Transfer failed for {remote_name}: "
-                            + r.std_err.decode(errors="replace").strip()
-                        )
-                    bytes_done += local.stat().st_size
-            finally:
-                log("Shutting down HTTP file server.")
-                try:
-                    server.shutdown()
-                except Exception as ex:
-                    log(f"HTTP server shutdown: {ex}")
-                try:
-                    server.server_close()
-                except Exception:
-                    pass
-                serve_thread.join(timeout=30)
-                if serve_thread.is_alive():
-                    log(
-                        "WARNING: HTTP staging thread still running after shutdown; "
-                        "port may stay busy until the process exits."
-                    )
+        log(f"[transfer] mast-pull-staging.ps1 -ProvServer '{PROV_SERVER}' -UnitStage '{unit_stage}'")
+        r = run_ps(unit, ps, label="transfer", timeout_s=60 * 60, echo=False)
+        if r.status_code != 0:
+            raise RuntimeError(f"Transfer failed (exit code: {r.status_code})")
+        return unit_stage
 
 
-def phase_execute(unit: winrm.Session, host_unit: str, unit_cred: dict[str, str]) -> winrm.Response:
+def phase_execute(
+    unit: winrm.Session,
+    host_unit: str,
+    unit_cred: dict[str, str],
+    staging_path: str,
+) -> winrm.Response:
     with timed("EXECUTE PHASE"):
         log("Starting execute-mast-provisioning.ps1 on unit (up to 90 min)...")
         log(
@@ -712,15 +623,16 @@ def phase_execute(unit: winrm.Session, host_unit: str, unit_cred: dict[str, str]
             f"from unit every {EXECUTE_POLL_INTERVAL_S}s..."
         )
 
-        poller = ExecuteLogPoller(host_unit, unit_cred)
+        step_timer: list[float] = [time.monotonic()]
+        poller = ExecuteLogPoller(host_unit, unit_cred, step_timer=step_timer)
         poller.start()
         try:
             execute_cmd = (
                 "Set-ExecutionPolicy Bypass -Scope Process -Force; "
-                "& 'C:\\mast-staging\\execute-mast-provisioning.ps1' "
-                "-StagingPath 'C:\\mast-staging'"
+                f"& '{staging_path}\\execute-mast-provisioning.ps1' "
+                f"-StagingPath '{staging_path}'"
             )
-            r = run_ps(unit, execute_cmd, label="execute", timeout_s=WINRM_TIMEOUT_S)
+            r = run_ps(unit, execute_cmd, label="execute", timeout_s=WINRM_TIMEOUT_S, step_timer=step_timer)
         finally:
             poller.stop()
 
@@ -732,9 +644,12 @@ def phase_execute(unit: winrm.Session, host_unit: str, unit_cred: dict[str, str]
 
 
 def phase_run_verify_only(
-    unit: winrm.Session, host_unit: str, unit_cred: dict[str, str]
+    unit: winrm.Session,
+    host_unit: str,
+    unit_cred: dict[str, str],
+    staging_path: str,
 ) -> winrm.Response:
-    """Run run-verify-only.ps1 on the unit (expects staging at C:\\mast-staging)."""
+    """Run run-verify-only.ps1 on the unit using the given staging path."""
     with timed("VERIFY-RUN PHASE"):
         log("Starting run-verify-only.ps1 on unit (no execute-mast-provisioning.ps1)...")
         log(
@@ -742,17 +657,20 @@ def phase_run_verify_only(
             f"from unit every {EXECUTE_POLL_INTERVAL_S}s..."
         )
 
+        step_timer: list[float] = [time.monotonic()]
         poller = ExecuteLogPoller(
-            host_unit, unit_cred, log_filename="provisioning-verify-only.log"
+            host_unit, unit_cred,
+            log_filename="provisioning-verify-only.log",
+            step_timer=step_timer,
         )
         poller.start()
         try:
             verify_cmd = (
                 "Set-ExecutionPolicy Bypass -Scope Process -Force; "
-                "& 'C:\\mast-staging\\run-verify-only.ps1' "
-                "-StagingPath 'C:\\mast-staging'"
+                f"& '{staging_path}\\run-verify-only.ps1' "
+                f"-StagingPath '{staging_path}'"
             )
-            r = run_ps(unit, verify_cmd, label="verify-only", timeout_s=VERIFY_ONLY_TIMEOUT_S)
+            r = run_ps(unit, verify_cmd, label="verify-only", timeout_s=VERIFY_ONLY_TIMEOUT_S, step_timer=step_timer)
         finally:
             poller.stop()
 
@@ -969,6 +887,8 @@ def main() -> None:
     creds = load_creds()
     if "unit" not in creds:
         sys.exit("ERROR: vault/creds.json must contain a 'unit' block.")
+    if "smb" not in creds:
+        sys.exit("ERROR: vault/creds.json must contain an 'smb' block (see creds.json.template).")
 
     LOG_ROOT.mkdir(parents=True, exist_ok=True)
     run_ts = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -997,6 +917,8 @@ def main() -> None:
                 log_dir = setup_log_dir(cycle)
 
                 try:
+                    run_id = "run-" + datetime.now().strftime("%Y%m%d-%H%M%S")
+
                     if not args.execute_only and (not built or args.rebuild):
                         phase_build(args.hostname, modules)
                         built = True
@@ -1012,16 +934,37 @@ def main() -> None:
 
                     if args.execute_only:
                         log("--execute-only: skipping build and transfer.")
+                        r_probe = run_ps(
+                            unit_session,
+                            "Get-ChildItem 'C:\\mast-staging' -Directory -ErrorAction SilentlyContinue"
+                            " | Sort-Object LastWriteTime -Descending"
+                            " | Select-Object -First 1 -ExpandProperty FullName",
+                            label="find-staging",
+                            timeout_s=30,
+                        )
+                        unit_stage = r_probe.std_out.decode(errors="replace").strip()
+                        if not unit_stage:
+                            sys.exit(
+                                "ERROR: --execute-only but no run directory found "
+                                "under C:\\mast-staging on unit."
+                            )
+                        log(f"--execute-only: using existing staging dir {unit_stage}")
                     else:
-                        phase_transfer(unit_session, args.hostname)
+                        unit_stage = phase_transfer(
+                            unit_session,
+                            args.hostname,
+                            run_id,
+                            creds["smb"]["user"],
+                            creds["smb"]["pass"],
+                        )
 
                     if args.build_transfer_verify:
                         run_response = phase_run_verify_only(
-                            unit_session, args.host_unit, creds["unit"]
+                            unit_session, args.host_unit, creds["unit"], unit_stage
                         )
                     else:
                         run_response = phase_execute(
-                            unit_session, args.host_unit, creds["unit"]
+                            unit_session, args.host_unit, creds["unit"], unit_stage
                         )
 
                     results = phase_verify(

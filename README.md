@@ -5,8 +5,9 @@ Automated Windows provisioning for MAST telescope unit machines (`mast01`-`mast2
 ## Overview
 
 The provisioning server (a long-lived Windows machine) builds a per-unit staging
-payload from this repo, then pushes it to each unit machine via WinRM and runs the
-provisioning script on the unit. Modules are self-describing via `module.json`
+payload from this repo, exposes it on an SMB share (`mast-staging`), and triggers
+each unit to pull its own payload via `robocopy` over that share. The unit then runs
+the provisioning script locally. Modules are self-describing via `module.json`
 manifests; the orchestrator never has to know what software lives in which module.
 
 In production this loop runs autonomously every N minutes via a Windows Task
@@ -20,7 +21,7 @@ pipeline against a single VirtualBox VM on the same host.
 |   Task Scheduler                  |
 |     -> check-and-provision.ps1    |
 |          -> build-mast.ps1        |
-|          -> WinRM push to unit    |
+|          -> SMB pull by unit      |
 |          -> execute on unit       |
 |          -> verify smoke tests    |
 |                                   |
@@ -52,6 +53,7 @@ MAST_provisioning/
 |   |-- providers/<module>/...        # Per-module install logic + assets
 |   |-- check-and-provision.ps1       # Autonomous loop -- the production driver
 |   |-- install-scheduled-task.ps1    # Wires check-and-provision.ps1 into Task Scheduler
+|   |-- setup-smb-share.ps1           # One-time elevated setup: mast-staging share + mast-transfer account
 |   `-- unit-registry.json.template   # Per-unit metadata, copy to unit-registry.json
 |-- tools/
 |   `-- run-remote-script-winrm.py    # Ad hoc remote PS1 runner via WinRM HTTP Basic
@@ -151,8 +153,30 @@ under `C:\MAST\logs\onboarding\<hostname>.log`).
 
 ## Autonomous loop on the prov server
 
-After the first successful onboarding, the prov server installs and enables the
-Task Scheduler job that runs every 30 min:
+### One-time SMB share setup (elevated, run once per provisioning server)
+
+Before the autonomous loop can transfer payloads, run `setup-smb-share.ps1` from an
+**elevated** PowerShell (it auto-elevates if needed). This creates the `mast-staging`
+SMB share, the read-only `mast-transfer` local account (password from `vault/creds.json`),
+and the NTFS permissions that allow units to pull their payloads:
+
+```powershell
+.\server\setup-smb-share.ps1
+```
+
+Verify the share is ready:
+
+```powershell
+Get-SmbShare -Name mast-staging | Select Name, Path
+Get-SmbShareAccess -Name mast-staging
+```
+
+This is a one-time step. The Task Scheduler job and all subsequent runs of
+`check-and-provision.ps1` operate non-elevated and use the share as-is.
+
+### Install the Task Scheduler job
+
+After the SMB share is set up, install and enable the job:
 
 ```powershell
 # On the prov server, as Administrator:
@@ -166,8 +190,9 @@ Each run:
 2. For every reachable unit: builds the latest staging payload, compares its
    `build-manifest.json` `payload_hash` against the unit's
    `C:\MAST\installed-manifest.json`, and skips if matching.
-3. Otherwise WinRM-pushes the staged payload to `C:\mast-staging` on the unit
-   and runs `execute-mast-provisioning.ps1`.
+3. Otherwise sends a short `Invoke-Command` to the unit, which mounts
+   `\\prov-server\mast-staging` (authenticating as `mast-transfer`) and robocopy's
+   its payload to `C:\mast-staging\<run-id>`, then runs `execute-mast-provisioning.ps1`.
 4. Verifies smoke markers and writes structured logs to
    `C:\MAST\logs\prov\sessions\run-<ts>\run-<ts>.log` and `C:\MAST\logs\prov\activity.csv`.
 
@@ -196,8 +221,15 @@ pip install pywinrm
 Then create `vault/creds.json` from `vault/creds.json.template`:
 
 ```json
-{ "unit": { "user": ".\\mast", "pass": "physics" } }
+{
+    "unit": { "user": ".\\mast", "pass": "physics" },
+    "smb":  { "user": "mast-transfer", "pass": "<choose a strong password>" }
+}
 ```
+
+`unit` is the WinRM credential for connecting to units. `smb` is a read-only local
+account created on the provisioning server; units authenticate with it to pull their
+staging payload over SMB.
 
 ### One-time unit VM setup
 

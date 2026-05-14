@@ -4,5 +4,10 @@
     "unit": {
         "user": ".\\mast",
         "pass": "physics"
+    },
+    "_comment_smb": "Read-only account on the provisioning server; units authenticate as this to pull staging payloads via SMB.",
+    "smb": {
+        "user": "mast-transfer",
+        "pass": "CHANGE ME"
     }
 }

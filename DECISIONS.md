@@ -2,6 +2,93 @@
 
 ---
 
+## [2026-05-13] SMB transfer refined: setup-smb-share.ps1, DRY transfer script, dev/prod parity
+
+Supersedes parts of the earlier [2026-05-13] SMB pull entry below.
+
+**Why:** Four problems were identified after the initial SMB implementation:
+1. SMB share setup was baked into `build-mast.ps1`, which requires `-HostName` and is run
+   per-unit. Share setup is a one-time server-level operation with no hostname dependency.
+2. `-SkipSmbShare` was a workaround for the above; it spread across four call sites and
+   added flag-management debt.
+3. `run-prov-test.py` was using an embedded Python HTTP server for transfer -- a completely
+   different mechanism from `check-and-provision.ps1`. Dev cycles were not exercising the
+   real transfer code path.
+4. The net use + robocopy PS block existed verbatim in both `check-and-provision.ps1` and
+   `run-prov-test.py` (once as an inline ScriptBlock, once as a Python f-string). Two
+   copies will diverge.
+
+**What:**
+- `server/setup-smb-share.ps1` (new): standalone elevated script that creates the
+  `mast-staging` SMB share, the `mast-transfer` local account, and the NTFS ACL.
+  Takes no hostname argument. Run once per provisioning server.
+- `build-mast.ps1`: SMB share creation section removed entirely. `-SkipSmbShare`
+  parameter removed. Callers (`check-and-provision.ps1`, `run-prov-test.py`,
+  `run-verify-only.ps1` usage docs) updated accordingly.
+- `run-prov-test.py`: HTTP server + `WebClient.DownloadFile` transfer replaced with
+  the same SMB pull mechanism used by `check-and-provision.ps1` (net use + robocopy,
+  per-run `C:\mast-staging\run-<timestamp>` staging path).
+- `client/mast-pull-staging.ps1` (new): single canonical PS script containing the
+  net use + robocopy + cleanup logic. `check-and-provision.ps1` sends it to the unit
+  via `Invoke-Command -FilePath` (reuses existing session). `run-prov-test.py` reads
+  the file and wraps it in a scriptblock call via pywinrm -- no PS logic in Python.
+
+**Implications:**
+- SMB share setup is now a documented one-time step (`.\server\setup-smb-share.ps1`)
+  separate from the provisioning loop. `build-mast.ps1` can run non-elevated at any time.
+- Any future change to the transfer logic (retry count, flags, cleanup policy) is made
+  in one file (`client/mast-pull-staging.ps1`) and takes effect for both the autonomous
+  loop and the dev harness on the next run -- no synchronisation needed.
+- `vault/creds.json` must have an `smb` block for both scripts; both validate this at
+  startup.
+
+---
+
+## [2026-05-13] File transfer switched from WinRM Copy-Item to SMB pull
+
+**Why:** `Copy-Item -ToSession` (WinRM push) requires elevated WinRM client configuration
+(`TrustedHosts`, machine-wide `Enable-PSRemoting`) on the provisioning server. That is a
+blocker for running `check-and-provision.ps1` as a non-elevated service account, which is
+the target steady-state. SMB pull inverts the direction: the unit reaches out to
+`\\prov-server\mast-staging` and robocopy's its own payload, triggered by a short
+`Invoke-Command`. No elevated server-side configuration needed for ongoing operation.
+
+**What:**
+- `build-mast.ps1` SMB share section replaced: now creates a dedicated read-only local
+  account `mast-transfer` (password in `vault/creds.json` under `smb.pass`) and grants it
+  `ReadAccess` at the SMB share level plus `ReadAndExecute` at the NTFS level. The
+  previous `Everyone: ReadAndExecute` NTFS grant is removed (staging contains GitHub
+  tokens and NoMachine licenses).
+- `vault/creds.json` (and the `.template`) gains an `smb` block: `{user, pass}` for the
+  provisioning-server-side transfer account.
+- `check-and-provision.ps1` transfer block (was ~46 lines of per-file `Copy-Item` retry
+  loop) replaced by a single `Invoke-Command` ScriptBlock that runs on the unit:
+    1. `net use \\provserver\mast-staging <pass> /user:mast-transfer /persistent:no`
+       (with a stale-connection cleanup before mount and one retry on failure)
+    2. `robocopy <UNC-src> C:\mast-staging\<RunId> /E /R:3 /W:5 /NP /NFL /NDL`
+    3. `net use ... /delete /yes` in a `finally` block
+  Exit codes: robocopy rc 0-7 = OK (0=no change, 1=copied, 2-7=warnings); rc >= 8 =
+  `TRANSFER_FAIL`. `TRANSFER_START`/`TRANSFER_OK`/`TRANSFER_FAIL` events are logged with
+  `src_unc`, `dst_local`, `robocopy_rc`, and `note` fields.
+- SMB share creation is a **one-time elevated setup** (run `build-mast.ps1` without
+  `-SkipSmbShare` once). The autonomous loop keeps passing `-SkipSmbShare $true` to
+  `build-mast.ps1` for the build step -- it never recreates the share.
+
+**Implications:**
+- The provisioning server needs TCP 445 (SMB) reachable from the unit subnet. On the
+  host-only VirtualBox network this is already open; on physical networks a firewall rule
+  may be needed.
+- `mast-transfer` credentials travel over the WinRM channel (HTTP 5985 = cleartext in
+  dev/test). Exposure is bounded: the account is read-only and separate from the unit
+  admin account. Adopting WinRM HTTPS (`-WinRMUseSSL`) encrypts this end-to-end.
+- The per-file retry loop is gone. Robocopy's `/R:3 /W:5` handles per-file transient
+  failures; the stale-connection guard handles the session-level failure mode that
+  previously required AV-lock workarounds.
+- Operators onboarding a new provisioning server must run the elevated setup once and
+  set a site-specific password in `vault/creds.json` (`smb.pass`).
+
+---
+
 ## [2026-05-07] Re-hosted on Windows 11 host with VirtualBox + collapsed prov-server VM
 
 **Why:** The development setup moved from a Mac (Apple Silicon) host running two

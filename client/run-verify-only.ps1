@@ -11,7 +11,7 @@
 
   1) On the build host (from MAST_provisioning repo root, admin PowerShell):
 
-       .\build\build-mast.ps1 -HostName mast01 -SkipSmbShare [-TestMode]
+       .\build\build-mast.ps1 -HostName mast01 [-TestMode]
 
      This writes staging\mast01\01-provisioning\ with commands.json, verify scripts,
      mast-log.ps1, provisioning.psm1, run-verify-only.ps1, etc.

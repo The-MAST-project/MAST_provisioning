@@ -36,23 +36,15 @@ param(
   [switch]${AllowMissingNoMachineLicense},
   # Dev/test: allow missing GitHub token file (skip staging mast_github.txt).
   [switch]${AllowMissingGithubToken},
-  # Dev/test: skip SMB share creation (WinRM push is preferred).
-  [switch]${SkipSmbShare}
-  ,
   # Dev/test: allow missing large optional assets (skip with warning).
   [switch]${TestMode}
 )
 
-# Require administrator
+# Elevation is not required for the build itself, but mklink/junction optimizations
+# in New-LinkOrCopy are only available when running as Administrator.
 ${isAdmin} = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")
 if (-not ${isAdmin}) {
-    if (-not ${SkipSmbShare}) {
-        Write-Host "This script requires Administrator privileges."
-        ${arguments} = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Top `"${Top}`" -HostName `"${HostName}`""
-        Start-Process -FilePath "powershell.exe" -ArgumentList ${arguments} -Verb RunAs -Wait
-        exit 0
-    }
-    Write-Warning "Running non-elevated due to -SkipSmbShare (dev/test mode). Linking optimizations will be disabled."
+    Write-Warning "Running non-elevated. Linking optimizations disabled; assets will be copied instead."
 }
 
 # Set-StrictMode -Version Latest
@@ -470,71 +462,4 @@ Write-Host "Staged ${HostName} at ${staging}"
 # save allocation CSV if we changed it
 Save-AllocCsv -Path ${allocCsv} -Rows ${allocRows}
 
-# Share staging folder over network
-if (${SkipSmbShare}) {
-    Write-Host "Skipping SMB share creation due to -SkipSmbShare."
-    exit 0
-}
-
-${shareName} = "mast-staging"
-${sharePath} = ${OutRoot}
-${shareComment} = "MAST provisioning staging area for VMs and physical machines"
-
-Write-Host "Setting up network share for provisioning..."
-
-# Check if share already exists
-${existingShare} = Get-SmbShare -Name ${shareName} -ErrorAction SilentlyContinue
-if (${existingShare}) {
-    Write-Host "Share '${shareName}' already exists at $($existingShare.Path)"
-    if ($existingShare.Path -ne ${sharePath}) {
-        Write-Warning "Existing share points to different path: $($existingShare.Path). Removing and recreating..."
-        Remove-SmbShare -Name ${shareName} -Force
-    } else {
-        Write-Host "Share is up to date."
-        exit 0
-    }
-}
-
-# Create new SMB share
-try {
-    New-SmbShare -Name ${shareName} `
-        -Path ${sharePath} `
-        -FullAccess @("Administrators", "SYSTEM") `
-        -Description ${shareComment} `
-        -ErrorAction Stop | Out-Null
-    Write-Host "Created SMB share: \\$($env:COMPUTERNAME)\${shareName}"
-} catch {
-    Write-Warning "Failed to create SMB share (non-fatal, staging was written): $_"
-}
-
-# Configure share permissions (allow Everyone read access for provisioning clients)
-try {
-    $acl = Get-Acl ${sharePath}
-    $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
-        "Everyone",
-        "ReadAndExecute",
-        "ContainerInherit,ObjectInherit",
-        "None",
-        "Allow"
-    )
-    $acl.AddAccessRule($rule)
-    Set-Acl -Path ${sharePath} -AclObject $acl
-    Write-Host "Configured permissions for \\$($env:COMPUTERNAME)\${shareName}"
-} catch {
-    Write-Warning "Could not configure Everyone read access: $_"
-}
-
-Write-Host ""
-Write-Host "=========================================="
-Write-Host "Provisioning share ready:"
-Write-Host "  UNC Path: \\$($env:COMPUTERNAME)\${shareName}"
-Write-Host "  Local Path: ${sharePath}"
-Write-Host "  Host folder: ${staging}"
-Write-Host "=========================================="
-Write-Host ""
-Write-Host "Client mount command:"
-Write-Host "  net use Z: \\$($env:COMPUTERNAME)\${shareName} /persistent:yes"
-Write-Host ""
-Write-Host "Client staging path:"
-Write-Host "  Z:\${HostName}\"
-Write-Host "=========================================="
+Write-Host "Build complete. SMB share setup is handled separately by server\setup-smb-share.ps1."

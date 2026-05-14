@@ -9,8 +9,8 @@
     2. Build the latest payload via build-mast.ps1
     3. Compare build-manifest.json (server) vs installed-manifest.json (unit)
        - hash matches  -> log UNIT_SKIP and continue
-    4. WinRM push the staged payload to C:\mast-staging on the unit
-       (uses Copy-Item -ToSession to avoid SMB credential complexity)
+    4. SMB pull: unit connects to \\<prov-server>\mast-staging and robocopy's payload
+       (net use + robocopy via Invoke-Command; no credential forwarding or CredSSP)
     5. Run execute-mast-provisioning.ps1 on the unit
     6. Verify smoke markers, write structured logs
 
@@ -162,6 +162,14 @@ $unitPass = $creds.unit.pass
 $securePw = ConvertTo-SecureString $unitPass -AsPlainText -Force
 $unitCred = New-Object System.Management.Automation.PSCredential($unitUser, $securePw)
 
+if (-not $creds.smb -or -not $creds.smb.user -or -not $creds.smb.pass) {
+    Log-Event 'FATAL' @{ reason='creds_smb_missing'; hint='Add smb.user and smb.pass to vault/creds.json' }
+    exit 2
+}
+$smbUser    = $creds.smb.user
+$smbPass    = $creds.smb.pass
+$provServer = $env:COMPUTERNAME
+
 if ($OnlyHosts) {
     $units = $units | Where-Object { $OnlyHosts -contains $_.hostname }
 }
@@ -244,7 +252,6 @@ foreach ($unit in $units) {
                 $args = @{
                     Top        = $RepoTop
                     HostName   = $hostname
-                    SkipSmbShare = $true
                 }
                 if ($modules) { $args.Modules = $modules }
                 if ($TestMode) {
@@ -308,51 +315,72 @@ foreach ($unit in $units) {
             Log-Event 'AVAIL_SET' @{ unit=$hostname; available='false'; reason='provisioning' }
 
             # ---------------------------------------------------------------
-            # 7. Transfer staging payload via WinRM (Copy-Item -ToSession)
+            # 7. Transfer staging payload via SMB pull (robocopy on unit)
             # ---------------------------------------------------------------
-            $unitStage = "C:\mast-staging\$RunId"
-            $files = Get-ChildItem -Path $stagingDir -File
+            $unitStage  = "C:\mast-staging\$RunId"
+            $srcUNC     = "\\$provServer\mast-staging\$hostname\01-provisioning"
+            $files      = Get-ChildItem -Path $stagingDir -File
             $totalBytes = ($files | Measure-Object -Sum Length).Sum
-            Log-Event 'TRANSFER_START' @{ unit=$hostname; files=$files.Count; bytes=$totalBytes }
+            Log-Event 'TRANSFER_START' @{
+                unit      = $hostname
+                files     = $files.Count
+                bytes     = $totalBytes
+                src_unc   = $srcUNC
+                dst_local = $unitStage
+            }
             $tStart = Get-Date
 
-            Invoke-Command -Session $session -ScriptBlock {
-                param($stagePath)
-                # Use a unique staging directory per run to avoid file-lock collisions.
-                New-Item -ItemType Directory -Force -Path $stagePath | Out-Null
-                # Best-effort cleanup of older run dirs (keep newest 3).
-                $root = Split-Path $stagePath -Parent
-                if (Test-Path $root) {
-                    Get-ChildItem $root -Directory -ErrorAction SilentlyContinue |
-                        Sort-Object LastWriteTime -Descending |
-                        Select-Object -Skip 3 |
-                        ForEach-Object { Remove-Item -Recurse -Force $_.FullName -ErrorAction SilentlyContinue }
-                }
-            } -ArgumentList $unitStage
+            $pullScript = Join-Path $PSScriptRoot '..\client\mast-pull-staging.ps1'
+            $xferResult = Invoke-Command -Session $session -FilePath $pullScript `
+                -ArgumentList $provServer, $hostname, $smbUser, $smbPass, $unitStage, $srcUNC
 
-            $copied = 0
-            foreach ($f in $files) {
-                $attempt = 0
-                while ($true) {
-                    $attempt++
-                    try {
-                        Copy-Item -Path $f.FullName -Destination ($unitStage + '\') `
-                                  -ToSession $session -Force -ErrorAction Stop
-                        break
-                    } catch {
-                        # Some large EXEs can be transiently locked by AV / indexing right after build.
-                        if ($attempt -ge 5) { throw }
-                        Start-Sleep -Seconds (2 * $attempt)
-                    }
+            $xferDur = [int]((Get-Date) - $tStart).TotalSeconds
+
+            if ($xferResult.outcome -eq 'NET_USE_FAIL') {
+                Log-Event 'TRANSFER_FAIL' @{
+                    unit       = $hostname
+                    reason     = 'net_use_failed'
+                    rc         = $xferResult.rc
+                    detail     = $xferResult.detail
+                    duration_s = $xferDur
                 }
-                $copied += $f.Length
-                $elapsed = [int]((Get-Date) - $tStart).TotalSeconds
-                # Heartbeat every ~30s, not every file (would spam for large fleets).
-                if ($elapsed -gt 0 -and ($elapsed % 30) -lt 1) {
-                    Log-Event 'TRANSFER_PROGRESS' @{ unit=$hostname; bytes_done=$copied; bytes_total=$totalBytes }
-                }
+                Log-Activity -Unit $hostname -Outcome 'TRANSFER_FAIL' `
+                             -Reason "net_use_rc_$($xferResult.rc)" `
+                             -DurationS ([int]((Get-Date) - $unitStart).TotalSeconds) `
+                             -PayloadHash $payloadHash -GitSha $gitSha
+                $exitCode = 1
+                continue
             }
-            Log-Event 'TRANSFER_OK' @{ unit=$hostname; duration_s=[int]((Get-Date) - $tStart).TotalSeconds; bytes=$copied }
+
+            if ($xferResult.outcome -eq 'ROBOCOPY_ERROR') {
+                Log-Event 'TRANSFER_FAIL' @{
+                    unit       = $hostname
+                    reason     = 'robocopy_error'
+                    rc         = $xferResult.rc
+                    detail     = $xferResult.detail
+                    duration_s = $xferDur
+                }
+                Log-Activity -Unit $hostname -Outcome 'TRANSFER_FAIL' `
+                             -Reason "robocopy_rc_$($xferResult.rc)" `
+                             -DurationS ([int]((Get-Date) - $unitStart).TotalSeconds) `
+                             -PayloadHash $payloadHash -GitSha $gitSha
+                $exitCode = 1
+                continue
+            }
+
+            # rc 0 = no differences (idempotent re-run); rc 1 = files copied; 2-7 = warnings (non-fatal).
+            $xferNote = $(
+                if ($xferResult.rc -eq 0) { 'no_changes' }
+                elseif ($xferResult.rc -eq 1) { 'files_copied' }
+                else { "robocopy_warning_rc_$($xferResult.rc)" }
+            )
+            Log-Event 'TRANSFER_OK' @{
+                unit        = $hostname
+                duration_s  = $xferDur
+                bytes       = $totalBytes
+                robocopy_rc = $xferResult.rc
+                note        = $xferNote
+            }
 
             # ---------------------------------------------------------------
             # 8. Execute provisioning on the unit
