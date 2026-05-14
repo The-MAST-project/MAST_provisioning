@@ -25,7 +25,7 @@ param(
     'phd2',
     'planewave',
     'python',
-    'stage',
+    # 'stage',   # disabled temporarily - re-add when XILab installer issue is resolved
     'sysinternals',
     'vcredist2013',
     'vscode',

@@ -2,6 +2,23 @@
 
 ---
 
+## [2026-05-14] Stage module disabled in default build
+
+**Why:** The stage (XILab/Standa mount controller) provisioning step caused
+`provisioning-execute.log` to truncate on the 2026-05-13 test run -- the log had no
+SUCCESS/FAIL outcome for the module and the downstream verify/smoke files were never
+written. Blocking the rest of the provisioning flow (planewave, zwo, vscode, mast, etc.)
+on an unresolved stage installer problem is not acceptable while other work continues.
+
+**What:** Commented out `'stage'` in the default `${Modules}` list in
+`build\build-mast.ps1`. The module manifest, provider scripts, and assets remain intact.
+Re-enable by un-commenting the line when the root cause of the log truncation is
+diagnosed and fixed.
+
+**Implications:** Builds produced until stage is re-enabled will not install XILab or
+the Standa driver. Units that require mount control must have stage re-added before
+production provisioning.
+
 ## [2026-05-13] SMB transfer refined: setup-smb-share.ps1, DRY transfer script, dev/prod parity
 
 Supersedes parts of the earlier [2026-05-13] SMB pull entry below.
