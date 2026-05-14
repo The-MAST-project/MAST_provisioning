@@ -9,4 +9,4 @@
 # Lines starting with # and blank lines are ignored.
 #github.com/The-MAST-project/MAST_unit.2024-12-12
 github.com/elibrody-weizmann/MAST_unit.2024-12-12 eli/vm-provisioning
-github.com/The-MAST-project/MAST_common
+github.com/elibrody-weizmann/MAST_common eli/vm-provisioning

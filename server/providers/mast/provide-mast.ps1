@@ -2,7 +2,8 @@
 [CmdletBinding()]
 param(
     [string]${AssetsRoot} = ${PSScriptRoot},
-    [string]${CloneRoot}  = 'C:\Users\mast\source\repos'
+    [string]${CloneRoot}  = 'C:\Users\mast\source\repos',
+    [switch]${Force}
 )
 
 # Import shared helpers
@@ -244,9 +245,20 @@ try {
         Write-MastProvisionEvent ("repo phase START name={0} targetDir={1}" -f ${repoName}, ${targetDir})
         ${gitDirMarker} = Join-Path ${targetDir} '.git'
         if ((Test-Path -LiteralPath ${targetDir}) -and (Test-Path -LiteralPath ${gitDirMarker})) {
-            Write-MastProvisionEvent ("repo SKIP (clone already present, .git exists) name={0}" -f ${repoName})
-            Write-Host "Repo ${repoName} already exists, skipping."
-            continue
+            if (-not ${Force}) {
+                Write-MastProvisionEvent ("repo SKIP (clone already present, .git exists) name={0}" -f ${repoName})
+                Write-Host "Repo ${repoName} already exists, skipping."
+                continue
+            }
+            if (${repoName} -like 'MAST_unit*') {
+                ${svc} = Get-Service -Name 'MAST_unit' -ErrorAction SilentlyContinue
+                if (${svc} -and ${svc}.Status -eq 'Running') {
+                    Write-MastProvisionEvent ("Force: stopping MAST_unit service before re-clone name={0}" -f ${repoName})
+                    Stop-Service -Name 'MAST_unit' -Force -ErrorAction SilentlyContinue
+                }
+            }
+            Write-MastProvisionEvent ("Force: removing existing clone for re-clone name={0}" -f ${repoName})
+            Remove-Item -LiteralPath ${targetDir} -Recurse -Force -ErrorAction SilentlyContinue
         }
         if ((Test-Path -LiteralPath ${targetDir}) -and -not (Test-Path -LiteralPath ${gitDirMarker})) {
             Write-MastProvisionEvent ("repo REMEDIATION removing incomplete directory (no .git) name={0}" -f ${repoName})
@@ -345,10 +357,22 @@ try {
                     & ${nssmExe} set ${serviceName} AppRotateFiles 1
                     & ${nssmExe} set ${serviceName} AppRotateOnline 1
                     & ${nssmExe} set ${serviceName} AppRotateBytes 10485760
+                    ${fwRuleName} = 'MAST - Unit API (TCP 8000)'
+                    if (-not (Get-NetFirewallRule -DisplayName ${fwRuleName} -ErrorAction SilentlyContinue)) {
+                        New-NetFirewallRule -DisplayName ${fwRuleName} -Direction Inbound -Action Allow `
+                            -Protocol TCP -LocalPort 8000 -Profile Any | Out-Null
+                        Write-MastProvisionEvent ("Firewall rule created: {0}" -f ${fwRuleName})
+                    } else {
+                        Write-MastProvisionEvent ("Firewall rule already exists: {0}" -f ${fwRuleName})
+                    }
                     Start-Service -Name ${serviceName} -ErrorAction SilentlyContinue
                     Write-MastProvisionEvent ("NSSM service register DONE name={0}" -f ${serviceName})
                 } else {
                     Write-MastProvisionEvent ("NSSM service SKIP (already registered) name={0}" -f ${serviceName})
+                    if (${Force}) {
+                        Write-MastProvisionEvent ("Force: restarting service after re-clone name={0}" -f ${serviceName})
+                        Start-Service -Name ${serviceName} -ErrorAction SilentlyContinue
+                    }
                 }
             }
         }

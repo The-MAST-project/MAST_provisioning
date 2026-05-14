@@ -81,6 +81,49 @@ try {
         Write-MastPwLog "NSSM not found; skipping PWI4 service registration."
     }
 
+    # Install PWShutter
+    ${pwShutterInstallerPath} = Join-Path ${AssetsRoot} "Setup_PWShutter_1.12.0.exe"
+    if (-not (Test-Path ${pwShutterInstallerPath})) {
+        throw "PWShutter installer not found at ${pwShutterInstallerPath}"
+    }
+    Write-MastPwLog "Launching PWShutter setup (silent install)."
+    ${argListShutter} = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-')
+    ${pShutter} = Start-Process -FilePath ${pwShutterInstallerPath} -ArgumentList ${argListShutter} -PassThru -Wait -NoNewWindow
+    try { ${pShutter}.Refresh() } catch {}
+    Write-MastPwLog ("Setup_PWShutter_1.12.0.exe exit code: {0}" -f ${pShutter}.ExitCode)
+    if ($null -ne ${pShutter}.ExitCode -and ${pShutter}.ExitCode -ne 0) {
+        throw ("PWShutter installer exited with code {0}" -f ${pShutter}.ExitCode)
+    }
+    Start-Sleep -Seconds 3
+
+    # Locate PWShutter.exe and register it as an NSSM service (same pattern as PWI4).
+    # SERVICE_INTERACTIVE_PROCESS lets the GUI run in session 0 on headless units.
+    ${pwShutterExePath} = Get-ChildItem -Path 'C:\Program Files', 'C:\Program Files (x86)' `
+        -Recurse -Filter 'PWShutter.exe' -ErrorAction SilentlyContinue |
+        Select-Object -First 1 -ExpandProperty FullName
+    if (-not ${pwShutterExePath}) {
+        Write-Warning "PWShutter.exe not found after installation; skipping service registration."
+    } elseif (Test-Path -LiteralPath ${nssmExe}) {
+        ${pwShutterSvcName} = 'PWShutter'
+        ${existingPwShutterSvc} = Get-Service -Name ${pwShutterSvcName} -ErrorAction SilentlyContinue
+        if ($null -eq ${existingPwShutterSvc}) {
+            Write-MastPwLog ("Registering PWShutter as NSSM service at {0}" -f ${pwShutterExePath})
+            & ${nssmExe} install ${pwShutterSvcName} ${pwShutterExePath}
+            & ${nssmExe} set ${pwShutterSvcName} Start SERVICE_AUTO_START
+            & ${nssmExe} set ${pwShutterSvcName} Type SERVICE_INTERACTIVE_PROCESS
+            & ${nssmExe} set ${pwShutterSvcName} AppStdout 'C:\MAST\logs\pwshutter_stdout.log'
+            & ${nssmExe} set ${pwShutterSvcName} AppStderr 'C:\MAST\logs\pwshutter_stderr.log'
+            & ${nssmExe} set ${pwShutterSvcName} AppRotateFiles 1
+            & ${nssmExe} set ${pwShutterSvcName} AppRotateBytes 10485760
+            Start-Service -Name ${pwShutterSvcName} -ErrorAction SilentlyContinue
+            Write-MastPwLog "PWShutter service registered and started."
+        } else {
+            Write-MastPwLog "PWShutter service already registered -- skipping."
+        }
+    } else {
+        Write-MastPwLog "NSSM not found; skipping PWShutter service registration."
+    }
+
     # Extract PS3 CLI tools
     ${ps3cliZipPath} = Join-Path ${AssetsRoot} "ps3cli.zip"
     if (-not (Test-Path ${ps3cliZipPath})) {

@@ -48,6 +48,8 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.error
+import urllib.request
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -85,6 +87,8 @@ VERIFY_ONLY_TIMEOUT_S = 30 * 60
 
 EXPECTED_PYTHON = "C:\\Python312\\python.exe"
 EXPECTED_REPOS_ROOT = "C:\\MAST\\repos"
+CLONE_ROOT = EXPECTED_REPOS_ROOT
+PULL_REPOS_SCRIPT = REPO_ROOT / "server" / "providers" / "mast" / "pull-mast-repos.ps1"
 MAST_LOGS_BASE = "C:\\MAST\\logs"
 SMOKE_LOG_DIR = f"{MAST_LOGS_BASE}\\smoke"
 VERIFY_LOG_DIR = f"{MAST_LOGS_BASE}\\verify"
@@ -615,6 +619,8 @@ def phase_execute(
     host_unit: str,
     unit_cred: dict[str, str],
     staging_path: str,
+    smb_user: str = "",
+    smb_pass: str = "",
 ) -> winrm.Response:
     with timed("EXECUTE PHASE"):
         log("Starting execute-mast-provisioning.ps1 on unit (up to 90 min)...")
@@ -623,6 +629,7 @@ def phase_execute(
             f"from unit every {EXECUTE_POLL_INTERVAL_S}s..."
         )
 
+        smb_pass_ps = smb_pass.replace("'", "''")
         step_timer: list[float] = [time.monotonic()]
         poller = ExecuteLogPoller(host_unit, unit_cred, step_timer=step_timer)
         poller.start()
@@ -630,7 +637,10 @@ def phase_execute(
             execute_cmd = (
                 "Set-ExecutionPolicy Bypass -Scope Process -Force; "
                 f"& '{staging_path}\\execute-mast-provisioning.ps1' "
-                f"-StagingPath '{staging_path}'"
+                f"-StagingPath '{staging_path}' "
+                f"-ProvServer '{PROV_SERVER}' "
+                f"-SmbUser '{smb_user}' "
+                f"-SmbPass '{smb_pass_ps}'"
             )
             r = run_ps(unit, execute_cmd, label="execute", timeout_s=WINRM_TIMEOUT_S, step_timer=step_timer)
         finally:
@@ -835,6 +845,113 @@ def phase_reset(
         return winrm_session(host_unit, unit_cred)
 
 
+def phase_pull_repos(unit: winrm.Session) -> None:
+    """Pull all repos (+ submodules) on the unit in-place. No build or transfer needed."""
+    with timed("PULL-REPOS PHASE"):
+        if not PULL_REPOS_SCRIPT.exists():
+            raise FileNotFoundError(f"pull-mast-repos.ps1 not found: {PULL_REPOS_SCRIPT}")
+        raw = PULL_REPOS_SCRIPT.read_text(encoding="ascii")
+        # Strip block comments so the encoded command stays under the WinRM 8192-char limit.
+        script_text = re.sub(r'<#.*?#>', '', raw, flags=re.DOTALL)
+        script_text = '\n'.join(ln for ln in script_text.splitlines() if ln.strip())
+        ps = (
+            f"&{{\n{script_text}\n}}"
+            f" -CloneRoot '{CLONE_ROOT}'\n"
+        )
+        log(f"[pull-repos] Pulling repos under {CLONE_ROOT} on unit...")
+        r = run_ps(unit, ps, label="pull-repos", timeout_s=30 * 60, echo=False)
+        if r.status_code != 0:
+            raise RuntimeError(f"pull-repos failed with exit code {r.status_code}")
+
+
+MAST_UNIT_SVC_LOG_DIR = "C:\\MAST\\logs\\mast-unit"
+MAST_UNIT_PORT = 8000
+MAST_UNIT_STATUS_PATH = "/mast/api/v1/unit/status"
+MAST_UNIT_BOOT_TIMEOUT_S = 120
+
+
+def phase_clear_unit_logs(unit: winrm.Session) -> None:
+    """Stop MAST_unit and delete its NSSM stdout/stderr logs so the next run starts clean."""
+    with timed("CLEAR UNIT LOGS PHASE"):
+        ps = (
+            "Stop-Service -Name 'MAST_unit' -Force -ErrorAction SilentlyContinue\n"
+            f"$d = '{MAST_UNIT_SVC_LOG_DIR}'\n"
+            "foreach ($f in @('stdout.log', 'stderr.log')) {\n"
+            "    $p = Join-Path $d $f\n"
+            "    if (Test-Path -LiteralPath $p) {\n"
+            "        Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue\n"
+            "        Write-Host \"[clear-unit-logs] deleted $p\"\n"
+            "    } else {\n"
+            "        Write-Host \"[clear-unit-logs] not found (skipping): $p\"\n"
+            "    }\n"
+            "}\n"
+            "Write-Host '[clear-unit-logs] done'\n"
+        )
+        r = run_ps(unit, ps, label="clear-unit-logs", timeout_s=60, echo=False)
+        if r.status_code != 0:
+            log(f"WARNING: clear-unit-logs returned exit code {r.status_code}")
+
+
+def phase_start_mast_unit(unit: winrm.Session) -> None:
+    """Start the MAST_unit service after a pull or rebuild."""
+    log("[start-mast-unit] Starting MAST_unit service...")
+    r = run_ps(
+        unit,
+        "Start-Service -Name 'MAST_unit' -ErrorAction SilentlyContinue; "
+        "Write-Host '[start-mast-unit] done'",
+        label="start-mast-unit",
+        timeout_s=60,
+        echo=False,
+    )
+    if r.status_code != 0:
+        log(f"WARNING: start-mast-unit returned exit code {r.status_code}")
+
+
+def phase_wait_for_unit_health(host: str, timeout_s: int = MAST_UNIT_BOOT_TIMEOUT_S) -> None:
+    """Poll MAST_unit's status endpoint until it returns a valid CanonicalResponse or timeout."""
+    url = f"http://{host}:{MAST_UNIT_PORT}{MAST_UNIT_STATUS_PATH}"
+    with timed("UNIT HEALTH CHECK PHASE"):
+        log(f"[unit-health] Waiting for {url} (up to {timeout_s}s)...")
+        deadline = time.monotonic() + timeout_s
+        last_err = ""
+        while time.monotonic() < deadline:
+            try:
+                with urllib.request.urlopen(url, timeout=5) as resp:
+                    body = json.loads(resp.read().decode())
+                if "api_version" not in body:
+                    raise ValueError(f"missing api_version in response: {body}")
+                if body.get("errors"):
+                    raise ValueError(f"unit reported errors: {body['errors']}")
+                log(f"[unit-health] OK -- api_version={body.get('api_version')!r}")
+                return
+            except (urllib.error.URLError, OSError, json.JSONDecodeError, ValueError) as e:
+                last_err = str(e)
+            time.sleep(5)
+        raise RuntimeError(
+            f"MAST_unit health check timed out after {timeout_s}s. Last error: {last_err}"
+        )
+
+
+def phase_run_rebuild_repos(unit: winrm.Session, staging_path: str) -> winrm.Response:
+    """Force-reclone all repos: runs provide-mast.ps1 -Force from the transferred staging dir."""
+    with timed("REBUILD-REPOS PHASE"):
+        log(
+            f"[rebuild-repos] Running provide-mast.ps1 -Force"
+            f" -CloneRoot {CLONE_ROOT!r} from {staging_path}..."
+        )
+        cmd = (
+            "Set-ExecutionPolicy Bypass -Scope Process -Force; "
+            f"& '{staging_path}\\provide-mast.ps1'"
+            f" -Force"
+            f" -CloneRoot '{CLONE_ROOT}'"
+            f" -AssetsRoot '{staging_path}'"
+        )
+        r = run_ps(unit, cmd, label="rebuild-repos", timeout_s=WINRM_TIMEOUT_S)
+        if r.status_code != 0:
+            raise RuntimeError(f"rebuild-repos failed with exit code {r.status_code}")
+        return r
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -863,6 +980,18 @@ def parse_args() -> argparse.Namespace:
         help="After transfer, run run-verify-only.ps1 instead of execute-mast-provisioning.ps1 "
         "(BUILD + TRANSFER + staged *-verify checks only).",
     )
+    p.add_argument(
+        "--pull-repos",
+        action="store_true",
+        help="Connect to unit and git pull (+ submodule update) all repos under "
+        f"{CLONE_ROOT}. No build or transfer.",
+    )
+    p.add_argument(
+        "--rebuild-repos",
+        action="store_true",
+        help="Build mast module, transfer, then force-reclone all repos via "
+        "provide-mast.ps1 -Force (removes existing clones and re-clones fresh).",
+    )
     p.add_argument("--vbox-vm", default="mast-unit", help="VirtualBox VM name (default: 'mast-unit')")
     p.add_argument("--snapshot", default="post-prepare", help="Snapshot name to restore between cycles (default: 'post-prepare')")
     p.add_argument("--no-reset", action="store_true", help="Do not reset the VM between cycles (debug)")
@@ -878,10 +1007,14 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    mode_flags = int(args.build_only) + int(args.execute_only) + int(args.build_transfer_verify)
+    mode_flags = (
+        int(args.build_only) + int(args.execute_only) + int(args.build_transfer_verify)
+        + int(args.pull_repos) + int(args.rebuild_repos)
+    )
     if mode_flags > 1:
         sys.exit(
-            "ERROR: use at most one of --build-only, --execute-only, --build-transfer-verify."
+            "ERROR: use at most one of --build-only, --execute-only, "
+            "--build-transfer-verify, --pull-repos, --rebuild-repos."
         )
     modules = args.modules.split(",") if args.modules else ALL_MODULES
     creds = load_creds()
@@ -919,7 +1052,7 @@ def main() -> None:
                 try:
                     run_id = "run-" + datetime.now().strftime("%Y%m%d-%H%M%S")
 
-                    if not args.execute_only and (not built or args.rebuild):
+                    if not args.execute_only and not args.pull_repos and not args.rebuild_repos and (not built or args.rebuild):
                         phase_build(args.hostname, modules)
                         built = True
 
@@ -931,6 +1064,39 @@ def main() -> None:
                         with timed("WAIT FOR WINRM"):
                             wait_for_winrm(args.host_unit, creds["unit"], timeout=args.winrm_wait_seconds)
                         unit_session = winrm_session(args.host_unit, creds["unit"])
+
+                    if args.pull_repos:
+                        phase_clear_unit_logs(unit_session)
+                        phase_pull_repos(unit_session)
+                        phase_start_mast_unit(unit_session)
+                        phase_wait_for_unit_health(args.host_unit)
+                        results = phase_verify(unit_session, modules, 0)
+                        (log_dir / "results.json").write_text(json.dumps(results, indent=2))
+                        passed = print_results(results, cycle)
+                        cycle_results.append(passed)
+                        if not passed:
+                            _fetch_diagnostics(unit_session)
+                        continue  # skip reset
+
+                    if args.rebuild_repos:
+                        phase_build(args.hostname, ["mast"])
+                        unit_stage = phase_transfer(
+                            unit_session,
+                            args.hostname,
+                            run_id,
+                            creds["smb"]["user"],
+                            creds["smb"]["pass"],
+                        )
+                        phase_clear_unit_logs(unit_session)
+                        phase_run_rebuild_repos(unit_session, unit_stage)
+                        phase_wait_for_unit_health(args.host_unit)
+                        results = phase_verify(unit_session, modules, 0)
+                        (log_dir / "results.json").write_text(json.dumps(results, indent=2))
+                        passed = print_results(results, cycle)
+                        cycle_results.append(passed)
+                        if not passed:
+                            _fetch_diagnostics(unit_session)
+                        continue  # skip reset
 
                     if args.execute_only:
                         log("--execute-only: skipping build and transfer.")
@@ -964,7 +1130,9 @@ def main() -> None:
                         )
                     else:
                         run_response = phase_execute(
-                            unit_session, args.host_unit, creds["unit"], unit_stage
+                            unit_session, args.host_unit, creds["unit"], unit_stage,
+                            smb_user=creds["smb"]["user"],
+                            smb_pass=creds["smb"]["pass"],
                         )
 
                     results = phase_verify(

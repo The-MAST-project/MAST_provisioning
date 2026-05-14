@@ -1130,6 +1130,50 @@ scrape-friendly form:
 
 Include **start mode** where useful (Automatic vs Manual) so misconfiguration is visible.
 
+#### MAST application service logs
+
+Each MAST telescope control service writes its stdout and stderr to NSSM-managed log files on
+the unit. These files are the primary source of application-level errors and should be shipped
+to a central log store (Loki, Elastic, or equivalent) alongside Prometheus metrics.
+
+**Log file locations (per unit):**
+
+| Service | stdout | stderr |
+|---------|--------|--------|
+| `MAST_unit` | `C:\MAST\logs\mast-unit\stdout.log` | `C:\MAST\logs\mast-unit\stderr.log` |
+| `PWI4` | `C:\MAST\logs\pwi4_stdout.log` | `C:\MAST\logs\pwi4_stderr.log` |
+| `PWShutter` | `C:\MAST\logs\pwshutter_stdout.log` | `C:\MAST\logs\pwshutter_stderr.log` |
+
+All three services are configured with `AppRotateFiles=1` and `AppRotateBytes=10485760`
+(10 MB). A log shipping agent (e.g. Promtail, Fluent Bit, or Elastic Agent) should tail
+these files and forward structured entries to the central store.
+
+**What to monitor in MAST_unit logs:**
+
+- Startup sequence: PWI4 connection established, PWShutter found, ps3cli health check result.
+- Python exceptions / tracebacks -- any `ERROR` or `Traceback` line from the FastAPI
+  service warrants an alert.
+- Component state changes logged by the `Activities` bitflag tracker (startup, shutdown,
+  operational transitions).
+- WS disconnect or reconnect bursts (may indicate network instability on the unit).
+
+**Grafana panels:**
+
+- **Log viewer per unit:** Loki datasource filtered on `{job="mast_unit", hostname="mastNN"}`,
+  showing the last N lines of MAST_unit stdout/stderr interleaved.
+- **Error rate panel:** count of log lines matching `level=ERROR` or `Traceback` per unit
+  per time window; alert when rate exceeds baseline.
+- **Service restart counter:** derived from NSSM or Windows Event Log entries for
+  `MAST_unit` service state transitions; a climbing restart count indicates a crash loop.
+
+**Retention and cleanup:** the NSSM rotation caps individual files at 10 MB. The log
+shipping agent should retain at least 7 days of history in the central store.
+Provisioning tooling that resets or rebuilds a unit (`--pull-repos`, `--rebuild-repos`
+in `run-prov-test.py`) stops the service and deletes the on-unit log files before
+restart so stale entries from a previous code version do not pollute the next session.
+
+---
+
 #### Heartbeats and liveness
 
 - **Per-service or per-layer last OK time:** e.g. `mast_heartbeat_timestamp_seconds{component="..."}`
