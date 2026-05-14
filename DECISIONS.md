@@ -103,6 +103,93 @@ the target steady-state. SMB pull inverts the direction: the unit reaches out to
   previously required AV-lock workarounds.
 - Operators onboarding a new provisioning server must run the elevated setup once and
   set a site-specific password in `vault/creds.json` (`smb.pass`).
+## [2026-05-13] Driver publisher certificate pre-trust for Stage installer (partial / deferred)
+
+**Why:** The XILab (Stage/Standa) installer installs a kernel-mode driver whose publisher
+is not in Windows' built-in TrustedPublisher store. When the installer runs in Session 0
+(no interactive desktop -- i.e., any service or scheduled-task context), Windows cannot
+show the "Allow this driver?" security dialog. The result is a silent hang: the installer
+process never exits and provisioning times out.
+
+**What:** `provide-stage.ps1` imports `standa-driver-publisher.cer` into the
+`LocalMachine\TrustedPublisher` certificate store before launching the installer. The
+certificate file is staged alongside the installer in `server/providers/stage/assets/`.
+This is a best-effort measure -- the approach is partially effective but a reliable
+end-to-end solution has not been confirmed yet and is deferred to a later pass.
+
+**Implications:**
+- A full solution may require additional steps (Group Policy, `certutil`, or pre-staging
+  via the unattended setup phase) and needs verification in a true Session 0 context.
+- The cert must be refreshed if Standa re-signs with a new key (check on Stage version bumps).
+- This pattern (import to TrustedPublisher before installer runs) should apply to any other
+  driver-installing providers added in future, once the approach is confirmed working.
+
+---
+
+## [2026-05-13] Centralized log-path library (`mast-log.ps1`) as single source of truth
+
+**Why:** Provider scripts were each computing their own log paths independently, producing
+logs scattered across multiple directories with inconsistent naming. Correlating a
+provisioning run across the orchestrator, the execution engine, and individual providers
+required searching multiple locations. Any change to the root log path required editing
+every script that referenced it.
+
+**What:** `server/lib/mast-log.ps1` is a dot-sourceable script that defines all shared log
+path functions:
+
+- `Get-MastLogsBase` - returns `<SystemDrive>\MAST\logs` (typically `C:\MAST\logs`)
+- `Get-MastLogSessionDir` - returns the session-scoped subdirectory; creates it on first call
+  and propagates the path via `$env:MAST_LOG_SESSION_DIR` so all scripts in a WinRM session
+  share the same directory without being passed an explicit path argument
+- `Get-MastSmokeDir` - returns `<LogBase>\smoke` for per-module smoke-test marker files
+- `Get-MastVerifyDir` - returns the verification output directory
+
+Provider scripts dot-source `mast-log.ps1` (searching `$PSScriptRoot` then `..\..\lib\`)
+and call `Get-MastLogSessionDir` to obtain their log directory. `provisioning.psm1` also
+imports this library so module-level helpers (`Start-ProvisionLog`) resolve to the same paths.
+
+**Implications:**
+- All provider logs for a single provisioning run land in one session directory, making
+  post-run diagnosis straightforward (`cd C:\MAST\logs\sessions\<timestamp>`).
+- The session directory is set once by the execution engine and inherited by all child
+  scripts via the environment variable -- no plumbing changes needed in provider scripts.
+- The log root (`C:\MAST\logs`) is defined in exactly one place; moving it is a one-line change.
+
+---
+
+## [2026-05-13] Unit registry (`unit-registry.json`) for per-unit configuration
+
+**Why:** The build and autonomous provision loop needed a way to know which units exist,
+which modules each unit should receive, and per-unit operating constraints (maintenance
+window, timezone). Hard-coding this in scripts would make adding or reconfiguring a unit
+require editing the orchestrator rather than data.
+
+**What:** `server/unit-registry.json` (gitignored when it contains real credentials; a
+`unit-registry.json.template` is committed) stores a JSON array of unit objects:
+
+```json
+{
+  "hostname": "mast01",
+  "modules": ["ascom","chrome","cygwin","git","mast","mongodb","nomachine","nssm",
+               "phd2","planewave","python","stage","sysinternals","vscode","wireshark","zwo"],
+  "maintenance_window": { "start_hour": 10, "end_hour": 16 },
+  "timezone": "Asia/Jerusalem"
+}
+```
+
+`check-and-provision.ps1` reads this file to enumerate units and passes each unit's
+`modules` array to `build-mast.ps1 -Modules`. The `maintenance_window` and `timezone`
+fields are reserved for Phase 1 enforcement (skip disruptive steps outside the window).
+
+**Implications:**
+- Adding a new unit to the fleet is a registry edit + first `onboard-mast-unit.ps1` run;
+  no script changes required.
+- Units with different hardware (e.g., no ZWO camera) get different module lists; the
+  provisioning pipeline and smoke tests are the same code.
+- The registry is the authoritative source of "what should be installed where"; the
+  installed manifest on each unit is the authoritative source of "what is installed now".
+- `unit-registry.json` is gitignored to keep WinRM credentials out of the repo. The
+  template must be kept in sync with the actual schema.
 
 ---
 

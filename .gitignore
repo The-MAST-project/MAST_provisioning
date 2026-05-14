@@ -11,3 +11,4 @@ server/providers/cygwin/assets/astrometry.tgz
 venv/
 __pycache__/
 server/providers/mast/assets/mast_github.txt
+.claude/
