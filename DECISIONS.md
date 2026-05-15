@@ -2,6 +2,66 @@
 
 ---
 
+## [2026-05-15] run-prov-test.py: composable phase selection and per-module execute filtering
+
+**Why:** Debugging a single module installer (e.g. stage/XILab) required a full
+build-transfer-execute-verify-reset cycle against all modules. Iterating on one
+provider script was slow and produced noisy output. A way to isolate individual
+phases and individual modules was needed for a tight edit-run-verify loop.
+
+**What:**
+- `vm/run-prov-test.py`: `--phases` flag accepting a comma-separated list of phase
+  names (build, transfer, execute, verify-run, verify, reset). Legacy mode flags
+  (`--build-only`, `--execute-only`, `--build-transfer-verify`) become aliases resolved
+  by a new `resolve_phases()` helper. `--pull-repos` and `--rebuild-repos` remain as
+  dedicated one-shot modes hoisted above the cycle loop.
+- `client/execute-mast-provisioning.ps1`: new `-Modules` string parameter
+  (comma-separated). When set, filters the loaded commands list to only those whose
+  module name (or base name stripped of `-verify` suffix) is in the list.
+- `client/run-verify-only.ps1`: same `-Modules` parameter applied to the verify
+  commands list.
+- Python `phase_execute()` and `phase_run_verify_only()` pass `--modules` through
+  to the PS scripts at runtime, so `--modules zwo --phases execute,verify` re-runs
+  only the zwo module against an already-transferred staging payload.
+
+**Implications:**
+- Typical debug loop: `--modules stage --phases build,transfer,execute,verify`
+  with `--no-reset` to skip VM reset between iterations.
+- `--phases execute,verify --modules zwo` skips build+transfer entirely and re-runs
+  zwo from the existing staging dir on the unit.
+- `execute-mast-provisioning.ps1` staged on units provisioned before this change
+  will not accept `-Modules`; the new flag is only effective after a fresh
+  build+transfer.
+
+## [2026-05-15] Shared utility extraction: mast-log.ps1, mast-client-util.ps1 (commit 325778e6)
+
+**Why:** Bootstrap, onboard, prepare, execute, and run-verify-only all duplicated the
+same logging boilerplate and client utility functions inline. Parallel copies diverge
+silently. `run-prov-test.py` also had 73 lines requiring alignment with the PS scripts
+on every change.
+
+**What:**
+- `server/lib/mast-log.ps1`: extended with `Get-MastLogSessionDir`, `Get-MastSmokeDir`,
+  and related helpers previously copy-pasted across scripts.
+- `client/mast-client-util.ps1` (new): canonical home for client-side utilities such as
+  `Disable-WindowsAutoUpdate`. Staged via `build-mast.ps1` and
+  `build-autounattend-iso.ps1`.
+- All client scripts updated to dot-source using the two-path fallback
+  (`PSScriptRoot` -> `parent/server/lib`) so they work both from repo and from staging.
+- `CLAUDE.md`: added shared-utility reference table and canonical dot-source pattern.
+- `vm/run-prov-test.py`: factory helpers (`winrm_session`, `_ps_escape`,
+  `_find_unit_log_path`) made canonical -- never inline outside `run-prov-test.py`.
+- `server/setup-smb-share.ps1`: significant refactor (206 lines changed) as part of the
+  same DRY pass.
+
+**Implications:**
+- Any new PS script that needs logging must dot-source `mast-log.ps1` using the
+  two-path fallback; no local function definitions.
+- `mast-client-util.ps1` must be added to the staging `Copy-Item` lists in both
+  `build/build-mast.ps1` and `vm/build-autounattend-iso.ps1` for any new client script
+  that depends on it.
+- Python orchestration helpers are canonical in `run-prov-test.py`; do not duplicate.
+
 ## [2026-05-14] mast-shared SMB share: writable Z: drive for unit machines
 
 **Why:** Unit machines need a place to write files back to the provisioning

@@ -3,7 +3,8 @@ param(
     [string]${StagingPath} = ".",
     [string]${ProvServer}  = "",
     [string]${SmbUser}     = "",
-    [string]${SmbPass}     = ""
+    [string]${SmbPass}     = "",
+    [string]${Modules}     = ""  # comma-separated; empty = all modules
 )
 
 ${ErrorActionPreference} = "Stop"
@@ -66,9 +67,6 @@ function Write-Log {
     Write-MastLog -Message ${Message} -LogFile ${logFile}
 }
 
-# Track whether this run mapped Z: so the finally block only unmaps what we mapped.
-${script:MappedSharedDrive} = $false
-
 try {
     Write-Log "=========================================="
     Write-Log "Starting MAST provisioning execution"
@@ -78,6 +76,7 @@ try {
 
     # ---------------------------------------------------------------
     # Map Z: -> \\<ProvServer>\mast-shared (writable shared directory)
+    # Persistent so the mapping survives reboots.
     # Skip if ProvServer was not passed or if Z: is already in use.
     # ---------------------------------------------------------------
     if (-not [string]::IsNullOrWhiteSpace(${ProvServer})) {
@@ -86,18 +85,17 @@ try {
         if (${zDrive}) {
             Write-Log "Z: drive already mapped (root: $($zDrive.Root)) -- skipping mast-shared mapping."
         } else {
-            Write-Log "Mapping Z: -> ${sharedUNC}"
+            Write-Log "Mapping Z: -> ${sharedUNC} (persistent)"
             ${netArgs} = @('use', 'Z:', ${sharedUNC})
             if (-not [string]::IsNullOrWhiteSpace(${SmbUser})) {
                 ${netArgs} += ${SmbPass}
                 ${netArgs} += "/user:${SmbUser}"
             }
-            ${netArgs} += '/persistent:no'
+            ${netArgs} += '/persistent:yes'
             ${netOut} = & net @netArgs 2>&1
             ${netRc}  = $LASTEXITCODE
             if (${netRc} -eq 0) {
-                ${script:MappedSharedDrive} = $true
-                Write-Log "Z: mapped OK."
+                Write-Log "Z: mapped OK (persistent)."
 
                 # Verify the share is writable.
                 ${testFile} = "Z:\mast-write-test-${env:COMPUTERNAME}.tmp"
@@ -136,6 +134,16 @@ try {
 
     ${commands} = Import-MastCommandsFromJson -CommandsJsonPath ${commandsJsonPath}
     Write-Log "Loaded $(@(${commands}).Count) commands from commands.json"
+
+    if (-not [string]::IsNullOrWhiteSpace(${Modules})) {
+        ${moduleFilter} = @(${Modules}.Split(',') | Where-Object { $_ -ne '' })
+        ${commands} = @(${commands} | Where-Object {
+            ${m} = $_.module
+            ${base} = if (${m} -like '*-verify') { ${m}.Substring(0, ${m}.Length - 7) } else { ${m} }
+            ${moduleFilter} -contains ${base}
+        })
+        Write-Log "Module filter: $($moduleFilter -join ', '). Running $(@(${commands}).Count) command(s)."
+    }
 
     # Execute commands in order
     ${successCount} = 0
@@ -240,10 +248,6 @@ catch {
     exit 1
 }
 finally {
-    if (${script:MappedSharedDrive}) {
-        & net use Z: /delete /yes 2>&1 | Out-Null
-        Write-Log "Z: unmapped."
-    }
     Write-Log "Log file: ${logFile}"
     Remove-Item -Force ${lockPath} -ErrorAction SilentlyContinue
 }

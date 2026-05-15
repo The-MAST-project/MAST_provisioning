@@ -29,10 +29,14 @@
 
 .PARAMETER StagingPath
   Directory containing commands.json (typically C:\mast-staging after WinRM copy).
+
+.PARAMETER Modules
+  Comma-separated module names to verify (e.g. 'git,python'). Empty = all verify commands.
 #>
 [CmdletBinding()]
 param(
-    [string]${StagingPath} = '.'
+    [string]${StagingPath} = '.',
+    [string]${Modules}     = ''  # comma-separated; empty = all verify commands
 )
 
 ${ErrorActionPreference} = 'Stop'
@@ -95,6 +99,16 @@ ${verifyCmds} = @(
 if (${verifyCmds}.Count -lt 1) {
     throw 'No *-verify commands found in commands.json'
 }
+
+if (-not [string]::IsNullOrWhiteSpace(${Modules})) {
+    ${moduleFilter} = @(${Modules}.Split(',') | Where-Object { $_ -ne '' })
+    ${verifyCmds} = @(${verifyCmds} | Where-Object {
+        ${base} = $_.module -replace '-verify$', ''
+        ${moduleFilter} -contains ${base}
+    })
+    Write-VerifyLog ("Module filter: {0}. Running {1} verify command(s)." -f ($moduleFilter -join ', '), ${verifyCmds}.Count)
+}
+
 Write-VerifyLog ("Found {0} verify command(s)." -f ${verifyCmds}.Count)
 
 ${failCount} = 0

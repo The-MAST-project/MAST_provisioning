@@ -21,11 +21,33 @@ Usage (Windows PowerShell, run from anywhere):
         [--modules python,ascom,mast] ^
         [--repeat 3] ^
         [--rebuild] ^
+        [--phases build,transfer,execute,verify,reset] ^
         [--build-only] ^
         [--execute-only] ^
         [--build-transfer-verify] ^
         [--vbox-vm mast-unit] ^
         [--snapshot post-prepare]
+
+Phase selection (--phases supersedes --build-only, --execute-only, --build-transfer-verify):
+    Valid phase names: build, transfer, execute, verify-run, verify, reset
+    Default (no flag): build,transfer,execute,verify,reset
+
+Quick module debug loop (no VM reset between runs):
+    python MAST_provisioning\\vm\\run-prov-test.py ^
+        --host-unit mast01 --hostname mast01 ^
+        --modules stage ^
+        --phases build,transfer,execute,verify ^
+        --no-reset
+
+Re-run execute + verify only (reuse last transfer, no rebuild):
+    python MAST_provisioning\\vm\\run-prov-test.py ^
+        --host-unit mast01 --hostname mast01 ^
+        --modules stage ^
+        --phases execute,verify
+
+Verify current unit state without running anything:
+    python MAST_provisioning\\vm\\run-prov-test.py ^
+        --host-unit mast01 --phases verify
 
 Credentials read from vault/creds.json (gitignored):
     {
@@ -98,6 +120,9 @@ ALL_MODULES = [
     "nssm", "phd2", "planewave", "python", "stage",
     "sysinternals", "vscode", "wireshark", "zwo",
 ]
+
+VALID_PHASES = frozenset(("build", "transfer", "execute", "verify-run", "verify", "reset"))
+DEFAULT_PHASES = frozenset(("build", "transfer", "execute", "verify", "reset"))
 
 # ---------------------------------------------------------------------------
 # Logging - tee to file and stdout
@@ -636,6 +661,7 @@ def phase_execute(
     host_unit: str,
     unit_cred: dict[str, str],
     staging_path: str,
+    modules: list[str] | None = None,
     smb_user: str = "",
     smb_pass: str = "",
 ) -> winrm.Response:
@@ -659,6 +685,8 @@ def phase_execute(
                 f"-SmbUser '{smb_user}' "
                 f"-SmbPass '{smb_pass_ps}'"
             )
+            if modules and sorted(modules) != sorted(ALL_MODULES):
+                execute_cmd += f" -Modules '{','.join(modules)}'"
             r = run_ps(unit, execute_cmd, label="execute", timeout_s=WINRM_TIMEOUT_S, step_timer=step_timer)
         finally:
             poller.stop()
@@ -675,6 +703,7 @@ def phase_run_verify_only(
     host_unit: str,
     unit_cred: dict[str, str],
     staging_path: str,
+    modules: list[str] | None = None,
 ) -> winrm.Response:
     """Run run-verify-only.ps1 on the unit using the given staging path."""
     with timed("VERIFY-RUN PHASE"):
@@ -697,6 +726,8 @@ def phase_run_verify_only(
                 f"& '{staging_path}\\run-verify-only.ps1' "
                 f"-StagingPath '{staging_path}'"
             )
+            if modules and sorted(modules) != sorted(ALL_MODULES):
+                verify_cmd += f" -Modules '{','.join(modules)}'"
             r = run_ps(unit, verify_cmd, label="verify-only", timeout_s=VERIFY_ONLY_TIMEOUT_S, step_timer=step_timer)
         finally:
             poller.stop()
@@ -960,6 +991,59 @@ def phase_run_rebuild_repos(unit: winrm.Session, staging_path: str) -> winrm.Res
 
 
 # ---------------------------------------------------------------------------
+# Phase resolution
+# ---------------------------------------------------------------------------
+
+def resolve_phases(args: argparse.Namespace) -> frozenset[str] | None:
+    """Return canonical phase set from args.
+
+    Returns None to signal a legacy special mode (--pull-repos or --rebuild-repos)
+    which is handled by dedicated code in main() before the cycle loop.
+    """
+    legacy_flags = (
+        args.build_only, args.execute_only, args.build_transfer_verify,
+        args.pull_repos, args.rebuild_repos,
+    )
+    legacy_count = sum(bool(f) for f in legacy_flags)
+    has_phases = args.phases is not None
+
+    if legacy_count > 1:
+        sys.exit(
+            "ERROR: use at most one of --build-only, --execute-only, "
+            "--build-transfer-verify, --pull-repos, --rebuild-repos."
+        )
+    if legacy_count >= 1 and has_phases:
+        sys.exit(
+            "ERROR: --phases cannot be combined with legacy mode flags "
+            "(--build-only, --execute-only, --build-transfer-verify, "
+            "--pull-repos, --rebuild-repos)."
+        )
+
+    if args.build_only:
+        return frozenset(("build",))
+    if args.execute_only:
+        return frozenset(("execute", "verify"))
+    if args.build_transfer_verify:
+        return frozenset(("build", "transfer", "verify-run", "verify"))
+    if args.pull_repos or args.rebuild_repos:
+        return None
+
+    if has_phases:
+        requested = frozenset(p.strip() for p in args.phases.split(",") if p.strip())
+        unknown = requested - VALID_PHASES
+        if unknown:
+            sys.exit(
+                f"ERROR: unknown phase(s): {', '.join(sorted(unknown))}. "
+                f"Valid phases: {', '.join(sorted(VALID_PHASES))}"
+            )
+        if "execute" in requested and "verify-run" in requested:
+            sys.exit("ERROR: 'execute' and 'verify-run' are mutually exclusive in --phases.")
+        return requested
+
+    return DEFAULT_PHASES
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -999,6 +1083,18 @@ def parse_args() -> argparse.Namespace:
         help="Build mast module, transfer, then force-reclone all repos via "
         "provide-mast.ps1 -Force (removes existing clones and re-clones fresh).",
     )
+    p.add_argument(
+        "--phases",
+        default=None,
+        metavar="PHASE[,PHASE...]",
+        help=(
+            "Comma-separated phases to run: build, transfer, execute, verify-run, verify, reset. "
+            "Default: build,transfer,execute,verify,reset. "
+            "Cannot be combined with --build-only, --execute-only, --build-transfer-verify, "
+            "--pull-repos, or --rebuild-repos. "
+            "Example: --phases transfer,execute,verify"
+        ),
+    )
     p.add_argument("--vbox-vm", default="mast-unit", help="VirtualBox VM name (default: 'mast-unit')")
     p.add_argument("--snapshot", default="post-prepare", help="Snapshot name to restore between cycles (default: 'post-prepare')")
     p.add_argument("--no-reset", action="store_true", help="Do not reset the VM between cycles (debug)")
@@ -1014,21 +1110,14 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    mode_flags = (
-        int(args.build_only) + int(args.execute_only) + int(args.build_transfer_verify)
-        + int(args.pull_repos) + int(args.rebuild_repos)
-    )
-    if mode_flags > 1:
-        sys.exit(
-            "ERROR: use at most one of --build-only, --execute-only, "
-            "--build-transfer-verify, --pull-repos, --rebuild-repos."
-        )
     modules = args.modules.split(",") if args.modules else ALL_MODULES
     creds = load_creds()
     if "unit" not in creds:
         sys.exit("ERROR: vault/creds.json must contain a 'unit' block.")
     if "smb" not in creds:
         sys.exit("ERROR: vault/creds.json must contain an 'smb' block (see creds.json.template).")
+
+    phases = resolve_phases(args)
 
     LOG_ROOT.mkdir(parents=True, exist_ok=True)
     run_ts = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -1038,17 +1127,69 @@ def main() -> None:
     with log_to_file(run_log):
         log(f"Run log: {run_log}")
         log(f"Modules: {', '.join(modules)}")
+        if phases is not None:
+            log(f"Phases:  {', '.join(sorted(phases))}")
         log(f"Cycles:  {args.repeat}")
         log(f"VM:      {args.vbox_vm}  (snapshot: {args.snapshot})")
         log(f"Unit WinRM target: {args.host_unit}")
         log(f"WinRM wait: {args.winrm_wait_seconds}s")
-        if args.build_transfer_verify:
-            log("Mode:    --build-transfer-verify (run-verify-only.ps1 after transfer)")
 
         cycle_results: list[bool] = []
-        built = False
         unit_session: winrm.Session | None = None
 
+        # --- one-shot special modes: --pull-repos and --rebuild-repos ---
+        if args.pull_repos or args.rebuild_repos:
+            try:
+                with timed("WAIT FOR WINRM"):
+                    wait_for_winrm(args.host_unit, creds["unit"], timeout=args.winrm_wait_seconds)
+                unit_session = winrm_session(args.host_unit, creds["unit"])
+                run_id = "run-" + datetime.now().strftime("%Y%m%d-%H%M%S")
+                log_dir = setup_log_dir(1)
+
+                if args.pull_repos:
+                    phase_clear_unit_logs(unit_session)
+                    phase_pull_repos(unit_session)
+                    phase_start_mast_unit(unit_session)
+                    phase_wait_for_unit_health(args.host_unit)
+                    results = phase_verify(unit_session, modules, 0)
+                    (log_dir / "results.json").write_text(json.dumps(results, indent=2))
+                    passed = print_results(results, 1)
+                    cycle_results.append(passed)
+                    if not passed:
+                        _fetch_diagnostics(unit_session)
+                else:  # rebuild_repos
+                    phase_build(args.hostname, ["mast"])
+                    unit_stage = phase_transfer(
+                        unit_session, args.hostname, run_id,
+                        creds["smb"]["user"], creds["smb"]["pass"],
+                    )
+                    phase_clear_unit_logs(unit_session)
+                    phase_run_rebuild_repos(unit_session, unit_stage)
+                    phase_wait_for_unit_health(args.host_unit)
+                    results = phase_verify(unit_session, modules, 0)
+                    (log_dir / "results.json").write_text(json.dumps(results, indent=2))
+                    passed = print_results(results, 1)
+                    cycle_results.append(passed)
+                    if not passed:
+                        _fetch_diagnostics(unit_session)
+            finally:
+                _dispose_winrm_session(unit_session)
+
+            log(
+                f"[TIMING] Total run (run-prov-test.py): "
+                f"{_format_elapsed(time.monotonic() - run_started)}"
+            )
+            total = len(cycle_results)
+            passed_count = sum(cycle_results)
+            log(f"\n{'='*60}")
+            log(f"SUMMARY: {passed_count}/{total} cycles passed")
+            log(f"Run log saved to: {run_log}")
+            log(f"{'='*60}")
+            sys.exit(0 if passed_count == total else 1)
+
+        # --- standard phase-based cycle loop ---
+        assert phases is not None  # guaranteed by resolve_phases when not pull/rebuild-repos
+        built = False
         try:
             for cycle in range(1, args.repeat + 1):
                 log(f"\n{'='*60}")
@@ -1059,34 +1200,25 @@ def main() -> None:
                 try:
                     run_id = "run-" + datetime.now().strftime("%Y%m%d-%H%M%S")
 
-                    if not args.execute_only and not args.pull_repos and not args.rebuild_repos and (not built or args.rebuild):
+                    # BUILD
+                    if "build" in phases and (not built or args.rebuild):
                         phase_build(args.hostname, modules)
                         built = True
 
-                    if args.build_only:
-                        log("--build-only specified; stopping after build.")
-                        break
-
-                    if unit_session is None:
+                    # WINRM (needed for any non-build phase)
+                    non_build = phases - {"build"}
+                    if non_build and unit_session is None:
                         with timed("WAIT FOR WINRM"):
                             wait_for_winrm(args.host_unit, creds["unit"], timeout=args.winrm_wait_seconds)
                         unit_session = winrm_session(args.host_unit, creds["unit"])
 
-                    if args.pull_repos:
-                        phase_clear_unit_logs(unit_session)
-                        phase_pull_repos(unit_session)
-                        phase_start_mast_unit(unit_session)
-                        phase_wait_for_unit_health(args.host_unit)
-                        results = phase_verify(unit_session, modules, 0)
-                        (log_dir / "results.json").write_text(json.dumps(results, indent=2))
-                        passed = print_results(results, cycle)
-                        cycle_results.append(passed)
-                        if not passed:
-                            _fetch_diagnostics(unit_session)
-                        continue  # skip reset
+                    if not non_build:
+                        log("No non-build phases selected; stopping after build.")
+                        break
 
-                    if args.rebuild_repos:
-                        phase_build(args.hostname, ["mast"])
+                    # TRANSFER
+                    unit_stage = ""
+                    if "transfer" in phases:
                         unit_stage = phase_transfer(
                             unit_session,
                             args.hostname,
@@ -1094,19 +1226,8 @@ def main() -> None:
                             creds["smb"]["user"],
                             creds["smb"]["pass"],
                         )
-                        phase_clear_unit_logs(unit_session)
-                        phase_run_rebuild_repos(unit_session, unit_stage)
-                        phase_wait_for_unit_health(args.host_unit)
-                        results = phase_verify(unit_session, modules, 0)
-                        (log_dir / "results.json").write_text(json.dumps(results, indent=2))
-                        passed = print_results(results, cycle)
-                        cycle_results.append(passed)
-                        if not passed:
-                            _fetch_diagnostics(unit_session)
-                        continue  # skip reset
-
-                    if args.execute_only:
-                        log("--execute-only: skipping build and transfer.")
+                    elif "execute" in phases or "verify-run" in phases:
+                        # No transfer: probe for newest existing staging dir
                         r_probe = run_ps(
                             unit_session,
                             "Get-ChildItem 'C:\\mast-staging' -Directory -ErrorAction SilentlyContinue"
@@ -1118,44 +1239,41 @@ def main() -> None:
                         unit_stage = r_probe.std_out.decode(errors="replace").strip()
                         if not unit_stage:
                             sys.exit(
-                                "ERROR: --execute-only but no run directory found "
+                                "ERROR: transfer not in phases but no run directory found "
                                 "under C:\\mast-staging on unit."
                             )
-                        log(f"--execute-only: using existing staging dir {unit_stage}")
-                    else:
-                        unit_stage = phase_transfer(
-                            unit_session,
-                            args.hostname,
-                            run_id,
-                            creds["smb"]["user"],
-                            creds["smb"]["pass"],
-                        )
+                        log(f"Using existing staging dir: {unit_stage}")
 
-                    if args.build_transfer_verify:
-                        run_response = phase_run_verify_only(
-                            unit_session, args.host_unit, creds["unit"], unit_stage
-                        )
-                    else:
+                    # EXECUTE or VERIFY-RUN
+                    run_rc = 0
+                    if "execute" in phases:
                         run_response = phase_execute(
                             unit_session, args.host_unit, creds["unit"], unit_stage,
+                            modules=modules,
                             smb_user=creds["smb"]["user"],
                             smb_pass=creds["smb"]["pass"],
                         )
+                        run_rc = run_response.status_code
+                    elif "verify-run" in phases:
+                        run_response = phase_run_verify_only(
+                            unit_session, args.host_unit, creds["unit"], unit_stage,
+                            modules=modules,
+                        )
+                        run_rc = run_response.status_code
 
-                    results = phase_verify(
-                        unit_session,
-                        modules,
-                        run_response.status_code,
-                        verify_only=args.build_transfer_verify,
-                    )
-
-                    (log_dir / "results.json").write_text(json.dumps(results, indent=2))
-
-                    passed = print_results(results, cycle)
-                    cycle_results.append(passed)
-
-                    if not passed:
-                        _fetch_diagnostics(unit_session)
+                    # VERIFY
+                    if "verify" in phases:
+                        verify_only_mode = "verify-run" in phases and "execute" not in phases
+                        results = phase_verify(
+                            unit_session, modules, run_rc, verify_only=verify_only_mode,
+                        )
+                        (log_dir / "results.json").write_text(json.dumps(results, indent=2))
+                        passed = print_results(results, cycle)
+                        cycle_results.append(passed)
+                        if not passed:
+                            _fetch_diagnostics(unit_session)
+                    else:
+                        cycle_results.append(True)
 
                 except Exception as exc:
                     log(f"\nCycle {cycle} ERROR: {exc}")
@@ -1167,7 +1285,7 @@ def main() -> None:
                         except Exception:
                             pass
 
-                if cycle < args.repeat and not args.no_reset:
+                if cycle < args.repeat and not args.no_reset and "reset" in phases:
                     prev = unit_session
                     unit_session = phase_reset(
                         args.vbox_vm,
@@ -1185,7 +1303,7 @@ def main() -> None:
             f"{_format_elapsed(time.monotonic() - run_started)}"
         )
 
-        if not args.build_only:
+        if "verify" in phases:
             total = len(cycle_results)
             passed_count = sum(cycle_results)
             log(f"\n{'='*60}")

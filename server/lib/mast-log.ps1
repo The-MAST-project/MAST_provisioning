@@ -88,7 +88,7 @@ function Now-Utc {
 function Write-MastLog {
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory)][string]$Message,
+        [Parameter(Mandatory)][AllowEmptyString()][string]$Message,
         [Parameter(Mandatory)][string]$LogFile
     )
     $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
