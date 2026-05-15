@@ -62,6 +62,9 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+$_clientUtilDot = Join-Path $PSScriptRoot 'mast-client-util.ps1'
+if (Test-Path $_clientUtilDot) { . $_clientUtilDot }
+
 $script:BootstrapLogDir = Join-Path $env:SystemDrive 'MAST\logs'
 $script:BootstrapLog = Join-Path $script:BootstrapLogDir 'bootstrap-winrm.log'
 $script:RebootRecommended = $false
@@ -231,13 +234,7 @@ try {
     # --- Windows Update policy ---
     Write-BootstrapMsg '' 'Cyan'
     Write-BootstrapMsg '--- Suppressing Windows Update (provisioning window) ---' 'Cyan'
-    $auPath = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU'
-    New-Item -Path $auPath -Force | Out-Null
-    Set-ItemProperty -Path $auPath -Name NoAutoUpdate -Value 1 -Type DWord
-    Set-ItemProperty -Path $auPath -Name AUOptions -Value 1 -Type DWord
-    Set-ItemProperty -Path $auPath -Name NoAutoRebootWithLoggedOnUsers -Value 1 -Type DWord
-    Stop-Service wuauserv -Force -ErrorAction SilentlyContinue
-    Set-Service wuauserv -StartupType Disabled
+    Disable-WindowsAutoUpdate
     Write-BootstrapMsg '  Windows Update service disabled for AUOptions=1.' 'Green'
 
     # --- Suppress Windows popup notifications ---

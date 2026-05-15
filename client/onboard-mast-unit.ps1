@@ -81,6 +81,16 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# mast-log.ps1: try next to this script (ISO/USB deploy) then repo layout
+$_mastLogDot = Join-Path $PSScriptRoot 'mast-log.ps1'
+if (-not (Test-Path $_mastLogDot)) { $_mastLogDot = Join-Path (Split-Path -Parent $PSScriptRoot) 'server\lib\mast-log.ps1' }
+if (Test-Path $_mastLogDot) { . $_mastLogDot }
+
+# mast-client-util.ps1: try next to this script then repo client/ folder
+$_clientUtilDot = Join-Path $PSScriptRoot 'mast-client-util.ps1'
+if (-not (Test-Path $_clientUtilDot)) { $_clientUtilDot = Join-Path $PSScriptRoot '..\client\mast-client-util.ps1' }
+if (Test-Path $_clientUtilDot) { . $_clientUtilDot }
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -96,7 +106,9 @@ New-Item -ItemType Directory -Force -Path $DataRoot, $LogDir, $StatusDir | Out-N
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
-function Now-Utc { (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ') }
+if (-not (Get-Command Now-Utc -ErrorAction SilentlyContinue)) {
+    function Now-Utc { (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ') }
+}
 
 function Log-Event {
     param(
@@ -263,13 +275,7 @@ function Stage-Prepare {
     }
 
     Log-Event 'ACTION' @{ step='suppress_windows_update' }
-    $auPath = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU'
-    New-Item -Path $auPath -Force | Out-Null
-    Set-ItemProperty -Path $auPath -Name NoAutoUpdate -Value 1 -Type DWord
-    Set-ItemProperty -Path $auPath -Name AUOptions -Value 1 -Type DWord
-    Set-ItemProperty -Path $auPath -Name NoAutoRebootWithLoggedOnUsers -Value 1 -Type DWord
-    Stop-Service wuauserv -Force -ErrorAction SilentlyContinue
-    Set-Service wuauserv -StartupType Disabled
+    Disable-WindowsAutoUpdate
     Log-Event 'ACTION_OK' @{ step='suppress_windows_update' }
 
     # Open a session to the prov server so subsequent stages can mirror logs

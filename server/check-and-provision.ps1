@@ -105,8 +105,6 @@ if (-not (Test-Path $ActivityCsv)) {
         Out-File -FilePath $ActivityCsv -Encoding UTF8
 }
 
-function Now-Utc { (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ') }
-
 function Log-Event {
     param(
         [Parameter(Mandatory)][string]$EventType,

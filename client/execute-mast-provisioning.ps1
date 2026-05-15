@@ -63,8 +63,7 @@ try {
 
 function Write-Log {
     param([string]${Message})
-    ${timestamp} = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-    "${timestamp} | ${Message}" | Tee-Object -FilePath ${logFile} -Append
+    Write-MastLog -Message ${Message} -LogFile ${logFile}
 }
 
 # Track whether this run mapped Z: so the finally block only unmaps what we mapped.
@@ -88,11 +87,12 @@ try {
             Write-Log "Z: drive already mapped (root: $($zDrive.Root)) -- skipping mast-shared mapping."
         } else {
             Write-Log "Mapping Z: -> ${sharedUNC}"
-            ${netArgs} = @('use', 'Z:', ${sharedUNC}, '/persistent:no')
+            ${netArgs} = @('use', 'Z:', ${sharedUNC})
             if (-not [string]::IsNullOrWhiteSpace(${SmbUser})) {
                 ${netArgs} += ${SmbPass}
                 ${netArgs} += "/user:${SmbUser}"
             }
+            ${netArgs} += '/persistent:no'
             ${netOut} = & net @netArgs 2>&1
             ${netRc}  = $LASTEXITCODE
             if (${netRc} -eq 0) {

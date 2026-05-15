@@ -163,6 +163,30 @@ def timed(label: str) -> Generator[None, None, None]:
 
 
 # ---------------------------------------------------------------------------
+# PS string helpers
+# ---------------------------------------------------------------------------
+
+def _ps_escape(s: str) -> str:
+    """Escape a value for embedding inside a PowerShell single-quoted string."""
+    return s.replace("'", "''")
+
+
+def _find_unit_log_path(session: winrm.Session, log_filename: str) -> str:
+    """Return the full path of log_filename inside the newest sessions/ subdir, or ''."""
+    r = session.run_ps(
+        "$b = Join-Path $env:SystemDrive 'MAST\\logs\\sessions'; "
+        "$p = ''; "
+        "if (Test-Path $b) { "
+        "  $d = Get-ChildItem -LiteralPath $b -Directory "
+        "    -ErrorAction SilentlyContinue | Sort-Object Name -Descending | "
+        "    Select-Object -First 1; "
+        f"  if ($d) {{ $p = Join-Path $d.FullName '{log_filename}' }} "
+        "}; $p"
+    )
+    return (r.std_out or b"").decode(errors="replace").strip()
+
+
+# ---------------------------------------------------------------------------
 # Credentials / WinRM
 # ---------------------------------------------------------------------------
 
@@ -176,13 +200,18 @@ def load_creds() -> dict[str, dict[str, str]]:
     return json.loads(VAULT_CREDS.read_text(encoding="utf-8"))
 
 
-def winrm_session(host: str, cred: dict[str, str]) -> winrm.Session:
+def winrm_session(
+    host: str,
+    cred: dict[str, str],
+    read_timeout_s: int | None = None,
+    op_timeout_s: int | None = None,
+) -> winrm.Session:
     return winrm.Session(
         f"http://{host}:{WINRM_PORT}/wsman",
         auth=(cred["user"], cred["pass"]),
         transport="basic",
-        read_timeout_sec=WINRM_CALL_TIMEOUT_S + 30,
-        operation_timeout_sec=WINRM_CALL_TIMEOUT_S,
+        read_timeout_sec=read_timeout_s if read_timeout_s is not None else WINRM_CALL_TIMEOUT_S + 30,
+        operation_timeout_sec=op_timeout_s if op_timeout_s is not None else WINRM_CALL_TIMEOUT_S,
     )
 
 
@@ -455,12 +484,10 @@ class ExecuteLogPoller:
         self._lines_seen = 0
 
     def _new_session(self) -> winrm.Session:
-        return winrm.Session(
-            f"http://{self._host}:{WINRM_PORT}/wsman",
-            auth=(self._cred["user"], self._cred["pass"]),
-            transport="basic",
-            read_timeout_sec=self._CALL_TIMEOUT_S + 10,
-            operation_timeout_sec=self._CALL_TIMEOUT_S,
+        return winrm_session(
+            self._host, self._cred,
+            read_timeout_s=self._CALL_TIMEOUT_S + 10,
+            op_timeout_s=self._CALL_TIMEOUT_S,
         )
 
     def start(self) -> None:
@@ -482,17 +509,7 @@ class ExecuteLogPoller:
         consecutive_errors = 0
         while not self._stop.wait(timeout=EXECUTE_POLL_INTERVAL_S):
             try:
-                r0 = self._session.run_ps(
-                    "$b = Join-Path $env:SystemDrive 'MAST\\logs\\sessions'; "
-                    "$p = ''; "
-                    "if (Test-Path $b) { "
-                    "  $d = Get-ChildItem -LiteralPath $b -Directory "
-                    "    -ErrorAction SilentlyContinue | Sort-Object Name -Descending | "
-                    "    Select-Object -First 1; "
-                    f"  if ($d) {{ $p = Join-Path $d.FullName '{self._log_filename}' }} "
-                    "}; $p"
-                )
-                path = (r0.std_out or b"").decode(errors="replace").strip()
+                path = _find_unit_log_path(self._session, self._log_filename)
                 if not path:
                     consecutive_errors = 0
                     continue
@@ -575,7 +592,7 @@ def phase_transfer(
         total_bytes = sum(f.stat().st_size for f in files)
         unit_stage = f"C:\\mast-staging\\{run_id}"
         src_unc = f"\\\\{PROV_SERVER}\\mast-staging\\{hostname}\\01-provisioning"
-        smb_pass_ps = smb_pass.replace("'", "''")
+        smb_pass_ps = _ps_escape(smb_pass)
 
         log(
             f"{len(files)} files, {total_bytes / 1_048_576:.1f} MB  "
@@ -629,7 +646,7 @@ def phase_execute(
             f"from unit every {EXECUTE_POLL_INTERVAL_S}s..."
         )
 
-        smb_pass_ps = smb_pass.replace("'", "''")
+        smb_pass_ps = _ps_escape(smb_pass)
         step_timer: list[float] = [time.monotonic()]
         poller = ExecuteLogPoller(host_unit, unit_cred, step_timer=step_timer)
         poller.start()
@@ -695,17 +712,7 @@ def phase_run_verify_only(
 
 def _fetch_session_log_tail(unit: winrm.Session, log_filename: str, lines: int = 40) -> None:
     try:
-        r0 = unit.run_ps(
-            "$b = Join-Path $env:SystemDrive 'MAST\\logs\\sessions'; "
-            "$p = ''; "
-            "if (Test-Path $b) { "
-            "  $d = Get-ChildItem -LiteralPath $b -Directory "
-            "    -ErrorAction SilentlyContinue | Sort-Object Name -Descending | "
-            "    Select-Object -First 1; "
-            f"  if ($d) {{ $p = Join-Path $d.FullName '{log_filename}' }} "
-            "}; $p"
-        )
-        path = (r0.std_out or b"").decode(errors="replace").strip()
+        path = _find_unit_log_path(unit, log_filename)
         if not path:
             log(f"--- {log_filename} not found under sessions ---")
             return

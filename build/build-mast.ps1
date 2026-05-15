@@ -305,6 +305,14 @@ if (Test-Path ${invokeChildScript}) {
     Write-Warning "mast-invoke-child.ps1 not found at ${invokeChildScript}"
 }
 
+${clientUtilScript} = Join-Path ${clientRoot} 'mast-client-util.ps1'
+if (Test-Path ${clientUtilScript}) {
+    Copy-Item -Force ${clientUtilScript} (Join-Path ${staging} 'mast-client-util.ps1')
+    Write-Host " Staged mast-client-util.ps1"
+} else {
+    Write-Warning "mast-client-util.ps1 not found at ${clientUtilScript}"
+}
+
 ${verifyOnlyScript} = Join-Path ${clientRoot} 'run-verify-only.ps1'
 if (Test-Path ${verifyOnlyScript}) {
     Copy-Item -Force ${verifyOnlyScript} (Join-Path ${staging} 'run-verify-only.ps1')

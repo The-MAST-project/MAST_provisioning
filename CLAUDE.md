@@ -94,6 +94,71 @@ that all touch the same provisioning pipeline. Drift between copies has already 
 bugs (HTTP vs SMB transfer, hardcoded paths, stale credential keys). The cost of
 finding and reusing existing code is always lower than the cost of debugging divergence.
 
+## Shared utilities — use these, do not reimplement
+
+Before writing any new PS or Python utility function, check whether it already exists
+in one of the canonical shared files below. If a caller needs something the lib does not
+yet provide, add it to the lib rather than defining it locally.
+
+### PowerShell shared libs
+
+| File | What it provides |
+|------|-----------------|
+| `server/lib/mast-log.ps1` | `Get-MastLog*` path helpers; `Now-Utc`; `Write-MastLog -Message -LogFile` |
+| `client/mast-client-util.ps1` | `Disable-WindowsAutoUpdate` |
+| `client/mast-invoke-child.ps1` | `Invoke-MastChildCommandLine`, `Import-MastCommandsFromJson` |
+
+Dot-source pattern (two-path fallback so scripts work both from the repo and from staging):
+
+```powershell
+$_dot = Join-Path $PSScriptRoot 'mast-log.ps1'
+if (-not (Test-Path $_dot)) { $_dot = Join-Path $PSScriptRoot '..\server\lib\mast-log.ps1' }
+if (-not (Test-Path $_dot)) { throw "mast-log.ps1 not found" }
+. $_dot
+```
+
+Scripts that need to run standalone (e.g. bootstrap on a USB drive) must use the soft-fail
+variant (no `throw`) and keep a local fallback only for functions the lib may not be present
+to supply.
+
+### Python shared helpers (`vm/run-prov-test.py`)
+
+| Helper | Purpose |
+|--------|---------|
+| `_ps_escape(s)` | Escape a string for embedding in a PS single-quoted string (`'` -> `''`). Never inline `.replace("'", "''")`. |
+| `_find_unit_log_path(session, log_filename)` | Locate the newest session log on the unit. Never duplicate the embedded PS snippet. |
+| `winrm_session(host, cred, read_timeout_s, op_timeout_s)` | Construct a `winrm.Session`. Never instantiate `winrm.Session` directly outside this factory. |
+
+## `net use` argument order
+
+`net use` is sensitive to argument position. The password **must** come immediately after
+the UNC path and **before** any flags. Putting a flag (e.g. `/persistent:no`) between the
+path and the password silently mis-parses and the mapping fails with no obvious error.
+
+**Correct:**
+```
+net use Z: \\server\share <password> /user:<user> /persistent:no
+```
+
+**Wrong (causes silent failure):**
+```
+net use Z: \\server\share /persistent:no <password> /user:<user>
+```
+
+The canonical reference implementation is `client/mast-pull-staging.ps1`. Any new `net use`
+call must match that argument order.
+
+## Adding a new client script
+
+When adding any new `client/*.ps1` that is needed at provisioning or bootstrap time:
+
+1. **`build/build-mast.ps1`** — add a `Copy-Item` block so the file is staged into each
+   unit's `01-provisioning/` folder.
+2. **`vm/build-autounattend-iso.ps1`** — add a `Copy-Item` call in the staging block if the
+   script is needed at bootstrap (i.e. used by `bootstrap-winrm.ps1` or `onboard-mast-unit.ps1`).
+
+Skipping either step means the script is missing at runtime on the unit.
+
 ## Do not edit the staging area
 
 Do **not** make edits to files under `staging/`. That directory is generated automatically by the build process and any manual changes will be overwritten.

@@ -338,6 +338,11 @@ try {
     Write-Host "  Staged bootstrap-winrm.cmd"
     Copy-Item -Force $bootstrapVmTestCmdPath (Join-Path $staging 'bootstrap-winrm-vmtest.cmd')
     Write-Host "  Staged bootstrap-winrm-vmtest.cmd"
+    $clientUtilPath = Join-Path $RepoRoot 'client\mast-client-util.ps1'
+    if (Test-Path $clientUtilPath) {
+        Copy-Item -Force $clientUtilPath (Join-Path $staging 'mast-client-util.ps1')
+        Write-Host "  Staged mast-client-util.ps1"
+    }
 
     foreach ($extra in $resolvedExtras) {
         $name = Split-Path $extra -Leaf

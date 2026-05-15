@@ -61,8 +61,7 @@ ${logFile} = Join-Path ${logDir} 'provisioning-verify-only.log'
 
 function Write-VerifyLog {
     param([string]${Message})
-    ${timestamp} = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
-    ("${timestamp} | ${Message}" | Tee-Object -FilePath ${logFile} -Append)
+    Write-MastLog -Message ${Message} -LogFile ${logFile}
 }
 
 ${stagingResolved} = (Resolve-Path -LiteralPath ${StagingPath}).Path

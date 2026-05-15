@@ -106,122 +106,108 @@ try {
 # ---------------------------------------------------------------------------
 # SMB share
 # ---------------------------------------------------------------------------
-$shareName    = "mast-staging"
-$sharePath    = $outRoot
-$shareComment = "MAST provisioning staging (read-only pull for units)"
+# Helper: idempotent SMB share + NTFS ACL setup
+# ---------------------------------------------------------------------------
+function Ensure-MastSmbShare {
+    param(
+        [string]$Name,
+        [string]$SharePath,
+        [string]$Comment,
+        [string]$ShareAccess,
+        [string]$NtfsAccess,
+        [string]$AccountName,
+        [System.Security.Principal.SecurityIdentifier]$EveryoneSid
+    )
 
-$existingShare = Get-SmbShare -Name $shareName -ErrorAction SilentlyContinue
-if ($existingShare) {
-    Write-Host "Share '$shareName' already exists at $($existingShare.Path)"
-    if ($existingShare.Path -ne $sharePath) {
-        Write-Warning "Path mismatch ($($existingShare.Path) vs $sharePath) -- removing and recreating..."
-        Remove-SmbShare -Name $shareName -Force
-        $existingShare = $null
+    if (-not (Test-Path $SharePath)) {
+        New-Item -ItemType Directory -Force -Path $SharePath | Out-Null
+        Write-Host "Created directory: $SharePath"
     }
+
+    $existing = Get-SmbShare -Name $Name -ErrorAction SilentlyContinue
+    if ($existing) {
+        Write-Host "Share '$Name' already exists at $($existing.Path)"
+        if ($existing.Path -ne $SharePath) {
+            Write-Warning "Path mismatch ($($existing.Path) vs $SharePath) -- removing and recreating..."
+            Remove-SmbShare -Name $Name -Force
+            $existing = $null
+        }
+    }
+
+    if (-not $existing) {
+        $shareParams = @{
+            Name        = $Name
+            Path        = $SharePath
+            FullAccess  = @('Administrators', 'SYSTEM')
+            Description = $Comment
+            ErrorAction = 'Stop'
+        }
+        if ($ShareAccess -eq 'Read') {
+            $shareParams['ReadAccess'] = @($AccountName)
+        } else {
+            $shareParams['ChangeAccess'] = @($AccountName)
+        }
+        New-SmbShare @shareParams | Out-Null
+        Write-Host "Created SMB share: \\$($env:COMPUTERNAME)\$Name"
+    } else {
+        Grant-SmbShareAccess  -Name $Name -AccountName $AccountName `
+                              -AccessRight $ShareAccess -Force -ErrorAction SilentlyContinue | Out-Null
+        Revoke-SmbShareAccess -Name $Name -AccountName 'Everyone' `
+                              -Force -ErrorAction SilentlyContinue | Out-Null
+        Write-Host "Updated SMB share permissions for '$AccountName' on '$Name'."
+    }
+
+    $acl = Get-Acl $SharePath
+    $everyoneRules = $acl.Access | Where-Object {
+        try {
+            $_.IdentityReference.Translate(
+                [System.Security.Principal.SecurityIdentifier]
+            ).Value -eq $EveryoneSid.Value
+        } catch { $false }
+    }
+    foreach ($r in $everyoneRules) { $acl.RemoveAccessRule($r) | Out-Null }
+
+    $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+        $AccountName,
+        $NtfsAccess,
+        'ContainerInherit,ObjectInherit',
+        'None',
+        'Allow'
+    )
+    $acl.AddAccessRule($rule)
+    Set-Acl -Path $SharePath -AclObject $acl
+    Write-Host "NTFS ACL: granted $NtfsAccess to '$AccountName' on '$Name', removed Everyone."
 }
 
-if (-not $existingShare) {
-    New-SmbShare -Name $shareName `
-                 -Path $sharePath `
-                 -FullAccess @("Administrators", "SYSTEM") `
-                 -ReadAccess @($smbUser) `
-                 -Description $shareComment `
-                 -ErrorAction Stop | Out-Null
-    Write-Host "Created SMB share: \\$($env:COMPUTERNAME)\$shareName"
-} else {
-    Grant-SmbShareAccess  -Name $shareName -AccountName $smbUser `
-                          -AccessRight Read -Force -ErrorAction SilentlyContinue | Out-Null
-    Revoke-SmbShareAccess -Name $shareName -AccountName "Everyone" `
-                          -Force -ErrorAction SilentlyContinue | Out-Null
-    Write-Host "Updated SMB share permissions for '$smbUser'."
-}
-
-# ---------------------------------------------------------------------------
-# NTFS ACL: replace Everyone (if present) with mast-transfer ReadAndExecute
-# ---------------------------------------------------------------------------
-$acl = Get-Acl $sharePath
+# Build the Everyone SID once; passed into each Ensure-MastSmbShare call.
 $everyoneSid = New-Object System.Security.Principal.SecurityIdentifier(
     [System.Security.Principal.WellKnownSidType]::WorldSid, $null
 )
-$rulesToRemove = $acl.Access | Where-Object {
-    try {
-        $_.IdentityReference.Translate(
-            [System.Security.Principal.SecurityIdentifier]
-        ).Value -eq $everyoneSid.Value
-    } catch { $false }
-}
-foreach ($r in $rulesToRemove) { $acl.RemoveAccessRule($r) | Out-Null }
 
-$xferRule = New-Object System.Security.AccessControl.FileSystemAccessRule(
-    $smbUser,
-    "ReadAndExecute",
-    "ContainerInherit,ObjectInherit",
-    "None",
-    "Allow"
-)
-$acl.AddAccessRule($xferRule)
-Set-Acl -Path $sharePath -AclObject $acl
-Write-Host "NTFS ACL: granted ReadAndExecute to '$smbUser', removed Everyone."
+# ---------------------------------------------------------------------------
+# mast-staging: read-only pull share for units
+# ---------------------------------------------------------------------------
+Ensure-MastSmbShare `
+    -Name        'mast-staging' `
+    -SharePath   $outRoot `
+    -Comment     'MAST provisioning staging (read-only pull for units)' `
+    -ShareAccess 'Read' `
+    -NtfsAccess  'ReadAndExecute' `
+    -AccountName $smbUser `
+    -EveryoneSid $everyoneSid
 
 # ---------------------------------------------------------------------------
 # mast-shared: writable share for unit machines to save files back to the server
 # ---------------------------------------------------------------------------
-$sharedRoot    = Join-Path $Top 'shared'
-$sharedName    = "mast-shared"
-$sharedComment = "MAST shared directory (read-write for units)"
-
-if (-not (Test-Path $sharedRoot)) {
-    New-Item -ItemType Directory -Force -Path $sharedRoot | Out-Null
-    Write-Host "Created shared directory: $sharedRoot"
-}
-
-$existingShared = Get-SmbShare -Name $sharedName -ErrorAction SilentlyContinue
-if ($existingShared) {
-    Write-Host "Share '$sharedName' already exists at $($existingShared.Path)"
-    if ($existingShared.Path -ne $sharedRoot) {
-        Write-Warning "Path mismatch ($($existingShared.Path) vs $sharedRoot) -- removing and recreating..."
-        Remove-SmbShare -Name $sharedName -Force
-        $existingShared = $null
-    }
-}
-
-if (-not $existingShared) {
-    New-SmbShare -Name $sharedName `
-                 -Path $sharedRoot `
-                 -FullAccess @("Administrators", "SYSTEM") `
-                 -ChangeAccess @($smbUser) `
-                 -Description $sharedComment `
-                 -ErrorAction Stop | Out-Null
-    Write-Host "Created SMB share: \\$($env:COMPUTERNAME)\$sharedName"
-} else {
-    Grant-SmbShareAccess  -Name $sharedName -AccountName $smbUser `
-                          -AccessRight Change -Force -ErrorAction SilentlyContinue | Out-Null
-    Revoke-SmbShareAccess -Name $sharedName -AccountName "Everyone" `
-                          -Force -ErrorAction SilentlyContinue | Out-Null
-    Write-Host "Updated SMB share permissions for '$smbUser' on '$sharedName'."
-}
-
-# NTFS ACL: grant mast-transfer Modify (create/write/delete) on the shared directory.
-$sharedAcl = Get-Acl $sharedRoot
-$sharedRulesToRemove = $sharedAcl.Access | Where-Object {
-    try {
-        $_.IdentityReference.Translate(
-            [System.Security.Principal.SecurityIdentifier]
-        ).Value -eq $everyoneSid.Value
-    } catch { $false }
-}
-foreach ($r in $sharedRulesToRemove) { $sharedAcl.RemoveAccessRule($r) | Out-Null }
-
-$sharedXferRule = New-Object System.Security.AccessControl.FileSystemAccessRule(
-    $smbUser,
-    "Modify",
-    "ContainerInherit,ObjectInherit",
-    "None",
-    "Allow"
-)
-$sharedAcl.AddAccessRule($sharedXferRule)
-Set-Acl -Path $sharedRoot -AclObject $sharedAcl
-Write-Host "NTFS ACL: granted Modify to '$smbUser' on shared directory, removed Everyone."
+$sharedRoot = Join-Path $Top 'shared'
+Ensure-MastSmbShare `
+    -Name        'mast-shared' `
+    -SharePath   $sharedRoot `
+    -Comment     'MAST shared directory (read-write for units)' `
+    -ShareAccess 'Change' `
+    -NtfsAccess  'Modify' `
+    -AccountName $smbUser `
+    -EveryoneSid $everyoneSid
 
 # ---------------------------------------------------------------------------
 # Done
@@ -229,15 +215,15 @@ Write-Host "NTFS ACL: granted Modify to '$smbUser' on shared directory, removed 
 Write-Host ""
 Write-Host "=========================================="
 Write-Host "Provisioning share ready:"
-Write-Host "  UNC:              \\$($env:COMPUTERNAME)\$shareName"
-Write-Host "  Local path:       $sharePath"
+Write-Host "  UNC:              \\$($env:COMPUTERNAME)\mast-staging"
+Write-Host "  Local path:       $outRoot"
 Write-Host "  Transfer account: $smbUser"
-Write-Host "  Unit pulls from:  \\$($env:COMPUTERNAME)\$shareName\<hostname>\01-provisioning"
+Write-Host "  Unit pulls from:  \\$($env:COMPUTERNAME)\mast-staging\<hostname>\01-provisioning"
 Write-Host ""
 Write-Host "Shared (writable) share ready:"
-Write-Host "  UNC:              \\$($env:COMPUTERNAME)\$sharedName"
+Write-Host "  UNC:              \\$($env:COMPUTERNAME)\mast-shared"
 Write-Host "  Local path:       $sharedRoot"
-Write-Host "  Unit maps as:     Z: -> \\$($env:COMPUTERNAME)\$sharedName"
+Write-Host "  Unit maps as:     Z: -> \\$($env:COMPUTERNAME)\mast-shared"
 Write-Host "=========================================="
 Write-Host "Setup complete. Run install-scheduled-task.ps1 to activate the autonomous loop."
 Write-Host "=========================================="

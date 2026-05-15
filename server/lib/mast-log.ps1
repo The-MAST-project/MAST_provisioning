@@ -76,3 +76,21 @@ function Get-MastProvLastErrLog {
     param()
     return (Join-Path (Get-MastProvLogsBase) 'last-error.log')
 }
+
+# ---------------------------------------------------------------------------
+# Shared timestamp and log-line helpers
+# ---------------------------------------------------------------------------
+
+function Now-Utc {
+    return (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+}
+
+function Write-MastLog {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Message,
+        [Parameter(Mandatory)][string]$LogFile
+    )
+    $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+    "$timestamp | $Message" | Tee-Object -FilePath $LogFile -Append
+}

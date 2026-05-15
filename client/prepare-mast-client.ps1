@@ -36,6 +36,10 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+$_clientUtilDot = Join-Path $PSScriptRoot 'mast-client-util.ps1'
+if (-not (Test-Path $_clientUtilDot)) { $_clientUtilDot = Join-Path $PSScriptRoot '..\client\mast-client-util.ps1' }
+if (Test-Path $_clientUtilDot) { . $_clientUtilDot }
+
 function Show-Help {
   $exe = (Split-Path -Leaf $MyInvocation.MyCommand.Path)
   @"
@@ -373,13 +377,7 @@ try {
   # 6) Disable Windows Update automatic installation for the duration of provisioning.
   #    Prevents mid-run reboots. Restored to download-only (AUOptions=3) after provisioning.
   Write-Headline "Suppressing Windows Update automatic installs during provisioning"
-  $auPath = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU'
-  New-Item -Path $auPath -Force | Out-Null
-  Set-ItemProperty -Path $auPath -Name NoAutoUpdate  -Value 1 -Type DWord
-  Set-ItemProperty -Path $auPath -Name AUOptions     -Value 1 -Type DWord
-  Set-ItemProperty -Path $auPath -Name NoAutoRebootWithLoggedOnUsers -Value 1 -Type DWord
-  Stop-Service wuauserv -Force -ErrorAction SilentlyContinue
-  Set-Service  wuauserv -StartupType Disabled
+  Disable-WindowsAutoUpdate
   Write-Host "Windows Update automatic installs disabled."
 
   # --- Prepare phase complete: summary and timing before any WinRM HTTPS listener recreation ---
