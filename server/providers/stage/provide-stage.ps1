@@ -1,5 +1,5 @@
 param(
-    [string]${AssetsRoot} = ".",
+    [string]${AssetsRoot}  = ".",
     [string]${InstallRoot} = "C:\Program Files\Stage"
 )
 
@@ -7,18 +7,25 @@ ${ErrorActionPreference} = "Stop"
 ${mastLogDot} = Join-Path ${PSScriptRoot} 'mast-log.ps1'
 if (-not (Test-Path ${mastLogDot})) { ${mastLogDot} = Join-Path ${PSScriptRoot} '..\..\lib\mast-log.ps1' }
 . ${mastLogDot}
-${logDir} = Get-MastLogSessionDir
+${logDir}     = Get-MastLogSessionDir
 New-Item -ItemType Directory -Path ${logDir} -Force | Out-Null
-${logFile} = Join-Path ${logDir} "stage-install.log"
+${logFile}    = Join-Path ${logDir} "stage-install.log"
+# Also write to provisioning-execute.log so the orchestrator poller sees progress live.
+${execLog}    = Join-Path ${logDir} "provisioning-execute.log"
 
 function Write-StageLog {
-    param([string]${Line})
-    ${ts} = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
-    Add-Content -LiteralPath ${logFile} -Encoding UTF8 -Value ("[{0}] {1}" -f ${ts}, ${Line})
+    param([AllowEmptyString()][string]${Line})
+    ${ts}  = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+    ${msg} = ("[{0}] [stage] {1}" -f ${ts}, ${Line})
+    Add-Content -LiteralPath ${logFile} -Encoding UTF8 -Value ${msg}
+    if (Test-Path -LiteralPath ${execLog}) {
+        Add-Content -LiteralPath ${execLog} -Encoding UTF8 -Value ${msg}
+    }
     Write-Host ${Line}
 }
 
-Set-Content -LiteralPath ${logFile} -Encoding UTF8 -Value ("[{0}] provide-stage.ps1 started." -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))
+Set-Content -LiteralPath ${logFile} -Encoding UTF8 -Value `
+    ("[{0}] provide-stage.ps1 started." -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))
 
 try {
     ${installerPath} = Join-Path ${AssetsRoot} "xilab-1.20.19-win32_win64.exe"
@@ -33,7 +40,7 @@ try {
         throw "Driver publisher cert not found at ${certPath}"
     }
     Write-StageLog "Importing driver publisher cert to TrustedPublisher store..."
-    ${cert} = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2
+    ${cert}  = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2
     ${cert}.Import(${certPath})
     ${store} = New-Object System.Security.Cryptography.X509Certificates.X509Store(
         [System.Security.Cryptography.X509Certificates.StoreName]::TrustedPublisher,
@@ -44,76 +51,96 @@ try {
     ${store}.Close()
     Write-StageLog ("Cert imported: {0}" -f ${cert}.Subject)
 
-    # /S = NSIS silent; /NCRC skips CRC verification which can stall some NSIS builds.
-    # No stdout/stderr redirection: redirecting handles causes the spawned XILab welcome
-    # dialog to inherit the pipes, which prevents the installer process from exiting.
+    # Run the NSIS installer silently.
+    # /S = silent; /NCRC skips CRC check which can stall some NSIS builds.
+    # Redirect stdout/stderr to private files so this script's outer stdout pipe
+    # (created by mast-invoke-child.ps1) is not inherited by the installer or its
+    # children. Without this, a child process holding the pipe open would cause
+    # mast-invoke-child.ps1's WaitForExit() to block after we exit.
+    ${installerOut} = Join-Path ${logDir} "xilab-installer-stdout.log"
+    ${installerErr} = Join-Path ${logDir} "xilab-installer-stderr.log"
     Write-StageLog ("Running Stage installer: {0} /S /NCRC" -f ${installerPath})
-    ${p} = Start-Process -FilePath ${installerPath} -ArgumentList '/S', '/NCRC' -PassThru -WindowStyle Hidden
-    Write-StageLog ("Installer PID: {0}; polling for xilab.exe..." -f ${p}.Id)
+    ${p} = Start-Process -FilePath ${installerPath} -ArgumentList '/S', '/NCRC' `
+        -PassThru -WindowStyle Hidden `
+        -RedirectStandardOutput ${installerOut} `
+        -RedirectStandardError  ${installerErr}
+    ${installerPid} = ${p}.Id
+    Write-StageLog ("Installer PID: {0}" -f ${installerPid})
 
-    # Poll for xilab.exe appearing on disk -- that is the signal that the file
-    # installation is complete. After files land, the installer may launch a
-    # "Quick Start" welcome process and not exit on its own, so kill it once done.
-    # Timeout: InfDefaultInstall inside the NSIS installer can block in session 0
-    # even with the cert pre-trusted. If files have already landed (typical -- the
-    # driver step is last), we kill the stuck installer and let PnPUtil handle the
-    # driver separately.
-    ${stageExe} = $null
-    ${searchPaths} = 'C:\Program Files', 'C:\Program Files (x86)'
-    ${pollStart} = [System.Diagnostics.Stopwatch]::StartNew()
-    ${pollTimeoutS} = 300
-    while ($true) {
-        try { ${p}.Refresh() } catch {}
-        if (${p}.HasExited -and $null -ne ${p}.ExitCode -and ${p}.ExitCode -ne 0) {
-            throw ("XILab installer exited early with code {0}" -f ${p}.ExitCode)
-        }
-        ${stageExe} = Get-ChildItem -Path ${searchPaths} -Recurse -Filter 'xilab.exe' `
-            -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
-        if (${stageExe}) { break }
+    # The NSIS installer extracts all files first, then runs post-install steps
+    # as child processes (observed: InfDefaultInstall.exe for driver staging).
+    # InfDefaultInstall can block in session 0 when the driver is unsigned or
+    # triggers a signing prompt. We handle the driver ourselves via PnPUtil below,
+    # so once the files are on disk we terminate any children the installer is
+    # waiting on and let it exit cleanly. Fall back to a full tree kill only if
+    # the installer is still running after the deadline.
+    ${deadlineS}   = 240
+    ${deadline}    = (Get-Date).AddSeconds(${deadlineS})
+    ${exitedClean} = $false
+    ${childKilled} = $false
+    Write-StageLog ("Waiting up to {0}s for installer to finish..." -f ${deadlineS})
+    while ((Get-Date) -lt ${deadline}) {
         if (${p}.HasExited) {
-            throw "XILab installer exited but xilab.exe was not found. Installation may have failed."
-        }
-        if (${pollStart}.Elapsed.TotalSeconds -ge ${pollTimeoutS}) {
-            Write-StageLog "Installer poll timeout -- killing installer and driver-install processes."
-            # Kill drvinst.exe / rundll32 that InfDefaultInstall may have spawned.
-            Get-Process -ErrorAction SilentlyContinue |
-                Where-Object { $_.Name -in 'drvinst', 'rundll32' } |
-                ForEach-Object {
-                    try { $_.Kill(); Write-StageLog ("Killed driver-install process: {0} (PID {1})" -f $_.Name, $_.Id) } catch {}
-                }
-            try { ${p}.Kill() } catch {}
-            # Check once more after killing -- files are usually on disk by this point.
-            ${stageExe} = Get-ChildItem -Path ${searchPaths} -Recurse -Filter 'xilab.exe' `
-                -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
-            if (-not ${stageExe}) {
-                throw "XILab installer timed out and xilab.exe was not found. Installation failed."
-            }
-            Write-StageLog "Installer was killed after timeout; xilab.exe found -- continuing with PnPUtil."
+            ${exitedClean} = $true
             break
         }
-        Start-Sleep -Seconds 5
-    }
-    try { ${p}.Kill() } catch {}
-    # Kill any child/welcome processes the NSIS installer may have spawned before exiting.
-    Get-Process -ErrorAction SilentlyContinue |
-        Where-Object { $_.Path -like '*XILab*' -or $_.Name -like 'xilab*' } |
-        ForEach-Object {
-            try { $_.Kill(); Write-StageLog ("Killed lingering XILab process: {0} (PID {1})" -f $_.Name, $_.Id) } catch {}
+        if (-not ${childKilled} -and (Test-Path -LiteralPath 'C:\Program Files\XILab\XILab.exe')) {
+            ${children} = @(Get-CimInstance Win32_Process `
+                -Filter "ParentProcessId = ${installerPid}" `
+                -ErrorAction SilentlyContinue)
+            if (${children}.Count -gt 0) {
+                foreach (${c} in ${children}) {
+                    Write-StageLog ("Terminating Quick Start child: {0} (PID {1})" -f ${c}.Name, ${c}.ProcessId)
+                    Stop-Process -Id ${c}.ProcessId -Force -ErrorAction SilentlyContinue
+                }
+                ${childKilled} = $true
+                Start-Sleep -Seconds 5
+            }
         }
+        Start-Sleep -Seconds 3
+    }
+
+    if (${exitedClean}) {
+        Write-StageLog ("Installer exited cleanly with code: {0}" -f ${p}.ExitCode)
+        if ($null -ne ${p}.ExitCode -and ${p}.ExitCode -ne 0) {
+            throw ("XILab installer exited with non-zero code: {0}" -f ${p}.ExitCode)
+        }
+    } else {
+        Write-StageLog ("Installer still running after {0}s -- terminating." -f ${deadlineS})
+        & taskkill /F /T /PID ${installerPid} 2>&1 | ForEach-Object { Write-StageLog ("  taskkill: {0}" -f $_) }
+    }
+
+    # Locate xilab.exe. Check the two standard paths first (fast); fall back to a
+    # limited-depth recursive search so we handle non-standard install locations without
+    # scanning the entire Program Files tree recursively (which can block or be very slow
+    # while the installer is still writing files).
+    Write-StageLog "Locating xilab.exe..."
+    ${knownPaths} = @(
+        'C:\Program Files\XILab\XILab.exe',
+        'C:\Program Files (x86)\XILab\XILab.exe'
+    )
+    ${stageExe} = ${knownPaths} | Where-Object { Test-Path -LiteralPath $_ } |
+        Select-Object -First 1
+    if (-not ${stageExe}) {
+        Write-StageLog "Not found at standard paths; scanning Program Files (depth 3)..."
+        ${stageExe} = Get-ChildItem `
+            -Path 'C:\Program Files', 'C:\Program Files (x86)' `
+            -Depth 3 -Filter 'xilab.exe' -ErrorAction SilentlyContinue |
+            Select-Object -First 1 -ExpandProperty FullName
+    }
+    if (-not ${stageExe}) {
+        throw "xilab.exe not found after installer completed. Installation failed."
+    }
     Write-StageLog ("XILab files installed: {0}" -f ${stageExe})
 
-    # Explicitly add the driver to the Windows driver store using PnPUtil.
-    # This is the reliable, unattended alternative to the installer's InfDefaultInstall
-    # call, which can block on a signing dialog if the cert is not yet trusted.
+    # Explicitly stage the driver via PnPUtil -- the reliable unattended alternative to
+    # the installer's InfDefaultInstall, which can block in session 0 on a signing dialog.
+    # /add-driver stages it in the driver store only; no device attachment triggered.
     ${infPath} = Join-Path (Split-Path -Parent ${stageExe}) "driver\Standa_8SMC4-5.inf"
     if (-not (Test-Path ${infPath})) {
         throw "Driver .inf not found at expected path: ${infPath}"
     }
     Write-StageLog ("Installing driver via PnPUtil: {0}" -f ${infPath})
-    # /add-driver stages the driver in the Windows driver store only; omit /install to avoid
-    # triggering Plug and Play device attachment (DrvInst.exe) which can block on a UI dialog
-    # if a matching device is present. The driver will be applied automatically when the
-    # hardware is first connected.
     ${pnpLog} = Join-Path ${logDir} "pnputil.log"
     ${pnp} = Start-Process -FilePath 'pnputil.exe' `
         -ArgumentList '/add-driver', "`"${infPath}`"" `
@@ -136,5 +163,8 @@ catch {
     ${errorMsg} = ("Stage installation failed: {0}" -f $_)
     Write-Host ${errorMsg}
     Add-Content -LiteralPath ${logFile} -Encoding UTF8 -Value ${errorMsg}
+    if (Test-Path -LiteralPath ${execLog}) {
+        Add-Content -LiteralPath ${execLog} -Encoding UTF8 -Value ${errorMsg}
+    }
     exit 1
 }

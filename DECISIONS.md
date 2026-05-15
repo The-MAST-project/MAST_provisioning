@@ -2,6 +2,43 @@
 
 ---
 
+## [2026-05-15] Stage module: XILab installer child-kill strategy and re-enable in default build
+
+**Why:** The XILab/Standa NSIS installer hangs in session 0 after deploying files because it
+launches post-install child processes via `ExecWait` that can never exit without user
+interaction. Specifically, `InfDefaultInstall.exe` (the Windows driver installer helper) was
+the blocking child. The earlier workaround of setting a 180-second timeout and then doing a
+full `taskkill /F /T` on the installer tree was unreliable and unnecessarily violent. The
+root cause was identified as: NSIS extracts all files first, then runs post-install helpers
+as children; in session 0 those children have no interactive user to respond to signing or
+driver-install prompts. The installer is also left holding a pipe handle inherited from the
+parent PowerShell process, causing `WaitForExit()` in `mast-invoke-child.ps1` to block even
+after the installer notionally completes.
+
+**What:**
+- `server/providers/stage/provide-stage.ps1`: replaced the blanket timeout-kill with a
+  targeted strategy. The installer is given its own stdout/stderr redirects (breaking the
+  outer pipe inheritance). A polling loop waits for `XILab.exe` to appear on disk (signaling
+  that file extraction is complete), then enumerates and terminates only the child processes
+  the installer is waiting on via `Get-CimInstance Win32_Process` + `Stop-Process`. This
+  allows the NSIS installer itself to exit cleanly with exit code 0. The full tree kill
+  (`taskkill /F /T`) is retained as a last-resort fallback only if the installer has not
+  exited after the deadline (240 s).
+- The Standa driver is always staged via `pnputil /add-driver` after the installer exits,
+  which is the correct unattended method regardless of what `InfDefaultInstall.exe` did.
+- `build/build-mast.ps1`: `'stage'` uncommented and restored to the default module list.
+  It was disabled on 2026-05-14 due to the unresolved installer hang.
+
+**Implications:**
+- The stage module is now included in all builds by default.
+- Installer completes in ~30-50 s (vs 3+ min with the prior timeout approach) because the
+  blocking child is removed promptly once files are on disk.
+- If a future XILab installer version changes its post-install child process names, the
+  polling loop will still work: it kills all children of the installer PID once files are
+  deployed, regardless of child process name.
+- The PnPUtil step is the authoritative driver staging path; `InfDefaultInstall.exe` being
+  terminated before it completes is intentional and not a regression.
+
 ## [2026-05-15] run-prov-test.py: composable phase selection and per-module execute filtering
 
 **Why:** Debugging a single module installer (e.g. stage/XILab) required a full

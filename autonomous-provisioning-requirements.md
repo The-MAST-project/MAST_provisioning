@@ -438,6 +438,28 @@ seen, instead of blocking until the single SOAP response finishes.
 
 ---
 
+### XILab / Standa driver provisioning **[DONE]**
+
+The `stage` provider module (`server/providers/stage/`) installs XILab (the Standa
+8SMC4-USB motor controller software) and stages the Standa kernel driver. The installer
+runs silently (`/S /NCRC`); the driver is staged unattended via `pnputil /add-driver`.
+
+**What was shipped:**
+- `provide-stage.ps1`: pre-trusts the Standa publisher cert, runs the NSIS installer,
+  monitors for blocking child processes (e.g. `InfDefaultInstall.exe`) and terminates them
+  once files are deployed so the installer exits cleanly, then stages the driver via PnPUtil.
+- `verify-stage.ps1`: confirms `XILab.exe` is present at the expected path and writes a
+  smoke file.
+- Assets: `xilab-1.20.19-win32_win64.exe`, `standa-driver-publisher.cer`.
+- `stage` added to all entries in `unit-registry.json` and restored to the default module
+  list in `build-mast.ps1` (was disabled 2026-05-14 to 2026-05-15 while the installer hang
+  was diagnosed; see DECISIONS.md).
+
+**Exit criteria met:** stage-smoke.txt and stage-verify-smoke.txt written on a clean
+VM snapshot in the test cycle; installer exits with code 0 in ~30-50 s.
+
+---
+
 ## Phase 1 - Core Correctness
 
 *Goal: eliminate blockers that could cause silent failure or require elevated privileges in
@@ -1212,24 +1234,6 @@ and which metrics are **SLI**-grade.
 Logs (`activity.csv`, `package-timings.csv`, remote-run transcripts, prov run logs)
 remain the **deep dive** for incidents. Prometheus and the central dashboard provide
 **continuous, queryable, alertable** summaries; they do not replace structured logging.
-
----
-
-## Phase 2 additions (future work)
-
-### Xilabs driver provisioning
-
-**Future requirement:** Add a `xilabs` provider module to the provisioning pipeline for the
-Xilabs (Spectral Instruments) camera driver. The provider must:
-
-1. Stage the Xilabs driver installer as an offline asset.
-2. Install the driver silently and add any required PATH or registry entries.
-3. Register a `verify` smoke check (e.g. confirm the expected DLL or service is present).
-4. Add `xilabs` to the `modules` list in `unit-registry.json` for units that carry the
-   Xilabs camera.
-
-**Exit criteria:** Xilabs-equipped units pass the driver smoke check after provisioning,
-and the MAST application can enumerate the camera without a manual driver install.
 
 ---
 

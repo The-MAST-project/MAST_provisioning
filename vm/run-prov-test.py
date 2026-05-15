@@ -806,18 +806,31 @@ def phase_verify(
             results["python_ok"] = True
             results["python_version"] = "(skipped in verify-only mode)"
             results["repos_root_ok"] = True
+            results["repos_root_checked"] = False
             results["smoke"] = {}
             return results
 
-        r = run_ps(unit, f'& "{EXPECTED_PYTHON}" --version', label="python-check")
-        results["python_ok"] = r.status_code == 0
-        results["python_version"] = (
-            r.std_out.decode(errors="replace").strip()
-            or r.std_err.decode(errors="replace").strip()
-        )
+        check_python = "python" in modules
+        check_repos = "mast" in modules
 
-        r = run_ps(unit, f'Test-Path "{EXPECTED_REPOS_ROOT}"', label="repos-root")
-        results["repos_root_ok"] = "True" in r.std_out.decode(errors="replace")
+        if check_python:
+            r = run_ps(unit, f'& "{EXPECTED_PYTHON}" --version', label="python-check")
+            results["python_ok"] = r.status_code == 0
+            results["python_version"] = (
+                r.std_out.decode(errors="replace").strip()
+                or r.std_err.decode(errors="replace").strip()
+            )
+        else:
+            results["python_ok"] = True
+            results["python_version"] = "(not tested - python module not selected)"
+
+        if check_repos:
+            r = run_ps(unit, f'Test-Path "{EXPECTED_REPOS_ROOT}"', label="repos-root")
+            results["repos_root_ok"] = "True" in r.std_out.decode(errors="replace")
+            results["repos_root_checked"] = True
+        else:
+            results["repos_root_ok"] = True
+            results["repos_root_checked"] = False
 
         smoke_checks: dict[str, str | None] = {}
         for mod in modules:
@@ -845,11 +858,14 @@ def print_results(results: dict[str, Any], cycle: int) -> bool:
         return passed
 
     log(f"  execute exit code : {results['execute_exit_code']}")
-    log(
-        f"  python check      : {'OK' if results['python_ok'] else 'FAIL'}"
-        f" ({results.get('python_version', '')})"
-    )
-    log(f"  repos root        : {'OK' if results['repos_root_ok'] else 'FAIL'}")
+    python_ver = results.get("python_version", "")
+    if "(not tested" not in python_ver:
+        log(
+            f"  python check      : {'OK' if results['python_ok'] else 'FAIL'}"
+            f" ({python_ver})"
+        )
+    if results.get("repos_root_checked", True):
+        log(f"  repos root        : {'OK' if results['repos_root_ok'] else 'FAIL'}")
     log("  smoke tests:")
     smoke = results.get("smoke", {})
     for mod, content in smoke.items():
