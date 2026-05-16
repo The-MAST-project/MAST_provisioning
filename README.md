@@ -61,6 +61,9 @@ MAST_provisioning/
 |   |-- admin-prep.ps1                # One-time elevated host prep (PATH, ICMP firewall)
 |   |-- build-autounattend-iso.ps1    # Builds autounattend ISO for unattended Windows install
 |   |-- run-prov-test.py              # Dev-cycle test orchestrator (not the production driver)
+|   |-- test-suite.py                 # Named scenarios on top of run-prov-test.py (run --list to see them)
+|   |-- vm_lib.py                     # Canonical WinRM / creds / upload helpers; import from here, do not instantiate winrm.Session directly
+|   |-- DEBUGGING.md                  # Convention for ad-hoc debug_*.py scripts using vm_lib
 |   |-- sync-dev-unit-hosts.ps1       # Update Windows hosts file for VirtualBox DHCP guest
 |   |-- vbox-create-unit.ps1          # Create the dev VirtualBox VM
 |   |-- vbox-recreate-unit.ps1        # Full VM teardown and rebuild
@@ -299,6 +302,32 @@ python .\vm\run-prov-test.py --host-unit mast01 --hostname mast01 --modules pyth
 ```
 
 Cycle logs land in `C:\MAST\logs\dev\<timestamp>-cycle<N>\results.json`.
+
+### Named scenarios (test-suite.py)
+
+`vm/test-suite.py` wraps `run-prov-test.py` with named, repeatable scenarios
+(full provision, mid-stream failure, recovery without snapshot reset,
+per-module idempotency after manifest wipe, and STUBs for future work).
+
+```powershell
+# List all 11 scenarios (5 ACTIVE, 6 STUB):
+python .\vm\test-suite.py --list
+
+# Run one scenario:
+python .\vm\test-suite.py --scenario full-provision --host-unit mast-wis-01
+
+# Run every scenario (STUBs report SKIP):
+python .\vm\test-suite.py --all --host-unit mast-wis-01
+```
+
+Suite results land in `C:\MAST\logs\dev\tests\<UTC-stamp>\suite-results.json`.
+
+### Ad-hoc debugging against a unit
+
+For one-off WinRM debugging (poke a service, push a patched source file,
+check logs), follow the convention in `vm/DEBUGGING.md`: name the script
+`debug_*.py`, import from `vm/vm_lib.py`, and never instantiate
+`winrm.Session` directly.
 
 ---
 

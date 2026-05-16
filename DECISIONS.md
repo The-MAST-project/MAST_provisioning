@@ -2,6 +2,70 @@
 
 ---
 
+## [2026-05-16] vm/ test infrastructure: vm_lib shared module + named test-suite scenarios
+
+**Why:** Two pressures converged. (1) During VM bring-up debugging, ~15 ad-hoc
+Python scripts accumulated in `vm/` (`_check_logs.py`, `_patch_common.py`,
+`_rename_vm*.py`, ...) all of which re-instantiated `winrm.Session` directly
+and re-read `vault/creds.json` inline -- a direct violation of the DRY rule in
+`CLAUDE.md` and a recurring source of drift. (2) `run-prov-test.py` was the
+only test path against a unit, but it has no named, repeatable scenarios for
+common provisioning regressions (mid-stream failure, recovery without
+snapshot, per-module idempotency without the UNIT_SKIP shortcut). We needed
+canonical helpers AND a thin scenario harness on top of them.
+
+**What:**
+- `vm/vm_lib.py`: new module. Extracted `load_creds`, `winrm_session`,
+  `wait_for_winrm`, `run_ps`, `check_rc`, `_ps_escape`,
+  `_dispose_winrm_session` and their internal helpers
+  (`_run_with_heartbeat`, `_candidate_users`, `_format_winrm_stderr`) out of
+  `run-prov-test.py`. Added `upload_file_b64` (base64-chunked text upload
+  lifted from `_patch_common.py`). Module is import-pure; callers rebind
+  `vm_lib.log_fn` / `vm_lib.log_raw_fn` to tee through a session log.
+- `vm/run-prov-test.py`: now imports the helpers from `vm_lib` and reassigns
+  `vm_lib.log_fn` / `log_raw_fn` to its tee-to-file logger. Single source of
+  truth restored.
+- `vm/DEBUGGING.md`: new doc. Codifies the convention for throwaway debug
+  scripts -- name them `debug_*.py`, use `vm_lib` helpers, never instantiate
+  `winrm.Session` directly, delete or promote-to-vm_lib when done.
+- 15 untracked `_*.py` scripts and `vm/__pycache__/`: deleted.
+- `vm/test-suite.py`: new driver. Defines 11 named scenarios (5 ACTIVE, 6
+  STUB); spawns `run-prov-test.py` as a subprocess per phase sub-invocation
+  and asserts on exit codes plus, where relevant, on unit-side state read via
+  `vm_lib`. ACTIVE scenarios: `full-provision`,
+  `full-provision-verify-only`, `interrupted-inject-fail` (deterministic
+  bomb at order=65, expect non-zero then clean re-run after reset),
+  `failure-recover-no-reset` (marker-gated sporadic bomb, attempt 1 fails,
+  attempt 2 succeeds against the same unit), `idempotent-after-manifest-wipe`
+  (full provision, delete `installed-manifest.json` on unit, full provision
+  again, assert same `payload_hash`). Writes
+  `C:\MAST\logs\dev\tests\<stamp>\suite-results.json`.
+- `MAST_provisioning/README.md`: cross-references added for `vm_lib.py`,
+  `test-suite.py`, and `DEBUGGING.md`, including a short "Named scenarios"
+  subsection under the dev/test loop.
+
+**Implications:**
+- Direct `winrm.Session(...)` instantiation is now forbidden anywhere under
+  `vm/` outside `vm_lib.winrm_session()` and `vm_lib.wait_for_winrm()`.
+  `CLAUDE.md`'s DRY section already encoded this rule for `run-prov-test.py`;
+  the canonical factory is now in `vm_lib` and applies to every script in
+  the directory, including test-suite and future debug scripts.
+- The two `test-suite.py` bomb injectors patch
+  `staging/<hostname>/01-provisioning/commands.json` AFTER the `build`
+  sub-invocation. This is a deliberate, narrowly-scoped exception to the
+  "do not edit staging/" convention: the patch is ephemeral (the next
+  `build` sub-run regenerates the file), is colocated with the test driver,
+  and is documented in code with a comment pointing here.
+- Smoke-marker-set equality assertion for `idempotent-after-manifest-wipe`
+  is deferred: the current implementation asserts `payload_hash` equality
+  across the two runs but does not yet diff the per-module smoke marker
+  contents. Adding that requires parsing the `results.json` artifact
+  `run-prov-test.py` writes under `C:\MAST\logs\dev\<stamp>-cycle<N>\` and
+  is a known future enhancement (no separate tracking doc; recorded only
+  here).
+- The six STUB scenarios are deliberately not failures: the suite reports
+  them as SKIP so they do not block CI while their implementations land.
+
 ## [2026-05-16] Remove DLI power switch stub from provisioning tests
 
 **Why:** The DLI stub (`dli-power-stub.py`) was a transient NSSM service started by the test
