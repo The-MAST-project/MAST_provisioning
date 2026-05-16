@@ -2,6 +2,69 @@
 
 ---
 
+## [2026-05-16] Remove DLI power switch stub from provisioning tests
+
+**Why:** The DLI stub (`dli-power-stub.py`) was a transient NSSM service started by the test
+orchestrator to satisfy `DliPowerSwitch.probe()` on MAST_unit startup during VM provisioning
+tests. It required both NSSM and Python 3.12 to be installed before it could start, but both
+are installed during the execute phase — creating an ordering dependency that could not be
+satisfied without either splitting the execute phase or pre-installing prerequisites inside
+the stub launcher. Rather than patch around the ordering, the MAST_unit service itself was
+made fault-tolerant: it now starts and serves `/status` with errors reported regardless of
+whether hardware or config is reachable.
+
+**What:**
+- `client/dli-power-stub.py`: deleted.
+- `build/build-mast.ps1`: removed staging block for `dli-power-stub.py`.
+- `vm/run-prov-test.py`: removed `DLI_STUB_*` constants, `phase_start_dli_stub`,
+  `phase_stop_dli_stub`, and the `try/finally` wrapper around the execute/verify block in
+  the cycle loop.
+
+**Implications:** Provisioning test cycles no longer attempt to start or stop a stub power
+switch service. The MAST_unit service is expected to start without hardware present and
+report component failures via `CanonicalResponse.errors` in the `/status` response. The
+`power_switch.network.ipaddr = "127.0.0.1"` setting in the MongoDB test unit document
+(added in the VM naming entry below) is now irrelevant during tests and should be set to
+the real switch address when the physical unit is deployed.
+
+## [2026-05-16] Test VM unit name: mast-wis-01 (site-qualified canonical format)
+
+**Why:** MAST unit hostnames follow the same site-qualified pattern as control and spec
+machines: `mast-<site>-<role>`. For numbered units, role is the two-digit unit number, e.g.,
+`mast-wis-01` for unit 1 at the WIS site. This is consistent with `mast-wis-control` and
+`mast-wis-spec`. The test VM was initially provisioned as `MAST01` (wrong - that is not a
+recognized canonical form) and then briefly as `MASTW` before the correct convention was
+established. Using the site-qualified name also avoids a latent bug in `canonic_unit_name()`
+where the `mastXX` path calls `name.isdigit()` (always False) instead of `suffix.isdigit()`;
+the `mast-<site>-NN` path is handled by a separate regex branch.
+
+**What:**
+- VM hostname renamed from `MAST01` -> `MASTW` -> `MAST-WIS-01` via `Rename-Computer`.
+- Host `C:\Windows\System32\drivers\etc\hosts`: added `192.168.56.110 mast-wis-01`
+  (also `mastw` and `mast01` remain for backward compatibility during transition).
+- MongoDB `mast.units`: document renamed `mastw` -> `mast-wis-01`; removed `mast01`
+  test-override document; `power_switch.network.ipaddr = "127.0.0.1"` (DLI stub for test).
+- MongoDB `mast.sites` wis: `unit_ids` and `deployed_units` updated from `"w"` to
+  `["mast-wis-01"]`.
+- `MAST_common/config/__init__.py`:
+  - `Config.__init__`: added `.lower()` to hostname before site detection (Windows
+    `socket.gethostname()` returns uppercase); extended regex from
+    `^mast-([^-]+)-(?:control|spec)$` to also match unit numbers
+    `^mast-([^-]+)-(?:control|spec|\\d+)$`.
+  - `get_unit()`: added `unit_name = unit_name.lower()` so Windows uppercase hostnames
+    are normalized before MongoDB lookup.
+- `MAST_common/utils.py`: extended `canonic_unit_name()` with a new branch for the
+  `mast-<site>-NN` format (regex `-([a-z]+)-(\\d+)$` on the suffix).
+- `build/build-mast.ps1`: updated `ValidatePattern` to also accept `mast-<site>-NN`.
+- `vm/run-prov-test.py`: updated `--host-unit` / `--hostname` examples and defaults.
+
+**Implications:** All provisioning test runs must pass `--host-unit mast-wis-01 --hostname
+mast-wis-01` (or rely on the updated defaults). The `mast-wis-01` MongoDB unit document is
+test-configured with `ipaddr = "127.0.0.1"` (DLI stub); the production power switch address
+must be set when the physical unit is deployed. The `canonic_unit_name` `name.isdigit()` bug
+in the `mastXX` path is NOT fixed here (deferred); ns-site units provisioned as `mast-ns-NN`
+will use the new branch and will not hit it.
+
 ## [2026-05-16] diagnostics verify: ASCOM-diagnostics path corrected; MAST_unit heartbeat port corrected
 
 **Why:** Two checks in `verify-diagnostics.ps1` produced hard FAILs due to wrong search paths and a wrong default port. (1) The hardcoded candidate list and recursive fallback used the filename `ASCOM.Diagnostics.exe` (dot-separated) and paths matching a `Platform 6/7\Tools\Diagnostics\` layout. The actual install by `ASCOMPlatform710.4707.exe` places the tool at `C:\Program Files (x86)\ASCOM\Platform\Tools\ASCOM Diagnostics.exe` (space in name, `Platform\Tools\` path). (2) The MAST_unit heartbeat defaulted to port 5000, but `ServiceConfig` in `MAST_common/config/__init__.py` defaults to port 8000, confirmed by `mongo_seeds/services.json`. Both are hard FAILs by design - the ASCOM-diagnostics check verifies the tool can be launched, and the heartbeat verifies the service is up.

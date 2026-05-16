@@ -64,11 +64,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import socket
 import subprocess
 import sys
-import threading
 import time
 import urllib.error
 import urllib.request
@@ -86,11 +84,25 @@ except ImportError:
         "Then re-run this script."
     )
 
+import vm_lib
+from vm_lib import (
+    VAULT_CREDS,
+    WINRM_BOOT_TIMEOUT_S,
+    WINRM_CALL_TIMEOUT_S,
+    WINRM_PORT,
+    _dispose_winrm_session,
+    _ps_escape,
+    check_rc,
+    load_creds,
+    run_ps,
+    wait_for_winrm,
+    winrm_session,
+)
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 REPO_ROOT = Path(__file__).parent.parent
-VAULT_CREDS = REPO_ROOT / "vault" / "creds.json"
 LOG_ROOT = Path(r"C:\MAST\logs\dev")
 
 VBOXMANAGE = Path(r"C:\Program Files\Oracle\VirtualBox\VBoxManage.exe")
@@ -98,12 +110,7 @@ VBOXMANAGE = Path(r"C:\Program Files\Oracle\VirtualBox\VBoxManage.exe")
 # Hostname of the provisioning server (this machine) as the unit will address it for SMB.
 PROV_SERVER = os.environ.get("COMPUTERNAME") or socket.gethostname()
 
-WINRM_PORT = 5985
 WINRM_TIMEOUT_S = 90 * 60
-WINRM_CALL_TIMEOUT_S = 60 * 60
-# First cycle often waits for the unit after snapshot restore or reboot; auth can lag TCP.
-WINRM_BOOT_TIMEOUT_S = 15 * 60
-HEARTBEAT_INTERVAL_S = 30
 EXECUTE_POLL_INTERVAL_S = 20
 VERIFY_ONLY_TIMEOUT_S = 30 * 60
 
@@ -148,6 +155,11 @@ def log_raw(text: str) -> None:
         print(text, file=_log_file, flush=True)
 
 
+# Route vm_lib's heartbeat / stdout-passthrough logging through our tee-to-file logger.
+vm_lib.log_fn = log
+vm_lib.log_raw_fn = log_raw
+
+
 @contextmanager
 def log_to_file(path: Path) -> Generator[None, None, None]:
     global _log_file
@@ -170,12 +182,6 @@ def _format_elapsed(seconds: float) -> str:
     return f"{seconds:.2f}s"
 
 
-def _fmt_mmss(seconds: int) -> str:
-    if seconds < 60:
-        return f"{seconds}s"
-    return f"{seconds // 60:02d}:{seconds % 60:02d}"
-
-
 @contextmanager
 def timed(label: str) -> Generator[None, None, None]:
     log(f"\n=== {label} ===")
@@ -188,13 +194,8 @@ def timed(label: str) -> Generator[None, None, None]:
 
 
 # ---------------------------------------------------------------------------
-# PS string helpers
+# Unit log path helper
 # ---------------------------------------------------------------------------
-
-def _ps_escape(s: str) -> str:
-    """Escape a value for embedding inside a PowerShell single-quoted string."""
-    return s.replace("'", "''")
-
 
 def _find_unit_log_path(session: winrm.Session, log_filename: str) -> str:
     """Return the full path of log_filename inside the newest sessions/ subdir, or ''."""
@@ -209,227 +210,6 @@ def _find_unit_log_path(session: winrm.Session, log_filename: str) -> str:
         "}; $p"
     )
     return (r.std_out or b"").decode(errors="replace").strip()
-
-
-# ---------------------------------------------------------------------------
-# Credentials / WinRM
-# ---------------------------------------------------------------------------
-
-def load_creds() -> dict[str, dict[str, str]]:
-    if not VAULT_CREDS.exists():
-        sys.exit(
-            f"ERROR: Credentials file not found: {VAULT_CREDS}\n"
-            "Create vault/creds.json with the format:\n"
-            '  { "unit": { "user": ".\\\\mast", "pass": "..." } }'
-        )
-    return json.loads(VAULT_CREDS.read_text(encoding="utf-8"))
-
-
-def winrm_session(
-    host: str,
-    cred: dict[str, str],
-    read_timeout_s: int | None = None,
-    op_timeout_s: int | None = None,
-) -> winrm.Session:
-    return winrm.Session(
-        f"http://{host}:{WINRM_PORT}/wsman",
-        auth=(cred["user"], cred["pass"]),
-        transport="basic",
-        read_timeout_sec=read_timeout_s if read_timeout_s is not None else WINRM_CALL_TIMEOUT_S + 30,
-        operation_timeout_sec=op_timeout_s if op_timeout_s is not None else WINRM_CALL_TIMEOUT_S,
-    )
-
-
-def _dispose_winrm_session(sess: winrm.Session | None) -> None:
-    """Close pooled HTTP connections for a pywinrm Session (best-effort)."""
-    if sess is None:
-        return
-    try:
-        sess.protocol.transport.close_session()
-    except Exception:
-        pass
-
-
-def _candidate_users(host: str, raw_user: str) -> list[str]:
-    # vault/creds.json user may be '.\\mast'. pywinrm on some hosts accepts 'mast' instead.
-    # Try a small set of common equivalences without guessing domains.
-    u = (raw_user or "").strip()
-    if not u:
-        return []
-    candidates: list[str] = [u]
-    if u.startswith(".\\"):
-        candidates.append(u[2:])
-    if "\\" in u:
-        candidates.append(u.split("\\")[-1])
-    # If host is an IPv4, try <host>\\user (workgroup-style).
-    if re.match(r"^\\d{1,3}(\\.\\d{1,3}){3}$", host):
-        base = u[2:] if u.startswith(".\\") else (u.split("\\")[-1] if "\\" in u else u)
-        candidates.append(f"{host}\\{base}")
-    # de-dupe preserving order
-    seen: set[str] = set()
-    out: list[str] = []
-    for c in candidates:
-        if c and c not in seen:
-            seen.add(c)
-            out.append(c)
-    return out
-
-
-def _run_with_heartbeat(
-    fn: Any,
-    label: str,
-    timeout_s: int = WINRM_CALL_TIMEOUT_S,
-    step_timer: list[float] | None = None,
-) -> Any:
-    result: list[Any] = []
-    exc: list[BaseException] = []
-
-    def worker() -> None:
-        try:
-            result.append(fn())
-        except BaseException as e:
-            exc.append(e)
-
-    t = threading.Thread(target=worker, daemon=True)
-    start = time.monotonic()
-    t.start()
-    while t.is_alive():
-        t.join(timeout=HEARTBEAT_INTERVAL_S)
-        if t.is_alive():
-            now = time.monotonic()
-            elapsed = int(now - start)
-            step_start = step_timer[0] if step_timer is not None else start
-            step = int(now - step_start)
-            log(f"  ... {label} still running ({_fmt_mmss(elapsed)} elapsed, step {_fmt_mmss(step)})")
-            if elapsed >= timeout_s:
-                raise TimeoutError(
-                    f"{label} exceeded {timeout_s}s timeout - likely hung"
-                )
-    if exc:
-        raise exc[0]
-    return result[0]
-
-
-def _unescape_clixml_fragment(s: str) -> str:
-    s = s.replace("_x000D__x000A_", " ").replace("_x000A_", " ").replace("_x000D_", " ")
-    return " ".join(s.split())
-
-
-def _format_winrm_stderr(text: str, max_len: int = 900) -> str:
-    """Turn noisy WinRM / CLIXML stderr into one readable line for the host log."""
-    t = text.strip()
-    if not t:
-        return ""
-    # Remote PowerShell often prefixes the CLIXML envelope on stderr.
-    t = re.sub(r"^#<\s*CLIXML\s*", "", t, flags=re.IGNORECASE).strip()
-    if not t:
-        return ""
-
-    if "<Objs" in t:
-        chunks: list[str] = []
-        for tag in ("Error", "Warning"):
-            for m in re.findall(rf'<S S="{tag}">(.*?)</S>', t, flags=re.DOTALL):
-                chunks.append(_unescape_clixml_fragment(m))
-        if chunks:
-            t = " ".join(chunks)
-        else:
-            # Progress / Information CLIXML on stderr (no Error or Warning stream).
-            # It duplicates normal host messages and floods the log; drop it.
-            return ""
-
-    for marker in ("At line:", "At ", "    + CategoryInfo", "    + FullyQualifiedErrorId"):
-        if marker in t:
-            t = t.split(marker)[0].rstrip()
-            break
-    t = " ".join(t.split())
-    if len(t) > max_len:
-        return t[: max_len - 3] + "..."
-    return t
-
-
-def run_ps(
-    session: winrm.Session,
-    script: str,
-    *,
-    label: str = "",
-    timeout_s: int = WINRM_CALL_TIMEOUT_S,
-    echo: bool = True,
-    step_timer: list[float] | None = None,
-) -> winrm.Response:
-    """Run a PowerShell script via WinRM with heartbeat logging and a hard timeout."""
-    tag = f"[{label}] " if label else ""
-    if echo:
-        log(f"{tag}>>> {script[:120].rstrip()}")
-    r = _run_with_heartbeat(
-        lambda: session.run_ps(script),
-        label=f"{tag}run_ps",
-        timeout_s=timeout_s,
-        step_timer=step_timer,
-    )
-    if r.std_out:
-        log_raw(r.std_out.decode(errors="replace").rstrip())
-    if r.std_err:
-        brief = _format_winrm_stderr(r.std_err.decode(errors="replace"))
-        if brief:
-            log_raw(f"[stderr] {brief}")
-    return r
-
-
-def check_rc(r: winrm.Response, phase: str) -> None:
-    if r.status_code != 0:
-        raise RuntimeError(f"{phase} failed with exit code {r.status_code}")
-
-
-def wait_for_winrm(host: str, cred: dict[str, str], timeout: int = WINRM_BOOT_TIMEOUT_S) -> None:
-    log(f"Waiting for WinRM on {host} (up to {timeout}s)...")
-    deadline = time.monotonic() + timeout
-    users = _candidate_users(host, cred.get("user", ""))
-    last_diag = 0.0
-    while time.monotonic() < deadline:
-        tcp_ok = False
-        try:
-            with socket.create_connection((host, WINRM_PORT), timeout=5):
-                tcp_ok = True
-        except OSError:
-            pass
-
-        auth_errors: list[str] = []
-        if tcp_ok:
-            for usr in users or [cred.get("user", "")]:
-                s: winrm.Session | None = None
-                try:
-                    s = winrm.Session(
-                        f"http://{host}:{WINRM_PORT}/wsman",
-                        auth=(usr, cred["pass"]),
-                        transport="basic",
-                        read_timeout_sec=30,
-                        operation_timeout_sec=20,
-                    )
-                    r = s.run_cmd("echo", ["ping"])
-                    if r.status_code == 0:
-                        cred["user"] = usr
-                        log(f"WinRM on {host} is ready (user={usr!r}).")
-                        return
-                except Exception as e:
-                    auth_errors.append(f"{usr!r}:{type(e).__name__}")
-                    continue
-                finally:
-                    _dispose_winrm_session(s)
-
-        now = time.monotonic()
-        if now - last_diag >= 60:
-            if tcp_ok:
-                tail = "; ".join(auth_errors[-4:]) if auth_errors else "no auth attempts"
-                log(
-                    f"WinRM: TCP {WINRM_PORT} open on {host} but Basic auth not accepted yet ({tail}). "
-                    "Confirm vault/creds.json matches the unit mast password and that prepare-mast-client "
-                    "finished (HTTPS step can recycle WinRM briefly)."
-                )
-            else:
-                log(f"WinRM: TCP {WINRM_PORT} not open on {host} yet (still booting or wrong host?).")
-            last_diag = now
-        time.sleep(5)
-    raise TimeoutError(f"WinRM on {host} did not become reachable within {timeout}s")
 
 
 # ---------------------------------------------------------------------------
@@ -1015,57 +795,6 @@ def phase_wait_for_unit_health(host: str, timeout_s: int = MAST_UNIT_BOOT_TIMEOU
         )
 
 
-DLI_STUB_PID_FILE = "C:\\mast-dli-stub.pid"
-DLI_STUB_SCRIPT = "dli-power-stub.py"
-DLI_STUB_SVC = "DLI_stub"
-PYTHON_EXE = "C:\\Python312\\python.exe"
-
-
-def phase_start_dli_stub(unit: winrm.Session, staging_path: str) -> None:
-    """Install and start the DLI power-switch stub as a transient NSSM service.
-
-    Installed only during test cycles; removed by phase_stop_dli_stub.
-    The stub listens on port 80 and satisfies DliPowerSwitch.probe() and
-    upload_outlet_names() so Unit.__init__ can complete without real hardware.
-    """
-    with timed("START DLI STUB"):
-        nssm = "C:\\Program Files\\nssm\\nssm.exe"
-        stub = f"{staging_path}\\{DLI_STUB_SCRIPT}"
-        ps = (
-            f"$nssm = '{nssm}'\n"
-            f"$svc = '{DLI_STUB_SVC}'\n"
-            # Remove any leftover service from a previous interrupted run.
-            "Stop-Service $svc -Force -ErrorAction SilentlyContinue\n"
-            "& $nssm remove $svc confirm 2>$null | Out-Null\n"
-            "Start-Sleep -Seconds 1\n"
-            f"& $nssm install $svc '{PYTHON_EXE}' '{stub}'\n"
-            "& $nssm set $svc Start SERVICE_AUTO_START\n"
-            "Start-Service $svc -ErrorAction Stop\n"
-            "Start-Sleep -Seconds 2\n"
-            "$svc2 = Get-Service $svc -ErrorAction SilentlyContinue\n"
-            "if ($svc2) { 'DLI stub service: ' + $svc2.Status } else { 'DLI stub service: NOT FOUND' }\n"
-        )
-        r = run_ps(unit, ps, label="dli-stub-start", timeout_s=60, echo=False)
-        if r.status_code != 0:
-            raise RuntimeError(f"phase_start_dli_stub failed (exit {r.status_code})")
-
-
-def phase_stop_dli_stub(unit: winrm.Session) -> None:
-    """Stop and uninstall the transient DLI power-switch stub NSSM service."""
-    with timed("STOP DLI STUB"):
-        nssm = "C:\\Program Files\\nssm\\nssm.exe"
-        ps = (
-            f"$nssm = '{nssm}'\n"
-            f"$svc = '{DLI_STUB_SVC}'\n"
-            "Stop-Service $svc -Force -ErrorAction SilentlyContinue\n"
-            "Start-Sleep -Seconds 1\n"
-            "& $nssm remove $svc confirm 2>$null | Out-Null\n"
-            "'DLI stub removed'\n"
-        )
-        r = run_ps(unit, ps, label="dli-stub-stop", timeout_s=30, echo=False)
-        if r.status_code != 0:
-            log(f"WARNING: phase_stop_dli_stub exited {r.status_code} (non-fatal)")
-
 
 def phase_run_rebuild_repos(unit: winrm.Session, staging_path: str) -> winrm.Response:
     """Force-reclone all repos: runs provide-mast.ps1 -Force from the transferred staging dir."""
@@ -1343,52 +1072,36 @@ def main() -> None:
 
                     # EXECUTE or VERIFY-RUN
                     run_rc = 0
-                    dli_stub_started = False
-                    needs_dli_stub = (
-                        "mast" in modules
-                        and "execute" in phases
-                        and unit_stage
-                    )
-                    try:
-                        if needs_dli_stub:
-                            phase_start_dli_stub(unit_session, unit_stage)
-                            dli_stub_started = True
 
-                        if "execute" in phases:
-                            run_response = phase_execute(
-                                unit_session, args.host_unit, creds["unit"], unit_stage,
-                                modules=modules,
-                                smb_user=creds["smb"]["user"],
-                                smb_pass=creds["smb"]["pass"],
-                            )
-                            run_rc = run_response.status_code
-                        elif "verify-run" in phases:
-                            run_response = phase_run_verify_only(
-                                unit_session, args.host_unit, creds["unit"], unit_stage,
-                                modules=modules,
-                            )
-                            run_rc = run_response.status_code
+                    if "execute" in phases:
+                        run_response = phase_execute(
+                            unit_session, args.host_unit, creds["unit"], unit_stage,
+                            modules=modules,
+                            smb_user=creds["smb"]["user"],
+                            smb_pass=creds["smb"]["pass"],
+                        )
+                        run_rc = run_response.status_code
+                    elif "verify-run" in phases:
+                        run_response = phase_run_verify_only(
+                            unit_session, args.host_unit, creds["unit"], unit_stage,
+                            modules=modules,
+                        )
+                        run_rc = run_response.status_code
 
-                        # VERIFY
-                        if "verify" in phases:
-                            verify_only_mode = "verify-run" in phases and "execute" not in phases
-                            results = phase_verify(
-                                unit_session, modules, run_rc, verify_only=verify_only_mode,
-                                host=args.host_unit,
-                            )
-                            (log_dir / "results.json").write_text(json.dumps(results, indent=2))
-                            passed = print_results(results, cycle)
-                            cycle_results.append(passed)
-                            if not passed:
-                                _fetch_diagnostics(unit_session)
-                        else:
-                            cycle_results.append(True)
-                    finally:
-                        if dli_stub_started:
-                            try:
-                                phase_stop_dli_stub(unit_session)
-                            except Exception as e:
-                                log(f"WARNING: phase_stop_dli_stub: {e}")
+                    # VERIFY
+                    if "verify" in phases:
+                        verify_only_mode = "verify-run" in phases and "execute" not in phases
+                        results = phase_verify(
+                            unit_session, modules, run_rc, verify_only=verify_only_mode,
+                            host=args.host_unit,
+                        )
+                        (log_dir / "results.json").write_text(json.dumps(results, indent=2))
+                        passed = print_results(results, cycle)
+                        cycle_results.append(passed)
+                        if not passed:
+                            _fetch_diagnostics(unit_session)
+                    else:
+                        cycle_results.append(True)
 
                 except Exception as exc:
                     log(f"\nCycle {cycle} ERROR: {exc}")

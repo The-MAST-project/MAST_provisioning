@@ -6,8 +6,8 @@ param(
         if (-not $_) {
             throw "Parameter -HostName must be supplied."
         }
-        if ($_ -notmatch '^mast(0[1-9]|1[0-9]|20)$') {
-            throw "Parameter -HostName must match pattern 'mast01'..'mast20'."
+        if ($_ -notmatch '^(mast(w|0[0-9]|[1-9]|1[0-9]|20)|mast-[a-z]+-[0-9]+)$') {
+            throw "Parameter -HostName must match 'mastw', 'mast00', 'mast01'..'mast20', or 'mast-<site>-NN'."
         }
         $true
     })]
