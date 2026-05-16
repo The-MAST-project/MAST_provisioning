@@ -68,7 +68,9 @@ param(
     [switch]   $DryRun,
     [switch]   $Force,
     [switch]   $WinRMUseSSL,
-    [switch]   $TestMode
+    [switch]   $TestMode,
+    [int]      $MaintenanceWindowStart = -1,
+    [int]      $MaintenanceWindowEnd   = -1
 )
 
 $ErrorActionPreference = 'Stop'
@@ -131,6 +133,61 @@ function Log-Activity {
         (Now-Utc), $RunId, $Unit, $Outcome, $Reason, $DurationS, $PayloadHash, $GitSha
     ) -join ','
     Add-Content -Path $ActivityCsv -Value $row -Encoding UTF8
+}
+
+# Returns @{ allowed=[bool]; current=HH:mm; window="HH:00-HH:00"; reason=... }.
+# A unit with no maintenance_window in its registry entry is allowed at any time
+# (preserves prior behavior for partially configured registries). The -MaintenanceWindowStart
+# and -MaintenanceWindowEnd script parameters, when supplied (>=0), override the
+# per-unit values for an ad-hoc fleet-wide push.
+function Test-InMaintenanceWindow {
+    param([Parameter(Mandatory)]$Unit)
+
+    $startH = $null; $endH = $null; $tz = $null
+    if ($MaintenanceWindowStart -ge 0 -and $MaintenanceWindowEnd -ge 0) {
+        $startH = $MaintenanceWindowStart
+        $endH   = $MaintenanceWindowEnd
+        $tz     = if ($Unit.timezone) { [string]$Unit.timezone } else { $null }
+    } elseif ($Unit.maintenance_window) {
+        $mw = $Unit.maintenance_window
+        if (-not ($mw.PSObject.Properties.Match('start_hour').Count) -or
+            -not ($mw.PSObject.Properties.Match('end_hour').Count)) {
+            return @{ allowed=$true; reason='window_fields_missing' }
+        }
+        $startH = [int]$mw.start_hour
+        $endH   = [int]$mw.end_hour
+        $tz     = if ($Unit.timezone) { [string]$Unit.timezone } else { $null }
+    } else {
+        return @{ allowed=$true; reason='no_window_configured' }
+    }
+
+    $nowUtc = [DateTime]::UtcNow
+    try {
+        if ($tz) {
+            $zone = [System.TimeZoneInfo]::FindSystemTimeZoneById($tz)
+            $local = [System.TimeZoneInfo]::ConvertTimeFromUtc($nowUtc, $zone)
+        } else {
+            $local = $nowUtc.ToLocalTime()
+        }
+    } catch {
+        # Bad timezone id -- fall back to server local time but flag it.
+        $local = $nowUtc.ToLocalTime()
+        Log-Event 'MAINT_TZ_WARN' @{ unit=$Unit.hostname; tz=$tz; err=$_.Exception.Message }
+    }
+
+    $h = $local.Hour
+    if ($startH -le $endH) {
+        $inWin = ($h -ge $startH -and $h -lt $endH)
+    } else {
+        # Wrap case, e.g. 22-06 -> allowed if h>=start OR h<end.
+        $inWin = ($h -ge $startH -or $h -lt $endH)
+    }
+    return @{
+        allowed = [bool]$inWin
+        current = $local.ToString('HH:mm')
+        window  = ("{0:00}:00-{1:00}:00" -f $startH, $endH)
+        tz      = $tz
+    }
 }
 
 # ---------------------------------------------------------------------------
@@ -288,6 +345,21 @@ foreach ($unit in $units) {
             if ($DryRun) {
                 Log-Event 'DRYRUN_STOP' @{ unit=$hostname; reason='would_transfer_and_execute' }
                 Log-Activity -Unit $hostname -Outcome 'SKIP' -Reason 'dry_run' `
+                             -DurationS ([int]((Get-Date) - $unitStart).TotalSeconds) `
+                             -PayloadHash $payloadHash -GitSha $gitSha
+                continue
+            }
+
+            # ---------------------------------------------------------------
+            # 5b. Maintenance window gate. The hash check above runs at any
+            # time (non-disruptive); the steps below (mark unavailable, SMB
+            # pull, execute, reboot) only run inside the unit's window.
+            # ---------------------------------------------------------------
+            $mw = Test-InMaintenanceWindow -Unit $unit
+            if (-not $mw.allowed) {
+                Log-Event 'MAINT_SKIP' @{ unit=$hostname; reason='outside_window'; current=$mw.current; window=$mw.window; tz=$mw.tz }
+                Log-Activity -Unit $hostname -Outcome 'SKIP_MAINTENANCE' `
+                             -Reason "outside_window current=$($mw.current) window=$($mw.window)" `
                              -DurationS ([int]((Get-Date) - $unitStart).TotalSeconds) `
                              -PayloadHash $payloadHash -GitSha $gitSha
                 continue

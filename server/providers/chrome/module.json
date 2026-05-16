@@ -1,5 +1,6 @@
-{
+﻿{
   "name": "chrome",
+  "version": "stable",
   "description": "Install Google Chrome web browser.",
   "order": 150,
   "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-chrome.ps1\" -AssetsRoot \".\"",

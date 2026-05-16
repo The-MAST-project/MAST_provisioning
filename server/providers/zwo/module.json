@@ -1,5 +1,6 @@
-{
+﻿{
   "name": "zwo",
+  "version": "asistudio-1.16.2/ascom-6.5.32/driver-3.25",
   "description": "Install ZWO camera drivers, ASI Studio, and ASCOM driver.",
   "order": 120,
   "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-zwo.ps1\" -AssetsRoot \".\"",

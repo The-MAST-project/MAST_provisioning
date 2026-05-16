@@ -1,5 +1,6 @@
-{
+﻿{
   "name": "git",
+  "version": "2.52.0",
   "description": "Install Git for Windows (silent) and add Git cmd/bin to system PATH.",
   "order": 25,
   "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-git.ps1\" -AssetsRoot \".\"",

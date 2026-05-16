@@ -1,5 +1,6 @@
-{
+﻿{
   "name": "imdisk",
+  "version": "imdisktk-x64",
   "description": "Install ImDisk virtual disk driver and create a 10GB ramdisk at D: with boot-time activation.",
   "order": 170,
   "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -Command \"${wd} = Split-Path -Parent ${PSCommandPath}; & powershell.exe -ExecutionPolicy Bypass -NoProfile -File (Join-Path ${wd} 'provide-imdisk.ps1') -AssetsRoot ${wd}\"",

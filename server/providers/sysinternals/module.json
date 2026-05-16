@@ -1,5 +1,6 @@
-{
+﻿{
   "name": "sysinternals",
+  "version": "rolling",
   "description": "Install Sysinternals Suite tools for system diagnostics and monitoring.",
   "order": 140,
   "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-sysinternals.ps1\" -AssetsRoot \".\" -InstallRoot \"C:\\Program Files\\Sysinternals\"",

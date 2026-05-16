@@ -1,5 +1,6 @@
-{
+﻿{
   "name": "nssm",
+  "version": "2.24",
   "description": "Install NSSM (Non-Sucking Service Manager) from nssm-2.24.zip and add to PATH.",
   "order": 60,
   "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-nssm.ps1\" -AssetsRoot \".\" -InstallDir \"C:\\Program Files\\nssm\"",

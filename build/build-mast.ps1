@@ -459,12 +459,30 @@ function Get-GitSha {
 
 ${payloadHash} = Get-PayloadHash -StagingDir ${staging}
 ${gitSha}      = Get-GitSha -RepoTop ${Top}
+
+# Aggregate per-module versions from each provider's module.json. The 'version'
+# field is required; a missing one is a build error (fail loud rather than emit
+# a manifest with silent gaps). The literal string 'git' is substituted with the
+# current git SHA so source-tracked modules (e.g. mast) report a meaningful hash.
+${moduleVersions} = [ordered]@{}
+foreach (${vm} in ${Modules}) {
+    ${vmf} = Read-ModuleManifest -ModuleName ${vm}
+    if (-not ${vmf}.PSObject.Properties.Match('version').Count -or
+        [string]::IsNullOrWhiteSpace(${vmf}.version)) {
+        throw "module.json missing 'version' for module '${vm}'"
+    }
+    ${vstr} = [string]${vmf}.version
+    if (${vstr} -eq 'git') { ${vstr} = ${gitSha} }
+    ${moduleVersions}[${vm}] = ${vstr}
+}
+
 ${manifest}    = [pscustomobject]@{
-    built_at     = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
-    git_sha      = ${gitSha}
-    payload_hash = ${payloadHash}
-    hostname     = ${HostName}
-    modules      = ${Modules}
+    built_at        = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+    git_sha         = ${gitSha}
+    payload_hash    = ${payloadHash}
+    hostname        = ${HostName}
+    modules         = ${Modules}
+    module_versions = ${moduleVersions}
 }
 (${manifest} | ConvertTo-Json -Depth 4) |
     Out-File -FilePath (Join-Path ${staging} 'build-manifest.json') -Encoding UTF8

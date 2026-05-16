@@ -1,5 +1,6 @@
-{
+﻿{
   "name": "mongodb-client",
+  "version": "mongosh-2.2.6/tools-100.9.4",
   "description": "Install MongoDB client-only tools: mongosh, Database Tools, and optionally Compass. Does NOT install or start mongod.",
   "order": 40,
   "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-mongodb.ps1\" -AssetsRoot \".\" -InstallRoot \"C:\\Program Files\\MongoDB\" -NoCompass",

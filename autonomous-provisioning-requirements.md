@@ -7,9 +7,12 @@
 > to converge toward.
 >
 > **Important:** The codebase currently has scripts that can perform provisioning steps
-> when invoked manually. It does **not** yet have a working autonomous loop -- no
-> self-scheduling service, no unattended cadence, no production-hardened driver. That is
-> the primary goal of Phase 1.
+> when invoked manually. The driver now enforces maintenance windows and emits a
+> `module_versions` map in `build-manifest.json` -- the last gating Foundation items
+> for unattended operation. Activating the scheduled task on the prov server is the
+> remaining operator step before the autonomous loop is live. Phase 1 driver
+> self-monitoring (heartbeat + `last-run.json`), lease replacement, and the remaining
+> test-mode exceptions are the next workstreams.
 
 ## Status key
 
@@ -136,48 +139,47 @@ The per-unit `modules` array is the seed for future profile-based provisioning: 
 units can already receive different module sets by editing their registry entry. See
 **Unit profiles (future hardware variation)** in Phase 2 for the fuller design.
 
-#### 2. Build Manifest (`build-manifest.json`) **[PARTIAL]**
+#### 2. Build Manifest (`build-manifest.json`) **[DONE]**
 
-Written by `build-mast.ps1` after a successful build. Contains a content hash (or version
-tag) for the staged payload so units can compare what they have installed against what's
-current.
+Written by `build-mast.ps1` after a successful build. Contains a content hash for the
+staged payload so units can compare what they have installed against what's current,
+and a `module_versions` map so the fleet can answer "what version of python is on
+mast03?" without remoting in.
 
-**Current actual schema** (as written by `build-mast.ps1`):
+**Schema** (as written by `build-mast.ps1`):
 
 ```json
 {
-  "built_at": "2026-05-14T07:51:14Z",
-  "git_sha": "6aeac999502187164b6a97bd4ca0c288a49b1359",
+  "built_at": "2026-05-16T16:24:00Z",
+  "git_sha": "6da70693a4ee557d22fcc02099fb3f47a08fab36",
   "payload_hash": "<sha256>",
   "hostname": "mast01",
-  "modules": ["ascom", "chrome", "cygwin", "..."]
-}
-```
-
-**Target schema** (adds `module_versions` -- not yet emitted):
-
-```json
-{
-  "built_at": "2026-05-05T12:00:00Z",
-  "git_sha": "abc1234",
-  "payload_hash": "<sha256 of commands.json + all asset checksums>",
-  "modules": ["python", "ascom", "cygwin", "mast", "..."],
+  "modules": ["ascom", "chrome", "cygwin", "..."],
   "module_versions": {
-    "python":  "3.12.0",
-    "ascom":   "7.1.0",
-    "cygwin":  "3.5.3",
-    "mast":    "abc1234",
-    "mongodb": "7.0.8"
+    "ascom":          "7.1.0",
+    "chrome":         "stable",
+    "cygwin":         "cygwin64-snapshot",
+    "diagnostics":    "builtin",
+    "git":            "2.52.0",
+    "mast":           "6da70693a4ee557d22fcc02099fb3f47a08fab36",
+    "mongodb-client": "mongosh-2.2.6/tools-100.9.4",
+    "nomachine":      "9.0.188",
+    "python":         "3.12.0",
+    "sysinternals":   "rolling",
+    "...": "..."
   }
 }
 ```
 
-`build-mast.ps1` writes this to `staging\<hostname>\build-manifest.json` at build time.
-The `module_versions` map should be populated from the `version` field in each provider's
-`module.json`, but this field is **not yet emitted**. It is needed to answer "what version
-of python is on mast03?" without logging into the unit, and to correlate timing regressions
-or failures with specific version bumps. Adding it requires that each `module.json` carries
-a `version` field and that `build-mast.ps1` reads and aggregates those fields.
+`build-mast.ps1` writes this to `staging\<hostname>\01-provisioning\build-manifest.json`
+at build time. The `module_versions` map is aggregated from the `version` field in each
+provider's `module.json`. A missing or whitespace `version` is a build error (`throw
+"module.json missing 'version' for module '<name>'"`) -- explicit failure beats silent
+omission. The literal string `"git"` is substituted with the current `$gitSha` at
+aggregate time, so source-tracked modules (e.g. `mast`) report a meaningful hash.
+Modules with no external versioned payload use `"builtin"` (diagnostics) or `"rolling"`
+(sysinternals); composite installers use slash-joined strings (e.g.
+`"mongosh-2.2.6/tools-100.9.4"`).
 
 #### 3. Installed / effective state (on each unit) **[PARTIAL]**
 
@@ -196,12 +198,14 @@ the effective hash reported by the unit to decide whether an update is needed.
 The script implements the full provisioning control flow using WinRM Basic HTTP (port 5985,
 no `TrustedHosts` elevation required) and SMB pull for payload transfer. The workflow runs
 end-to-end against a VirtualBox unit. It writes `activity.csv` with the documented schema
-and manages `availability.json` on the unit.
+and manages `availability.json` on the unit. **Maintenance window enforcement is
+implemented** (see the Phase 1 section of the same name): outside a unit's
+`maintenance_window`, the hash check still runs but disruptive steps are skipped with a
+`MAINT_SKIP` event and a `SKIP_MAINTENANCE` activity row.
 
-**Remaining gap:** maintenance window enforcement is not yet implemented -- the
-`maintenance_window` / `timezone` fields in `unit-registry.json` are read but disruptive
-steps are never skipped based on them. The task scheduler job (see item 5) is also not
-yet activated on the production server. The intended control flow is:
+**Remaining gap:** the task scheduler job (see item 5) is not yet activated on the
+production server, and the Phase 1 driver self-monitoring work (mid-cycle heartbeat +
+`last-run.json`) is outstanding. The intended control flow is:
 
 ```
 for each unit in unit-registry.json:
@@ -230,9 +234,13 @@ for each unit in unit-registry.json:
 #### 5. Scheduling **[PARTIAL]**
 
 `server/install-scheduled-task.ps1` exists and can register a Task Scheduler job to run
-`check-and-provision.ps1` every 30 minutes under SYSTEM. The task has **not** been
-installed and activated on the provisioning server; this is blocked on Phase 1 work
-(the driver must be hardened before it runs unattended).
+`check-and-provision.ps1` every 30 minutes under SYSTEM. **Activation prerequisites are
+now met** -- maintenance window enforcement landed (the previously gating Foundation
+work), so an unattended fire on a 30-minute cadence will respect each unit's window.
+The task has **not** yet been installed on the provisioning server; that is a one-time
+operator step (elevated `.\server\install-scheduled-task.ps1`, documented in
+`docs/provisioning-server-setup.md` Step 7). Phase 1 driver self-monitoring (heartbeat
++ `last-run.json`) can land before or after this activation -- it is not gating.
 
 ---
 
@@ -260,8 +268,11 @@ double-hop problem and keeps the prov server's WinRM client unprivileged.
 
 ### Version / Drift Detection **[PARTIAL]**
 
-The logic is present in `check-and-provision.ps1` but only exercised by manual invocation.
-It becomes meaningful once the autonomous loop is running.
+The logic is present in `check-and-provision.ps1` (hash compare at lines ~234-294)
+and verified end-to-end via `vm/run-prov-test.py`. It is exercised on every manual
+driver invocation today; it becomes a continuous fleet guarantee once the scheduled
+task is activated on the prov server (Components #5 above). No driver-side gaps remain
+for drift detection itself.
 
 Two levels:
 
@@ -647,21 +658,35 @@ ultimately align with what a fresh inspection of the unit would produce.
 
 ---
 
-### Maintenance window enforcement in `check-and-provision.ps1`
+### Maintenance window enforcement in `check-and-provision.ps1` **[DONE]**
 
-`unit-registry.json` already carries `maintenance_window` and `timezone` per unit. The
-driver must **enforce** these windows: disruptive steps (update transfers, reboots, Windows
-Update installs) must be skipped outside the window with a `MAINT_SKIP` log event.
+`unit-registry.json` carries `maintenance_window: { start_hour, end_hour }` and
+`timezone` per unit. The driver enforces these windows: disruptive steps (SMB pull,
+execute, reboot) are skipped outside the window. Non-disruptive steps (hash check,
+skip-if-current) run at any time -- the gate is placed **after** the hash check, so
+"already current" outcomes are still logged when outside the window.
 
-**Planned parameters for `check-and-provision.ps1`:** `-MaintenanceWindowStart` and
-`-MaintenanceWindowEnd` (24-hour local time, e.g. `10` and `16`). Runs that start outside
-the window skip update and reboot steps and log:
+**Implementation:** helper `Test-InMaintenanceWindow` in
+`server/check-and-provision.ps1` resolves the unit's `timezone` via
+`[System.TimeZoneInfo]::FindSystemTimeZoneById`, converts `UtcNow` to that zone, and
+returns allowed/current/window/tz. The wrap case (`end_hour < start_hour`, e.g. 22-06)
+is handled. A unit with **no** `maintenance_window` field is allowed at any time
+(preserves prior behavior for partially configured registries); an invalid timezone
+falls back to server local time with a `MAINT_TZ_WARN` log so a typo never blocks the
+loop.
+
+**Script parameters:** `-MaintenanceWindowStart` and `-MaintenanceWindowEnd` (24-hour
+local, default `-1` = unset). When both are supplied, they override the per-unit
+registry values for an ad-hoc fleet-wide push.
+
+**Log line:**
 
 ```
-[2026-05-06T22:30:00Z] MAINT_SKIP unit=mast02 reason=outside_window current=22:30 window=10:00-16:00
+[2026-05-16T22:30:00Z] MAINT_SKIP  unit=mast02  reason=outside_window  current=22:30  window=10:00-16:00  tz=America/Los_Angeles
 ```
 
-Non-disruptive steps (hash check, skip-if-current) may run at any time.
+Skipped units also get an activity-CSV row with `outcome=SKIP_MAINTENANCE`, distinct
+from `SKIP` (already-current / dry-run).
 
 ---
 

@@ -1,5 +1,6 @@
-{
+﻿{
   "name": "wireshark",
+  "version": "4.6.0",
   "description": "Install Wireshark 4.6.0 network analyzer.",
   "order": 50,
   "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-wireshark.ps1\" -AssetsRoot \".\" -InstallRoot \"C:\\Program Files\\Wireshark\"",

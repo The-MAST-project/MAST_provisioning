@@ -1,5 +1,6 @@
-{
+﻿{
   "name": "mast",
+  "version": "git",
   "description": "Clone repos, create per-repo virtualenvs, and install requirements.txt in each.",
   "order": 160,
   "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-mast.ps1\" -AssetsRoot \".\" -CloneRoot \"C:\\MAST\\repos\"",

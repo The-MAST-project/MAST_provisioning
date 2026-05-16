@@ -1,5 +1,6 @@
-{
+﻿{
   "name": "python",
+  "version": "3.12.0",
   "description": "Install Python 3.12.0 and virtualenv.",
   "order": 20,
   "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-python.ps1\" -AssetsRoot \".\" -InstallDir \"C:\\Python312\"",

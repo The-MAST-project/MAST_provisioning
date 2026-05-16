@@ -2,6 +2,80 @@
 
 ---
 
+## [2026-05-16] check-and-provision.ps1: maintenance-window enforcement
+
+**Why:** `unit-registry.json` has carried `maintenance_window: { start_hour, end_hour }`
+and `timezone` per unit since the autonomous-provisioning design landed, but the
+driver never consulted them. Closing this Foundation [PARTIAL] gap is a prerequisite
+for activating the scheduled task on the prov server -- without it, an unattended
+fire on a 30-minute cadence could trigger transfers and reboots at arbitrary local
+times. Phase 1 work (driver heartbeat, lease replacement) is independent and can
+land afterward.
+
+**What:**
+- New helper `Test-InMaintenanceWindow` in `server/check-and-provision.ps1`.
+  Resolves the unit's `timezone` via `[System.TimeZoneInfo]::FindSystemTimeZoneById`,
+  converts `UtcNow` to that zone, and returns allowed/current/window/tz. Handles
+  the wrap case (`end_hour < start_hour`, e.g. 22-06). Missing window or invalid
+  timezone falls back to "allowed" with a `MAINT_TZ_WARN` log -- a partially
+  configured registry never blocks the loop.
+- Gate placed **after** the hash check and DryRun handling, **before** the
+  "mark unavailable / SMB pull / execute" sequence. Hash-only "needs update?"
+  probes therefore still run at any time; only disruptive steps are gated.
+- New script parameters `-MaintenanceWindowStart` / `-MaintenanceWindowEnd`
+  (default `-1` = unset). When both are supplied, they override the per-unit
+  registry values for ad-hoc fleet-wide pushes.
+- Skipped units log `MAINT_SKIP` (event) and `SKIP_MAINTENANCE` (activity.csv
+  outcome) so per-unit accounting stays consistent each cycle.
+
+**Implications:**
+- The scheduled task can now be activated unattended without risk of mid-day
+  disruption to units with a defined window.
+- Registry entries without a `maintenance_window` field still get provisioned
+  on any cycle -- callers who want strict gating must populate the field.
+- Activity-CSV consumers (future Phase 3 dashboards) gain a new outcome value
+  `SKIP_MAINTENANCE` distinct from `SKIP` (already-current / dry-run).
+
+---
+
+## [2026-05-16] Build manifest: aggregate per-module versions
+
+**Why:** The autonomous-provisioning design has long called for a `module_versions`
+map in `build-manifest.json` so the fleet can answer "what version of python is on
+mast03?" without remoting in, and so regression hunts can correlate failures with
+specific package bumps. The field was specified but never emitted; provider
+`module.json` files had no `version` key, and `build-mast.ps1` did not aggregate
+one. This entry closes that Foundation [PARTIAL] tag.
+
+**What:**
+- Every provider `module.json` under `server/providers/*/` (19 files) now carries
+  a `version` string positioned immediately after `name`. Values reflect the
+  bundled installer asset where one exists (e.g. python -> `"3.12.0"`,
+  git -> `"2.52.0"`, wireshark -> `"4.6.0"`). Source-tracked modules use the
+  literal `"git"` (mast); modules with no external versioned payload use
+  `"builtin"` (diagnostics) or `"rolling"` (sysinternals); composite modules use
+  a slash-joined string (e.g. mongodb-client ->
+  `"mongosh-2.2.6/tools-100.9.4"`). Values are informational, not gating.
+- `build/build-mast.ps1` now iterates `${Modules}` before constructing the
+  manifest object, reads each `module.json` via the existing
+  `Read-ModuleManifest` helper, throws if `version` is missing or whitespace,
+  and substitutes the literal `"git"` with `$gitSha`. The aggregated
+  `[ordered]` hashtable is attached to the manifest as `module_versions`.
+- `client/execute-mast-provisioning.ps1` (lines 220-238) already copies the
+  build manifest verbatim into `installed-manifest.json`, so the new field
+  propagates to units without any change there.
+
+**Implications:**
+- Adding a new provider now requires a `version` field -- a missing one fails
+  the build loudly rather than emitting a manifest with silent gaps.
+- The `git` sentinel keeps source-tracked modules meaningful without burdening
+  provider authors with templating logic.
+- The next provisioning cycle on every unit will produce a fresh
+  `installed-manifest.json` carrying `module_versions`, enabling fleet-wide
+  version queries without remoting in.
+
+---
+
 ## [2026-05-16] vm/ test infrastructure: vm_lib shared module + named test-suite scenarios
 
 **Why:** Two pressures converged. (1) During VM bring-up debugging, ~15 ad-hoc

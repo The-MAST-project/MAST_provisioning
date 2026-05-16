@@ -1,5 +1,6 @@
-{
+﻿{
   "name": "cygwin",
+  "version": "cygwin64-snapshot",
   "description": "Install Cygwin from a prebuilt cygwin64.tgz, run postinstall, add to PATH, and verify.",
   "order": 10,
   "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-cygwin.ps1\" -AssetsRoot \".\" -InstallRoot \"C:\\cygwin64\"",

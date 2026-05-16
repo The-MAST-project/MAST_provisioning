@@ -1,5 +1,6 @@
-{
+﻿{
   "name": "vscode",
+  "version": "1.105.1",
   "description": "Install Visual Studio Code with extensions for development.",
   "order": 130,
   "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-vscode.ps1\" -AssetsRoot \".\" -InstallRoot \"C:\\Program Files\\Microsoft VS Code\"",

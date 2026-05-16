@@ -244,6 +244,17 @@ VM boot (it updates the Windows `hosts` file):
 
 ## Step 7 - Install the Task Scheduler job (elevated, once)
 
+**Prerequisite -- review maintenance windows.** Each entry in
+`server\unit-registry.json` carries a `maintenance_window: { start_hour, end_hour }`
+and `timezone`. The driver now **enforces** these: outside the window, the hash
+check still runs but disruptive steps (SMB pull, execute, reboot) are skipped
+with a `MAINT_SKIP` log event and a `SKIP_MAINTENANCE` row in `activity.csv`.
+Confirm every unit's window reflects the operator's intent before activation. A
+unit with **no** `maintenance_window` field is allowed at any time; if you need
+strict gating, populate the field. For an ad-hoc fleet-wide push outside the
+configured windows, invoke the driver manually with
+`-MaintenanceWindowStart 0 -MaintenanceWindowEnd 24`.
+
 ```powershell
 # From the repo root, elevated:
 .\server\install-scheduled-task.ps1

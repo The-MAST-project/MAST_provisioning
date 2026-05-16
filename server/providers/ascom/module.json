@@ -1,5 +1,6 @@
-{
+﻿{
   "name": "ascom",
+  "version": "7.1.0",
   "description": "Install ASCOM Platform 7.1.0 and ASCOM Developer tools, enabling .NET 3.5 if needed.",
   "order": 30,
   "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-ascom.ps1\" -AssetsRoot \".\"",

@@ -1,5 +1,6 @@
-{
+﻿{
   "name": "planewave",
+  "version": "pwi-4.1.8",
   "description": "Install PlaneWave Instruments telescope control software (PWI4) and PS3 CLI tools.",
   "order": 110,
   "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-planewave.ps1\" -AssetsRoot \".\"",
