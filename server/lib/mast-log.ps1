@@ -94,3 +94,49 @@ function Write-MastLog {
     $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
     "$timestamp | $Message" | Tee-Object -FilePath $LogFile -Append
 }
+
+# ---------------------------------------------------------------------------
+# Status files under <SystemDrive>\MAST\status\ (typically C:\MAST\status).
+# Co-located with logs and installed-manifest so every unit-side state file
+# lives under one tree. Shared by the unit-side execute lease, availability
+# state, and prov-server last-run heartbeat. All writers must go through
+# Write-MastStatusFileAtomic so partial writes are never observed by readers.
+# ---------------------------------------------------------------------------
+
+function Get-MastStatusBase {
+    [CmdletBinding()]
+    param()
+    $base = Join-Path $env:SystemDrive 'MAST\status'
+    $null = New-Item -ItemType Directory -Path $base -Force -ErrorAction SilentlyContinue
+    return $base
+}
+
+function Get-MastExecuteLeasePath {
+    [CmdletBinding()]
+    param()
+    return (Join-Path (Get-MastStatusBase) 'execute-lease.json')
+}
+
+function Get-MastAvailabilityPath {
+    [CmdletBinding()]
+    param()
+    return (Join-Path (Get-MastStatusBase) 'availability.json')
+}
+
+function Get-MastLastRunPath {
+    [CmdletBinding()]
+    param()
+    return (Join-Path (Get-MastStatusBase) 'last-run.json')
+}
+
+function Write-MastStatusFileAtomic {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)]$Object
+    )
+    $tmp = "$Path.tmp"
+    $json = $Object | ConvertTo-Json -Depth 8
+    Set-Content -Path $tmp -Value $json -Encoding ASCII -NoNewline
+    Move-Item -Path $tmp -Destination $Path -Force
+}

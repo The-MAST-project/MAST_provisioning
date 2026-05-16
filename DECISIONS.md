@@ -2,6 +2,140 @@
 
 ---
 
+## [2026-05-16] Drop in-process lease renewer; size LeaseTtlSeconds to cover worst-case runs
+
+**Why:** The lease renewer introduced in the prior entry used a
+`System.Timers.Timer` + `Register-ObjectEvent -Action` to re-stamp
+`expires_utc` every 60 s. Under WinRM this hung every clean-exit run:
+`execute-mast-provisioning.ps1` reached `exit 0` and the `finally` block
+ran as far as `Write-Log "Log file: ..."`, then `powershell.exe` froze
+forever without emitting `LEASE_RELEASE`. The Python orchestrator's
+`run_ps still running` heartbeat was the only signal. Root cause is a
+known PSEventJob teardown trap: `powershell.exe` waits for all event
+subscribers to drain before returning to the WinRM caller, and an
+in-flight Elapsed action plus `Unregister-Event` can deadlock the engine
+event queue with no timeout. The renewer's correctness benefit (lease
+expiry never overruns a slow install) is not worth a primitive that
+silently hangs every successful run -- especially given that observed
+end-to-end provisioning on a slow VM runs about 40 minutes, well inside
+a single fixed-TTL window.
+
+**What:**
+- `client/execute-mast-provisioning.ps1`: removed the `Timers.Timer`
+  + `Register-ObjectEvent -Action` block and the matching teardown
+  (`Stop`/`Dispose`/`Unregister-Event`/`Get-Job`/`Remove-Job`) from
+  `finally`. The lease is written once at acquire time and released
+  in `finally`; nothing touches the file in between.
+- `LeaseTtlSeconds` default kept at 7200 (2 h). A real provisioning
+  cycle on a slow VM is ~40 min today, so 2 h is roughly a 3x margin
+  on the worst case we have evidence for; that is the right cap until
+  measured runs say otherwise. Callers that want a tighter window can
+  still pass `-LeaseTtlSeconds` explicitly.
+- Comment left at the former renewer site documenting the WinRM hang
+  and explicitly forbidding reintroduction of `Register-ObjectEvent`
+  here. The same ban is recorded in `CLAUDE.md` under the PS 5.1
+  DO NOT list.
+
+**Implications:**
+- A crashed run with a still-live owning pid blocks the next cycle for
+  up to 2 h before `LEASE_STALE_TAKEOVER` triggers. The pid-liveness
+  check still lets the next cycle take over immediately when the prior
+  `powershell.exe` is gone, so the 2 h ceiling only matters when the
+  prior pid is somehow still alive but stuck.
+- The lease TTL and the `availability.json` reason=`provisioning` TTL
+  both sit at 2 h, so the two recovery clocks stay aligned.
+- If a future workload genuinely needs sub-TTL renewal, run the renewer
+  as a child `powershell.exe` (`Start-Process -PassThru`, killed in
+  `finally` via `Stop-Process`) so its lifetime is decoupled from the
+  parent runspace. Do not reintroduce `Register-ObjectEvent` in any
+  WinRM-invoked script.
+
+---
+
+## [2026-05-16] Lease record + availability TTL + last-run heartbeat replace sticky lock file
+
+**Why:** Three Phase 1 gaps blocked safe activation of the prov-server
+scheduled task. (1) `client/execute-mast-provisioning.ps1` used a sticky
+`C:\MAST\execute.lock`; a crashed run left the file behind and blocked all
+future provisioning until a human deleted it. (2) `server/check-and-provision.ps1`
+wrote `availability.json` with `available:false, reason:provisioning` before
+execute and `available:true` on success -- if the driver died between the
+two writes, the unit was silently removed from MAST scheduling indefinitely
+(no TTL, no recovery, no reader). (3) A crashed driver surfaced in Task
+Scheduler; a hung one did not. No `last-run.json` existed and no in-cycle
+progress was emitted during the long transfer/execute steps, so a stuck
+cycle was indistinguishable from a slow one. All three are the same shape
+of bug -- a state file with no freshness contract -- so they are addressed
+together with one pattern.
+
+**What:**
+- New shared helpers in `server/lib/mast-log.ps1`:
+  `Get-MastStatusBase` (always returns `<SystemDrive>\MAST\status`, typically
+  `C:\MAST\status` -- co-located with logs and `installed-manifest.json` so
+  every unit-side state file lives under one tree, rather than splitting
+  across `C:\MAST\` and `C:\ProgramData\MAST\`),
+  `Get-MastExecuteLeasePath`, `Get-MastAvailabilityPath`, `Get-MastLastRunPath`,
+  and `Write-MastStatusFileAtomic` (`.tmp` + `Move-Item -Force`). All three
+  status-file writers across the repo now go through the same code path.
+- `client/execute-mast-provisioning.ps1`: lock file replaced with a lease
+  record at `C:\MAST\status\execute-lease.json`. Fields:
+  `run_id`, `held_by`, `pid`, `started_utc`, `expires_utc`, `ttl_seconds`.
+  New parameters `-RunId`, `-HeldBy`, `-LeaseTtlSeconds` (default 7200 = 2 h).
+  Acquire: refuse with `LEASE_HELD` if `now < expires_utc` AND owning pid is
+  alive; otherwise log `LEASE_STALE_TAKEOVER` and overwrite. Renew: a
+  `System.Timers.Timer` re-stamps `expires_utc` every 60 s. Release: only
+  the owning run_id deletes the file (defensive against an intervening
+  takeover). Legacy sweep removes any pre-migration `execute.lock` artifacts.
+- `availability.json` schema extended so every `available:false` write
+  includes mandatory `expected_return_utc` and `lease_owner`. TTL policy:
+  `provisioning` = 2 h (matches lease), `windows_update` = 1 h, `rebooting`
+  = 15 min, `maintenance` = window end, `smoke_failure` = 30 min.
+  `available:true` writes do **not** include these fields.
+- `server/check-and-provision.ps1`: new pre-cycle availability read after
+  WinRM session open. If `available:false` and `lease_owner` is a prior run
+  AND `now > expected_return_utc`, log `AVAIL_STALE_RECOVER` and proceed.
+  If the lease is still live (`now <= expected_return_utc`), log
+  `AVAIL_LEASE_LIVE` and skip with activity outcome `SKIP /
+  reason=avail_lease_live`. The driver also passes `-RunId $RunId
+  -HeldBy $env:COMPUTERNAME` when invoking `execute-mast-provisioning.ps1`
+  so the unit-side lease ties back to the driver run.
+- Prov-server heartbeat: at cycle exit the driver writes
+  `C:\MAST\status\last-run.json` via
+  `Write-MastStatusFileAtomic` with `run_id`, `started_utc`, `ended_utc`,
+  `duration_s`, `units_checked`, `units_updated`, `units_failed`,
+  `unit_outcomes`, `exit_code`. A `Phase 3` alert can fire when
+  `now - ended_utc > 2 * scheduled_interval`. During long transfer/execute
+  phases a `System.Timers.Timer` emits `UNIT_PROGRESS unit=... phase=... elapsed_s=...`
+  every 60 s so a hung cycle is visible in the run log.
+- `client/onboard-mast-unit.ps1` Stage 5 routed through the shared atomic
+  writer for schema consistency (writes `available:true`, no TTL fields).
+
+**Implications:**
+- The sticky lock failure mode is gone. A crashed unit-side execute is
+  recovered automatically on the next cycle once `expires_utc` passes;
+  no manual file deletion required.
+- The stuck-on-`provisioning` availability failure mode is gone. The MAST
+  scheduler can treat any `available:false` with `now > expected_return_utc
+  + grace` as stale -- documented in the autonomous-provisioning doc under
+  **Autonomous recovery from common failure modes**.
+- `last-run.json` is the single source of truth for "when did the prov
+  server last complete a cycle". Phase 3 alerting will consume it (or the
+  Prometheus metric derived from it) without parsing `activity.csv`.
+- `expected_return_utc` is currently a fixed conservative cap per reason
+  rather than a value derived from recent `activity.csv` run durations.
+  That resolves the doc's Open Question on lease/availability TTL semantics
+  for now; revisit once a few weeks of real-fleet durations exist.
+- `executable-mast-provisioning.ps1` now has two flavors of invocation:
+  autonomous (driver passes `-RunId`/`-HeldBy`) and manual (run_id is
+  auto-generated as `exec-<timestamp>-<pid>`). Both paths exercise the
+  same lease code, so a developer running the script by hand also acquires
+  a lease and will collide with any in-flight autonomous run -- intentional.
+- `installed-manifest.json` is unchanged by this work and stays at
+  `C:\MAST\installed-manifest.json`; the new status files sit alongside it
+  under `C:\MAST\status\` so the entire unit-side state tree is one place.
+
+---
+
 ## [2026-05-16] check-and-provision.ps1: maintenance-window enforcement
 
 **Why:** `unit-registry.json` has carried `maintenance_window: { start_hour, end_hour }`

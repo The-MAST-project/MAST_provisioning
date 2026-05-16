@@ -118,19 +118,95 @@ if (${RequireLicense} -and -not ${licFile}) {
 }
 
 # --- Helpers ---
+function Stop-ProcessTree {
+  param([Parameter(Mandatory)][int]${RootPid})
+  try {
+    ${all} = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue
+    if ($null -eq ${all}) { return }
+    ${byParent} = @{}
+    foreach (${p} in ${all}) {
+      ${ppid} = [int]${p}.ParentProcessId
+      if (-not ${byParent}.ContainsKey(${ppid})) { ${byParent}[${ppid}] = @() }
+      ${byParent}[${ppid}] += [int]${p}.ProcessId
+    }
+    ${order} = New-Object System.Collections.Generic.List[int]
+    ${queue} = New-Object System.Collections.Generic.Queue[int]
+    ${queue}.Enqueue(${RootPid})
+    while (${queue}.Count -gt 0) {
+      ${cur} = ${queue}.Dequeue()
+      ${order}.Add(${cur})
+      if (${byParent}.ContainsKey(${cur})) {
+        foreach (${c} in ${byParent}[${cur}]) { ${queue}.Enqueue(${c}) }
+      }
+    }
+    # Kill leaves first
+    [array]::Reverse(${order})
+    foreach (${pidToKill} in ${order}) {
+      try { Stop-Process -Id ${pidToKill} -Force -ErrorAction SilentlyContinue } catch {}
+    }
+  } catch {
+    Write-Warning "Stop-ProcessTree: $($_.Exception.Message)"
+  }
+}
+
+function Test-NoMachineInstalled {
+  ${nxExe} = Join-Path ${InstallDir} 'bin\nxserver.exe'
+  if (-not (Test-Path -LiteralPath ${nxExe})) { return $false }
+  ${svc} = Get-Service -Name 'nxservice' -ErrorAction SilentlyContinue
+  if ($null -eq ${svc}) { return $false }
+  return (${svc}.Status -eq 'Running')
+}
+
 function Try-InstallExe {
   param(
     [Parameter(Mandatory)][string]${FilePath},
     [string[]]${ArgsList} = @('/verysilent /usbinstall="0" /printerinstall="0"'),
-    [string]${Tag} = 'install'
+    [string]${Tag} = 'install',
+    [int]${TimeoutSec} = 600,
+    [int]${PostInstallGraceSec} = 20,
+    [scriptblock]${SuccessProbe} = $null
   )
   foreach (${a} in ${ArgsList}) {
     try {
       Write-Host "${Tag}: ${FilePath} ${a}"
-      ${p} = Start-Process -FilePath ${FilePath} -ArgumentList ${a} -PassThru -Wait -WindowStyle Hidden
+      ${p} = Start-Process -FilePath ${FilePath} -ArgumentList ${a} -PassThru -WindowStyle Hidden
+      ${deadline} = (Get-Date).AddSeconds(${TimeoutSec})
+      ${probeStableSince} = $null
+      while ($true) {
+        if (${p}.HasExited) { break }
+        if (${SuccessProbe}) {
+          ${ok} = $false
+          try { ${ok} = [bool](& ${SuccessProbe}) } catch { ${ok} = $false }
+          if (${ok}) {
+            if ($null -eq ${probeStableSince}) {
+              ${probeStableSince} = Get-Date
+              Write-Host "${Tag}: success probe satisfied; allowing ${PostInstallGraceSec}s for installer to exit."
+            } elseif (((Get-Date) - ${probeStableSince}).TotalSeconds -ge ${PostInstallGraceSec}) {
+              Write-Warning "${Tag}: installer (PID $(${p}.Id)) still running after success; terminating tree."
+              Stop-ProcessTree -RootPid ${p}.Id
+              Start-Sleep -Seconds 2
+              return $true
+            }
+          } else {
+            ${probeStableSince} = $null
+          }
+        }
+        if ((Get-Date) -gt ${deadline}) {
+          Write-Warning "${Tag}: timeout after ${TimeoutSec}s waiting on PID $(${p}.Id); terminating tree."
+          Stop-ProcessTree -RootPid ${p}.Id
+          Start-Sleep -Seconds 2
+          if (${SuccessProbe}) {
+            try { if (& ${SuccessProbe}) { return $true } } catch {}
+          }
+          break
+        }
+        Start-Sleep -Seconds 2
+      }
       try { ${p}.Refresh() } catch {}
-      if ($null -eq ${p}.ExitCode -or ${p}.ExitCode -eq 0) { return $true }
-      Write-Warning "${Tag}: exit code $(${p}.ExitCode) with args '${a}'"
+      ${exit} = $null
+      try { ${exit} = ${p}.ExitCode } catch {}
+      if ($null -eq ${exit} -or ${exit} -eq 0) { return $true }
+      Write-Warning "${Tag}: exit code ${exit} with args '${a}'"
     } catch {
       Write-Warning "${Tag}: ${FilePath} '${a}' failed: $($_.Exception.Message)"
     }
@@ -167,12 +243,23 @@ function Install-License {
   }
 }
 
-# --- Install Client & Server (Desktop) ---
-if (-not (Try-InstallExe -FilePath ${clientExe} -Tag 'NoMachine Client')) {
-  Write-Warning "NoMachine Enterprise Client install may have failed. Check logs."
-}
-if (-not (Try-InstallExe -FilePath ${serverExe} -Tag 'NoMachine Enterprise Desktop')) {
-  Write-Warning "NoMachine Enterprise Desktop (server) install may have failed. Check logs."
+# --- Idempotency: skip install if already present and service running ---
+if (Test-NoMachineInstalled) {
+  Write-Host "NoMachine already installed and nxservice running; skipping installer execution."
+} else {
+  # --- Install Client & Server (Desktop) ---
+  # The Inno Setup wrapper for NoMachine Enterprise Desktop has been observed to
+  # not exit cleanly under /verysilent even after the service is up and binaries
+  # are in place. Use a success probe + grace + forced terminate to avoid hangs.
+  ${desktopProbe} = { Test-NoMachineInstalled }
+  ${clientProbe}  = { Test-Path -LiteralPath (Join-Path ${InstallDir} 'bin\nxplayer.exe') }
+
+  if (-not (Try-InstallExe -FilePath ${clientExe} -Tag 'NoMachine Client' -TimeoutSec 600 -SuccessProbe ${clientProbe})) {
+    Write-Warning "NoMachine Enterprise Client install may have failed. Check logs."
+  }
+  if (-not (Try-InstallExe -FilePath ${serverExe} -Tag 'NoMachine Enterprise Desktop' -TimeoutSec 600 -SuccessProbe ${desktopProbe})) {
+    Write-Warning "NoMachine Enterprise Desktop (server) install may have failed. Check logs."
+  }
 }
 if (${licFile}) {
   Install-License -SourceLicPath ${licFile}

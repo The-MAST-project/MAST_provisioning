@@ -99,7 +99,7 @@ $mastLogsBase   = Join-Path $env:SystemDrive 'MAST\logs'
 $LogDir         = Join-Path $mastLogsBase 'onboarding'
 $OnboardingLog  = Join-Path $LogDir 'onboarding.log'
 $CheckpointPath = Join-Path $DataRoot 'onboarding-checkpoint.json'
-$StatusDir      = Join-Path $DataRoot 'status'
+$StatusDir      = Join-Path $env:SystemDrive 'MAST\status'
 
 New-Item -ItemType Directory -Force -Path $DataRoot, $LogDir, $StatusDir | Out-Null
 
@@ -357,14 +357,15 @@ function Stage-Register {
 # ---------------------------------------------------------------------------
 function Stage-Handoff {
     Log-Event 'ACTION' @{ step='write_availability_true' }
-    $tmp = Join-Path $StatusDir 'availability.json.tmp'
-    $a = @{
+    # available:true writes do not carry expected_return_utc/lease_owner
+    # (the unit is in steady state, not under a lease). Route through the
+    # shared atomic writer so all availability.json writers share one path.
+    $a = [ordered]@{
         available = $true
         since_utc = (Now-Utc)
         reason    = 'onboarding_complete'
     }
-    ($a | ConvertTo-Json) | Out-File -FilePath $tmp -Encoding UTF8
-    Move-Item -Force $tmp (Join-Path $StatusDir 'availability.json')
+    Write-MastStatusFileAtomic -Path (Get-MastAvailabilityPath) -Object $a
     Log-Event 'ACTION_OK' @{ step='write_availability_true' }
 
     Log-Event 'ACTION' @{ step='cleanup_prov_session' }

@@ -356,7 +356,7 @@ Stage 5 of `onboard-mast-unit.ps1` writes `availability.json` with `available: t
 handoff. `check-and-provision.ps1` and related automation write status changes during
 maintenance and provisioning runs.
 
-**Mechanism:** `C:\ProgramData\MAST\status\availability.json`
+**Mechanism:** `C:\MAST\status\availability.json`
 
 ```json
 {
@@ -531,7 +531,7 @@ Acceptable directions (pick one coherent approach):
   execution slot (queue depth 1, explicit states, timeouts, structured logs).
 - A **kernel-backed mutex or named semaphore** with **timeouts** and stale-holder
   detection (tied to PID + heartbeat file updated by the owning process).
-- A **lease record** under `C:\ProgramData\MAST\status\` written **atomically** (temp file
+- A **lease record** under `C:\MAST\status\` written **atomically** (temp file
   then rename), carrying **TTL**, **run_id**, **started_utc**, and optional **held_by**
   identity so the sole provisioning server can **poll**, **expire stale leases**, or follow
   a break-glass procedure without guessing.
@@ -542,7 +542,7 @@ machine drives automation; and expose enough state for **logs and metrics**.
 
 **Concrete design for the lease record** (the recommended direction):
 
-- Path: `C:\ProgramData\MAST\status\execute-lease.json`.
+- Path: `C:\MAST\status\execute-lease.json`.
 - Fields: `run_id` (string, set from `MAST_RUN_ID`), `started_utc`, `expires_utc`
   (started_utc + TTL), `pid` (owning PowerShell process), `held_by` (hostname of the
   orchestrator that requested the run).
@@ -620,7 +620,7 @@ watch.
   per-unit steps so a stuck cycle is distinguishable from a cycle that legitimately
   takes 30 min to provision a unit.
 - At cycle exit, atomically write
-  `C:\ProgramData\MAST\status\last-run.json` containing:
+  `C:\MAST\status\last-run.json` containing:
   `run_id`, `started_utc`, `ended_utc`, `units_checked`, `units_updated`, `units_failed`,
   `duration_s`, and the per-unit outcome map. This file is the **single source of truth**
   for "when did the driver last complete a cycle". Phase 3 alerting reads it (or the
@@ -1387,9 +1387,9 @@ remain the **deep dive** for incidents. Prometheus and the central dashboard pro
 
 | # | Task | Status |
 |---|------|--------|
-| 1 | Replace `execute.lock` with lease record at `C:\ProgramData\MAST\status\execute-lease.json` (TTL, run_id, atomic rename, stale recovery, 60s renewal) | **Phase 1** |
-| 1a | Extend `availability.json` writers with mandatory `expected_return_utc` and `lease_owner`; add `AVAIL_STALE_RECOVER` path in `check-and-provision.ps1` | **Phase 1** |
-| 1b | Prov-server heartbeat: write `C:\ProgramData\MAST\status\last-run.json` at every cycle exit; emit 60s in-cycle progress lines so a hung driver is distinguishable from a slow one | **Phase 1** |
+| 1 | Replace `execute.lock` with lease record at `C:\MAST\status\execute-lease.json` (TTL, run_id, atomic rename, stale recovery, 60s renewal) | **[DONE]** |
+| 1a | Extend `availability.json` writers with mandatory `expected_return_utc` and `lease_owner`; add `AVAIL_STALE_RECOVER` path in `check-and-provision.ps1` | **[DONE]** |
+| 1b | Prov-server heartbeat: write `C:\MAST\status\last-run.json` at every cycle exit; emit 60s in-cycle progress lines so a hung driver is distinguishable from a slow one | **[DONE]** |
 | 2 | `payload_hash` generation in `build-mast.ps1` -> write `build-manifest.json` with git ref fields | **[DONE]** |
 | 3 | Unit-side effective state: inspection-based probe (or hardened `installed-manifest.json`) | **Phase 1** |
 | 4 | Per-module uninstall/reinstall paths; `build-mast.ps1` support for pinned git refs and rollback | **Phase 2** |

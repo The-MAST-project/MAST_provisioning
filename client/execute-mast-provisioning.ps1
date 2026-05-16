@@ -1,10 +1,13 @@
 [CmdletBinding()]
 param(
-    [string]${StagingPath} = ".",
-    [string]${ProvServer}  = "",
-    [string]${SmbUser}     = "",
-    [string]${SmbPass}     = "",
-    [string]${Modules}     = ""  # comma-separated; empty = all modules
+    [string]${StagingPath}       = ".",
+    [string]${ProvServer}        = "",
+    [string]${SmbUser}           = "",
+    [string]${SmbPass}           = "",
+    [string]${Modules}           = "",  # comma-separated; empty = all modules
+    [string]${RunId}             = "",  # autonomous: server passes its run id; manual: auto-generated
+    [string]${HeldBy}            = "",  # hostname of orchestrator; defaults to local computer
+    [int]   ${LeaseTtlSeconds}   = 7200  # 2 h default; comfortably covers a ~40 min provisioning run on a slow VM without an in-process renewer
 )
 
 ${ErrorActionPreference} = "Stop"
@@ -32,35 +35,80 @@ New-Item -ItemType Directory -Path ${logDir} -Force | Out-Null
 ${smokeDir} = Get-MastSmokeDir
 ${logFile} = Join-Path ${logDir} "provisioning-execute.log"
 
-# State under <SystemDrive>\MAST (same tree as logs); avoid ProgramData for execute lock.
+# State under <SystemDrive>\MAST (same tree as logs); installed-manifest lives here.
 ${mastRoot} = Join-Path ${env:SystemDrive} "MAST"
 ${null} = New-Item -ItemType Directory -Path ${mastRoot} -Force -ErrorAction SilentlyContinue
 
-# Remove stale lock from previous layout (ProgramData) so a path change does not block forever.
-${legacyLock} = Join-Path ${env:ProgramData} "MAST\execute.lock"
-if (Test-Path ${legacyLock}) {
-    try {
-        Remove-Item -Force ${legacyLock} -ErrorAction Stop
-    } catch {
-        Write-Warning "Could not remove legacy lock at ${legacyLock}: $($_.Exception.Message)"
+# Sweep prior lock-file artifacts from before the lease-record migration so an
+# upgraded unit does not have a stray file confusing operators.
+foreach (${legacyLock} in @(
+    (Join-Path ${env:ProgramData} 'MAST\execute.lock'),
+    (Join-Path ${mastRoot}        'execute.lock')
+)) {
+    if (Test-Path ${legacyLock}) {
+        try { Remove-Item -Force ${legacyLock} -ErrorAction Stop }
+        catch { Write-Warning "Could not remove legacy lock at ${legacyLock}: $($_.Exception.Message)" }
     }
 }
 
-# Prevent overlapping provisioning runs on the same unit.
-${lockPath} = Join-Path ${mastRoot} "execute.lock"
-if (Test-Path ${lockPath}) {
-    ${lockInfo} = ''
-    try { ${lockInfo} = (Get-Content ${lockPath} -Raw -ErrorAction SilentlyContinue).Trim() } catch {}
-    if (${lockInfo}) {
-        ${lockInfo} = (${lockInfo} -replace "`r`n", ' ' -replace "`n", ' ').Trim()
+# ---------------------------------------------------------------------------
+# Execute-lease acquire. The lease replaces the old sticky lock file: it
+# carries an expiry, the run id that owns it, and the pid so a crashed run
+# can be detected and taken over on the next cycle instead of blocking the
+# fleet until a human intervenes.
+# ---------------------------------------------------------------------------
+if ([string]::IsNullOrWhiteSpace(${RunId})) {
+    ${RunId} = "exec-$(Get-Date -Format 'yyyyMMdd-HHmmss')-$PID"
+}
+if ([string]::IsNullOrWhiteSpace(${HeldBy})) {
+    ${HeldBy} = ${env:COMPUTERNAME}
+}
+${leasePath} = Get-MastExecuteLeasePath
+
+function New-LeaseObject {
+    param([string]$RunId, [string]$HeldBy, [int]$TtlSeconds)
+    $startedUtc = (Get-Date).ToUniversalTime()
+    $expiresUtc = $startedUtc.AddSeconds($TtlSeconds)
+    return [pscustomobject]@{
+        run_id       = $RunId
+        held_by      = $HeldBy
+        pid          = $PID
+        started_utc  = $startedUtc.ToString('yyyy-MM-ddTHH:mm:ssZ')
+        expires_utc  = $expiresUtc.ToString('yyyy-MM-ddTHH:mm:ssZ')
+        ttl_seconds  = $TtlSeconds
     }
-    throw "Another provisioning run is in progress (lock: ${lockPath}). If no run is active, delete that file. Details: ${lockInfo}"
 }
-try {
-    "pid=$PID`nstarted=$(Get-Date -Format s)`nstaging=${StagingPath}" | Out-File -FilePath ${lockPath} -Encoding UTF8 -Force
-} catch {
-    Write-Warning "Failed to create lock file at ${lockPath}: $($_.Exception.Message)"
+
+if (Test-Path ${leasePath}) {
+    ${existing} = $null
+    try { ${existing} = Get-Content ${leasePath} -Raw -ErrorAction Stop | ConvertFrom-Json }
+    catch {
+        Write-Warning "LEASE_CORRUPT path=${leasePath} err=$($_.Exception.Message) -- overwriting"
+    }
+    if (${existing}) {
+        ${expiresUtc} = $null
+        try { ${expiresUtc} = [datetime]::Parse(${existing}.expires_utc).ToUniversalTime() } catch {}
+        ${pidAlive} = $false
+        if (${existing}.PSObject.Properties.Name -contains 'pid' -and ${existing}.pid) {
+            ${pidAlive} = [bool](Get-Process -Id ${existing}.pid -ErrorAction SilentlyContinue)
+        }
+        ${nowUtc} = (Get-Date).ToUniversalTime()
+        if (${expiresUtc} -and ${nowUtc} -lt ${expiresUtc} -and ${pidAlive}) {
+            throw "LEASE_HELD run_id=$(${existing}.run_id) held_by=$(${existing}.held_by) pid=$(${existing}.pid) expires=$(${existing}.expires_utc)"
+        }
+        Write-Warning "LEASE_STALE_TAKEOVER prior_run=$(${existing}.run_id) prior_pid=$(${existing}.pid) prior_expires=$(${existing}.expires_utc)"
+    }
 }
+
+${leaseObj} = New-LeaseObject -RunId ${RunId} -HeldBy ${HeldBy} -TtlSeconds ${LeaseTtlSeconds}
+Write-MastStatusFileAtomic -Path ${leasePath} -Object ${leaseObj}
+
+# No in-process renewer: the TTL above is sized to cover worst-case
+# provisioning. An in-process Timers.Timer + Register-ObjectEvent renewer
+# was tried previously, but PSEventJob teardown at script exit hung
+# powershell.exe under WinRM (clean exits stopped reaching the WinRM
+# caller). If the TTL ever proves too short, run the renewer out of
+# process instead -- do not reintroduce Register-ObjectEvent here.
 
 function Write-Log {
     param([string]${Message})
@@ -73,6 +121,7 @@ try {
     Write-Log "=========================================="
     Write-Log "Staging path: ${StagingPath}"
     Write-Log "Hostname: ${env:COMPUTERNAME}"
+    Write-Log "LEASE_ACQUIRE run_id=${RunId} held_by=${HeldBy} pid=$PID ttl_s=${LeaseTtlSeconds} expires=$(${leaseObj}.expires_utc)"
 
     # ---------------------------------------------------------------
     # Map Z: -> \\<ProvServer>\mast-shared (writable shared directory)
@@ -249,5 +298,23 @@ catch {
 }
 finally {
     Write-Log "Log file: ${logFile}"
-    Remove-Item -Force ${lockPath} -ErrorAction SilentlyContinue
+
+    # Release the lease, but only if we still own it -- a takeover may have
+    # already overwritten it while we ran.
+    try {
+        if (Test-Path ${leasePath}) {
+            ${current} = $null
+            try { ${current} = Get-Content ${leasePath} -Raw -ErrorAction Stop | ConvertFrom-Json } catch {}
+            if (${current} -and ${current}.run_id -eq ${RunId}) {
+                Remove-Item -Force ${leasePath} -ErrorAction SilentlyContinue
+                Write-Log "LEASE_RELEASE run_id=${RunId}"
+            } elseif (${current}) {
+                Write-Log "LEASE_RELEASE_SKIPPED run_id=${RunId} current_owner=$(${current}.run_id)"
+            } else {
+                Remove-Item -Force ${leasePath} -ErrorAction SilentlyContinue
+            }
+        }
+    } catch {
+        Remove-Item -Force ${leasePath} -ErrorAction SilentlyContinue
+    }
 }

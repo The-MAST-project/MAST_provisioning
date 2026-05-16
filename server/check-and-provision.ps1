@@ -96,7 +96,15 @@ $mastLogsBase   = Get-MastLogsBase
 $provLogsStable = Get-MastProvLogsBase
 
 $RunId = "run-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
+$RunStartUtc = (Get-Date).ToUniversalTime()
 $LogRoot = Get-MastProvSessionDir $RunId
+
+# Per-cycle counters and outcome map written to last-run.json at exit so a
+# Phase 3 alert can fire when no fresh heartbeat appears on the prov server.
+$UnitsChecked = 0
+$UnitsUpdated = 0
+$UnitsFailed  = 0
+$UnitOutcomes = @{}
 
 $RunLogPath  = Join-Path $LogRoot "$RunId.log"
 $ActivityCsv = Get-MastProvActivityCsv
@@ -133,6 +141,65 @@ function Log-Activity {
         (Now-Utc), $RunId, $Unit, $Outcome, $Reason, $DurationS, $PayloadHash, $GitSha
     ) -join ','
     Add-Content -Path $ActivityCsv -Value $row -Encoding UTF8
+    $script:UnitOutcomes[$Unit] = $Outcome
+}
+
+# ---------------------------------------------------------------------------
+# Per-unit progress heartbeat. A System.Timers.Timer ticks every 60 s while a
+# long-running phase (transfer, execute) is active and emits a UNIT_PROGRESS
+# line. The action runs on a thread-pool thread; only Add-Content is used
+# inside it for thread safety.
+# ---------------------------------------------------------------------------
+$script:ProgressTimer  = $null
+$script:ProgressSrcId  = $null
+
+function Start-UnitProgressTimer {
+    param(
+        [Parameter(Mandatory)][string]$Unit,
+        [Parameter(Mandatory)][string]$Phase,
+        [Parameter(Mandatory)][DateTime]$StartUtc
+    )
+    Stop-UnitProgressTimer
+    $script:ProgressSrcId = "MastUnitProgress-$([guid]::NewGuid().ToString('N').Substring(0,8))"
+    $script:ProgressTimer = New-Object System.Timers.Timer
+    $script:ProgressTimer.Interval  = 60000
+    $script:ProgressTimer.AutoReset = $true
+    $msg = [pscustomobject]@{
+        Unit       = $Unit
+        Phase      = $Phase
+        StartUtc   = $StartUtc
+        LogPath    = $RunLogPath
+    }
+    $null = Register-ObjectEvent -InputObject $script:ProgressTimer -EventName Elapsed `
+        -SourceIdentifier $script:ProgressSrcId -MessageData $msg `
+        -Action {
+            try {
+                $m   = $Event.MessageData
+                $now = (Get-Date).ToUniversalTime()
+                $elapsed = [int]($now - $m.StartUtc).TotalSeconds
+                $line = "[{0}]  UNIT_PROGRESS  unit={1}  phase={2}  elapsed_s={3}" -f `
+                    $now.ToString('yyyy-MM-ddTHH:mm:ssZ'), $m.Unit, $m.Phase, $elapsed
+                Add-Content -Path $m.LogPath -Value $line -Encoding UTF8
+            } catch {}
+        }
+    $script:ProgressTimer.Start()
+}
+
+function Stop-UnitProgressTimer {
+    try {
+        if ($script:ProgressTimer) {
+            $script:ProgressTimer.Stop()
+            $script:ProgressTimer.Dispose()
+        }
+    } catch {}
+    try {
+        if ($script:ProgressSrcId) {
+            Unregister-Event -SourceIdentifier $script:ProgressSrcId -ErrorAction SilentlyContinue
+            Get-Job -Name $script:ProgressSrcId -ErrorAction SilentlyContinue | Remove-Job -Force -ErrorAction SilentlyContinue
+        }
+    } catch {}
+    $script:ProgressTimer = $null
+    $script:ProgressSrcId = $null
 }
 
 # Returns @{ allowed=[bool]; current=HH:mm; window="HH:00-HH:00"; reason=... }.
@@ -236,6 +303,7 @@ Log-Event 'RUN_PLAN' @{ units=($units | ForEach-Object { $_.hostname }) -join ',
 $exitCode = 0
 
 foreach ($unit in $units) {
+    $UnitsChecked++
     $unitStart = Get-Date
     $hostname = $unit.hostname
     # Hostname is the identity / WinRM target (DNS must resolve). Legacy 'ip' field is ignored.
@@ -287,6 +355,42 @@ foreach ($unit in $units) {
         $session = New-PSSession @sessParams
 
         try {
+            # ---------------------------------------------------------------
+            # 2a. Availability state recovery. If a prior cycle crashed
+            # between the unavailable/available writes, the unit is silently
+            # excluded from MAST scheduling. Treat the file as stale once
+            # expected_return_utc has passed; otherwise honor a live lease
+            # held by another run.
+            # ---------------------------------------------------------------
+            $avail = Invoke-Command -Session $session -ScriptBlock {
+                $p = 'C:\MAST\status\availability.json'
+                if (Test-Path $p) {
+                    try { Get-Content $p -Raw -ErrorAction Stop | ConvertFrom-Json }
+                    catch { $null }
+                } else { $null }
+            }
+            if ($avail -and ($avail.PSObject.Properties.Match('available').Count) -and -not $avail.available) {
+                $owner = if ($avail.PSObject.Properties.Match('lease_owner').Count) { [string]$avail.lease_owner } else { '' }
+                $expUtc = $null
+                if ($avail.PSObject.Properties.Match('expected_return_utc').Count -and $avail.expected_return_utc) {
+                    try { $expUtc = [datetime]::Parse($avail.expected_return_utc).ToUniversalTime() } catch {}
+                }
+                $nowUtc = (Get-Date).ToUniversalTime()
+                $isStale = ($null -ne $expUtc) -and ($nowUtc -gt $expUtc)
+                $isOurs  = ($owner -eq $RunId)
+                if ($isOurs) {
+                    Log-Event 'AVAIL_LEASE_SELF' @{ unit=$hostname; owner=$owner; reason=$avail.reason }
+                } elseif (-not $isStale) {
+                    Log-Event 'AVAIL_LEASE_LIVE' @{ unit=$hostname; owner=$owner; reason=$avail.reason; expires=$(if ($expUtc) { $expUtc.ToString('yyyy-MM-ddTHH:mm:ssZ') } else { 'unknown' }) }
+                    Log-Activity -Unit $hostname -Outcome 'SKIP' -Reason 'avail_lease_live' `
+                                 -DurationS ([int]((Get-Date) - $unitStart).TotalSeconds)
+                    continue
+                } else {
+                    Log-Event 'AVAIL_STALE_RECOVER' @{ unit=$hostname; prior_run=$owner; reason=$avail.reason; expired_utc=$expUtc.ToString('yyyy-MM-ddTHH:mm:ssZ') }
+                    # Fall through; the cycle will write a fresh availability+lease shortly.
+                }
+            }
+
             # ---------------------------------------------------------------
             # 3. Read installed-manifest.json (if any)
             # ---------------------------------------------------------------
@@ -366,23 +470,34 @@ foreach ($unit in $units) {
             }
 
             # ---------------------------------------------------------------
-            # 6. Mark unit unavailable for science scheduling
+            # 6. Mark unit unavailable for science scheduling. The TTL bounds
+            # how long the MAST scheduler will honor this state if our cycle
+            # crashes; lease_owner identifies the run so a later cycle can
+            # recognize its own abandoned write.
             # ---------------------------------------------------------------
+            $availTtlSec = 7200  # 2 h; matches execute-lease default
+            $sinceUtc    = (Get-Date).ToUniversalTime()
+            $expectedUtc = $sinceUtc.AddSeconds($availTtlSec)
             Invoke-Command -Session $session -ScriptBlock {
-                param($payloadHash)
-                $statusDir = 'C:\ProgramData\MAST\status'
+                param($payloadHash, $sinceStr, $expectedStr, $owner)
+                $statusDir = 'C:\MAST\status'
                 New-Item -ItemType Directory -Force -Path $statusDir | Out-Null
                 $tmp = Join-Path $statusDir 'availability.json.tmp'
-                $a = @{
-                    available    = $false
-                    reason       = 'provisioning'
-                    since_utc    = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
-                    payload_hash = $payloadHash
+                $a = [ordered]@{
+                    available           = $false
+                    reason              = 'provisioning'
+                    since_utc           = $sinceStr
+                    expected_return_utc = $expectedStr
+                    lease_owner         = $owner
+                    payload_hash        = $payloadHash
                 }
-                ($a | ConvertTo-Json) | Out-File -FilePath $tmp -Encoding UTF8
+                ($a | ConvertTo-Json) | Out-File -FilePath $tmp -Encoding UTF8 -NoNewline
                 Move-Item -Force $tmp (Join-Path $statusDir 'availability.json')
-            } -ArgumentList $payloadHash
-            Log-Event 'AVAIL_SET' @{ unit=$hostname; available='false'; reason='provisioning' }
+            } -ArgumentList $payloadHash, `
+                            $sinceUtc.ToString('yyyy-MM-ddTHH:mm:ssZ'), `
+                            $expectedUtc.ToString('yyyy-MM-ddTHH:mm:ssZ'), `
+                            $RunId
+            Log-Event 'AVAIL_SET' @{ unit=$hostname; available='false'; reason='provisioning'; expected_return_utc=$expectedUtc.ToString('yyyy-MM-ddTHH:mm:ssZ'); lease_owner=$RunId }
 
             # ---------------------------------------------------------------
             # 7. Transfer staging payload via SMB pull (robocopy on unit)
@@ -400,9 +515,14 @@ foreach ($unit in $units) {
             }
             $tStart = Get-Date
 
-            $pullScript = Join-Path $PSScriptRoot '..\client\mast-pull-staging.ps1'
-            $xferResult = Invoke-Command -Session $session -FilePath $pullScript `
-                -ArgumentList $provServer, $hostname, $smbUser, $smbPass, $unitStage, $srcUNC
+            Start-UnitProgressTimer -Unit $hostname -Phase 'transfer' -StartUtc $tStart.ToUniversalTime()
+            try {
+                $pullScript = Join-Path $PSScriptRoot '..\client\mast-pull-staging.ps1'
+                $xferResult = Invoke-Command -Session $session -FilePath $pullScript `
+                    -ArgumentList $provServer, $hostname, $smbUser, $smbPass, $unitStage, $srcUNC
+            } finally {
+                Stop-UnitProgressTimer
+            }
 
             $xferDur = [int]((Get-Date) - $tStart).TotalSeconds
 
@@ -455,19 +575,26 @@ foreach ($unit in $units) {
             # ---------------------------------------------------------------
             # 8. Execute provisioning on the unit
             # ---------------------------------------------------------------
-            Log-Event 'EXECUTE_START' @{ unit=$hostname }
+            Log-Event 'EXECUTE_START' @{ unit=$hostname; run_id=$RunId }
             $eStart = Get-Date
-            $execResult = Invoke-Command -Session $session -ScriptBlock {
-                param($stagePath, $provSrv, $smbUsr, $smbPwd)
-                Set-ExecutionPolicy Bypass -Scope Process -Force
-                # Suppress script output so the WinRM return value is just the exit code.
-                $null = & (Join-Path $stagePath 'execute-mast-provisioning.ps1') `
-                    -StagingPath $stagePath `
-                    -ProvServer   $provSrv `
-                    -SmbUser      $smbUsr `
-                    -SmbPass      $smbPwd
-                return [int]$LASTEXITCODE
-            } -ArgumentList $unitStage, $provServer, $smbUser, $smbPass
+            Start-UnitProgressTimer -Unit $hostname -Phase 'execute' -StartUtc $eStart.ToUniversalTime()
+            try {
+                $execResult = Invoke-Command -Session $session -ScriptBlock {
+                    param($stagePath, $provSrv, $smbUsr, $smbPwd, $runId, $heldBy)
+                    Set-ExecutionPolicy Bypass -Scope Process -Force
+                    # Suppress script output so the WinRM return value is just the exit code.
+                    $null = & (Join-Path $stagePath 'execute-mast-provisioning.ps1') `
+                        -StagingPath $stagePath `
+                        -ProvServer   $provSrv `
+                        -SmbUser      $smbUsr `
+                        -SmbPass      $smbPwd `
+                        -RunId        $runId `
+                        -HeldBy       $heldBy
+                    return [int]$LASTEXITCODE
+                } -ArgumentList $unitStage, $provServer, $smbUser, $smbPass, $RunId, $provServer
+            } finally {
+                Stop-UnitProgressTimer
+            }
             $execRc = [int]($execResult | Select-Object -Last 1)
             $eDur   = [int]((Get-Date) - $eStart).TotalSeconds
             if ($execRc -ne 0) {
@@ -524,13 +651,16 @@ foreach ($unit in $units) {
             # 10. Mark unit available again
             # ---------------------------------------------------------------
             Invoke-Command -Session $session -ScriptBlock {
-                $statusDir = 'C:\ProgramData\MAST\status'
+                $statusDir = 'C:\MAST\status'
+                New-Item -ItemType Directory -Force -Path $statusDir | Out-Null
                 $tmp = Join-Path $statusDir 'availability.json.tmp'
-                $a = @{
+                # available:true intentionally omits expected_return_utc and
+                # lease_owner: the unit is in steady state, not under a lease.
+                $a = [ordered]@{
                     available = $true
                     since_utc = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
                 }
-                ($a | ConvertTo-Json) | Out-File -FilePath $tmp -Encoding UTF8
+                ($a | ConvertTo-Json) | Out-File -FilePath $tmp -Encoding UTF8 -NoNewline
                 Move-Item -Force $tmp (Join-Path $statusDir 'availability.json')
             }
             Log-Event 'AVAIL_SET' @{ unit=$hostname; available='true' }
@@ -555,5 +685,49 @@ foreach ($unit in $units) {
     }
 }
 
-Log-Event 'RUN_END' @{ exit_code=$exitCode }
+# ---------------------------------------------------------------------------
+# Heartbeat: write last-run.json so a Phase 3 alert can fire when no fresh
+# cycle has landed within 2 * scheduled_interval. Counters are derived from
+# the outcome map populated by Log-Activity so they always agree with the
+# CSV.
+#
+# IMPORTANT - this is telemetry, NOT a unit-state cache.
+# `unit_outcomes` records what THIS CYCLE DID (e.g. "we marked mast01 OK at
+# 14:55:05Z"), not what is installed on the unit. The autonomous-provisioning
+# requirements forbid caching per-unit installed state on the prov server --
+# the unit's own `C:\MAST\installed-manifest.json` is the source of truth and
+# is read fresh via WinRM at the top of every cycle.
+#
+# Consumers (Phase 3 alerting, Prometheus scrape) read last-run.json to
+# answer "did a cycle complete recently?". The driver itself MUST NOT read
+# last-run.json to make control-plane decisions (e.g. "skip mast01 because
+# last cycle said OK"). If you find yourself wanting to read this file from
+# the driver to short-circuit a unit, you are reintroducing the cache the
+# design explicitly rejected -- re-probe the unit instead.
+# ---------------------------------------------------------------------------
+$RunEndUtc  = (Get-Date).ToUniversalTime()
+$DurationS  = [int]($RunEndUtc - $RunStartUtc).TotalSeconds
+foreach ($oc in $UnitOutcomes.Values) {
+    if ($oc -eq 'OK') { $UnitsUpdated++ }
+    elseif ($oc -eq 'FAIL' -or $oc -eq 'UNREACHABLE' -or $oc -eq 'BUILD_FAIL' -or `
+            $oc -eq 'TRANSFER_FAIL' -or $oc -eq 'EXECUTE_FAIL') { $UnitsFailed++ }
+}
+try {
+    $lastRun = [ordered]@{
+        run_id        = $RunId
+        started_utc   = $RunStartUtc.ToString('yyyy-MM-ddTHH:mm:ssZ')
+        ended_utc     = $RunEndUtc.ToString('yyyy-MM-ddTHH:mm:ssZ')
+        duration_s    = $DurationS
+        units_checked = $UnitsChecked
+        units_updated = $UnitsUpdated
+        units_failed  = $UnitsFailed
+        unit_outcomes = $UnitOutcomes
+        exit_code     = $exitCode
+    }
+    Write-MastStatusFileAtomic -Path (Get-MastLastRunPath) -Object $lastRun
+} catch {
+    Log-Event 'HEARTBEAT_WRITE_FAIL' @{ err=$_.Exception.Message }
+}
+
+Log-Event 'RUN_END' @{ exit_code=$exitCode; units_checked=$UnitsChecked; units_updated=$UnitsUpdated; units_failed=$UnitsFailed; duration_s=$DurationS }
 exit $exitCode
