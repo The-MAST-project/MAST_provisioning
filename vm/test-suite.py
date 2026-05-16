@@ -35,9 +35,13 @@ from typing import Callable
 from vm_lib import (
     REPO_ROOT,
     VAULT_CREDS,
+    VBOXMANAGE,
     check_rc,
     load_creds,
+    reset_to_clean_snapshot,
     run_ps,
+    vbox_snapshot_exists,
+    vm_state,
     wait_for_winrm,
     winrm_session,
 )
@@ -48,7 +52,6 @@ from vm_lib import (
 
 RUN_PROV_TEST = Path(__file__).parent / "run-prov-test.py"
 STAGING_ROOT = REPO_ROOT / "staging"
-VBOXMANAGE = Path(r"C:\Program Files\Oracle\VirtualBox\VBoxManage.exe")
 SUITE_LOG_ROOT = Path(r"C:\MAST\logs\dev\tests")
 
 # Bomb sits between nssm-verify (61) and nomachine (70). See plan.
@@ -218,18 +221,6 @@ SCENARIOS_BY_NAME = {s.name: s for s in SCENARIOS}
 # Prerequisites check
 # ---------------------------------------------------------------------------
 
-def _vbox_snapshot_exists(vbox_vm: str, snapshot: str) -> bool:
-    try:
-        r = subprocess.run(
-            [str(VBOXMANAGE), "snapshot", vbox_vm, "list", "--machinereadable"],
-            check=True, text=True, capture_output=True,
-        )
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        return False
-    needle = f'"{snapshot}"'
-    return needle in r.stdout
-
-
 def check_prerequisites(vbox_vm: str, snapshot: str) -> list[str]:
     errors: list[str] = []
     # Credentials present and parseable. load_creds() raises RuntimeError if
@@ -245,11 +236,20 @@ def check_prerequisites(vbox_vm: str, snapshot: str) -> list[str]:
         errors.append(f"VBoxManage.exe not found at: {VBOXMANAGE}")
     if not RUN_PROV_TEST.exists():
         errors.append(f"run-prov-test.py not found at: {RUN_PROV_TEST}")
-    if VBOXMANAGE.exists() and not _vbox_snapshot_exists(vbox_vm, snapshot):
-        errors.append(
-            f"VBox snapshot {snapshot!r} not found on VM {vbox_vm!r}. "
-            f"Use VBoxManage snapshot {vbox_vm} list --machinereadable to inspect."
-        )
+    if VBOXMANAGE.exists():
+        # Catches a typo in --vbox-vm before we waste minutes on a bad reset.
+        try:
+            vm_state(vbox_vm)
+        except subprocess.CalledProcessError:
+            errors.append(
+                f"VBox VM {vbox_vm!r} not found. "
+                f"Use VBoxManage list vms to inspect."
+            )
+        if not vbox_snapshot_exists(vbox_vm, snapshot):
+            errors.append(
+                f"VBox snapshot {snapshot!r} not found on VM {vbox_vm!r}. "
+                f"Use VBoxManage snapshot {vbox_vm} list --machinereadable to inspect."
+            )
     return errors
 
 
@@ -776,9 +776,27 @@ def main() -> int:
     suite_log_dir = SUITE_LOG_ROOT / stamp
     print(f"[suite] log dir: {suite_log_dir}")
 
+    creds = load_creds()
+
     results: list[ScenarioResult] = []
     for s in targets:
         print(f"\n[suite] === scenario: {s.name} ({s.status}) ===")
+        if s.status == "ACTIVE":
+            print(f"[suite] pre-flight: resetting VM {args.vbox_vm!r} "
+                  f"to snapshot {args.snapshot!r}")
+            t0 = time.monotonic()
+            try:
+                reset_to_clean_snapshot(
+                    args.vbox_vm, args.snapshot, args.host_unit, creds["unit"],
+                )
+            except Exception as e:
+                detail = f"pre-flight reset failed: {type(e).__name__}: {e}"
+                print(f"[suite] {detail}")
+                results.append(ScenarioResult(
+                    name=s.name, status=s.status, outcome=ERROR,
+                    duration_s=time.monotonic() - t0, detail=detail, sub_runs=[],
+                ))
+                continue
         r = run_scenario(s, args.host_unit, args.hostname, args.vbox_vm,
                          args.snapshot, args.modules)
         results.append(r)

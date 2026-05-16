@@ -60,7 +60,7 @@ On a **developer PC** running VirtualBox with **host-only DHCP**, the guest addr
 and hostnames do not resolve until something provides the same name-to-address mapping DNS
 would supply.
 
-**Automated lab mapping (this repo):** run **`tools/sync-dev-unit-hosts.ps1`** in an
+**Automated lab mapping (this repo):** run **`vm/sync-dev-unit-hosts.ps1`** in an
 **elevated** PowerShell on the **Windows host** (once after the VM has DHCP, or whenever
 the guest IP changes). The script:
 
@@ -529,6 +529,98 @@ Whatever replaces the lock must: **prevent overlapping installs**; **recover wit
 SSH or RDP** after typical failure modes; remain correct when **only one** provisioning
 machine drives automation; and expose enough state for **logs and metrics**.
 
+**Concrete design for the lease record** (the recommended direction):
+
+- Path: `C:\ProgramData\MAST\status\execute-lease.json`.
+- Fields: `run_id` (string, set from `MAST_RUN_ID`), `started_utc`, `expires_utc`
+  (started_utc + TTL), `pid` (owning PowerShell process), `held_by` (hostname of the
+  orchestrator that requested the run).
+- Acquisition: atomic create-or-replace via `.tmp` + `Move-Item -Force`. Before writing,
+  read any existing lease: if `now < expires_utc` **and** `pid` is alive, refuse with a
+  structured error (`LEASE_HELD`). Otherwise overwrite (logging `LEASE_STALE_TAKEOVER`
+  with the prior `run_id`).
+- Renewal: the owning script touches `expires_utc` every 60 s while running (cheap atomic
+  rewrite). A consumer can therefore distinguish "actively running" from "abandoned".
+- Release: deleted in `finally`. If the script dies, expiry handles recovery.
+- TTL: default 2 h, overridable per call via `-LeaseTtlSeconds`. Long enough that a slow
+  install does not get preempted, short enough that an abandoned lease clears before the
+  next maintenance window.
+
+**Replaces:** `client/execute-mast-provisioning.ps1` lines 39-58 (legacy ProgramData
+cleanup + new `C:\MAST\execute.lock` create/throw) and line 252 (`finally` delete).
+
+---
+
+### Availability state recovery (stuck-on-provisioning guard)
+
+The lock-file liability has a **mirror image** in `availability.json`: if
+`check-and-provision.ps1` writes `available: false, reason: provisioning` and then
+crashes (process kill, prov-server reboot, WinRM blip mid-cycle) before its post-run
+`available: true` write, the unit stays excluded from MAST scheduling until someone
+notices and rewrites the file by hand. This silently removes a unit from the fleet --
+exactly the failure mode autonomous operation must avoid.
+
+**Requirement:** every writer of `availability.json` with `available: false` must include
+a bounded `expected_return_utc` and a `lease_owner` (run_id), and every reader (both
+`check-and-provision.ps1` on its next cycle and the MAST scheduler) must treat the file
+as **stale** once `now > expected_return_utc + grace`.
+
+**Behavior on the next driver cycle:**
+
+1. Read `availability.json`. If `available: false` and `lease_owner` matches a **prior**
+   run_id (not the current one) **and** `now > expected_return_utc`, log
+   `AVAIL_STALE_RECOVER unit=<name> prior_run=<id> reason=<old reason>` and proceed as
+   though the unit were available (the cycle will write a fresh lease for its own run).
+2. If `available: false` and the lease is still live, log `AVAIL_LEASE_LIVE` and skip
+   the unit -- another in-flight run owns it.
+3. On any successful exit path, the cycle writes `available: true` (clearing the lease)
+   exactly as today.
+
+**Schema addition to `availability.json`:**
+
+```json
+{
+  "available": false,
+  "reason": "provisioning",
+  "since_utc": "2026-05-16T11:00:00Z",
+  "expected_return_utc": "2026-05-16T13:00:00Z",
+  "lease_owner": "run-20260516-110000"
+}
+```
+
+`expected_return_utc` is **mandatory** for any `available: false` write. Default TTL:
+2 h for `reason=provisioning`, full window for `reason=maintenance`. The MAST scheduler
+ignores the file when `now > expected_return_utc + 5 min` and treats the unit as
+available.
+
+---
+
+### Driver self-monitoring (heartbeat)
+
+A crashed driver is loud (the scheduled task surfaces a non-zero exit). A **hung**
+driver is silent -- the scheduled task is still "running", no `RUN_END` is logged, no
+units are touched, and nothing notices until an operator pulls up `activity.csv`.
+
+**Requirement:** the autonomous loop emits a heartbeat that downstream alerting can
+watch.
+
+- Each `check-and-provision.ps1` cycle writes `RUN_START` at entry and `RUN_END` at exit
+  (already done). Add a **mid-cycle progress** line every 60 s during the long-running
+  per-unit steps so a stuck cycle is distinguishable from a cycle that legitimately
+  takes 30 min to provision a unit.
+- At cycle exit, atomically write
+  `C:\ProgramData\MAST\status\last-run.json` containing:
+  `run_id`, `started_utc`, `ended_utc`, `units_checked`, `units_updated`, `units_failed`,
+  `duration_s`, and the per-unit outcome map. This file is the **single source of truth**
+  for "when did the driver last complete a cycle". Phase 3 alerting reads it (or the
+  Prometheus metric derived from it) and fires when `now - ended_utc > 2 * scheduled_interval`.
+- The scheduled task wrapper logs a Windows Event Log entry on every fire (separate from
+  Phase 3's `RUN_END` event) so that "scheduled task fired but driver never wrote
+  last-run.json" is detectable.
+
+This is the **prov-server-side** mirror of `availability.json` on the unit: a bounded,
+freshness-checkable status file that distinguishes "working" from "abandoned".
+
 ---
 
 ### Unit provisioning manifest (source of truth)
@@ -624,6 +716,35 @@ but the code path is correct. This exception is resolved.
 - **Exit criteria:** formalize the bootstrap -> steady-state transition and ensure that
   the autonomous loop uses HTTPS by default, with HTTP allowed only for first-boot
   onboarding.
+
+---
+
+### Autonomous recovery from common failure modes
+
+The loop runs unattended on a fixed cadence. Each failure mode below must either
+**self-heal on the next cycle** or **expose enough state for a Phase 3 alert** so an
+operator can intervene before the unit goes silently offline. None should require a
+human to log into a unit to "clean up" before the next cycle can succeed.
+
+| Failure mode | Current behavior | Required behavior |
+|--------------|------------------|-------------------|
+| `check-and-provision.ps1` crashes between `availability=false` write and post-run `availability=true` write | `availability.json` stays `false` with `reason=provisioning` until next successful run completes the cycle (which may never happen if the same crash recurs). Unit is excluded from scheduling indefinitely. | Availability writer must include a **TTL or `expected_return_utc`** that downstream consumers honor as a stale-after timestamp; the next driver run must detect stale `provisioning`/`maintenance` state and either resume or reset it. |
+| Unit-side `execute-mast-provisioning.ps1` killed mid-run (process kill, reboot, power loss) | `C:\MAST\execute.lock` left in place; all subsequent runs throw immediately on the lock check and require **manual deletion** to recover. | See **Unit-side provisioning execution control** above -- lease/TTL with stale-holder recovery. |
+| `installed-manifest.json` partially written or corrupt | Hash compare reads garbage; behavior depends on Read-Manifest error handling. | Atomic write (already done via tmp+rename); reader must treat parse failure as "unknown installed state" and reprovision rather than skip. |
+| WinRM session drops mid-execute (network blip, listener restart) | Orchestrator gets a SOAP error; activity row written as `EXECUTE_FAIL`; next cycle reprovisions. **OK** but the unit-side run may continue after the orchestrator gives up, racing with the next cycle. | Unit-side execution must be **idempotent across orchestrator retries** -- the lease/TTL replacement is what guarantees this. |
+| Provisioning server reboots mid-cycle | No persistent run state; next scheduled fire starts a fresh cycle. **OK.** | Acceptable; keep cycles short enough that "lose the in-flight unit and retry next cycle" is cheap. |
+| Disk full on prov server (staging) or unit (downloaded payload) | `build-mast.ps1` or `robocopy` fails with non-zero exit; cycle logs `BUILD_FAIL` / `TRANSFER_FAIL`; next cycle retries forever. | Acceptable for self-healing, **but** Phase 3 must alert on N consecutive `BUILD_FAIL` / `TRANSFER_FAIL` rows in `activity.csv` so the operator notices before the fleet drifts. |
+| Git LFS quota exhausted on prov server | `build-mast.ps1` fails to fetch LFS objects; every cycle re-fails with the same error until quota resets. | Acceptable behavior, **but** the failure mode must surface distinctly in logs (recognizable `lfs_quota` reason) so alerts can route differently than a transient build break. Combined with the **Open Questions** entry on LFS credential storage. |
+| Stale availability lease | (see row 1) | Pair with `since_utc` + `expected_return_utc`; consumers (MAST scheduler) ignore the file if `now > expected_return_utc + grace`. |
+| Reboot loop after Windows Update install | Not yet possible (Phase 2 work). | Once Windows Update orchestration lands, cap consecutive reboots per maintenance window and emit `REBOOT_LOOP_GUARD` rather than continuing to drive reboots. |
+
+**Required additions to `availability.json`** (extends the schema in **Unit Availability
+During Maintenance**):
+
+- `expected_return_utc` is **mandatory** for any `available: false` write (already in the
+  documented schema -- writers must populate it consistently, not leave it null).
+- A separate `lease_owner` field naming the **run_id** that set the state, so a later
+  driver run can recognize and supersede its own abandoned writes.
 
 ---
 
@@ -1241,7 +1362,9 @@ remain the **deep dive** for incidents. Prometheus and the central dashboard pro
 
 | # | Task | Status |
 |---|------|--------|
-| 1 | Replace `execute.lock` with lease record (TTL, run_id, atomic rename, stale recovery) | **Phase 1** |
+| 1 | Replace `execute.lock` with lease record at `C:\ProgramData\MAST\status\execute-lease.json` (TTL, run_id, atomic rename, stale recovery, 60s renewal) | **Phase 1** |
+| 1a | Extend `availability.json` writers with mandatory `expected_return_utc` and `lease_owner`; add `AVAIL_STALE_RECOVER` path in `check-and-provision.ps1` | **Phase 1** |
+| 1b | Prov-server heartbeat: write `C:\ProgramData\MAST\status\last-run.json` at every cycle exit; emit 60s in-cycle progress lines so a hung driver is distinguishable from a slow one | **Phase 1** |
 | 2 | `payload_hash` generation in `build-mast.ps1` -> write `build-manifest.json` with git ref fields | **[DONE]** |
 | 3 | Unit-side effective state: inspection-based probe (or hardened `installed-manifest.json`) | **Phase 1** |
 | 4 | Per-module uninstall/reinstall paths; `build-mast.ps1` support for pinned git refs and rollback | **Phase 2** |
@@ -1266,3 +1389,22 @@ remain the **deep dive** for incidents. Prometheus and the central dashboard pro
   last known-good snapshot, or just retry next cycle?)
 - **Concurrency:** provision units sequentially or in parallel? Parallel is faster but
   harder to debug; sequential is safer for a small fleet.
+- **LFS quota exhaustion:** GitHub LFS bandwidth is metered. What is the policy if the
+  prov server hits the quota mid-cycle? (Cache LFS objects locally on the prov server
+  so cycles do not re-pull on every build; mirror the LFS store to an internal artifact
+  cache; pay for additional quota.) The failure mode must be recognizable in logs so
+  alerts route differently than a transient build break.
+- **Lease/availability TTL semantics:** what `expected_return_utc` value should
+  `check-and-provision.ps1` write when entering the `provisioning` state -- a fixed
+  conservative cap (e.g. now + 2 h), or a value derived from recent successful run
+  durations in `activity.csv`? The MAST scheduler needs a defined grace before it can
+  treat a stuck `available: false` as stale.
+- **Driver self-monitoring:** the autonomous loop on the prov server is itself a
+  long-lived process. If `check-and-provision.ps1` (or its scheduled-task wrapper) hangs
+  -- not crashes -- there is currently nothing to detect that. Phase 3 alerting should
+  cover "no `RUN_END` in N expected cycles" and not only per-unit outcomes.
+- **Clock skew between prov server and units:** maintenance window logic uses unit-local
+  time computed from the registry `timezone` field, but `activity.csv` timestamps and
+  `availability.json` `since_utc` are written from the prov server. If unit and prov
+  server clocks drift (no NTP), maintenance-window decisions and lease TTLs disagree.
+  Define an authoritative clock (prov server) and require unit NTP sync as a smoke check.

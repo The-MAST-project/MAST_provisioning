@@ -89,6 +89,7 @@ except ImportError:
 import vm_lib
 from vm_lib import (
     VAULT_CREDS,
+    VBOXMANAGE,
     WINRM_BOOT_TIMEOUT_S,
     WINRM_CALL_TIMEOUT_S,
     WINRM_PORT,
@@ -96,7 +97,13 @@ from vm_lib import (
     _ps_escape,
     check_rc,
     load_creds,
+    reset_to_clean_snapshot,
     run_ps,
+    unit_reset_to_snapshot,
+    unit_start,
+    unit_stop,
+    vbox,
+    vm_state,
     wait_for_winrm,
     winrm_session,
 )
@@ -106,8 +113,6 @@ from vm_lib import (
 # ---------------------------------------------------------------------------
 REPO_ROOT = Path(__file__).parent.parent
 LOG_ROOT = Path(r"C:\MAST\logs\dev")
-
-VBOXMANAGE = Path(r"C:\Program Files\Oracle\VirtualBox\VBoxManage.exe")
 
 # Hostname of the provisioning server (this machine) as the unit will address it for SMB.
 PROV_SERVER = os.environ.get("COMPUTERNAME") or socket.gethostname()
@@ -215,45 +220,9 @@ def _find_unit_log_path(session: winrm.Session, log_filename: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# VirtualBox control
+# VirtualBox control -- canonical helpers live in vm_lib (vbox, vm_state,
+# unit_stop, unit_reset_to_snapshot, unit_start, reset_to_clean_snapshot).
 # ---------------------------------------------------------------------------
-
-def vbox(*args: str) -> subprocess.CompletedProcess[str]:
-    cmd = [str(VBOXMANAGE), *args]
-    return subprocess.run(cmd, check=True, text=True, capture_output=True)
-
-
-def vm_state(vm: str) -> str:
-    info = vbox("showvminfo", vm, "--machinereadable").stdout
-    for line in info.splitlines():
-        if line.startswith("VMState="):
-            return line.split("=", 1)[1].strip().strip('"')
-    return "unknown"
-
-
-def unit_stop(vm: str) -> None:
-    state = vm_state(vm)
-    if state in ("poweroff", "aborted", "saved"):
-        log(f"VM '{vm}' already stopped (state={state}).")
-        return
-    log(f"Stopping VM '{vm}' (state={state})...")
-    vbox("controlvm", vm, "poweroff")
-    # poll until reported off
-    for _ in range(30):
-        if vm_state(vm) == "poweroff":
-            return
-        time.sleep(1)
-    log(f"WARNING: VM '{vm}' did not report poweroff within 30s.")
-
-
-def unit_reset_to_snapshot(vm: str, snapshot: str) -> None:
-    log(f"Restoring VM '{vm}' to snapshot '{snapshot}'...")
-    vbox("snapshot", vm, "restore", snapshot)
-
-
-def unit_start(vm: str) -> None:
-    log(f"Starting VM '{vm}' (GUI)...")
-    vbox("startvm", vm, "--type", "gui")
 
 
 def setup_log_dir(cycle: int) -> Path:
@@ -702,11 +671,10 @@ def phase_reset(
     winrm_wait_s: int = WINRM_BOOT_TIMEOUT_S,
 ) -> winrm.Session:
     with timed("RESET PHASE"):
-        unit_stop(vbox_vm)
-        time.sleep(3)
-        unit_reset_to_snapshot(vbox_vm, snapshot)
-        unit_start(vbox_vm)
-        wait_for_winrm(host_unit, unit_cred, timeout=winrm_wait_s)
+        reset_to_clean_snapshot(
+            vbox_vm, snapshot, host_unit, unit_cred,
+            winrm_wait_s=winrm_wait_s,
+        )
         return winrm_session(host_unit, unit_cred)
 
 
