@@ -794,6 +794,7 @@ def phase_verify(
     run_rc: int,
     *,
     verify_only: bool = False,
+    host: str = "",
 ) -> dict[str, Any]:
     with timed("VERIFY PHASE"):
         results: dict[str, Any] = {}
@@ -807,6 +808,8 @@ def phase_verify(
             results["python_version"] = "(skipped in verify-only mode)"
             results["repos_root_ok"] = True
             results["repos_root_checked"] = False
+            results["unit_health_ok"] = True
+            results["unit_health_detail"] = "(skipped in verify-only mode)"
             results["smoke"] = {}
             return results
 
@@ -831,6 +834,25 @@ def phase_verify(
         else:
             results["repos_root_ok"] = True
             results["repos_root_checked"] = False
+
+        if check_repos and host:
+            url = f"http://{host}:{MAST_UNIT_PORT}{MAST_UNIT_STATUS_PATH}"
+            log(f"[unit-health] GET {url}")
+            try:
+                with urllib.request.urlopen(url, timeout=10) as resp:
+                    body = json.loads(resp.read().decode())
+                if "api_version" not in body:
+                    raise ValueError(f"missing api_version in response: {body}")
+                if body.get("errors"):
+                    raise ValueError(f"unit reported errors: {body['errors']}")
+                results["unit_health_ok"] = True
+                results["unit_health_detail"] = f"api_version={body.get('api_version')!r}"
+            except Exception as e:
+                results["unit_health_ok"] = False
+                results["unit_health_detail"] = str(e)
+        else:
+            results["unit_health_ok"] = True
+            results["unit_health_detail"] = "(not checked)"
 
         smoke_checks: dict[str, str | None] = {}
         for mod in modules:
@@ -866,6 +888,12 @@ def print_results(results: dict[str, Any], cycle: int) -> bool:
         )
     if results.get("repos_root_checked", True):
         log(f"  repos root        : {'OK' if results['repos_root_ok'] else 'FAIL'}")
+    unit_health_detail = results.get("unit_health_detail", "")
+    if "(not checked)" not in unit_health_detail and "(skipped" not in unit_health_detail:
+        log(
+            f"  unit heartbeat    : {'OK' if results.get('unit_health_ok') else 'FAIL'}"
+            f" ({unit_health_detail})"
+        )
     log("  smoke tests:")
     smoke = results.get("smoke", {})
     for mod, content in smoke.items():
@@ -877,6 +905,7 @@ def print_results(results: dict[str, Any], cycle: int) -> bool:
         results["execute_ok"]
         and results["python_ok"]
         and results["repos_root_ok"]
+        and results.get("unit_health_ok", True)
         and all(v is not None for v in smoke.values())
     )
     log(f"\n  Cycle {cycle}: {'PASS' if passed else 'FAIL'}")
@@ -1167,7 +1196,7 @@ def main() -> None:
                     phase_pull_repos(unit_session)
                     phase_start_mast_unit(unit_session)
                     phase_wait_for_unit_health(args.host_unit)
-                    results = phase_verify(unit_session, modules, 0)
+                    results = phase_verify(unit_session, modules, 0, host=args.host_unit)
                     (log_dir / "results.json").write_text(json.dumps(results, indent=2))
                     passed = print_results(results, 1)
                     cycle_results.append(passed)
@@ -1182,7 +1211,7 @@ def main() -> None:
                     phase_clear_unit_logs(unit_session)
                     phase_run_rebuild_repos(unit_session, unit_stage)
                     phase_wait_for_unit_health(args.host_unit)
-                    results = phase_verify(unit_session, modules, 0)
+                    results = phase_verify(unit_session, modules, 0, host=args.host_unit)
                     (log_dir / "results.json").write_text(json.dumps(results, indent=2))
                     passed = print_results(results, 1)
                     cycle_results.append(passed)
@@ -1282,6 +1311,7 @@ def main() -> None:
                         verify_only_mode = "verify-run" in phases and "execute" not in phases
                         results = phase_verify(
                             unit_session, modules, run_rc, verify_only=verify_only_mode,
+                            host=args.host_unit,
                         )
                         (log_dir / "results.json").write_text(json.dumps(results, indent=2))
                         passed = print_results(results, cycle)

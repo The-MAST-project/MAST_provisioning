@@ -245,11 +245,90 @@ try {
         Write-MastProvisionEvent ("repo phase START name={0} targetDir={1}" -f ${repoName}, ${targetDir})
         ${gitDirMarker} = Join-Path ${targetDir} '.git'
         if ((Test-Path -LiteralPath ${targetDir}) -and (Test-Path -LiteralPath ${gitDirMarker})) {
-            if (-not ${Force}) {
-                Write-MastProvisionEvent ("repo SKIP (clone already present, .git exists) name={0}" -f ${repoName})
+            # A ref is a branch/tag when it is non-empty and does not look like a 7-40 hex commit hash.
+            ${isBranchRef} = ($null -ne ${repo}.Ref -and ${repo}.Ref -ne '' -and ${repo}.Ref -notmatch '^[0-9a-fA-F]{7,40}$')
+            if (-not ${Force} -and -not ${isBranchRef}) {
+                Write-MastProvisionEvent ("repo SKIP (clone present, ref is SHA or empty) name={0}" -f ${repoName})
                 Write-Host "Repo ${repoName} already exists, skipping."
                 continue
             }
+            if (-not ${Force} -and ${isBranchRef}) {
+                Write-MastProvisionEvent ("repo PULL (branch ref, updating existing clone) name={0} ref={1}" -f ${repoName}, ${repo}.Ref)
+                ${prevPromptPull} = ${env:GIT_TERMINAL_PROMPT}
+                ${env:GIT_TERMINAL_PROMPT} = '0'
+                try {
+                    ${fetchOut} = Join-Path ${CloneRoot} ("{0}.pull-fetch.stdout.log" -f ${repoName})
+                    ${fetchErr} = Join-Path ${CloneRoot} ("{0}.pull-fetch.stderr.log" -f ${repoName})
+                    ${pFetch} = Start-Process -FilePath ${gitExe} `
+                        -ArgumentList @('-C', ${targetDir}, 'fetch', 'origin', ${repo}.Ref) `
+                        -PassThru -Wait -WindowStyle Hidden `
+                        -RedirectStandardOutput ${fetchOut} -RedirectStandardError ${fetchErr}
+                    try { ${pFetch}.Refresh() } catch {}
+                    if ($null -ne ${pFetch}.ExitCode -and ${pFetch}.ExitCode -ne 0) {
+                        ${tailErrF} = ((Get-Content -LiteralPath ${fetchErr} -ErrorAction SilentlyContinue) | Select-Object -Last 20) -join [Environment]::NewLine
+                        throw ("git fetch failed exitCode={0}:{1}{2}" -f ${pFetch}.ExitCode, [Environment]::NewLine, ${tailErrF})
+                    }
+                    ${coOut} = Join-Path ${CloneRoot} ("{0}.pull-checkout.stdout.log" -f ${repoName})
+                    ${coErr} = Join-Path ${CloneRoot} ("{0}.pull-checkout.stderr.log" -f ${repoName})
+                    ${pCo} = Start-Process -FilePath ${gitExe} `
+                        -ArgumentList @('-C', ${targetDir}, 'checkout', ${repo}.Ref) `
+                        -PassThru -Wait -WindowStyle Hidden `
+                        -RedirectStandardOutput ${coOut} -RedirectStandardError ${coErr}
+                    try { ${pCo}.Refresh() } catch {}
+                    if ($null -ne ${pCo}.ExitCode -and ${pCo}.ExitCode -ne 0) {
+                        ${tailErrCo} = ((Get-Content -LiteralPath ${coErr} -ErrorAction SilentlyContinue) | Select-Object -Last 20) -join [Environment]::NewLine
+                        throw ("git checkout failed exitCode={0}:{1}{2}" -f ${pCo}.ExitCode, [Environment]::NewLine, ${tailErrCo})
+                    }
+                    ${rstOut} = Join-Path ${CloneRoot} ("{0}.pull-reset.stdout.log" -f ${repoName})
+                    ${rstErr} = Join-Path ${CloneRoot} ("{0}.pull-reset.stderr.log" -f ${repoName})
+                    ${pRst} = Start-Process -FilePath ${gitExe} `
+                        -ArgumentList @('-C', ${targetDir}, 'reset', '--hard', 'FETCH_HEAD') `
+                        -PassThru -Wait -WindowStyle Hidden `
+                        -RedirectStandardOutput ${rstOut} -RedirectStandardError ${rstErr}
+                    try { ${pRst}.Refresh() } catch {}
+                    if ($null -ne ${pRst}.ExitCode -and ${pRst}.ExitCode -ne 0) {
+                        ${tailErrRst} = ((Get-Content -LiteralPath ${rstErr} -ErrorAction SilentlyContinue) | Select-Object -Last 20) -join [Environment]::NewLine
+                        throw ("git reset --hard FETCH_HEAD failed exitCode={0}:{1}{2}" -f ${pRst}.ExitCode, [Environment]::NewLine, ${tailErrRst})
+                    }
+                    ${subPullOut} = Join-Path ${CloneRoot} ("{0}.pull-submodule.stdout.log" -f ${repoName})
+                    ${subPullErr} = Join-Path ${CloneRoot} ("{0}.pull-submodule.stderr.log" -f ${repoName})
+                    ${pSubPull} = Start-Process -FilePath ${gitExe} `
+                        -ArgumentList @('-C', ${targetDir}, 'submodule', 'update', '--init', '--recursive') `
+                        -PassThru -Wait -WindowStyle Hidden `
+                        -RedirectStandardOutput ${subPullOut} -RedirectStandardError ${subPullErr}
+                    try { ${pSubPull}.Refresh() } catch {}
+                    if ($null -ne ${pSubPull}.ExitCode -and ${pSubPull}.ExitCode -ne 0) {
+                        ${tailErrSub} = ((Get-Content -LiteralPath ${subPullErr} -ErrorAction SilentlyContinue) | Select-Object -Last 20) -join [Environment]::NewLine
+                        Write-Warning ("git submodule update after pull failed exitCode={0}:{1}{2}" -f ${pSubPull}.ExitCode, [Environment]::NewLine, ${tailErrSub})
+                    }
+                    ${headPullOut} = Join-Path ${CloneRoot} ("{0}.pull-head.stdout.log" -f ${repoName})
+                    ${headPullErr} = Join-Path ${CloneRoot} ("{0}.pull-head.stderr.log" -f ${repoName})
+                    ${pHeadPull} = Start-Process -FilePath ${gitExe} `
+                        -ArgumentList @('-C', ${targetDir}, 'rev-parse', 'HEAD') `
+                        -PassThru -Wait -WindowStyle Hidden `
+                        -RedirectStandardOutput ${headPullOut} -RedirectStandardError ${headPullErr}
+                    try { ${pHeadPull}.Refresh() } catch {}
+                    if ($null -ne ${pHeadPull}.ExitCode -and ${pHeadPull}.ExitCode -eq 0) {
+                        ${newHead} = ((Get-Content -LiteralPath ${headPullOut} -ErrorAction SilentlyContinue) | Select-Object -First 1)
+                        if ($null -ne ${newHead}) { ${newHead} = ${newHead}.Trim() }
+                        Write-MastProvisionEvent ("repo PULL DONE name={0} HEAD={1}" -f ${repoName}, ${newHead})
+                    }
+                    if (${repoName} -like 'MAST_unit*') {
+                        ${svcPull} = Get-Service -Name 'MAST_unit' -ErrorAction SilentlyContinue
+                        if ($null -ne ${svcPull}) {
+                            Write-MastProvisionEvent ("Pull: restarting MAST_unit service after update name={0}" -f ${repoName})
+                            Restart-Service -Name 'MAST_unit' -Force -ErrorAction SilentlyContinue
+                            Write-MastProvisionEvent ("Pull: MAST_unit restart issued name={0}" -f ${repoName})
+                        }
+                    }
+                }
+                finally {
+                    if ($null -ne ${prevPromptPull}) { ${env:GIT_TERMINAL_PROMPT} = ${prevPromptPull} } else { Remove-Item Env:\GIT_TERMINAL_PROMPT -ErrorAction SilentlyContinue }
+                }
+                Write-MastProvisionEvent ("repo phase DONE (pull) name={0}" -f ${repoName})
+                continue
+            }
+            # Force mode: stop service if running, then remove for re-clone.
             if (${repoName} -like 'MAST_unit*') {
                 ${svc} = Get-Service -Name 'MAST_unit' -ErrorAction SilentlyContinue
                 if (${svc} -and ${svc}.Status -eq 'Running') {

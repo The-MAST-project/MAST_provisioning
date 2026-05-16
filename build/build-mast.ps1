@@ -40,6 +40,11 @@ param(
   [switch]${TestMode}
 )
 
+# Normalize -Modules: subprocess passes comma-joined strings as a single element.
+if (${Modules}.Count -eq 1 -and ${Modules}[0] -match ',') {
+    ${Modules} = @(${Modules}[0].Split(',') | Where-Object { $_ -ne '' })
+}
+
 # Elevation is not required for the build itself, but mklink/junction optimizations
 # in New-LinkOrCopy are only available when running as Administrator.
 ${isAdmin} = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")
