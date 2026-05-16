@@ -890,11 +890,8 @@ def print_results(results: dict[str, Any], cycle: int) -> bool:
         log(f"  repos root        : {'OK' if results['repos_root_ok'] else 'FAIL'}")
     unit_health_detail = results.get("unit_health_detail", "")
     if "(not checked)" not in unit_health_detail and "(skipped" not in unit_health_detail:
-        # Informational only: the diagnostics module's verify-diagnostics.ps1 handles
-        # the heartbeat check with proper VM-test-mode awareness (WARN, not FAIL, when
-        # ASCOM drivers are absent). A failure here does not fail the cycle.
         log(
-            f"  unit heartbeat    : {'OK' if results.get('unit_health_ok') else 'INFO-FAIL'}"
+            f"  unit heartbeat    : {'OK' if results.get('unit_health_ok') else 'FAIL'}"
             f" ({unit_health_detail})"
         )
     log("  smoke tests:")
@@ -908,6 +905,7 @@ def print_results(results: dict[str, Any], cycle: int) -> bool:
         results["execute_ok"]
         and results["python_ok"]
         and results["repos_root_ok"]
+        and results.get("unit_health_ok", True)
         and all(v is not None for v in smoke.values())
     )
     log(f"\n  Cycle {cycle}: {'PASS' if passed else 'FAIL'}")

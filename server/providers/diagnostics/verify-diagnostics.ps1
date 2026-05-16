@@ -242,13 +242,7 @@ try {
         }
     }
     ${hbOk} = $null -ne ${resp} -and ${resp}.StatusCode -ge 200 -and ${resp}.StatusCode -lt 300
-    if (-not ${hbOk} -and ${isVmTestRun}) {
-        ${line} = ("[WARN] MAST_unit-heartbeat: url={0} status=no-response (VM test mode - ASCOM drivers not registered)" -f ${heartbeatUrl})
-        ${line} | Out-File -FilePath ${verifyLog} -Encoding UTF8 -Append
-        Write-Host ${line}
-    } else {
-        Add-DiagResult -Name 'MAST_unit-heartbeat' -Ok ${hbOk} -Detail ("url={0} status={1}" -f ${heartbeatUrl}, $(if ($null -ne ${resp}) { ${resp}.StatusCode } else { 'no-response' }))
-    }
+    Add-DiagResult -Name 'MAST_unit-heartbeat' -Ok ${hbOk} -Detail ("url={0} status={1}" -f ${heartbeatUrl}, $(if ($null -ne ${resp}) { ${resp}.StatusCode } else { 'no-response' }))
 } catch {
     Add-DiagResult -Name 'MAST_unit-heartbeat' -Ok $false -Detail ("exception: {0}" -f $_.Exception.Message)
 }
