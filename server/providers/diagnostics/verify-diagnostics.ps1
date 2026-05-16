@@ -11,7 +11,7 @@
 #>
 [CmdletBinding()]
 param(
-    [int]${MastUnitPort} = 5000,
+    [int]${MastUnitPort} = 8000,
     [int]${Phd2RpcPort}  = 4400
 )
 
@@ -70,23 +70,25 @@ try {
 # --- 2. ASCOM Diagnostics tool launches without error ---
 try {
     ${ascomDiagCandidates} = @(
-        'C:\Program Files\ASCOM\Platform 7\Tools\Diagnostics\ASCOM.Diagnostics.exe',
-        'C:\Program Files (x86)\ASCOM\Platform 7\Tools\Diagnostics\ASCOM.Diagnostics.exe',
-        'C:\Program Files\ASCOM\Platform 6\Tools\Diagnostics\ASCOM.Diagnostics.exe',
-        'C:\Program Files (x86)\ASCOM\Platform 6\Tools\Diagnostics\ASCOM.Diagnostics.exe',
-        'C:\Program Files\ASCOM\Diagnostics\ASCOM.Diagnostics.exe'
+        'C:\Program Files (x86)\ASCOM\Platform\Tools\ASCOM Diagnostics.exe',
+        'C:\Program Files\ASCOM\Platform\Tools\ASCOM Diagnostics.exe',
+        'C:\Program Files (x86)\ASCOM\Platform 7\Tools\Diagnostics\ASCOM Diagnostics.exe',
+        'C:\Program Files\ASCOM\Platform 7\Tools\Diagnostics\ASCOM Diagnostics.exe',
+        'C:\Program Files (x86)\ASCOM\Platform 6\Tools\Diagnostics\ASCOM Diagnostics.exe',
+        'C:\Program Files\ASCOM\Platform 6\Tools\Diagnostics\ASCOM Diagnostics.exe'
     )
     ${ascomDiagExe} = $null
     foreach (${c} in ${ascomDiagCandidates}) {
         if (Test-Path -LiteralPath ${c}) { ${ascomDiagExe} = ${c}; break }
     }
     if ($null -eq ${ascomDiagExe}) {
-        ${found1} = Get-ChildItem -Path 'C:\Program Files\ASCOM', 'C:\Program Files (x86)\ASCOM' `
-            -Recurse -Filter 'ASCOM.Diagnostics.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+        ${found1} = Get-ChildItem -Path 'C:\Program Files\ASCOM', 'C:\Program Files (x86)\ASCOM', `
+            'C:\Program Files\ASCOM Platform 7', 'C:\Program Files (x86)\ASCOM Platform 7' `
+            -Recurse -Filter 'ASCOM Diagnostics.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
         if (${found1}) { ${ascomDiagExe} = ${found1}.FullName }
     }
     if ($null -eq ${ascomDiagExe}) {
-        Add-DiagResult -Name 'ASCOM-diagnostics' -Ok $false -Detail 'ASCOM.Diagnostics.exe not found in known paths'
+        Add-DiagResult -Name 'ASCOM-diagnostics' -Ok $false -Detail 'ASCOM Diagnostics.exe not found in known paths'
     } else {
         ${p} = Start-Process -FilePath ${ascomDiagExe} -PassThru -WindowStyle Hidden -ErrorAction Stop
         ${started} = $null -ne ${p} -and ${p}.Id -gt 0

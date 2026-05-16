@@ -2,6 +2,18 @@
 
 ---
 
+## [2026-05-16] diagnostics verify: ASCOM-diagnostics path corrected; MAST_unit heartbeat port corrected
+
+**Why:** Two checks in `verify-diagnostics.ps1` produced hard FAILs due to wrong search paths and a wrong default port. (1) The hardcoded candidate list and recursive fallback used the filename `ASCOM.Diagnostics.exe` (dot-separated) and paths matching a `Platform 6/7\Tools\Diagnostics\` layout. The actual install by `ASCOMPlatform710.4707.exe` places the tool at `C:\Program Files (x86)\ASCOM\Platform\Tools\ASCOM Diagnostics.exe` (space in name, `Platform\Tools\` path). (2) The MAST_unit heartbeat defaulted to port 5000, but `ServiceConfig` in `MAST_common/config/__init__.py` defaults to port 8000, confirmed by `mongo_seeds/services.json`. Both are hard FAILs by design - the ASCOM-diagnostics check verifies the tool can be launched, and the heartbeat verifies the service is up.
+
+**What:**
+- `server/providers/diagnostics/verify-diagnostics.ps1`:
+  - ASCOM candidate list updated: filename changed to `ASCOM Diagnostics.exe` throughout; `C:\Program Files (x86)\ASCOM\Platform\Tools\ASCOM Diagnostics.exe` added as the first (most specific) candidate. Recursive fallback filter updated to match.
+  - Default `$MastUnitPort` corrected from 5000 to 8000.
+- Staging regenerated via `build-mast.ps1 -HostName mast01 -TestMode ...`.
+
+**Implications:** ASCOM-diagnostics now finds and launches the tool correctly on the provisioned VM. MAST_unit-heartbeat now probes the correct port. Both checks remain hard FAILs when the condition is not met.
+
 ## [2026-05-15] Stage module: XILab installer child-kill strategy and re-enable in default build
 
 **Why:** The XILab/Standa NSIS installer hangs in session 0 after deploying files because it
