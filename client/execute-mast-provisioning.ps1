@@ -115,6 +115,15 @@ function Write-Log {
     Write-MastLog -Message ${Message} -LogFile ${logFile}
 }
 
+# Hold the desired process exit code in a script-scope variable. We do NOT
+# call `exit` from inside the try/catch below, because under WinRM that path
+# regularly hangs powershell.exe at runspace teardown for many minutes
+# (PSEventJob teardown, module Remove handlers, child-runspace draining --
+# see CLAUDE.md). At the bottom of the file, after `finally` has released
+# the lease, we call [Environment]::Exit($script:exitCode) to terminate
+# the worker process immediately and unblock the host's WinRM read.
+$script:exitCode = 1
+
 try {
     Write-Log "=========================================="
     Write-Log "Starting MAST provisioning execution"
@@ -259,7 +268,7 @@ try {
 
     if (${failCount} -gt 0) {
         Write-Log "[WARN] Provisioning completed with ${failCount} failures"
-        exit 1
+        $script:exitCode = 1
     } else {
         # ---------------------------------------------------------------
         # Record the installed payload fingerprint so check-and-provision.ps1
@@ -287,14 +296,14 @@ try {
         }
 
         Write-Log "MAST provisioning completed successfully!"
-        exit 0
+        $script:exitCode = 0
     }
 }
 catch {
     ${errorMsg} = "Provisioning execution failed: $_"
     Write-Log ${errorMsg}
     Write-Error ${errorMsg}
-    exit 1
+    $script:exitCode = 1
 }
 finally {
     Write-Log "Log file: ${logFile}"
@@ -318,3 +327,27 @@ finally {
         Remove-Item -Force ${leasePath} -ErrorAction SilentlyContinue
     }
 }
+
+# ---------------------------------------------------------------------------
+# Hard exit: bypass PS runspace teardown.
+#
+# Under WinRM, after this script's body completes, the powershell.exe worker
+# in wsmprovhost would normally proceed to:
+#   - drop imported modules (provisioning.psm1, mast-invoke-child types)
+#   - fire engine PowerShell.Exiting events
+#   - tear down any PSEventJob subscribers
+#   - drain child runspaces / pipeline streams
+# In practice, that path has repeatedly hung for many minutes after the last
+# user-visible log line ("LEASE_RELEASE ..."), and the host's per-call WinRM
+# read timeout (vm_lib.WINRM_CALL_TIMEOUT_S, 3630s) fires before the worker
+# gets around to returning the response -- making a successful provisioning
+# look like a failure to run-prov-test.py.
+#
+# [Environment]::Exit($code) terminates the worker process immediately
+# (after .NET flushes stdio), so the exit code reaches wsmprovhost and the
+# host's WinRM call returns promptly. All durable state (log files,
+# installed-manifest.json, lease release) has already been completed above.
+#
+# Safe to remove only after the upstream PS-exit hang is root-caused and
+# fixed; see CLAUDE.md "Do not use Register-ObjectEvent ... -Action".
+[Environment]::Exit($script:exitCode)

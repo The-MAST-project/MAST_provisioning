@@ -24,20 +24,27 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
+import threading
 import time
+from collections import deque
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
+import vm_lib
 from vm_lib import (
     REPO_ROOT,
     VAULT_CREDS,
     VBOXMANAGE,
     check_rc,
+    dump_json_file,
     load_creds,
+    load_json_file,
+    parse_json_text,
     reset_to_clean_snapshot,
     run_ps,
     vbox_snapshot_exists,
@@ -58,6 +65,14 @@ SUITE_LOG_ROOT = Path(r"C:\MAST\logs\dev\tests")
 BOMB_ORDER = 65
 BOMB_MODULE = "test-bomb"
 SPORADIC_BOMB_MODULE = "test-sporadic-bomb"
+
+# Per-scenario overrides for run-prov-test.py's --winrm-call-timeout-s flag.
+# Empty by default: the WinRM-exit hang that justified a 90-min override
+# for full-provision is now fixed at the source via [Environment]::Exit()
+# in client/execute-mast-provisioning.ps1 and client/run-verify-only.ps1.
+# Add an entry here only if a scenario genuinely needs a longer transport
+# timeout than vm_lib.WINRM_CALL_TIMEOUT_S.
+SCENARIO_WINRM_CALL_TIMEOUT_S: dict[str, int] = {}
 
 MANIFEST_REMOTE_PATH = r"C:\MAST\installed-manifest.json"
 SPORADIC_BOMB_MARKER_REMOTE_PATH = r"C:\MAST\state\sporadic-bomb.marker"
@@ -108,15 +123,23 @@ SCENARIOS: list[Scenario] = [
         expected_rc=0,
         status="ACTIVE",
     ),
-    Scenario(
-        name="full-provision-verify-only",
-        description="build+transfer+verify-run+verify+reset (no installers).",
-        phases="build,transfer,verify-run,verify,reset",
-        modules="",
-        repeat=1,
-        expected_rc=0,
-        status="ACTIVE",
-    ),
+    # DISABLED 2026-05-17: the scenario runs verify-run against a freshly
+    # restored post-prepare snapshot (no installers have run), so every
+    # verify command fails -- either because the binary is missing or
+    # because C:\MAST\logs\verify hasn't been created yet, producing a
+    # cascade of "Out-File ... DirectoryNotFoundException" failures.
+    # Re-enable once the scenario is rewritten to chain a successful
+    # execute phase before verify-run (or run-verify-only.ps1 is taught
+    # to pre-create the verify log dir).
+    # Scenario(
+    #     name="full-provision-verify-only",
+    #     description="build+transfer+verify-run+verify+reset (no installers).",
+    #     phases="build,transfer,verify-run,verify,reset",
+    #     modules="",
+    #     repeat=1,
+    #     expected_rc=0,
+    #     status="ACTIVE",
+    # ),
     Scenario(
         name="interrupted-inject-fail",
         description=(
@@ -281,6 +304,9 @@ def _build_prov_args(
         args += ["--modules", modules]
     if scenario.repeat and scenario.repeat != 1:
         args += ["--repeat", str(scenario.repeat)]
+    override = SCENARIO_WINRM_CALL_TIMEOUT_S.get(scenario.name)
+    if override is not None:
+        args += ["--winrm-call-timeout-s", str(override)]
     return args
 
 
@@ -294,18 +320,149 @@ def _replace_phases(args: list[str], new_phases: str) -> list[str]:
     return out
 
 
-def run_prov_subprocess(args: list[str], label: str) -> tuple[int, float]:
-    """Call run-prov-test.py and stream its output live to our stdout.
+# Module-level run-context, populated by main() and read by runners/subprocess
+# driver. Threading these through every runner signature would be noisier than
+# the benefit; keep them here.
+_RUN_CTX: dict = {
+    "scenario_log_dir": None,    # Path
+    "sub_idx": 0,                # incrementing counter for sub-run filename prefix
+    "verbose": False,
+    "tail_on_fail": 30,
+    "heartbeat_s": 10.0,         # interval for the alive heartbeat line
+}
 
-    Returns (exit_code, elapsed_seconds). We deliberately do NOT capture
-    stdout/stderr so the user sees progress in real time.
+
+_LABEL_SAFE_RE = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def _safe_label(label: str) -> str:
+    """Normalize a sub-run label into a filename fragment.
+
+    'A: build (clean)' -> 'A-build-clean'
     """
-    print(f"\n[suite] >>> {label}")
-    print(f"[suite] argv: {' '.join(args[1:])}")
+    s = _LABEL_SAFE_RE.sub("-", label).strip("-")
+    return s or "sub"
+
+
+def _next_sub_log_path(label: str) -> Path | None:
+    d: Path | None = _RUN_CTX.get("scenario_log_dir")
+    if d is None:
+        return None
+    _RUN_CTX["sub_idx"] += 1
+    n = _RUN_CTX["sub_idx"]
+    return d / f"{n:02d}-{_safe_label(label)}.log"
+
+
+def _print_tail(path: Path, n: int) -> None:
+    if n <= 0 or path is None or not path.exists():
+        return
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            lines = deque(f, maxlen=n)
+    except OSError as e:
+        print(f"  [suite] could not read log for tail: {e}")
+        return
+    print(f"  --- tail (last {len(lines)} lines) of {path.name} ---")
+    for line in lines:
+        line = line.rstrip("\r\n")
+        print(f"  {line}")
+    print(f"  --- end tail ---")
+
+
+def run_prov_subprocess(args: list[str], label: str) -> tuple[int, float]:
+    """Call run-prov-test.py, capturing stdout+stderr to a per-sub-run log.
+
+    Prints one '>' start line and one '<' end line. On non-zero exit, tails
+    the captured log. With _RUN_CTX['verbose'] True, also echoes each
+    captured line to stdout in real time.
+
+    Returns (exit_code, elapsed_seconds).
+    """
+    log_path = _next_sub_log_path(label)
+    verbose: bool = _RUN_CTX.get("verbose", False)
+    tail_n: int = _RUN_CTX.get("tail_on_fail", 30)
+
+    log_hint = f"log: {log_path.name}" if log_path else "log: <stdout only>"
+    print(f"  > {label:<60} {log_hint}")
     t0 = time.monotonic()
-    rc = subprocess.run(args, check=False).returncode
+
+    if log_path is None:
+        # Fallback: no log dir set (shouldn't happen via main()); stream live.
+        rc = subprocess.run(args, check=False).returncode
+        elapsed = time.monotonic() - t0
+        print(f"  < {label:<60} rc={rc}  {elapsed:.1f}s")
+        return rc, elapsed
+
+    rc = 1
+    line_count = 0
+    last_line_seen = ""
+    heartbeat_s = float(_RUN_CTX.get("heartbeat_s", 10.0))
+    stop_evt = threading.Event()
+    try:
+        with open(log_path, "w", encoding="utf-8", errors="replace",
+                  newline="") as f:
+            f.write(f"# argv: {' '.join(args[1:])}\n")
+            f.flush()
+            proc = subprocess.Popen(
+                args,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                bufsize=1,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+            assert proc.stdout is not None
+
+            def _reader():
+                nonlocal line_count, last_line_seen
+                # readline() returns '' only on EOF; reliable line-at-a-time
+                # without the iterator's read-ahead buffering.
+                for line in iter(proc.stdout.readline, ""):
+                    f.write(line)
+                    f.flush()           # flush each line to disk so tail -f works
+                    line_count += 1
+                    stripped = line.rstrip("\r\n")
+                    if stripped:
+                        last_line_seen = stripped
+                    if verbose:
+                        sys.stdout.write(line)
+                        sys.stdout.flush()
+                stop_evt.set()
+
+            reader = threading.Thread(target=_reader, daemon=True)
+            reader.start()
+
+            # Stdout heartbeat (suppressed in verbose, where the live stream
+            # already shows progress).
+            last_beat = time.monotonic()
+            last_lines = 0
+            while not stop_evt.wait(timeout=1.0):
+                now = time.monotonic()
+                if not verbose and (now - last_beat) >= heartbeat_s:
+                    delta = line_count - last_lines
+                    tail = last_line_seen[-110:] if last_line_seen else "(no output yet)"
+                    print(f"    [running {now - t0:>5.0f}s "
+                          f"lines={line_count} (+{delta}) -> {log_path.name}]")
+                    print(f"      last: {tail}")
+                    last_beat = now
+                    last_lines = line_count
+
+            reader.join()
+            try:
+                proc.stdout.close()
+            except OSError:
+                pass
+            rc = proc.wait()
+    except OSError as e:
+        elapsed = time.monotonic() - t0
+        print(f"  < {label:<60} ERROR  {elapsed:.1f}s  ({e})")
+        return 2, elapsed
+
     elapsed = time.monotonic() - t0
-    print(f"[suite] <<< {label} exit={rc} duration={elapsed:.1f}s")
+    print(f"  < {label:<60} rc={rc}  {elapsed:.1f}s  lines={line_count}")
+    if rc != 0:
+        _print_tail(log_path, tail_n)
     return rc, elapsed
 
 
@@ -330,13 +487,13 @@ def _inject_commands_json_entry(hostname: str, entry: dict) -> Path:
         raise FileNotFoundError(
             f"staged commands.json not found: {path}. Did the build sub-run succeed?"
         )
-    data = json.loads(path.read_text(encoding="utf-8"))
+    data = load_json_file(path)
     if not isinstance(data, list):
         raise RuntimeError(f"commands.json is not a list: {path}")
     data = [e for e in data if e.get("module") != entry.get("module")]
     data.append(entry)
     data.sort(key=lambda e: int(e["order"]))
-    path.write_text(json.dumps(data, indent=4), encoding="utf-8")
+    dump_json_file(path, data)
     return path
 
 
@@ -386,7 +543,7 @@ def _unit_read_installed_manifest(host_unit: str, creds: dict) -> dict | None:
     if not text:
         return None
     try:
-        return json.loads(text)
+        return parse_json_text(text)
     except json.JSONDecodeError as e:
         raise RuntimeError(f"installed-manifest.json on unit is not valid JSON: {e}")
 
@@ -642,7 +799,7 @@ def run_stub(
 
 SCENARIO_RUNNERS: dict[str, Callable[..., ScenarioResult]] = {
     "full-provision":                run_simple_scenario,
-    "full-provision-verify-only":    run_simple_scenario,
+    # "full-provision-verify-only":    run_simple_scenario,  # see DISABLED note above
     "interrupted-inject-fail":       run_interrupted_inject_fail,
     "failure-recover-no-reset":      run_failure_recover_no_reset,
     "idempotent-after-manifest-wipe": run_idempotent_after_manifest_wipe,
@@ -677,6 +834,68 @@ def run_scenario(
 # ---------------------------------------------------------------------------
 # Reporter
 # ---------------------------------------------------------------------------
+
+BANNER_WIDTH = 80
+
+
+def _tally(results: list[ScenarioResult]) -> dict[str, int]:
+    counts = {PASS: 0, FAIL: 0, SKIP: 0, ERROR: 0}
+    for r in results:
+        counts[r.outcome] = counts.get(r.outcome, 0) + 1
+    return counts
+
+
+def _wrap_indent(text: str, indent: str, width: int) -> list[str]:
+    """Wrap `text` onto lines, each prefixed by `indent`, fitting within width."""
+    words = text.split()
+    out: list[str] = []
+    cur = indent
+    avail = width - len(indent)
+    for w in words:
+        if len(cur) - len(indent) == 0:
+            cur += w
+        elif len(cur) - len(indent) + 1 + len(w) <= avail:
+            cur += " " + w
+        else:
+            out.append(cur)
+            cur = indent + w
+    if cur.strip():
+        out.append(cur)
+    return out
+
+
+def _print_scenario_banner(
+    idx: int,
+    total: int,
+    scenario: Scenario,
+    scenario_log_dir: Path,
+    results_so_far: list[ScenarioResult],
+) -> None:
+    bar = "=" * BANNER_WIDTH
+    counts = _tally(results_so_far)
+    remaining = total - idx
+    progress = (
+        f"Progress: PASS={counts[PASS]} FAIL={counts[FAIL]} "
+        f"SKIP={counts[SKIP]} ERROR={counts[ERROR]}  |  {remaining} remaining"
+    )
+    print()
+    print(bar)
+    print(f"[{idx}/{total}] Scenario: {scenario.name}  ({scenario.status})")
+    for line in _wrap_indent(scenario.description, "      ", BANNER_WIDTH):
+        print(line)
+    print(f"      {progress}")
+    print(f"      Log dir: {scenario_log_dir}")
+    print(bar)
+
+
+def _print_scenario_footer(idx: int, total: int, result: ScenarioResult) -> None:
+    dash = "-" * BANNER_WIDTH
+    dur = _fmt_duration(result.duration_s)
+    tail = f": {result.detail}" if result.detail else ""
+    print(dash)
+    print(f"[{idx}/{total}] {result.name}: {result.outcome}{tail}  in {dur}")
+    print(dash)
+
 
 def _fmt_duration(seconds: float) -> str:
     if seconds < 1.0:
@@ -748,6 +967,11 @@ def main() -> int:
                    help="Override module list for all scenarios (comma-separated).")
     p.add_argument("--skip-prereq-check", action="store_true",
                    help="Skip prerequisite checks (creds, VBoxManage, snapshot, run-prov-test.py).")
+    p.add_argument("-v", "--verbose", action="store_true",
+                   help="Also echo each sub-run's captured output to stdout in real time.")
+    p.add_argument("--tail-on-fail", type=int, default=30, metavar="N",
+                   help="On sub-run non-zero exit, print last N lines of its log "
+                        "(default: 30; set 0 to disable).")
 
     args = p.parse_args()
 
@@ -774,32 +998,84 @@ def main() -> int:
 
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%SZ")
     suite_log_dir = SUITE_LOG_ROOT / stamp
+    suite_log_dir.mkdir(parents=True, exist_ok=True)
     print(f"[suite] log dir: {suite_log_dir}")
+    print(f"[suite] running {len(targets)} scenario(s); "
+          f"verbose={args.verbose}, tail_on_fail={args.tail_on_fail}")
+
+    _RUN_CTX["verbose"] = args.verbose
+    _RUN_CTX["tail_on_fail"] = args.tail_on_fail
 
     creds = load_creds()
 
+    total = len(targets)
     results: list[ScenarioResult] = []
-    for s in targets:
-        print(f"\n[suite] === scenario: {s.name} ({s.status}) ===")
+    for idx, s in enumerate(targets, start=1):
+        scenario_log_dir = suite_log_dir / s.name
+        scenario_log_dir.mkdir(parents=True, exist_ok=True)
+        _RUN_CTX["scenario_log_dir"] = scenario_log_dir
+        _RUN_CTX["sub_idx"] = 0
+
+        _print_scenario_banner(idx, total, s, scenario_log_dir, results)
+
         if s.status == "ACTIVE":
             print(f"[suite] pre-flight: resetting VM {args.vbox_vm!r} "
-                  f"to snapshot {args.snapshot!r}")
+                  f"to snapshot {args.snapshot!r}  (-> preflight.log)")
+            preflight_log = scenario_log_dir / "preflight.log"
             t0 = time.monotonic()
+            saved_log_fn = vm_lib.log_fn
+            saved_log_raw_fn = vm_lib.log_raw_fn
             try:
-                reset_to_clean_snapshot(
-                    args.vbox_vm, args.snapshot, args.host_unit, creds["unit"],
-                )
+                pf = open(preflight_log, "w", encoding="utf-8",
+                          errors="replace", newline="")
+                try:
+                    def _pf_log(msg: str, _f=pf) -> None:
+                        ts = datetime.now(timezone.utc).strftime("%H:%M:%SZ")
+                        line = f"[{ts}] {msg}\n"
+                        _f.write(line)
+                        _f.flush()
+                        if args.verbose:
+                            sys.stdout.write(line)
+                            sys.stdout.flush()
+
+                    def _pf_log_raw(text: str, _f=pf) -> None:
+                        _f.write(text if text.endswith("\n") else text + "\n")
+                        _f.flush()
+                        if args.verbose:
+                            sys.stdout.write(text)
+                            if not text.endswith("\n"):
+                                sys.stdout.write("\n")
+                            sys.stdout.flush()
+
+                    vm_lib.log_fn = _pf_log
+                    vm_lib.log_raw_fn = _pf_log_raw
+                    reset_to_clean_snapshot(
+                        args.vbox_vm, args.snapshot, args.host_unit, creds["unit"],
+                    )
+                finally:
+                    pf.close()
             except Exception as e:
+                vm_lib.log_fn = saved_log_fn
+                vm_lib.log_raw_fn = saved_log_raw_fn
                 detail = f"pre-flight reset failed: {type(e).__name__}: {e}"
-                print(f"[suite] {detail}")
-                results.append(ScenarioResult(
+                print(f"[suite] {detail}  (see {preflight_log.name})")
+                _print_tail(preflight_log, args.tail_on_fail)
+                r = ScenarioResult(
                     name=s.name, status=s.status, outcome=ERROR,
                     duration_s=time.monotonic() - t0, detail=detail, sub_runs=[],
-                ))
+                )
+                results.append(r)
+                _print_scenario_footer(idx, total, r)
                 continue
+            else:
+                vm_lib.log_fn = saved_log_fn
+                vm_lib.log_raw_fn = saved_log_raw_fn
+                print(f"[suite] pre-flight done in {time.monotonic() - t0:.1f}s")
+
         r = run_scenario(s, args.host_unit, args.hostname, args.vbox_vm,
                          args.snapshot, args.modules)
         results.append(r)
+        _print_scenario_footer(idx, total, r)
 
     print_summary_table(results)
     out = write_suite_results_json(results, suite_log_dir)

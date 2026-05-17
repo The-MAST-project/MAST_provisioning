@@ -104,6 +104,33 @@ def _ps_escape(s: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# JSON helpers (BOM-tolerant)
+# ---------------------------------------------------------------------------
+# Windows PowerShell 5.1's `Out-File -Encoding UTF8` and `Set-Content -Encoding
+# UTF8` both prepend a UTF-8 BOM. Python's plain `utf-8` codec leaves the BOM
+# as a leading U+FEFF, which makes json.loads choke on the first character.
+# Use these helpers anywhere we read JSON that may have been written by PS
+# (commands.json, build-manifest.json, installed-manifest.json, creds.json
+# touched by hand, etc.).
+
+def load_json_file(path: Path) -> object:
+    """Parse a JSON file, tolerating a leading UTF-8 BOM."""
+    return json.loads(Path(path).read_text(encoding="utf-8-sig"))
+
+
+def parse_json_text(text: str) -> object:
+    """Parse a JSON string, tolerating a leading UTF-8 BOM."""
+    if text.startswith("\ufeff"):
+        text = text[1:]
+    return json.loads(text)
+
+
+def dump_json_file(path: Path, data: object, *, indent: int = 4) -> None:
+    """Write JSON to a file as plain UTF-8 (no BOM)."""
+    Path(path).write_text(json.dumps(data, indent=indent), encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
 # Credentials / WinRM
 # ---------------------------------------------------------------------------
 
@@ -114,7 +141,7 @@ def load_creds() -> dict[str, dict[str, str]]:
             "Create vault/creds.json with the format:\n"
             '  { "unit": { "user": ".\\\\mast", "pass": "..." } }'
         )
-    return json.loads(VAULT_CREDS.read_text(encoding="utf-8"))
+    return load_json_file(VAULT_CREDS)  # type: ignore[return-value]
 
 
 def winrm_session(

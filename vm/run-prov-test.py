@@ -901,11 +901,34 @@ def parse_args() -> argparse.Namespace:
         metavar="N",
         help="Max seconds to wait for TCP :5985 plus WinRM Basic auth before failing (default: %s)." % WINRM_BOOT_TIMEOUT_S,
     )
+    p.add_argument(
+        "--winrm-call-timeout-s",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "Override the per-WinRM-call read/operation timeout (default from "
+            "vm_lib.WINRM_CALL_TIMEOUT_S=%d). Bump this for scenarios whose "
+            "execute phase routinely runs longer than the default."
+        ) % WINRM_CALL_TIMEOUT_S,
+    )
     return p.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+
+    # Apply the per-call WinRM timeout override before any session is
+    # created. vm_lib.winrm_session() reads WINRM_CALL_TIMEOUT_S at call
+    # time, so a rebind here propagates to every session opened in this
+    # process. We also bump the local WINRM_TIMEOUT_S (used as the
+    # phase_execute run_ps timeout) so it never sits below the WinRM
+    # transport timeout.
+    if args.winrm_call_timeout_s is not None:
+        global WINRM_TIMEOUT_S
+        vm_lib.WINRM_CALL_TIMEOUT_S = args.winrm_call_timeout_s
+        WINRM_TIMEOUT_S = max(WINRM_TIMEOUT_S, args.winrm_call_timeout_s)
+
     modules = args.modules.split(",") if args.modules else ALL_MODULES
     creds = load_creds()
     if "unit" not in creds:

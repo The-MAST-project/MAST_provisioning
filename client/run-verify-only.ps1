@@ -152,7 +152,11 @@ Write-VerifyLog "=========================================="
 Write-VerifyLog "Verify-only summary: failures=${failCount}"
 Write-VerifyLog ("Log file: {0}" -f ${logFile})
 Write-VerifyLog "=========================================="
+# Hard exit to bypass PS runspace teardown under WinRM (see the matching
+# block at the bottom of execute-mast-provisioning.ps1 for full rationale).
+# This script imports/dot-sources the same modules as execute and runs
+# the same per-module child commands, so the same hang risk applies.
 if (${failCount} -gt 0) {
-    exit 1
+    [Environment]::Exit(1)
 }
-exit 0
+[Environment]::Exit(0)

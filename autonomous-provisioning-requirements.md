@@ -805,6 +805,57 @@ shutdown, port reuse) and **cleanup** semantics compatible with an always-on hos
 
 ---
 
+### Staging area lifecycle and shared-payload deduplication
+
+**Current state:** `build-mast.ps1` writes to `staging\<hostname>\01-provisioning\` per
+unit. Today every unit gets the **same** module set (see **Unit profiles**), so the
+build is copying the same multi-GB asset tree once per unit -- identical bytes,
+identical hashes, N copies on disk on the prov server. After unit profiles land,
+two units sharing a profile will still produce byte-identical payloads, so the
+duplication problem grows with fleet size rather than going away.
+
+**Requirement:** the build pipeline must **stage shared content once** and reuse it
+across units that resolve to the same effective module set.
+
+Acceptable directions (pick one coherent approach):
+
+- **Profile-keyed staging:** stage to `staging\by-profile\<profile_hash>\` where
+  `profile_hash` is a hash of the resolved module list plus their pinned versions.
+  Each unit gets a tiny per-host directory (`staging\<hostname>\`) that contains only
+  unit-specific files (per-host config, smoke expectations) and a pointer or
+  hardlink/junction tree into the shared profile payload. SMB share exposes
+  `by-profile\<hash>\`; the WinRM trigger tells the unit which profile hash to pull.
+- **Content-addressed object store:** every staged file is written once under
+  `staging\objects\<sha256>` and per-unit trees are reconstructed as a manifest of
+  hashes. The unit's pull resolves the manifest against the object store. More work
+  to build, but each new module version only adds the new bytes.
+- **NTFS hardlinks across per-host directories:** keep `staging\<hostname>\` as
+  today, but in `build-mast.ps1` detect when a file's content matches an existing
+  staged file and use `New-Item -ItemType HardLink` instead of copying. Cheap to
+  retrofit; preserves the existing on-disk layout; storage cost drops to one copy
+  per unique file.
+
+Whatever the mechanism, the **payload_hash** contract is unchanged: two units that
+resolve to the same effective profile must produce the same `payload_hash`, and the
+drift-detection comparison on the unit side remains identical to today.
+
+**Staging retention and cleanup:** monotonic growth of `staging\` is a bug (see the
+parent section on resource leaks). The build must own its lifecycle:
+
+- After a successful build, **prune** profile/object-store entries whose hash is no
+  longer referenced by any unit in `unit-registry.json` and whose age exceeds a
+  rollback grace window (proposed: 7 days, configurable).
+- Per-host directories are torn down and rebuilt each cycle; no stale per-host files
+  may survive from a prior build (today's `staging\<hostname>\` is implicitly
+  overwritten, but the contract should be explicit and tested).
+- Log `STAGING_PRUNE removed=<N> bytes_reclaimed=<M>` at the end of each build so
+  growth or lack of pruning is visible in `activity.csv`.
+
+**Do not edit `staging/`** still applies (see `CLAUDE.md`): the directory is
+generated. The change here is to **how** it is generated, not to operator workflow.
+
+---
+
 ### Package lifecycle, MAST version pinning, rollback, and observability
 
 #### Dropping in a newer package version
@@ -989,7 +1040,10 @@ retried on the next day's maintenance run.
 
 **Current state:** All fleet units are identical hardware running the same module set.
 Every entry in `unit-registry.json` receives the same `modules` list and no
-hardware-specific configuration exists.
+hardware-specific configuration exists. **This is duplication** -- the same module
+array is copy-pasted into every unit row, and adding a module today means editing
+every entry. The registry is the source of truth for "which modules each unit gets"
+**and** it is the only place this drift can be introduced silently.
 
 **Future requirement:** As the fleet grows, hardware may diverge -- different camera
 models, mount types, focusers, or other attached instruments. When that happens, a single
@@ -997,14 +1051,41 @@ flat module list per unit will not be sufficient; the provisioning system must b
 assign a **profile** to each unit that determines which packages are installed, which
 configuration values are applied, and which smoke checks are expected.
 
+**DRY requirement for `unit-registry.json`:** this feature is also the mechanism that
+**eliminates the current duplication**. A unit entry should reference a named profile
+(e.g. `"profile": "standard-scope"`) and the profile definition -- including its
+`modules` list -- lives **once**, in a separate file (proposed: `unit-profiles.json`
+alongside `unit-registry.json`, or a `profiles/` subdirectory). After the feature
+lands:
+
+- Every entry in `unit-registry.json` carries only **unit-specific** fields: hostname,
+  `maintenance_window`, `timezone`, `profile`, and any per-unit overrides
+  (hardware serials, COM ports). No `modules` array per unit by default.
+- The profile file defines the canonical module list for each profile name. Adding a
+  module to the fleet is **one edit** in the profile file, not N edits across the
+  registry.
+- Per-unit overrides remain possible (e.g. `"modules_add": ["zwo-asi294"]`,
+  `"modules_remove": ["phd2"]`) so a single divergent unit does not force a new
+  profile, but the **default** is "inherit from profile".
+- `build-mast.ps1` and `check-and-provision.ps1` resolve the effective module list
+  per unit by merging `profile.modules` with `modules_add`/`modules_remove` at build
+  time. Drift detection continues to operate on the resolved list, so two units on
+  the same profile share a `payload_hash` when their override sets are equal.
+
+This makes "what modules go where" auditable from a single small file, removes the
+copy-paste hazard that already exists today, and lays the groundwork for hardware
+variation without a second migration later.
+
 **Design constraints to keep in mind now** (no implementation required today):
 
-- The `modules` array per unit in `unit-registry.json` is already the right primitive.
-  Do not collapse it into a fleet-wide default that every unit inherits -- per-unit
-  module lists must remain first-class.
-- A future `profile` field (e.g. `"profile": "standard-scope"`) could map to a named
-  module set and configuration block defined elsewhere, so `unit-registry.json` stays
-  concise while the profile definition lives in a separate file.
+- A `profile` field (e.g. `"profile": "standard-scope"`) maps to a named module set
+  and configuration block defined elsewhere, so `unit-registry.json` stays concise
+  while the profile definition lives in a separate file. See the **DRY requirement**
+  above -- the profile file is the source of truth for "what does a standard unit
+  get", not a per-unit duplicated `modules` array.
+- Per-unit overrides (`modules_add`, `modules_remove`, hardware-specific config blocks)
+  remain first-class so a single divergent unit does not require minting a new
+  profile. The default is "inherit from profile"; overrides are the exception.
 - Provider scripts (`provide-<name>.ps1`) must not hard-code assumptions that all units
   share the same hardware. Any hardware-specific configuration (driver paths, COM port
   assignments, camera serial numbers) should be injectable via parameters or a per-unit
@@ -1342,6 +1423,125 @@ restart so stale entries from a previous code version do not pollute the next se
 
 ---
 
+#### Observability agents -- future provisioning modules
+
+Prometheus scraping, log shipping, and the unit-side status endpoint each require
+software that is **not** currently installed by `execute-mast-provisioning.ps1`.
+These should land as **new provider modules** under `server/providers/` so they
+are built, transferred, executed, smoke-checked, version-pinned, and drift-detected
+through the same pipeline as everything else -- not bolted on with an out-of-band
+installer. Each gets its own `provide-<name>.ps1`, `verify-<name>.ps1`,
+`module.json` with `version` field, and `assets/` directory; each gets added to
+the relevant unit profiles (see **Unit profiles** in Phase 2).
+
+| Module | Purpose | Notes |
+|--------|---------|-------|
+| `windows-exporter` | Base Prometheus scrape target for OS-level metrics (CPU, memory, disk, network, services, scheduled tasks). | Install MSI from `assets/`; configure collectors (`cpu`, `cs`, `logical_disk`, `memory`, `net`, `os`, `service`, `system`, `scheduled_task`, `textfile`). Open TCP 9182 to the monitoring subnet only. Enable the `textfile` collector with directory `C:\MAST\status\textfile_inputs\` so other modules can drop `*.prom` snippets. |
+| `mast-exporter` | MAST-specific HTTP server exposing `/metrics` (manifest, module versions, service state, lease, availability, drift) and the `/status/*` + `/health` routes defined under **Unit state via HTTP endpoint**. | Small NSSM-managed service. Reads `installed-manifest.json`, `availability.json`, `execute-lease.json`, `last-execute.json`, and (optionally) the live filesystem probe. Bound to the management subnet. Versioned independently of MAST app code so observability does not block app deploys. |
+| `mast-textfile-writer` | Scheduled task that atomically writes `mast.prom` into the windows_exporter textfile collector directory. | Alternative or supplement to `mast-exporter` for sites that prefer the textfile-collector pattern. One canonical implementation in `client/mast-write-textfile-metrics.ps1`; the module just installs the scheduled task entry. |
+| `log-shipper` | Tail NSSM stdout/stderr logs (`MAST_unit`, `PWI4`, `PWShutter`) and forward to the central log store (Loki / Elastic). | Pick one of Promtail, Fluent Bit, or Elastic Agent at the **fleet** level -- not per-unit. Config is a profile-level template that names the central endpoint and the file list. Service runs under a constrained account with read-only access to the log paths. |
+| `pswindowsupdate` | Prerequisite for Phase 2 Windows Update orchestration; also a source of update-related metrics (`pending_update_count`, `last_update_install_utc`). | `Install-Module PSWindowsUpdate -Force -Scope AllUsers`. Module is small but versioning matters -- pin the gallery version in `module.json`. Smoke check verifies `Get-WUList` runs without error. |
+| `ntp-sync` | Configure `w32time` against the site NTP server(s) and verify drift is within tolerance. | Resolves the open question on clock skew under **Open Questions**. Smoke check fails if `w32tm /stripchart` reports drift greater than a configurable threshold (default 5 s). Required for maintenance-window correctness and lease TTL semantics. |
+| `sshd` (operator SSH) | Already specified under **Fleet SSH server (operator remote access)** in Phase 2; included here because its smoke check (port reachable, service Running) is a first-class observability signal. | Cross-reference, not a duplicate work item. |
+
+**Sequencing:**
+
+1. `windows-exporter` lands first -- gives the dashboard immediate signal (CPU,
+   disk, services) with no MAST-specific code.
+2. `mast-exporter` (or `mast-textfile-writer`) lands second -- exposes manifest,
+   lease, and availability so the dashboard can answer "is mast03 in maintenance
+   and on the right hash" without WinRM.
+3. `log-shipper` lands third -- ships MAST app logs so error rate panels and
+   crash-loop detection can be wired up.
+4. `pswindowsupdate` and `ntp-sync` are independent of the observability rollout
+   but block other Phase 1/2 work (Windows Update orchestration, clock-skew
+   correctness); they should not wait for the observability push.
+
+**Module set membership:** these modules are added to the **observability**
+profile (or to the default profile, depending on site policy) -- not hardcoded
+into every unit's module list. A dev VM running `run-prov-test.py` should be
+able to opt out of `log-shipper` and `windows-exporter` to keep test cycles fast.
+
+**Drift detection alignment:** each new module participates in `payload_hash`
+and `module_versions` like any other. The exporter must read its own version
+from `installed-manifest.json` so the dashboard can show "mast05 is running
+`mast-exporter 1.4.0` while the fleet target is 1.5.0" -- the observability
+plane must not be a blind spot in its own drift detection.
+
+**Prov-server side:** the provisioning server itself needs a parallel set of
+agents -- `windows-exporter` for OS metrics, plus a `prov-server-exporter` that
+reads `last-run.json`, tails `activity.csv` and `package-timings.csv`, and emits
+the `mast_prov_*` and `mast_pkg_*` metrics specified under **Package
+installation timing and statistics** and **Heartbeats and liveness**. The prov
+server is not provisioned by `check-and-provision.ps1` (it would be circular),
+so this is a separate installer script under `server/install-observability.ps1`
+rather than a provider module. Versioning still tracked through `build-manifest`
+so the fleet sees a consistent observability surface.
+
+---
+
+#### Unit state via HTTP endpoint (not just WinRM)
+
+**Current state:** every fact about a unit's provisioning state -- `availability.json`,
+`installed-manifest.json`, `execute-lease.json`, `last-run.json` -- is a file on the
+unit, readable only by opening a WinRM session and either invoking PowerShell or
+mounting an SMB path. The MAST scheduler, dashboards, and external monitors all need
+WinRM credentials and a Windows-savvy client to answer "is mast03 available?" or
+"what payload hash does mast05 have?". This couples every consumer to the
+provisioning credential surface and makes Prometheus scraping awkward (the
+windows_exporter / textfile collector pattern in **Implementation patterns** above
+helps for metric-shaped data, but does nothing for the JSON status files the
+provisioning loop already maintains).
+
+**Requirement:** each unit exposes its provisioning state on an **HTTP endpoint**
+that is readable without WinRM. The same MAST-specific exporter described in
+**Implementation patterns** is the natural host -- it already runs on each unit and
+already serves `/metrics`. Add status routes alongside it:
+
+| Route | Returns | Source |
+|-------|---------|--------|
+| `/health` | Liveness probe: 200 if the unit's MAST services are up and the provisioning subsystem is not in a failed state; 503 otherwise. Compact JSON body with `status`, `available`, `provisioning_state`, `last_run_age_s`. | Aggregates the files below. |
+| `/status/availability` | Current `availability.json` verbatim (with `expected_return_utc` honored for staleness). | `C:\MAST\status\availability.json` |
+| `/status/manifest` | Effective installed manifest (preferably from live inspection per the Phase 1 unit manifest section, falling back to `installed-manifest.json`). | Unit filesystem + `installed-manifest.json` |
+| `/status/lease` | Current `execute-lease.json` if one is held, else `{"held": false}`. | `C:\MAST\status\execute-lease.json` |
+| `/status/last-run` | The unit-side mirror of `last-run.json`: last completed `execute-mast-provisioning` run with `run_id`, `started_utc`, `ended_utc`, `outcome`, `failed_module`. | `C:\MAST\status\last-execute.json` (new file written by `execute-mast-provisioning.ps1`) |
+
+**Health-check / heartbeat wiring:** `/health` is the heartbeat. It must reflect
+the full **provisioning state**, not just "MAST services are running":
+
+- `available: false` (from `availability.json`, with stale-lease recovery applied)
+  -> `status: "unavailable"`, HTTP 503 with reason (`maintenance`, `provisioning`,
+  `rebooting`, `smoke_failure`).
+- An active provisioning lease whose `expires_utc` is in the past -> `status:
+  "lease_stale"`, HTTP 503 (the unit is in an inconsistent state and an operator
+  or the next driver cycle should clear it).
+- `last-run.json` (driver-side) or `last-execute.json` (unit-side) older than
+  `2 * scheduled_interval` -> `status: "stale"`, HTTP 200 with `warning` field
+  (the unit is reachable but no driver cycle has touched it recently -- this is
+  the **unit-visible** version of the Phase 1 driver heartbeat alert).
+- Effective payload hash differs from the desired hash published by the prov server
+  (when reachable) -> `status: "drift"`, HTTP 200 with `drift: true` so monitors
+  can distinguish "broken" from "behind".
+
+**Prometheus alignment:** the same exporter emits the metrics already specified
+under **Installed package / manifest exposure** and **Running MAST services
+manifest**. Adding `/status/*` routes does not duplicate that data -- it exposes
+the structured JSON the provisioning loop already writes, in a form that does not
+require Prometheus parsing or WinRM access. The MAST scheduler can poll
+`/status/availability` directly instead of `Invoke-Command`-ing into the unit.
+
+**Security:** the endpoint is read-only and bound to the management subnet (same
+posture as the metrics scrape path). No state-mutating routes; provisioning still
+flows through WinRM.
+
+**Consequence for `availability.json` and the lease:** these files remain the
+on-disk source of truth and continue to be written atomically; the HTTP endpoint
+is a **reader**, not a parallel writer. Stale-lease and stale-availability rules
+defined in Phase 1 are applied at read time so external consumers never see a
+state the driver itself would treat as expired.
+
+---
+
 #### Heartbeats and liveness
 
 - **Per-service or per-layer last OK time:** e.g. `mast_heartbeat_timestamp_seconds{component="..."}`
@@ -1351,7 +1551,11 @@ restart so stale entries from a previous code version do not pollute the next se
   **per-unit last outcome** (`OK`, `SKIP`, `FAIL`, `UNREACHABLE`), and **last failure
   reason** as bounded labels or parallel info metrics.
 - **Scheduler / availability:** Integrate with `availability.json` via metrics such as
-  `mast_unit_available` and timestamps for last change.
+  `mast_unit_available` and timestamps for last change. The same data is exposed in
+  JSON form on `/status/availability` (see **Unit state via HTTP endpoint** above) so
+  the MAST scheduler can read it without WinRM, and `/health` rolls availability,
+  lease, and last-run age into a single 200/503 heartbeat that external monitors can
+  poll without parsing metrics.
 
 **Alerting:** Prometheus Alertmanager rules should fire when scrape fails (`up == 0`),
 heartbeat age exceeds threshold, critical `mast_service_up == 0`, or effective payload
@@ -1400,6 +1604,16 @@ remain the **deep dive** for incidents. Prometheus and the central dashboard pro
 | 9 | Enable live runs; monitor logs / CSV for a week before treating as production | **Phase 3** |
 | 10 | Prometheus scrape targets on units and prov server; wire Grafana dashboards and Alertmanager | **Phase 3** |
 | 11 | Install and harden OpenSSH Server on fleet units; document firewall, auth, and smoke checks | **Phase 2** |
+| 12 | Introduce `unit-profiles.json` (or `profiles/`) and migrate `unit-registry.json` entries to reference a profile; remove duplicated `modules` arrays; support `modules_add` / `modules_remove` overrides | **Phase 2** |
+| 13 | DRY the staging area: stage shared payloads once per profile/content hash instead of per-host; add `STAGING_PRUNE` cleanup of unreferenced staged content | **Phase 2** |
+| 14 | Unit-side HTTP status/health endpoint (`/health`, `/status/availability`, `/status/manifest`, `/status/lease`, `/status/last-run`) wired to provisioning state files; MAST scheduler reads availability over HTTP instead of WinRM | **Phase 3** |
+| 15 | Add `windows-exporter` provider module; open scrape port to monitoring subnet; enable textfile collector | **Phase 3** |
+| 16 | Add `mast-exporter` provider module (or `mast-textfile-writer` scheduled-task module) emitting `mast_payload_hash`, `mast_module_version_info`, `mast_unit_available`, `mast_pkg_*`, and hosting `/status/*` + `/health` | **Phase 3** |
+| 17 | Add `log-shipper` provider module (Promtail / Fluent Bit / Elastic Agent -- fleet-level choice) tailing NSSM stdout/stderr to central log store | **Phase 3** |
+| 18 | Add `ntp-sync` provider module with drift smoke check; resolves clock-skew open question | **Phase 1** |
+| 19 | Add `pswindowsupdate` provider module (prereq for Phase 2 Windows Update orchestration; also feeds update-pending metrics) | **Phase 2** |
+| 20 | `server/install-observability.ps1` on the prov server: install windows-exporter + `prov-server-exporter` reading `last-run.json`, `activity.csv`, `package-timings.csv` | **Phase 3** |
+| 21 | Provision Prometheus + Grafana + Alertmanager (+ Loki if log-shipper uses it); commit dashboard JSON and alert rules to the repo; document standard dashboard UIDs and template variables | **Phase 3** |
 
 ---
 
