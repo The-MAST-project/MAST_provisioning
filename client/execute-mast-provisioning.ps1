@@ -33,6 +33,11 @@ if (-not (Test-Path ${invokeDot})) {
 ${logDir} = Get-MastLogSessionDir
 New-Item -ItemType Directory -Path ${logDir} -Force | Out-Null
 ${smokeDir} = Get-MastSmokeDir
+# Pre-create verify dir too: per-provider verify commands (module.json) run as
+# separate powershell.exe children that do not dot-source mast-log.ps1, so they
+# cannot call Get-MastVerifyDir themselves and will crash on Out-File if the
+# directory does not exist (seen in ascom verify, 2026-05-17 run).
+${verifyDir} = Get-MastVerifyDir
 ${logFile} = Join-Path ${logDir} "provisioning-execute.log"
 
 # State under <SystemDrive>\MAST (same tree as logs); installed-manifest lives here.
@@ -329,25 +334,54 @@ finally {
 }
 
 # ---------------------------------------------------------------------------
-# Hard exit: bypass PS runspace teardown.
+# Teardown breadcrumbs.
 #
-# Under WinRM, after this script's body completes, the powershell.exe worker
-# in wsmprovhost would normally proceed to:
-#   - drop imported modules (provisioning.psm1, mast-invoke-child types)
-#   - fire engine PowerShell.Exiting events
-#   - tear down any PSEventJob subscribers
-#   - drain child runspaces / pipeline streams
-# In practice, that path has repeatedly hung for many minutes after the last
-# user-visible log line ("LEASE_RELEASE ..."), and the host's per-call WinRM
-# read timeout (vm_lib.WINRM_CALL_TIMEOUT_S, 3630s) fires before the worker
-# gets around to returning the response -- making a successful provisioning
-# look like a failure to run-prov-test.py.
+# History: a prior incarnation of this script used `[Environment]::Exit($code)`
+# here to bypass PS runspace teardown, because a Register-ObjectEvent lease
+# renewer was hanging powershell.exe for many minutes at exit. That renewer is
+# long gone (see CLAUDE.md / DECISIONS.md), but the hard exit was left in
+# place "just in case" -- and on the 2026-05-17 ASCOM-only run it produced a
+# new failure mode: the wsmprovhost worker is terminated mid-shell, the WinRM
+# SOAP "CommandState=Done" + ExitCode response never gets sent to the host,
+# and the host's run_ps Invoke sits in Receive loops indefinitely (verified
+# by handle dump: wsmprovhost gone from unit, host still ticking).
 #
-# [Environment]::Exit($code) terminates the worker process immediately
-# (after .NET flushes stdio), so the exit code reaches wsmprovhost and the
-# host's WinRM call returns promptly. All durable state (log files,
-# installed-manifest.json, lease release) has already been completed above.
+# Reverting to a clean `exit`. If the original Register-ObjectEvent-style
+# teardown hang ever returns, the breadcrumbs below pinpoint which teardown
+# stage stalls (each line is flushed to disk before the next stage begins, so
+# the host-side log poller sees them even after WinRM stops responding).
 #
-# Safe to remove only after the upstream PS-exit hang is root-caused and
-# fixed; see CLAUDE.md "Do not use Register-ObjectEvent ... -Action".
-[Environment]::Exit($script:exitCode)
+# Do NOT bring back [Environment]::Exit without first confirming via these
+# breadcrumbs that PS teardown is actually hanging; otherwise you trade a
+# benign clean-exit delay for an unrecoverable host-side WinRM stall.
+# [Environment]::Exit($script:exitCode)   # disabled 2026-05-17, see above
+# ---------------------------------------------------------------------------
+function Write-TeardownBreadcrumb {
+    param([string]${Stage})
+    try {
+        ${ts} = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
+        ${line} = "${ts} | TEARDOWN ${Stage} pid=$PID"
+        Add-Content -LiteralPath ${logFile} -Value ${line} -ErrorAction SilentlyContinue
+    } catch {}
+}
+
+Write-TeardownBreadcrumb -Stage 'reached_exit_point'
+
+# Enumerate anything that could plausibly stall runspace teardown so the next
+# hang has named suspects in the log instead of a silent stall.
+try {
+    ${evtSubs} = @(Get-EventSubscriber -ErrorAction SilentlyContinue)
+    ${psJobs}  = @(Get-Job -ErrorAction SilentlyContinue)
+    Write-TeardownBreadcrumb -Stage ("inventory event_subscribers=" + ${evtSubs}.Count + " ps_jobs=" + ${psJobs}.Count)
+    foreach (${es} in ${evtSubs}) {
+        Write-TeardownBreadcrumb -Stage ("event_subscriber name=" + ${es}.SourceIdentifier + " source=" + ${es}.SourceObject)
+    }
+    foreach (${j} in ${psJobs}) {
+        Write-TeardownBreadcrumb -Stage ("ps_job id=" + ${j}.Id + " name=" + ${j}.Name + " state=" + ${j}.State)
+    }
+} catch {
+    Write-TeardownBreadcrumb -Stage ("inventory_failed " + $_.Exception.Message)
+}
+
+Write-TeardownBreadcrumb -Stage ("exit_code=" + $script:exitCode)
+exit $script:exitCode

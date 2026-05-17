@@ -32,12 +32,16 @@ from typing import Any, Callable
 
 try:
     import winrm  # type: ignore[import]
+    from winrm.exceptions import WinRMOperationTimeoutError  # type: ignore[import]
 except ImportError:
     sys.exit(
         "ERROR: pywinrm is required.\n"
         "Install it with:  pip install pywinrm\n"
         "Then re-run this script."
     )
+
+# requests is a hard dependency of pywinrm, so this import is always safe.
+import requests  # type: ignore[import]
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -144,6 +148,33 @@ def load_creds() -> dict[str, dict[str, str]]:
     return load_json_file(VAULT_CREDS)  # type: ignore[return-value]
 
 
+# WSMan per-Receive timeout. This is NOT the overall script timeout -- pywinrm
+# loops Receive requests until the command finishes, and each Receive is a
+# fresh HTTP request. Keeping this short means:
+#   - the server returns an empty Receive every ~30s of stdout silence, so
+#     pywinrm notices a dead TCP socket within ~40s instead of the next hour
+#   - when the unit's powershell.exe exits, the next poll picks up
+#     CommandState=Done immediately
+# The overall script timeout is enforced by _run_with_heartbeat using
+# timeout_s, not by these WSMan values.
+#
+# Previously these were sized to WINRM_CALL_TIMEOUT_S (3600s) "to match" long
+# provisioning runs. That was the wrong knob: a 13-minute silent stretch during
+# ASCOM install + a transient TCP glitch left pywinrm blocked inside a single
+# 3630s recv on a half-dead socket, never observing CommandState=Done -- the
+# host hung for the full hour after the unit had cleanly finished and exited.
+# operation_timeout drives the WSMan poll cadence (the server waits up to this
+# many seconds for new output before sending an empty Receive response).
+# read_timeout is the requests-side HTTP timeout and MUST be comfortably larger
+# than operation_timeout, otherwise the HTTP client gives up before the server
+# replies. During heavy install IO (e.g. .NET 3.5 via SYSTEM DISM scheduled
+# task while ASCOM Platform installs) the unit's WinRM HTTP listener can take
+# tens of seconds to flush its response, so we want a healthy margin -- the
+# earlier 30/40 pair tripped a Read-timeout mid-install.
+_WSMAN_OP_TIMEOUT_S = 60
+_WSMAN_READ_TIMEOUT_S = 120
+
+
 def winrm_session(
     host: str,
     cred: dict[str, str],
@@ -154,8 +185,8 @@ def winrm_session(
         f"http://{host}:{WINRM_PORT}/wsman",
         auth=(cred["user"], cred["pass"]),
         transport="basic",
-        read_timeout_sec=read_timeout_s if read_timeout_s is not None else WINRM_CALL_TIMEOUT_S + 30,
-        operation_timeout_sec=op_timeout_s if op_timeout_s is not None else WINRM_CALL_TIMEOUT_S,
+        read_timeout_sec=read_timeout_s if read_timeout_s is not None else _WSMAN_READ_TIMEOUT_S,
+        operation_timeout_sec=op_timeout_s if op_timeout_s is not None else _WSMAN_OP_TIMEOUT_S,
     )
 
 
@@ -266,6 +297,173 @@ def _format_winrm_stderr(text: str, max_len: int = 900) -> str:
     return t
 
 
+# How long we keep retrying Receive against the same shell_id+command_id when
+# the unit's WinRM service is transiently unresponsive (HTTP read/connect
+# timeouts, transport errors). The shell and command stay alive on the server
+# through its IdleTimeout window, so a fresh Receive picks up wherever the
+# previous one was cut off -- no work is lost, no state on the unit is
+# disturbed. 10 minutes comfortably covers the worst stretch observed during
+# heavy install IO (.NET 3.5 via SYSTEM DISM scheduled task + ASCOM Platform
+# installer hammering the box for several minutes with no output, sometimes
+# wedging the WinRM listener for 2+ minutes per stall).
+_TRANSIENT_RETRY_BUDGET_S = 10 * 60
+# Brief backoff between retry attempts. Short enough that recovery is prompt,
+# long enough that we don't hammer a wedged WinRM listener.
+_TRANSIENT_RETRY_BACKOFF_S = 3
+
+# Exception types that pywinrm/requests raise when the underlying HTTP call
+# to the WinRM listener fails or times out. The shell on the unit is unaware
+# of any of these -- they only mean "this particular Receive request didn't
+# get a reply" -- so the safe response is to retry the Receive (against the
+# same shell+command IDs), not to tear down the shell.
+#
+# winrm.exceptions.WinRMTransportError covers 5xx / proxy / transport hiccups
+# from the listener; auth failures and fatal protocol errors raise different
+# exception types and will propagate.
+_TRANSIENT_RECEIVE_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    requests.exceptions.ReadTimeout,
+    requests.exceptions.ConnectTimeout,
+    requests.exceptions.ConnectionError,
+    requests.exceptions.ChunkedEncodingError,
+    winrm.exceptions.WinRMTransportError,
+)
+
+
+def _evict_winrm_connection_pool(protocol: Any) -> None:
+    """Close the requests.Session backing this pywinrm protocol so the next
+    request dials a fresh TCP connection.
+
+    Why: a stale half-dead pooled connection (e.g. surviving a NAT/firewall
+    idle-drop on the host side) makes every retry hit the same broken socket
+    and time out identically; rebuilding the local pool is the in-code
+    equivalent of the "reboot the host" cure. The WSMan shell state is
+    server-side and keyed by shell_id GUID, so a fresh socket carrying a
+    Receive for the same shell continues exactly where the previous one
+    was cut off.
+    """
+    try:
+        protocol.transport.session.close()
+    except Exception:
+        # Whatever requests/urllib3 version is in use, close() is best-effort.
+        # If it raises, the next .post() will rebuild the pool anyway.
+        pass
+
+
+def _resilient_get_command_output(
+    protocol: Any,
+    shell_id: str,
+    command_id: str,
+    *,
+    log_label: str,
+    transient_retry_budget_s: int,
+) -> tuple[bytes, bytes, int]:
+    """pywinrm's Receive loop, but tolerant of transient HTTP failures.
+
+    pywinrm's built-in Protocol.get_command_output silently swallows
+    WinRMOperationTimeoutError (the expected WSMan-level "no output yet,
+    just keep polling" signal). It does NOT handle requests-level errors
+    such as ReadTimeout / ConnectTimeout, which surface whenever the unit's
+    WinRM listener stalls during heavy install IO. When that happens we
+    evict the local connection pool and issue another Receive against the
+    same shell+command IDs -- the server has the output buffered and
+    waiting -- and pick up exactly where we left off. Budget tracks total
+    time spent in the *failed* state and resets on every successful Receive,
+    so each fresh glitch gets the full grace window.
+    """
+    stdout_chunks: list[bytes] = []
+    stderr_chunks: list[bytes] = []
+    return_code = 0
+    command_done = False
+    transient_deadline: float | None = None
+    transient_first_err: str | None = None
+
+    while not command_done:
+        try:
+            stdout, stderr, return_code, command_done = (
+                protocol._raw_get_command_output(shell_id, command_id)
+            )
+            stdout_chunks.append(stdout)
+            stderr_chunks.append(stderr)
+            if transient_deadline is not None:
+                _log(f"  ... {log_label} WinRM recovered after transient errors")
+            transient_deadline = None
+            transient_first_err = None
+        except WinRMOperationTimeoutError:
+            # Expected: server returned an empty Receive because no new output
+            # arrived within operation_timeout_sec. The command is still alive
+            # on the unit; just issue another Receive immediately.
+            continue
+        except _TRANSIENT_RECEIVE_EXCEPTIONS as e:
+            now = time.monotonic()
+            if transient_deadline is None:
+                transient_deadline = now + transient_retry_budget_s
+                transient_first_err = f"{type(e).__name__}: {e}"
+                _log(
+                    f"  ... {log_label} transient WinRM error ({transient_first_err}); "
+                    f"will retry up to {transient_retry_budget_s}s against the same shell"
+                )
+            elif now >= transient_deadline:
+                raise RuntimeError(
+                    f"{log_label} gave up after {transient_retry_budget_s}s of "
+                    f"transient WinRM errors (first: {transient_first_err}; last: "
+                    f"{type(e).__name__}: {e})"
+                ) from e
+            _evict_winrm_connection_pool(protocol)
+            time.sleep(_TRANSIENT_RETRY_BACKOFF_S)
+
+    return b"".join(stdout_chunks), b"".join(stderr_chunks), return_code
+
+
+def _resilient_run_ps(
+    session: winrm.Session,
+    script: str,
+    *,
+    log_label: str,
+    transient_retry_budget_s: int = _TRANSIENT_RETRY_BUDGET_S,
+) -> winrm.Response:
+    """Drop-in replacement for ``session.run_ps`` that survives transient
+    WinRM HTTP failures without abandoning the running command on the unit.
+
+    Mirrors pywinrm's Session.run_ps (UTF-16 LE base64 encoding so the unit's
+    powershell.exe accepts the script as an -EncodedCommand) but drives the
+    Receive loop ourselves via the lower-level Protocol API so we can retry
+    transient HTTP failures against the same shell + command IDs.
+
+    Shell and command IDs are released in finally blocks; the WinRM listener
+    will also reap the shell on its idle timer if cleanup itself fails.
+    """
+    encoded = base64.b64encode(script.encode("utf_16_le")).decode("ascii")
+    command_line = f"powershell -encodedcommand {encoded}"
+
+    protocol = session.protocol
+    shell_id = protocol.open_shell()
+    try:
+        command_id = protocol.run_command(shell_id, command_line)
+        try:
+            stdout, stderr, return_code = _resilient_get_command_output(
+                protocol,
+                shell_id,
+                command_id,
+                log_label=log_label,
+                transient_retry_budget_s=transient_retry_budget_s,
+            )
+        finally:
+            try:
+                protocol.cleanup_command(shell_id, command_id)
+            except Exception as e:
+                _log(f"  ... {log_label} cleanup_command failed (ignored): {e}")
+    finally:
+        try:
+            protocol.close_shell(shell_id)
+        except Exception as e:
+            _log(f"  ... {log_label} close_shell failed (ignored): {e}")
+
+    # Match pywinrm's stderr post-processing for parity with session.run_ps.
+    if stderr:
+        stderr = session._clean_error_msg(stderr)  # type: ignore[attr-defined]
+    return winrm.Response((stdout, stderr, return_code))
+
+
 def run_ps(
     session: winrm.Session,
     script: str,
@@ -275,12 +473,18 @@ def run_ps(
     echo: bool = True,
     step_timer: list[float] | None = None,
 ) -> winrm.Response:
-    """Run a PowerShell script via WinRM with heartbeat logging and a hard timeout."""
+    """Run a PowerShell script via WinRM with heartbeat logging and a hard timeout.
+
+    Uses _resilient_run_ps under the hood so a transient WinRM hiccup during
+    a long-running command (e.g. WinRM listener wedged during heavy install
+    IO) does not abandon the running command on the unit. The hard ceiling
+    is still enforced by _run_with_heartbeat via timeout_s.
+    """
     tag = f"[{label}] " if label else ""
     if echo:
         _log(f"{tag}>>> {script[:120].rstrip()}")
     r = _run_with_heartbeat(
-        lambda: session.run_ps(script),
+        lambda: _resilient_run_ps(session, script, log_label=f"{tag}run_ps"),
         label=f"{tag}run_ps",
         timeout_s=timeout_s,
         step_timer=step_timer,

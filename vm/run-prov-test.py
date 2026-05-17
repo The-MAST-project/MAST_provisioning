@@ -918,12 +918,12 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
 
-    # Apply the per-call WinRM timeout override before any session is
-    # created. vm_lib.winrm_session() reads WINRM_CALL_TIMEOUT_S at call
-    # time, so a rebind here propagates to every session opened in this
-    # process. We also bump the local WINRM_TIMEOUT_S (used as the
-    # phase_execute run_ps timeout) so it never sits below the WinRM
-    # transport timeout.
+    # --winrm-call-timeout-s overrides the overall script timeout enforced
+    # by _run_with_heartbeat (via WINRM_TIMEOUT_S / timeout_s). It no longer
+    # affects WSMan per-Receive timeouts: those are fixed at _WSMAN_OP/READ
+    # in vm_lib.winrm_session(), short on purpose so pywinrm notices dead
+    # sockets and shell-done within seconds. WINRM_CALL_TIMEOUT_S is kept
+    # in sync only for callers that still read it as a ceiling.
     if args.winrm_call_timeout_s is not None:
         global WINRM_TIMEOUT_S
         vm_lib.WINRM_CALL_TIMEOUT_S = args.winrm_call_timeout_s

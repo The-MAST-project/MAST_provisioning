@@ -2,6 +2,109 @@
 
 ---
 
+## [2026-05-17] Resilient WinRM Receive loop; decouple WSMan op timeout from script timeout
+
+**Why:** The host orchestrator was repeatedly aborting successful unit-side
+runs mid-execute. `execute-mast-provisioning.ps1` would reach `LEASE_RELEASE`
+and exit cleanly, but `run-prov-test.py` kept ticking `run_ps still running`
+for the remainder of the WinRM call timeout (`WINRM_CALL_TIMEOUT_S`, 1 h)
+and ultimately marked the cycle as failed. Three findings out of the spike:
+
+1. `vm_lib.winrm_session()` was setting `operation_timeout_sec` to the full
+   1 h script ceiling. That tells the WinRM service to hold a single `Receive`
+   SOAP request open for up to an hour waiting for output, and pywinrm
+   correspondingly waits up to an hour on the underlying TCP `recv`. A long
+   silent stretch during heavy install IO (.NET 3.5 via SYSTEM DISM scheduled
+   task + ASCOM Platform installer) lined up with a transient TCP glitch, the
+   socket went half-dead, the single mega-Receive never returned, and the
+   host never saw `CommandState=Done`.
+2. pywinrm's `Session.run_ps` only handles `WinRMOperationTimeoutError` mid
+   command. Any `requests.ReadTimeout` / `ConnectTimeout` / `ConnectionError`
+   bubbles up out of `session.run_ps`, after which the shell + command IDs are
+   lost — even though the *running command on the unit is unaffected and the
+   server still has its output buffered*.
+3. The `requests.Session` connection pool can hold stale half-dead sockets
+   that survive single transient failures, so retrying naively against the
+   same pool reproduces the same timeout. A host reboot cured one stuck run
+   precisely because it flushed the pool.
+
+Prior misdiagnosis: the 2026-05-16 entry attributed an earlier instance of
+this symptom to `Register-ObjectEvent`/PSEventJob teardown on the unit. The
+lease renewer was a real PSEventJob hang and that fix stands, but the
+*recent* "stuck after `LEASE_RELEASE`" symptom is a different bug entirely
+and lives on the host. The unit-side `Register-ObjectEvent` ban remains
+good guidance (see CLAUDE.md DO NOT list) but is not the cause being fixed
+here.
+
+**What:**
+- `vm/vm_lib.py`: introduced `_WSMAN_OP_TIMEOUT_S=60`, `_WSMAN_READ_TIMEOUT_S=120`
+  for `winrm_session()`. WSMan now polls every ~60 s; the HTTP client has 60 s
+  of slack over each server-side wait. The 1 h ceiling is the
+  `_run_with_heartbeat` `timeout_s`, not the WSMan call timeout.
+- New `_resilient_get_command_output()` drives the WSMan Receive loop via
+  the lower-level `Protocol._raw_get_command_output` API. It swallows
+  `WinRMOperationTimeoutError` (expected mid-command) and catches transient
+  HTTP / transport errors (`requests.ReadTimeout`, `ConnectTimeout`,
+  `ConnectionError`, `ChunkedEncodingError`, `winrm.exceptions.WinRMTransportError`).
+  On a transient, it evicts the local `requests.Session` connection pool
+  (`_evict_winrm_connection_pool`) so the next Receive dials a fresh TCP
+  socket, then retries against the *same* `shell_id` + `command_id`. The
+  server has the output buffered through the shell's IdleTimeout window
+  (~2 h default on Windows Server SKUs); the running command never knew
+  anything went wrong.
+- New `_resilient_run_ps()` wraps the above with shell open / command
+  start / cleanup_command / close_shell in `finally` blocks, mirroring
+  `Session.run_ps()` (UTF-16 LE base64 → `powershell -EncodedCommand`).
+- `run_ps()` now routes through `_resilient_run_ps()` instead of
+  `session.run_ps()`. Public signature unchanged; the heartbeat / hard
+  timeout layer above is unaffected.
+- Retry budget: 10 minutes of *consecutive* failed state, with the deadline
+  reset on every successful Receive — each fresh glitch gets the full
+  grace window. Backoff between retries: 3 s.
+- `client/execute-mast-provisioning.ps1`: reverted the `[Environment]::Exit($code)`
+  workaround back to a plain `exit $script:exitCode`. The workaround was
+  patched in to mask the original `Register-ObjectEvent` hang on the unit;
+  with the host-side resilience layer in place, a clean PS exit is preferred
+  so the WSMan shell sends a proper `CommandState=Done` response. The
+  former line is kept commented in place per the project rule on disabling
+  rather than deleting, with a note explaining why it must not be reinstated
+  without first confirming via teardown breadcrumbs that PS teardown is
+  actually hanging.
+- New teardown breadcrumbs in `execute-mast-provisioning.ps1` (a small
+  helper writing timestamped `TEARDOWN ...` lines: reached_exit_point,
+  inventory of event subscribers / PS jobs, exit_code). These are how the
+  spike ruled out the PSEventJob theory and localized the bug to the host.
+  They stay as observability for any future "stuck at exit" symptom.
+- New `Get-MastVerifyDir` call at startup so per-provider `verify` commands
+  in `module.json` can `Out-File` into `C:\MAST\logs\verify\` without
+  pre-creating the directory themselves (they run as separate `powershell.exe`
+  children and cannot dot-source `mast-log.ps1`).
+- `server/providers/ascom/module.json`: verify command now sets
+  `$ErrorActionPreference='Stop'` so a failing `Out-File` actually fails
+  the verify (the original silent pass masked the missing-directory bug).
+
+**Implications:**
+- We are committed to pywinrm's `Protocol._raw_get_command_output` — a
+  private API. The method name has been stable across pywinrm versions for
+  years; if it ever changes, `_resilient_get_command_output` is one file
+  to update. The alternative (using `Protocol.get_command_output` directly)
+  cannot do same-shell retry, which is the whole point.
+- A genuinely wedged unit (no WinRM response for >10 min, plus no other
+  signal) will still abort the cycle. That is the right behavior — at that
+  point the unit needs human attention. If we ever want completion to
+  survive arbitrarily long WinRM blackouts, the architectural move is to
+  add an SMB-based completion sentinel (`installed-manifest.json` already
+  lives on the unit; could mirror to `mast-shared`), with WinRM degraded
+  from "on the critical path for completion" to "log harvester + initiator."
+  Not built today; flagged for future work.
+- WSMan poll cadence of 60 s means a worst-case ~60 s lag between unit
+  script exit and the host observing `CommandState=Done`. Acceptable.
+- `WINRM_CALL_TIMEOUT_S` is preserved as the heartbeat / hard ceiling and
+  still drives `--winrm-call-timeout-s`. It no longer flows into WSMan
+  session construction.
+
+---
+
 ## [2026-05-16] Drop in-process lease renewer; size LeaseTtlSeconds to cover worst-case runs
 
 **Why:** The lease renewer introduced in the prior entry used a

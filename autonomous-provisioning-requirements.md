@@ -1647,3 +1647,17 @@ remain the **deep dive** for incidents. Prometheus and the central dashboard pro
   `availability.json` `since_utc` are written from the prov server. If unit and prov
   server clocks drift (no NTP), maintenance-window decisions and lease TTLs disagree.
   Define an authoritative clock (prov server) and require unit NTP sync as a smoke check.
+- **Expand `why_not_operational` error messages with more information.** The current
+  strings produced by unit-side components (mount, focuser, covers, stage, imagers,
+  PHD2, power switch, etc.) when reporting `why_not_operational` are typically short
+  tags like `"not connected"` or `"not safe"`, which is enough for a human glancing at
+  a status panel but not enough for the autonomous prov server (or a remote operator
+  reading `availability.json` / `/status/availability`) to decide *what to do next*.
+  Each `why_not_operational` entry should carry: (a) the component name, (b) a stable
+  machine-readable reason code, (c) a human-readable detail string with the underlying
+  cause (driver error text, last exception message, timeout value, missing dependency,
+  etc.), and (d) where applicable, the timestamp of the observation and any relevant
+  IDs (COM port, ASCOM ProgID, device serial). The unit's HTTP `/status/availability`
+  endpoint (Phase 3, item 14) should surface this expanded structure so the prov
+  server can distinguish "transient -- retry next cycle" from "needs human / hardware
+  intervention" without scraping logs.
