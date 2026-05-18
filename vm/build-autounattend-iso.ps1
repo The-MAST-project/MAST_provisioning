@@ -41,13 +41,19 @@
   The operator runs client\bootstrap-winrm.cmd (or .ps1 in PowerShell) with -MastHostName mastNN; it renames user -> mast,
   sets physics, enables WinRM (matches vault/creds.json), and renames the computer to mastNN.
 
-.PARAMETER WindowsEdition
-  Optional <InstallFrom> filter when the install ISO has multiple editions (required
-  for autonomous setup on typical IoT LTSC ISOs or you get the Select Image wizard).
-  The Value must match an image Name from:
+.PARAMETER WindowsEditionIndex
+  Numeric image index from:
     dism /Get-WimInfo /WimFile:X:\sources\install.wim
-  Common IoT LTSC name: Windows 11 IoT Enterprise LTSC (verify with DISM).
-  If omitted and the WIM has one image only, Setup picks it; multiple images without this stay interactive.
+  Used when -WindowsEdition is empty (the default). INDEX is preferred over NAME
+  because multi-edition LTSC WIMs silently fall through /IMAGE/NAME filters and
+  install the wrong image. For the non-eval Win11 IoT LTSC 2024 retail/VL ISO
+  (en-us_windows_11_iot_enterprise_ltsc_2024_x64_dvd_f6b14814.iso) index 2 is
+  "Windows 11 IoT Enterprise LTSC". Override only when targeting a different ISO.
+
+.PARAMETER WindowsEdition
+  Optional <InstallFrom> NAME filter. When non-empty, takes precedence over
+  -WindowsEditionIndex. Avoid for multi-edition LTSC media -- NAME matching is
+  unreliable on those WIMs. Leave empty and use -WindowsEditionIndex instead.
 
 .PARAMETER Locale
   System / UI / user locale. Default 'en-US'.
@@ -83,8 +89,8 @@
   # Build with all defaults, drop next to the repo:
   .\build-autounattend-iso.ps1
 
-  # ARM64 IoT LTSC unit, custom output path:
-  .\build-autounattend-iso.ps1 -Architecture arm64 -WindowsEdition "Windows 11 IoT Enterprise LTSC" -OutputIso C:\ISOs\autounattend-mast-arm64.iso
+  # ARM64, custom output path (image name + key come from the defaults below):
+  .\build-autounattend-iso.ps1 -Architecture arm64 -OutputIso C:\ISOs\autounattend-mast-arm64.iso
 
   # Bundle onboarding script too (so a physical unit can run onboard from D:)
   .\build-autounattend-iso.ps1 -ExtraScripts client\onboard-mast-unit.ps1
@@ -97,11 +103,20 @@ param(
     [string]   $Architecture    = $(if ($env:PROCESSOR_ARCHITECTURE -ieq 'arm64') {'arm64'} else {'amd64'}),
     [string]   $MastUser        = 'user',
     [string]   $MastPassword    = 'password1',
-    [string]   $WindowsEdition  = '',
-    [string]   $Locale          = 'en-US',
-    [string]   $InputLocale     = '0409:00000409',
-    [string]   $TimeZone        = 'Israel Standard Time',
-    [string]   $ProductKey      = '',
+    # Defaults target the non-eval Win11 IoT LTSC 2024 retail/VL ISO
+    # (en-us_windows_11_iot_enterprise_ltsc_2024_x64_dvd_f6b14814.iso). Index 2 in
+    # that WIM is "Windows 11 IoT Enterprise LTSC". We select by INDEX, not NAME --
+    # multi-edition LTSC WIMs ignore /IMAGE/NAME filters and silently install index
+    # 1 (plain Enterprise LTSC) instead.
+    # KBN8V-... is the IoT LTSC KMS client setup key. The eval channel ISO cannot
+    # produce IoTEnterpriseS regardless of the key, so do not point this at the
+    # Microsoft Eval Center download.
+    [string]   $WindowsEditionIndex = '2',
+    [string]   $WindowsEdition      = '',
+    [string]   $Locale              = 'en-US',
+    [string]   $InputLocale         = '0409:00000409',
+    [string]   $TimeZone            = 'Israel Standard Time',
+    [string]   $ProductKey          = 'KBN8V-HFGQ4-MGXVD-347P6-PDQGT',
     [string]   $VolumeLabel     = 'MAST_AU',
     [string]   $FactoryComputerName = '',
     [string[]] $ExtraScripts    = @()
@@ -180,7 +195,8 @@ foreach ($s in $ExtraScripts) {
 # ---------------------------------------------------------------------------
 Write-Headline "Generating Autounattend.xml (arch=$Architecture, locale=$Locale, tz=$TimeZone, ComputerName=$resolvedComputerName)"
 
-# Optional <InstallFrom> block
+# <InstallFrom> block: prefer NAME if explicitly set, else fall back to INDEX,
+# else omit entirely (lets Setup pick when the WIM has a single image).
 $installFrom = ''
 if ($WindowsEdition) {
     $installFrom = @"
@@ -188,6 +204,15 @@ if ($WindowsEdition) {
                     <MetaData wcm:action="add">
                         <Key>/IMAGE/NAME</Key>
                         <Value>$WindowsEdition</Value>
+                    </MetaData>
+                </InstallFrom>
+"@
+} elseif ($WindowsEditionIndex) {
+    $installFrom = @"
+                <InstallFrom>
+                    <MetaData wcm:action="add">
+                        <Key>/IMAGE/INDEX</Key>
+                        <Value>$WindowsEditionIndex</Value>
                     </MetaData>
                 </InstallFrom>
 "@

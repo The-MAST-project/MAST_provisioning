@@ -34,7 +34,8 @@
   Seconds between connection attempts (default 30).
 
 .PARAMETER IsoPath
-  Path to the Windows 11 / IoT LTSC install ISO (required).
+  Path to the Windows 11 / IoT LTSC install ISO. Defaults to the non-eval
+  Win11 IoT LTSC 2024 retail/VL ISO under the user's Downloads folder.
 
 .PARAMETER AutounattendIso
   Path to the autounattend ISO. Default: <repo>\autounattend-mast.iso
@@ -52,17 +53,23 @@
   Passed through to vbox-create-unit.ps1.
 
 .EXAMPLE
-  .\vbox-recreate-unit.ps1 -IsoPath C:\ISOs\Win11_IoT_LTSC.iso
+  # Uses default IsoPath (Win11 IoT LTSC 2024 retail/VL ISO):
+  .\vbox-recreate-unit.ps1
 
 .EXAMPLE
   # After Windows installs, log in, run bootstrap from D:\, then optionally wait for WinRM:
-  .\vbox-recreate-unit.ps1 -IsoPath C:\ISOs\Win11_IoT_LTSC.iso -WaitForDevWinRm
+  .\vbox-recreate-unit.ps1 -WaitForDevWinRm
+
+.EXAMPLE
+  # Override to different install media:
+  .\vbox-recreate-unit.ps1 -IsoPath C:\ISOs\some-other.iso
 #>
 
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory = $true)]
-    [string]$IsoPath,
+    # Default points at the non-eval Win11 IoT LTSC 2024 retail/VL ISO. Override
+    # via -IsoPath when pointing at different install media.
+    [string]$IsoPath = 'C:\Users\labcomp2\Downloads\en-us_windows_11_iot_enterprise_ltsc_2024_x64_dvd_f6b14814.iso',
 
     [string]$AutounattendIso = '',
     [string]$VmName = 'mast-unit',
@@ -139,11 +146,10 @@ $phaseSw.Restart()
 
 Write-Host "`n=== Rebuild autounattend ISO ===" -ForegroundColor Cyan
 if (-not $SkipRebuildAutounattend) {
-    # IoT LTSC retail/VL ISOs ship multiple indexes; InstallFrom must match dism /Get-WimInfo Name.
-    # KMS client setup key (Microsoft Learn): selects LTSC volume channel; omit ProductKey only if you know your media.
-    & (Join-Path $RepoRoot 'build-autounattend-iso.ps1') `
-        -WindowsEdition 'Windows 11 IoT Enterprise LTSC' `
-        -ProductKey 'M7XTQ-FN8P6-TTKYV-9D4CC-J462D'
+    # Defaults in build-autounattend-iso.ps1 target the Win11 IoT LTSC EVAL ISO
+    # (correct image name + IoT LTSC KMS client setup key). Override here only if
+    # you're pointing at different install media.
+    & (Join-Path $RepoRoot 'build-autounattend-iso.ps1')
     $builtAu = Join-Path $RepoRoot 'autounattend-mast.iso'
     if (-not (Test-Path $builtAu)) { throw "build-autounattend-iso.ps1 did not produce $builtAu" }
     $AutounattendIso = (Resolve-Path $builtAu).Path
