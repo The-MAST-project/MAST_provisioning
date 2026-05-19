@@ -13,6 +13,7 @@ param(
     })]
   [string]${HostName},
   [string[]]${Modules} = @(
+    'proxy',
     'ascom',
     'chrome',
     'cygwin',
@@ -30,7 +31,8 @@ param(
     'vcredist2013',
     'vscode',
     'wireshark',
-    'zwo'
+    'zwo',
+    'reboot'
     ), # your module order
   # Dev/test: allow missing NoMachine license files (skip staging nomachine.lic).
   [switch]${AllowMissingNoMachineLicense},

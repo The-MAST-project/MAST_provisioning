@@ -8,7 +8,7 @@
     from USB, or dev VM after first login). This is NOT run from autounattend FirstLogon anymore.
 
     The installing operator must supply the unit Windows hostname (e.g. mast05). The script:
-      1. Optionally renames the factory local account (default 'user') to 'mast' and sets password.
+      1. Leaves the OEM factory local account (default 'user') intact; creates a separate 'mast' account.
       2. Ensures 'mast' is a local administrator with the provisioning password.
       3. Suppresses Windows Update automatic installs.
       4. Enables WinRM over HTTP (5985) with Basic auth and opens firewall port 5985.
@@ -37,8 +37,14 @@
 .PARAMETER SkipComputerRename
     Do not rename the computer (use only if you will set the name elsewhere).
 
-.PARAMETER FactoryUser, MastUser, MastPassword, ProvServerIP
-    Same defaults as factory unattend (user -> mast, physics, prov host for prepare example text).
+.PARAMETER FactoryUser
+    DEPRECATED no-op. Previously named the OEM account to rename to 'mast'; the rename
+    behavior has been removed (it stranded %USERPROFILE% at C:\Users\user). The OEM
+    account is now left intact and a fresh 'mast' account is created instead. The
+    parameter is still accepted so existing autounattend invocations keep working.
+
+.PARAMETER MastUser, MastPassword, ProvServerIP
+    Same defaults as factory unattend ('mast' / 'physics' / prov host for prepare example text).
 
 .PARAMETER VmTestRun
     *** VM TESTING ONLY - DO NOT USE IN PRODUCTION ***
@@ -176,27 +182,23 @@ try {
     }
     Write-BootstrapMsg ("Using MastHostName (computer rename target): {0}" -f $MastHostName) 'White'
 
-    # --- OEM factory account -> mast (optional) ---
+    # --- OEM factory account: leave intact, create fresh 'mast' instead ---
+    #
+    # Previous behavior renamed the OEM account ('user') to 'mast' in place.
+    # That left %USERPROFILE% pointing at C:\Users\user even after the rename
+    # (Windows does not migrate the profile directory on Rename-LocalUser), so
+    # everything hard-coded to C:\Users\mast silently broke on the VM. See
+    # compare-mastw/GAPS.md (2026-05-18) "Profile-dir anomaly on the VM".
+    #
+    # New policy: create a brand-new local 'mast' account (block below). The
+    # OEM account is left untouched. The -FactoryUser parameter is preserved
+    # for backward compatibility but is now a no-op.
     Write-BootstrapMsg '' 'Cyan'
-    Write-BootstrapMsg '--- OEM factory account -> mast ---' 'Cyan'
+    Write-BootstrapMsg '--- OEM factory account policy ---' 'Cyan'
     $RenamedOemToMast = $false
     if ($FactoryUser) {
-        $factoryAcct = Get-LocalUser -Name $FactoryUser -ErrorAction SilentlyContinue
-        $mastAcct = Get-LocalUser -Name $MastUser -ErrorAction SilentlyContinue
-        if ($factoryAcct -and $mastAcct) {
-            throw "Cannot rename '$FactoryUser' to '$MastUser' because '$MastUser' already exists."
-        }
-        if ($factoryAcct -and -not $mastAcct) {
-            $secPwd = ConvertTo-SecureString $MastPassword -AsPlainText -Force
-            Rename-LocalUser -Name $FactoryUser -NewName $MastUser
-            # FullName is what the lock/login screen shows; it is not updated by Rename-LocalUser.
-            Set-LocalUser -Name $MastUser -Password $secPwd -PasswordNeverExpires $true -FullName $MastUser
-            $RenamedOemToMast = $true
-            Write-BootstrapMsg "  Renamed '$FactoryUser' -> '$MastUser'; password and display name set." 'Green'
-            Write-BootstrapMsg "  If the sign-in screen still shows the old name, sign out or restart once." 'DarkGray'
-        } else {
-            Write-BootstrapMsg "  No factory account '$FactoryUser' (or mast already present) -- skipping rename." 'DarkGray'
-        }
+        Write-BootstrapMsg "  -FactoryUser is deprecated and ignored; OEM '$FactoryUser' is left intact." 'DarkGray'
+        Write-BootstrapMsg "  A separate '$MastUser' account will be created/ensured below." 'DarkGray'
     }
 
     # --- mast admin ---

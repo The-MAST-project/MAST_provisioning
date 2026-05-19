@@ -7,7 +7,8 @@ param(
     [string]${Modules}           = "",  # comma-separated; empty = all modules
     [string]${RunId}             = "",  # autonomous: server passes its run id; manual: auto-generated
     [string]${HeldBy}            = "",  # hostname of orchestrator; defaults to local computer
-    [int]   ${LeaseTtlSeconds}   = 7200  # 2 h default; comfortably covers a ~40 min provisioning run on a slow VM without an in-process renewer
+    [int]   ${LeaseTtlSeconds}   = 7200, # 2 h default; comfortably covers a ~40 min provisioning run on a slow VM without an in-process renewer
+    [switch]${AllowReboot}              # if the reboot provider dropped a flag and the run succeeded, schedule a reboot before exit
 )
 
 ${ErrorActionPreference} = "Stop"
@@ -330,6 +331,28 @@ finally {
         }
     } catch {
         Remove-Item -Force ${leasePath} -ErrorAction SilentlyContinue
+    }
+
+    # Reboot handling. The 'reboot' provider drops this flag at the end of the
+    # run if Windows reports a pending reboot. We honor it only on a clean run
+    # (exitCode == 0) and only when the caller passed -AllowReboot, so manual
+    # operators are not surprised by an unattended restart. The flag is
+    # consumed (deleted) before issuing the shutdown so a re-entry after the
+    # reboot does not see stale state. See compare-mastw/GAPS.md "Reboot
+    # handling after provisioning" and the REBOOT ME pattern at line 175.
+    try {
+        ${rebootFlag} = Join-Path ${mastRoot} 'state\reboot-requested.flag'
+        if ((Test-Path ${rebootFlag}) -and $script:exitCode -eq 0) {
+            if (${AllowReboot}) {
+                Write-Log ("REBOOT_SCHEDULE flag={0} -AllowReboot=true; issuing shutdown /r /t 60" -f ${rebootFlag})
+                Remove-Item -Force ${rebootFlag} -ErrorAction SilentlyContinue
+                & shutdown.exe /r /t 60 /c "MAST provisioning reboot (pending changes detected)" | Out-Null
+            } else {
+                Write-Log ("REBOOT_DEFERRED flag={0} -AllowReboot not set; next autonomous cycle will reboot." -f ${rebootFlag})
+            }
+        }
+    } catch {
+        Write-Log ("REBOOT_HANDLER_ERROR " + $_.Exception.Message)
     }
 }
 

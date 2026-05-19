@@ -1,6 +1,7 @@
 ﻿{
   "name": "ascom",
   "version": "7.1.0",
+  "pin_target": "7.0-RC4 (mastw); current 7.1.0 - acquire older installer to downgrade. See compare-mastw/GAPS.md.",
   "description": "Install ASCOM Platform 7.1.0 and ASCOM Developer tools, enabling .NET 3.5 if needed.",
   "order": 30,
   "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-ascom.ps1\" -AssetsRoot \".\"",

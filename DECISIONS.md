@@ -2,6 +2,91 @@
 
 ---
 
+## [2026-05-18] Phase 1 closure of mastw vs VM gap: service name, proxy, bootstrap, reboot
+
+**Why:** `compare-mastw/GAPS.md` (2026-05-18) catalogued the divergences
+between the hand-built `mastw` unit and the automatically provisioned
+`mast-wis-01` VM. A subset of the gaps is cross-cutting infrastructure that
+must be reconciled before adding new providers makes sense: the service name
+is spelled differently on each side (so `Get-Service` calls break against the
+wrong machine), the VM is missing the Weizmann proxy env vars (silent network
+failures inside the lab), the bootstrap renames the OEM account in a way that
+strands `%USERPROFILE%` at `C:\Users\user` instead of `C:\Users\mast`, and
+provisioning runs leave a `pendingFileRename = True` state with no follow-up
+reboot. These four problems are addressed together; new-provider work
+(NoMachine Server, ImDisk + scheduled task, windows_exporter, openssh-server,
+Astrometry.net, MongoDB Compass) and version-pin downgrades stay deferred to
+Phase 2 because they need installer assets we do not yet have.
+
+**What:**
+
+- **Service-name canonicalization.** The Windows service is now spelled
+  `MAST-Unit` (hyphen) everywhere code reads or writes it: `provide-mast.ps1`
+  registers and manages it under that name, `verify-mast.ps1` and
+  `verify-diagnostics.ps1` reference it by hyphen, `vm/run-prov-test.py`'s
+  start/stop helpers updated, and the unit-side service definition in
+  `MAST_unit.2024-12-12/service/mast-service.ps1` uses the hyphen too.
+  Filesystem paths and repo names that contain the substring `MAST_unit`
+  (e.g. the `MAST_unit.2024-12-12` repo, the `services/mast-unit/` folder)
+  are left alone -- they are not the service name.
+- **`proxy` provider.** New `server/providers/proxy/` with
+  `provide-proxy.ps1` + `module.json`, order 5 so it runs before anything
+  that does network I/O. Sets machine-scope `http_proxy`, `https_proxy`,
+  `no_proxy` to the mastw values (`http://bcproxy.weizmann.ac.il:8080`,
+  no_proxy = `10.23.3.0/24,10.23.4.0/24`). Idempotent; reads back to verify
+  the values stuck before exiting.
+- **Bootstrap user-creation policy.** `client/bootstrap-winrm.ps1` no longer
+  renames the OEM `user` account to `mast`. It now creates a separate
+  `mast` local administrator (the existing block at lines 202-229 already
+  did this; the change is removing the rename block that ran before it).
+  `-FactoryUser` is preserved as a deprecated no-op so existing
+  autounattend invocations keep working. Forward-only: existing
+  `mast-wis-01` will be re-imaged rather than fixed in place.
+- **Reboot detection + orchestrator handling.** New `server/providers/reboot/`
+  runs last in the build module list and writes
+  `C:\MAST\state\reboot-requested.flag` when Windows reports a pending
+  reboot (`PendingFileRenameOperations`, CBS `RebootPending`, or Windows
+  Update `RebootRequired`). The detector always exits 0 so it cannot fail a
+  run. `execute-mast-provisioning.ps1` gains an `-AllowReboot` switch; in
+  its `finally`, after lease release, if `exitCode == 0` and `-AllowReboot`
+  was passed and the flag is present, it deletes the flag and issues
+  `shutdown /r /t 60`. `server/check-and-provision.ps1` now passes
+  `-AllowReboot`; manual operators get the deferred path by default.
+- **Version-pin TODO markers.** `ascom`, `phd2`, `zwo`, `planewave`, and
+  `python` module.json files gained a `pin_target` informational field
+  naming the mastw version target. `build-mast.ps1` ignores the field;
+  it exists so `Select-String pin_target server/providers/*/module.json`
+  surfaces the remaining downgrade work as Phase 2.
+
+**Implications:**
+
+- Units already in service with the old `MAST_unit` service name will keep
+  running until they are re-provisioned. The next provisioning run will see
+  no `MAST-Unit` service and register it; the old `MAST_unit` is not
+  migrated. Out of Phase 1 scope to clean up.
+- The reboot provider is conservative: it only suggests a reboot, never
+  forces one. The orchestrator gate (`-AllowReboot`) means manual runs of
+  `execute-mast-provisioning.ps1` will leave the flag in place and log a
+  deferred-reboot notice. The next autonomous cycle picks it up. This
+  matches the "REBOOT ME" pattern requested in GAPS.md.
+- New autounattend-installed VMs will end up with `C:\Users\mast\` as the
+  operational profile and an untouched OEM `user` account. The existing
+  `mast-wis-01` VM still has the stranded `C:\Users\user` profile and will
+  not be remediated -- we re-image instead.
+- The `proxy` provider hardcodes the Weizmann values. If MAST is ever
+  deployed at a site with a different web proxy, this provider needs to
+  read the values from `vault/creds.json` (or similar) rather than
+  baking them in. Out of scope for now; we have one site.
+- Phase 2 must still tackle: new providers (Astrometry.net, MongoDB
+  Compass, ImDisk + scheduled task, windows_exporter, NoMachine Server
+  replacing the Client, openssh-server, Wireshark/Npcap addition);
+  acquiring the older installer assets to actually act on the `pin_target`
+  markers; and the Win11-vs-Win10-IoT SKU question (accepted as
+  non-actionable in GAPS.md but worth a follow-up if real production
+  hardware ships).
+
+---
+
 ## [2026-05-17] Resilient WinRM Receive loop; decouple WSMan op timeout from script timeout
 
 **Why:** The host orchestrator was repeatedly aborting successful unit-side

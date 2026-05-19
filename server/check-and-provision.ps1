@@ -583,13 +583,16 @@ foreach ($unit in $units) {
                     param($stagePath, $provSrv, $smbUsr, $smbPwd, $runId, $heldBy)
                     Set-ExecutionPolicy Bypass -Scope Process -Force
                     # Suppress script output so the WinRM return value is just the exit code.
+                    # -AllowReboot: autonomous orchestrator runs are allowed to schedule a
+                    # post-run restart when the reboot provider flag is set.
                     $null = & (Join-Path $stagePath 'execute-mast-provisioning.ps1') `
                         -StagingPath $stagePath `
                         -ProvServer   $provSrv `
                         -SmbUser      $smbUsr `
                         -SmbPass      $smbPwd `
                         -RunId        $runId `
-                        -HeldBy       $heldBy
+                        -HeldBy       $heldBy `
+                        -AllowReboot
                     return [int]$LASTEXITCODE
                 } -ArgumentList $unitStage, $provServer, $smbUser, $smbPass, $RunId, $provServer
             } finally {

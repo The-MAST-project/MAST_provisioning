@@ -707,7 +707,7 @@ def phase_clear_unit_logs(unit: winrm.Session) -> None:
     """Stop MAST_unit and delete its NSSM stdout/stderr logs so the next run starts clean."""
     with timed("CLEAR UNIT LOGS PHASE"):
         ps = (
-            "Stop-Service -Name 'MAST_unit' -Force -ErrorAction SilentlyContinue\n"
+            "Stop-Service -Name 'MAST-Unit' -Force -ErrorAction SilentlyContinue\n"
             f"$d = '{MAST_UNIT_SVC_LOG_DIR}'\n"
             "foreach ($f in @('stdout.log', 'stderr.log')) {\n"
             "    $p = Join-Path $d $f\n"
@@ -730,7 +730,7 @@ def phase_start_mast_unit(unit: winrm.Session) -> None:
     log("[start-mast-unit] Starting MAST_unit service...")
     r = run_ps(
         unit,
-        "Start-Service -Name 'MAST_unit' -ErrorAction SilentlyContinue; "
+        "Start-Service -Name 'MAST-Unit' -ErrorAction SilentlyContinue; "
         "Write-Host '[start-mast-unit] done'",
         label="start-mast-unit",
         timeout_s=60,

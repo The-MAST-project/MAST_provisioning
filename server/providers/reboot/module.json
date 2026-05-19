@@ -1,0 +1,10 @@
+{
+  "name": "reboot",
+  "version": "1.0",
+  "description": "Detect Windows pending-reboot state at end of run; drop C:\\MAST\\state\\reboot-requested.flag for the orchestrator to act on.",
+  "order": 999,
+  "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-reboot.ps1\"",
+  "commandfiles": [
+    "provide-reboot.ps1"
+  ]
+}

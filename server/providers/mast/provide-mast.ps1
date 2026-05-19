@@ -314,11 +314,11 @@ try {
                         Write-MastProvisionEvent ("repo PULL DONE name={0} HEAD={1}" -f ${repoName}, ${newHead})
                     }
                     if (${repoName} -like 'MAST_unit*') {
-                        ${svcPull} = Get-Service -Name 'MAST_unit' -ErrorAction SilentlyContinue
+                        ${svcPull} = Get-Service -Name 'MAST-Unit' -ErrorAction SilentlyContinue
                         if ($null -ne ${svcPull}) {
-                            Write-MastProvisionEvent ("Pull: restarting MAST_unit service after update name={0}" -f ${repoName})
-                            Restart-Service -Name 'MAST_unit' -Force -ErrorAction SilentlyContinue
-                            Write-MastProvisionEvent ("Pull: MAST_unit restart issued name={0}" -f ${repoName})
+                            Write-MastProvisionEvent ("Pull: restarting MAST-Unit service after update name={0}" -f ${repoName})
+                            Restart-Service -Name 'MAST-Unit' -Force -ErrorAction SilentlyContinue
+                            Write-MastProvisionEvent ("Pull: MAST-Unit restart issued name={0}" -f ${repoName})
                         }
                     }
                 }
@@ -330,10 +330,10 @@ try {
             }
             # Force mode: stop service if running, then remove for re-clone.
             if (${repoName} -like 'MAST_unit*') {
-                ${svc} = Get-Service -Name 'MAST_unit' -ErrorAction SilentlyContinue
+                ${svc} = Get-Service -Name 'MAST-Unit' -ErrorAction SilentlyContinue
                 if (${svc} -and ${svc}.Status -eq 'Running') {
-                    Write-MastProvisionEvent ("Force: stopping MAST_unit service before re-clone name={0}" -f ${repoName})
-                    Stop-Service -Name 'MAST_unit' -Force -ErrorAction SilentlyContinue
+                    Write-MastProvisionEvent ("Force: stopping MAST-Unit service before re-clone name={0}" -f ${repoName})
+                    Stop-Service -Name 'MAST-Unit' -Force -ErrorAction SilentlyContinue
                 }
             }
             Write-MastProvisionEvent ("Force: removing existing clone for re-clone name={0}" -f ${repoName})
@@ -411,16 +411,16 @@ try {
             Write-MastProvisionEvent ("pip SKIP (no requirements.txt) name={0}" -f ${repoName})
             Write-Host "No requirements.txt in ${repoName}, skipping pip install."
         }
-        # --- Register MAST_unit as a Windows service via NSSM ---
+        # --- Register MAST-Unit as a Windows service via NSSM ---
         if (${repoName} -like 'MAST_unit*') {
             ${nssmExe} = 'C:\Program Files\nssm\nssm.exe'
-            ${serviceName} = 'MAST_unit'
+            ${serviceName} = 'MAST-Unit'
             ${unitEntryPoint} = Join-Path ${targetDir} 'src\app.py'
             ${venvPythonSvc} = Join-Path ${venvPath} 'Scripts\python.exe'
             if (-not (Test-Path -LiteralPath ${nssmExe})) {
-                Write-Warning "NSSM not found at ${nssmExe}; skipping MAST_unit service registration."
+                Write-Warning "NSSM not found at ${nssmExe}; skipping MAST-Unit service registration."
             } elseif (-not (Test-Path -LiteralPath ${unitEntryPoint})) {
-                Write-Warning ("MAST_unit entry point not found at {0}; skipping service registration." -f ${unitEntryPoint})
+                Write-Warning ("MAST-Unit entry point not found at {0}; skipping service registration." -f ${unitEntryPoint})
             } else {
                 ${existingSvc} = Get-Service -Name ${serviceName} -ErrorAction SilentlyContinue
                 if ($null -eq ${existingSvc}) {

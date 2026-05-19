@@ -1,6 +1,7 @@
 ﻿{
   "name": "python",
   "version": "3.12.0",
+  "pin_target": "3.12.2 (mastw); current 3.12.0 - acquire python-3.12.2-amd64.exe to align. See compare-mastw/GAPS.md.",
   "description": "Install Python 3.12.0 and virtualenv.",
   "order": 20,
   "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-python.ps1\" -AssetsRoot \".\" -InstallDir \"C:\\Python312\"",

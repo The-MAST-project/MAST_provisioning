@@ -6,19 +6,19 @@
 
 .DESCRIPTION
   Production units resolve by corporate DNS. On a developer PC with VirtualBox host-only DHCP,
-  mast01 does not resolve until something maps hostname -> IP.
+  mast-wis-01 does not resolve until something maps hostname -> IP.
 
   This script discovers the guest IPv4 (Guest Additions Net/*/V4/IP, preferring the host-only
   subnet; skips VirtualBox NAT 10.0.2.x which is often Net/0), else NIC1 MAC match on the host-only
   subnet, else probe WinRM HTTP 5985 among VirtualBox-style neighbors,
   then writes a marked block into
-  %SystemRoot%\System32\drivers\etc\hosts so mast01 (or another name) resolves like production.
+  %SystemRoot%\System32\drivers\etc\hosts so mast-wis-01 (or another name) resolves like production.
 
   Must run elevated (hosts file is protected). Lab-only; do not run on the production
   provisioning server when real DNS already serves mastNN.
 
 .PARAMETER Hostname
-  Short name to register (default mast01). Same as unit-registry hostname.
+  Short name to register (default mast-wis-01). Same as unit-registry hostname.
 
 .PARAMETER VmName
   VirtualBox VM name (default mast-unit).
@@ -35,7 +35,7 @@
 [CmdletBinding()]
 param(
     [ValidatePattern('^[A-Za-z0-9-]{1,15}$')]
-    [string]$Hostname = 'mast01',
+    [string]$Hostname = 'mast-wis-01',
     [string]$VmName = 'mast-unit',
     [string]$IpAddress = '',
     [string]$HostOnlyPrefix = '192.168.56',
@@ -115,7 +115,7 @@ function Get-IpFromGuestProperty {
         }
         return $onHostOnly[0]
     }
-    # Default VBox NAT segment -- never use for mast01 on the host (wrong interface).
+    # Default VBox NAT segment -- never use for mast-wis-01 on the host (wrong interface).
     $nonVboxNat = @($candidates | Where-Object { $_ -notmatch '^10\.0\.2\.' })
     if ($nonVboxNat.Count -eq 1) {
         Write-MastObsLine ("Guest Additions: using {0} (no {1}.x in GA props; not VBox NAT 10.0.2.*)." -f $nonVboxNat[0], $prefixBase)

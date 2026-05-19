@@ -51,11 +51,11 @@ foreach (${spec} in ${repoSpecs}) {
     }
 
     if (${name} -like 'MAST_unit*') {
-        ${svc} = Get-Service -Name 'MAST_unit' -ErrorAction SilentlyContinue
+        ${svc} = Get-Service -Name 'MAST-Unit' -ErrorAction SilentlyContinue
         if ($null -eq ${svc}) {
-            [void]${issues}.Add("MAST_unit service not registered")
+            [void]${issues}.Add("MAST-Unit service not registered")
         } elseif (${svc}.Status -ne 'Running') {
-            [void]${issues}.Add(("MAST_unit service registered but not running (status={0})" -f ${svc}.Status))
+            [void]${issues}.Add(("MAST-Unit service registered but not running (status={0})" -f ${svc}.Status))
         }
     }
 }
