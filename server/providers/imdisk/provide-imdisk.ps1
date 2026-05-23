@@ -56,9 +56,8 @@ try {
     Write-Host "Creating boot-time ramdisk activation task" | Tee-Object -FilePath ${logFile} -Append
 
     ${taskName} = "MAST-ImDisk-Ramdisk"
-    ${taskDescription} = "Create ImDisk 10GB ramdisk at D: on system startup"
-    # TBD: give imdisk.exe parameter with the pre-populated image file
-    ${taskAction} = New-ScheduledTaskAction -Execute ${imdiskExe} -Argument "-a -t vm -s 10G -m D: -p `"/fs:ntfs /q /y`""
+    ${taskDescription} = "Mount a ramdisk pre-loaded with astrometry.net indexes at system startup"
+    ${taskAction} = New-ScheduledTaskAction -Execute ${imdiskExe} -Argument "-a -m D: -t vm -f "C:\MAST\Shared\MAST-15GB-indexes-5202+5203.img""
     ${taskTrigger} = New-ScheduledTaskTrigger -AtStartup
     ${taskPrincipal} = New-ScheduledTaskPrincipal -UserID "NT AUTHORITY\SYSTEM" -LogonType ServiceAccount -RunLevel Highest
 
