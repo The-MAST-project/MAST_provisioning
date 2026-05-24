@@ -2,5 +2,4 @@ server/tokens/
 staging/
 vault/
 
-# Huge (30GB) file
-server/providers/cygwin/assets/astrometry.tgz
+# server/providers/cygwin/assets/astrometry.tgz
