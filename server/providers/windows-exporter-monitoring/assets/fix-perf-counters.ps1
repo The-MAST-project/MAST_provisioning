@@ -38,7 +38,7 @@
 
 .EXAMPLE
     .\Fix-MastPerfCounters.ps1
-    Run with defaults. Idempotent — safe to run on already-fixed units.
+    Run with defaults. Idempotent  -  safe to run on already-fixed units.
 
 .EXAMPLE
     .\Fix-MastPerfCounters.ps1 -WindowsExporterServiceName 'prometheus-windows-exporter'
@@ -46,7 +46,9 @@
 
 .NOTES
     Must be run as Administrator.
-    Logs to C:\ProgramData\MAST\provisioning\Fix-MastPerfCounters-<timestamp>.log
+    Logs into the MAST session log directory (C:\MAST\logs\sessions\<stamp>\)
+    when run via the provisioning pipeline; falls back to a standalone subdir
+    if mast-log.ps1 is not present alongside this script.
 #>
 
 [CmdletBinding()]
@@ -63,12 +65,20 @@ param(
 $ErrorActionPreference = 'Stop'
 $ScriptVersion = '1.0.0'
 
-# Logging
-$LogDir = 'C:\ProgramData\MAST\provisioning'
-if (-not (Test-Path $LogDir)) {
-    New-Item -Path $LogDir -ItemType Directory -Force | Out-Null
+# Logging: prefer the MAST shared logging convention (C:\MAST\logs\sessions\...)
+# via mast-log.ps1. Fall back to a sibling path under C:\MAST\logs so the script
+# remains runnable standalone (e.g. when invoked by an operator directly on the
+# unit, outside the provisioning pipeline).
+$_mastLogDot = Join-Path $PSScriptRoot 'mast-log.ps1'
+if (-not (Test-Path $_mastLogDot)) { $_mastLogDot = Join-Path $PSScriptRoot '..\..\..\server\lib\mast-log.ps1' }
+if (Test-Path $_mastLogDot) {
+    . $_mastLogDot
+    $LogDir = Get-MastLogSessionDir
+} else {
+    $LogDir = Join-Path $env:SystemDrive 'MAST\logs\sessions\standalone'
+    if (-not (Test-Path $LogDir)) { New-Item -Path $LogDir -ItemType Directory -Force | Out-Null }
 }
-$LogFile = Join-Path $LogDir ("Fix-MastPerfCounters-{0:yyyyMMdd-HHmmss}.log" -f (Get-Date))
+$LogFile = Join-Path $LogDir ("fix-perf-counters-{0:yyyyMMdd-HHmmss}.log" -f (Get-Date))
 
 function Write-Log {
     param(
@@ -115,7 +125,7 @@ Write-Log "OS: $($os.Caption) (build $($os.BuildNumber)), SKU $($os.OperatingSys
 
 Write-Log "Phase 1: Diagnosing perf counter state" -Level STEP
 
-# Count visible counter sets — healthy is ~190+, broken is ~8
+# Count visible counter sets  -  healthy is ~190+, broken is ~8
 $listSetCount = 0
 try {
     $listSetCount = (Get-Counter -ListSet * -ErrorAction Stop).Count
@@ -192,7 +202,7 @@ $providersToDisable = @($knownBrokenProviders + $failingProviders) | Sort-Object
 foreach ($provider in $providersToDisable) {
     $regPath = "HKLM:\SYSTEM\CurrentControlSet\Services\$provider\Performance"
     if (-not (Test-Path $regPath)) {
-        Write-Log "Provider '$provider' has no Performance subkey — skipping." -Level INFO
+        Write-Log "Provider '$provider' has no Performance subkey  -  skipping." -Level INFO
         continue
     }
     try {
@@ -253,7 +263,7 @@ if ($WindowsExporterServiceName) {
         Start-Service -Name $WindowsExporterServiceName
         Write-Log "$WindowsExporterServiceName restarted." -Level OK
     } catch [Microsoft.PowerShell.Commands.ServiceCommandException] {
-        Write-Log "windows_exporter service '$WindowsExporterServiceName' not found — skipping restart." -Level INFO
+        Write-Log "windows_exporter service '$WindowsExporterServiceName' not found  -  skipping restart." -Level INFO
     } catch {
         Write-Log "Could not restart '$WindowsExporterServiceName': $_" -Level WARN
     }

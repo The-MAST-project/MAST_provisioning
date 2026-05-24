@@ -1436,7 +1436,7 @@ the relevant unit profiles (see **Unit profiles** in Phase 2).
 
 | Module | Purpose | Notes |
 |--------|---------|-------|
-| `windows-exporter` | Base Prometheus scrape target for OS-level metrics (CPU, memory, disk, network, services, scheduled tasks). | Install MSI from `assets/`; configure collectors (`cpu`, `cs`, `logical_disk`, `memory`, `net`, `os`, `service`, `system`, `scheduled_task`, `textfile`). Open TCP 9182 to the monitoring subnet only. Enable the `textfile` collector with directory `C:\MAST\status\textfile_inputs\` so other modules can drop `*.prom` snippets. |
+| `windows-exporter-monitoring` | Base Prometheus scrape target for OS-level metrics (CPU, memory, disk, network, services, scheduled tasks). | Install MSI from `assets/`; configure collectors (`cpu`, `cs`, `logical_disk`, `memory`, `net`, `os`, `service`, `system`, `scheduled_task`, `textfile`). Open TCP 9182 to the monitoring subnet only. Enable the `textfile` collector with directory `C:\MAST\status\textfile_inputs\` so other modules can drop `*.prom` snippets. |
 | `mast-exporter` | MAST-specific HTTP server exposing `/metrics` (manifest, module versions, service state, lease, availability, drift) and the `/status/*` + `/health` routes defined under **Unit state via HTTP endpoint**. | Small NSSM-managed service. Reads `installed-manifest.json`, `availability.json`, `execute-lease.json`, `last-execute.json`, and (optionally) the live filesystem probe. Bound to the management subnet. Versioned independently of MAST app code so observability does not block app deploys. |
 | `mast-textfile-writer` | Scheduled task that atomically writes `mast.prom` into the windows_exporter textfile collector directory. | Alternative or supplement to `mast-exporter` for sites that prefer the textfile-collector pattern. One canonical implementation in `client/mast-write-textfile-metrics.ps1`; the module just installs the scheduled task entry. |
 | `log-shipper` | Tail NSSM stdout/stderr logs (`MAST_unit`, `PWI4`, `PWShutter`) and forward to the central log store (Loki / Elastic). | Pick one of Promtail, Fluent Bit, or Elastic Agent at the **fleet** level -- not per-unit. Config is a profile-level template that names the central endpoint and the file list. Service runs under a constrained account with read-only access to the log paths. |
@@ -1446,7 +1446,7 @@ the relevant unit profiles (see **Unit profiles** in Phase 2).
 
 **Sequencing:**
 
-1. `windows-exporter` lands first -- gives the dashboard immediate signal (CPU,
+1. `windows-exporter-monitoring` lands first -- gives the dashboard immediate signal (CPU,
    disk, services) with no MAST-specific code.
 2. `mast-exporter` (or `mast-textfile-writer`) lands second -- exposes manifest,
    lease, and availability so the dashboard can answer "is mast03 in maintenance
@@ -1460,7 +1460,7 @@ the relevant unit profiles (see **Unit profiles** in Phase 2).
 **Module set membership:** these modules are added to the **observability**
 profile (or to the default profile, depending on site policy) -- not hardcoded
 into every unit's module list. A dev VM running `run-prov-test.py` should be
-able to opt out of `log-shipper` and `windows-exporter` to keep test cycles fast.
+able to opt out of `log-shipper` and `windows-exporter-monitoring` to keep test cycles fast.
 
 **Drift detection alignment:** each new module participates in `payload_hash`
 and `module_versions` like any other. The exporter must read its own version
@@ -1469,7 +1469,7 @@ from `installed-manifest.json` so the dashboard can show "mast05 is running
 plane must not be a blind spot in its own drift detection.
 
 **Prov-server side:** the provisioning server itself needs a parallel set of
-agents -- `windows-exporter` for OS metrics, plus a `prov-server-exporter` that
+agents -- `windows-exporter-monitoring` for OS metrics, plus a `prov-server-exporter` that
 reads `last-run.json`, tails `activity.csv` and `package-timings.csv`, and emits
 the `mast_prov_*` and `mast_pkg_*` metrics specified under **Package
 installation timing and statistics** and **Heartbeats and liveness**. The prov
@@ -1607,12 +1607,12 @@ remain the **deep dive** for incidents. Prometheus and the central dashboard pro
 | 12 | Introduce `unit-profiles.json` (or `profiles/`) and migrate `unit-registry.json` entries to reference a profile; remove duplicated `modules` arrays; support `modules_add` / `modules_remove` overrides | **Phase 2** |
 | 13 | DRY the staging area: stage shared payloads once per profile/content hash instead of per-host; add `STAGING_PRUNE` cleanup of unreferenced staged content | **Phase 2** |
 | 14 | Unit-side HTTP status/health endpoint (`/health`, `/status/availability`, `/status/manifest`, `/status/lease`, `/status/last-run`) wired to provisioning state files; MAST scheduler reads availability over HTTP instead of WinRM | **Phase 3** |
-| 15 | Add `windows-exporter` provider module; open scrape port to monitoring subnet; enable textfile collector | **Phase 3** |
+| 15 | Add `windows-exporter-monitoring` provider module; open scrape port to monitoring subnet; enable textfile collector | **Phase 3** |
 | 16 | Add `mast-exporter` provider module (or `mast-textfile-writer` scheduled-task module) emitting `mast_payload_hash`, `mast_module_version_info`, `mast_unit_available`, `mast_pkg_*`, and hosting `/status/*` + `/health` | **Phase 3** |
 | 17 | Add `log-shipper` provider module (Promtail / Fluent Bit / Elastic Agent -- fleet-level choice) tailing NSSM stdout/stderr to central log store | **Phase 3** |
 | 18 | Add `ntp-sync` provider module with drift smoke check; resolves clock-skew open question | **Phase 1** |
 | 19 | Add `pswindowsupdate` provider module (prereq for Phase 2 Windows Update orchestration; also feeds update-pending metrics) | **Phase 2** |
-| 20 | `server/install-observability.ps1` on the prov server: install windows-exporter + `prov-server-exporter` reading `last-run.json`, `activity.csv`, `package-timings.csv` | **Phase 3** |
+| 20 | `server/install-observability.ps1` on the prov server: install windows-exporter-monitoring + `prov-server-exporter` reading `last-run.json`, `activity.csv`, `package-timings.csv` | **Phase 3** |
 | 21 | Provision Prometheus + Grafana + Alertmanager (+ Loki if log-shipper uses it); commit dashboard JSON and alert rules to the repo; document standard dashboard UIDs and template variables | **Phase 3** |
 
 ---

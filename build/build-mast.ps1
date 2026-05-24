@@ -14,6 +14,7 @@ param(
   [string]${HostName},
   [string[]]${Modules} = @(
     'proxy',
+    'openssh-server',
     'ascom',
     'chrome',
     'cygwin',
@@ -32,6 +33,7 @@ param(
     'vscode',
     'wireshark',
     'zwo',
+    'windows-exporter-monitoring',
     'reboot'
     ), # your module order
   # Dev/test: allow missing NoMachine license files (skip staging nomachine.lic).

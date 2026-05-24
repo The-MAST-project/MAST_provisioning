@@ -1,4 +1,165 @@
-# MAST Provisioning — Architecture Decisions
+# MAST Provisioning - Architecture Decisions
+
+---
+
+## [2026-05-24] Merge upstream/main: monitoring assets, astrometry.tgz, imdisk filename
+
+**Why:** The upstream The-MAST-project/MAST_provisioning `main` advanced
+three commits beyond our fork point with material we needed: a windows
+performance-counter repair script + windows_exporter MSI, a stripped
+astrometry.tgz suitable to ship in-tree, and a refined imdisk action
+pointing at the canonical pre-built indexes image. Our staged Phase 2 WIP
+had a parallel `windows-exporter` provider authored against a missing MSI;
+the upstream merge supplies the asset and the perf-counter repair we
+needed anyway.
+
+**What:**
+
+- **Added `upstream` remote** pointing at
+  `github.com/The-MAST-project/MAST_provisioning.git`. Origin remains the
+  user's fork.
+- **Merged `upstream/main` into `eli/vm-provisioning`** (merge commit on
+  the branch). Conflicts in `.gitignore` and `provide-imdisk.ps1`
+  resolved in the merge commit; the imdisk conflict was effectively
+  reconciled by the follow-on Phase 2 reshape (see [2026-05-19] entry
+  below) which already implements the file-backed mount behaviour
+  upstream wanted - we only carried over upstream's authoritative
+  filename `MAST-15GB-indexes-5202+5203.img`.
+- **`server/providers/monitoring/` collapsed into
+  `server/providers/windows-exporter-monitoring/`.** Upstream shipped a
+  `monitoring` provider with a TODO-stub `provide-monitoring.ps1`, no
+  `module.json`, and useful assets (windows_exporter 0.31.7 MSI +
+  `fix-perf-counters.ps1`). Our staged WIP had a methodology-aligned
+  `windows-exporter` provider already integrated with `mast-log.ps1`.
+  Kept our provider as canonical, moved upstream's MSI and the
+  perf-counter repair into our `assets/`, deleted upstream's
+  `monitoring/` directory, then renamed our provider to
+  `windows-exporter-monitoring` so the build-list name reads as the
+  metrics-export piece (other monitoring providers may follow). The
+  provider now calls `fix-perf-counters.ps1` before installing the MSI
+  whenever the asset is present.
+- **`fix-perf-counters.ps1` ported to MAST log conventions.** Upstream's
+  script logged into `C:\ProgramData\MAST\provisioning\`. Replaced that
+  with a soft-fail dot-source of `mast-log.ps1` + `Get-MastLogSessionDir`,
+  falling back to `C:\MAST\logs\sessions\standalone\` when the script is
+  invoked outside the provisioning pipeline. Also stripped em dashes to
+  satisfy CLAUDE.md's ASCII-only rule for executable scripts.
+- **`server/providers/cygwin/assets/astrometry.tgz`** is now checked in
+  (upstream's "without indexes" variant). Commented out the matching
+  `.gitignore` entry so the in-tree file is tracked; kept the comment as
+  a reminder that the full ~30 GB version is intentionally *not* what
+  lives in the repo.
+
+**Implications:**
+
+- The merge is the first time we have pulled from upstream since the
+  branch diverged; the `upstream` remote now lives in `.git/config` and
+  future fetches should re-use it (`git fetch upstream`).
+- Our fork's `origin/main` is still at the pre-merge tip f9ee7ed.
+  Synchronising it is a separate decision and is intentionally deferred
+  - the autonomous provisioning work on `eli/vm-provisioning` has not
+  been promoted to main yet.
+- `windows-exporter-monitoring` and `cygwin` (with astrometry.tgz) are
+  now both enabled by default. The remaining asset-acquisition gap is
+  `npcap-*.exe` for the wireshark provider.
+- Anything that previously referenced the legacy `windows-exporter`
+  name (build configs, external docs) needs renaming. The only in-tree
+  references at merge time were in `build/build-mast.ps1` and
+  `DECISIONS.md`; both were updated.
+
+---
+
+## [2026-05-19] Phase 2 of mastw vs VM gap: new providers, imdisk reshape, Compass enablement
+
+**Why:** Phase 1 (2026-05-18 entry below) closed the cross-cutting gaps but
+deferred new-provider work, version pins, and the ImDisk reshape. The user
+re-imaged the VM with Phase 1 changes and we now extend the provider set to
+close the remaining GAPS.md items that do not require third-party installer
+assets we have not yet acquired.
+
+**What:**
+
+- **openssh-server provider** (new, `server/providers/openssh-server/`).
+  Installs the Windows OpenSSH Server optional capability, sets `sshd` to
+  Automatic and starts it, opens TCP 22 inbound, and asserts
+  `PasswordAuthentication yes` in `sshd_config` (matches mastw, where SSH
+  with `mast` / `physics` is the working entry point). Order 8 -- runs very
+  early so the inbound channel is available for diagnostics even if a later
+  provider fails. Added to `build-mast.ps1` module list. No asset; uses the
+  in-box capability.
+- **windows-exporter-monitoring provider** (new,
+  `server/providers/windows-exporter-monitoring/`). Provider script +
+  module.json install the official MSI as a LocalSystem auto-start service
+  listening on TCP 9182 and open the matching firewall rule. Now enabled in
+  the build module list (the MSI was supplied by the upstream merge below).
+  Also runs `fix-perf-counters.ps1` first to repair Perflib enumeration on
+  IoT LTSC images where windows_exporter's PerfData collectors otherwise
+  silently drop core OS series. The provider name carries the
+  `-monitoring` suffix to make it clear from the build module list that it
+  is the metrics-export piece (other monitoring providers - log forwarders,
+  alert agents - may join later).
+- **MongoDB Compass enabled in mongodb-client.** The existing
+  `mongodb-client` provider already ships `mongodb-compass-1.43.0-win32-x64.exe`
+  and has install logic gated by `-NoCompass`. Flipped the module.json
+  command to drop the `-NoCompass` flag so Compass installs alongside the
+  client tools. No new provider folder; the parallel-provider sketch in the
+  plan was redundant once we noticed the existing wiring.
+- **Astrometry.net Local Solver is *already* in the cygwin provider** (lines
+  98-106 of `provide-cygwin.ps1`). The optional `astrometry.tgz` asset is
+  extracted into `C:\cygwin64\usr\local\astrometry`. The GAPS.md item is
+  therefore an asset-shipping question, not a code question -- the cygwin
+  provider must be staged with a real `astrometry.tgz` (currently TestMode-
+  exempt at `build-mast.ps1` line 347, so dev builds skip it). Once the
+  index bundle is available, drop it under `server/providers/cygwin/assets/`
+  and remove the TestMode exemption to make it required for prod builds.
+- **ImDisk reshape: ramdisk -> file-backed persistent mount.**
+  `provide-imdisk.ps1` previously registered a startup task that created an
+  empty 10 GB ramdisk at D: each boot. That diverged from mastw, which
+  mounts `D:` from `C:\MAST\Shared\MAST-10GB-with-indexes.img` so the
+  indexes survive reboots. The provider now (a) ensures `C:\MAST\Shared\`
+  exists, (b) warns if the `.img` is absent at provider-run time without
+  failing the run, (c) registers a new task `MAST-ImDisk-Persistent` whose
+  action is `imdisk -a -m D: -f "<image>"` triggered AtStartup, and (d)
+  unregisters the legacy `MAST-ImDisk-Ramdisk` task on machines that have
+  it. The image file is supplied out-of-band per GAPS.md.
+- **Wireshark + Npcap.** `provide-wireshark.ps1` now looks for
+  `npcap-*.exe` under `AssetsRoot` after the Wireshark install and runs it
+  silently with `/loopback_support=yes /winpcap_mode=yes /admin_only=no`
+  (matches mastw's capture posture). The provider gracefully no-ops if no
+  Npcap installer is found and logs a `[WARN]` line. `module.json`
+  commandfiles is intentionally NOT updated, because build-mast is strict
+  about commandfiles existing; once Npcap is acquired, add the asset and a
+  matching commandfiles entry (or a TestMode exemption).
+- **build-mast.ps1 module list.** Added `'openssh-server'` near the top
+  (after `proxy`) and `'windows-exporter-monitoring'` near the bottom
+  (after `zwo`, before `reboot`).
+
+**Implications:**
+
+- The new VM should now end up with sshd reachable on TCP 22 with
+  `mast` / `physics`, matching mastw's inbound posture. Once that lands,
+  GAPS.md line 169 ("mastw: WinRM stopped (Manual), sshd running") becomes
+  symmetric and the host can drive comparisons against either box.
+- MongoDB Compass is now installed by default. If a future site does not
+  want a GUI, add a host-specific flag rather than reverting the module
+  default.
+- `npcap-*.exe` is the remaining gap item still blocked on asset
+  acquisition. The windows_exporter MSI (0.31.7) and a stripped
+  `astrometry.tgz` arrived via the upstream merge described in the
+  [2026-05-24] entry above; both providers are now enabled by default.
+- The ImDisk task name change (`MAST-ImDisk-Ramdisk` ->
+  `MAST-ImDisk-Persistent`) is handled gracefully on upgrade: the provider
+  unregisters the old task before registering the new one. Any external
+  monitoring that grepped the old task name needs updating.
+- Version pinning (ASCOM 7.0 RC4, PHD2 2.6.14dev1mast03, ZWO 6.5.20,
+  PlaneWave Shutter 1.15.0, Python 3.12.2, ASIStudio 1.14.0.0) is also
+  blocked on asset acquisition. The `pin_target` informational field from
+  Phase 1 makes the queue greppable:
+  `Select-String pin_target server/providers/*/module.json`.
+- NoMachine Server verification (whether `enterprise-desktop` actually
+  installs the server side correctly) is deferred to the post-deploy
+  smoke test described in the Phase 2 plan -- no code change needed in
+  this push.
 
 ---
 

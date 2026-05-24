@@ -1,0 +1,11 @@
+{
+  "name": "openssh-server",
+  "version": "windows-capability",
+  "description": "Install Windows OpenSSH Server capability, set sshd Automatic, open TCP 22, allow password auth (matches mastw).",
+  "order": 8,
+  "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-openssh-server.ps1\"",
+  "commandfiles": [
+    "provide-openssh-server.ps1"
+  ],
+  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -Command \"${log}=Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\verify\\openssh-server-verify.log'; ${svc}=Get-Service -Name 'sshd' -ErrorAction SilentlyContinue; if (${svc} -and ${svc}.Status -eq 'Running') { Set-Content -Path ${log} -Value ('sshd Status=' + ${svc}.Status + ' StartType=' + ${svc}.StartType); Set-Content -Path (Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\smoke\\openssh-server-smoke.txt') -Value 'openssh_server_ok' } else { ('sshd not running or not registered') | Out-File -FilePath ${log} -Encoding UTF8; exit 1 }\""
+}
