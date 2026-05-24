@@ -5,8 +5,10 @@ vault/*
 !vault/creds.json.template
 !vault/.gitkeep
 
-# Huge (30GB) file
-server/providers/cygwin/assets/astrometry.tgz
+# Upstream now ships a stripped (no-indexes) astrometry.tgz under the cygwin provider,
+# so it is checked in rather than ignored. Keep this commented marker as a reminder
+# that the full ~30GB asset (with indexes) is not what lives in the repo.
+# server/providers/cygwin/assets/astrometry.tgz
 .venv/
 venv/
 __pycache__/
