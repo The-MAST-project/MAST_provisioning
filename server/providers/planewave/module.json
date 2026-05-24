@@ -1,15 +1,14 @@
 ﻿{
   "name": "planewave",
-  "version": "pwi-4.1.8",
-  "pin_target": "PlaneWave Shutter Control 1.15.0 on mastw (current bundle ships 1.12.0). Acquire newer Setup_PWShutter_1.15.0.exe. See compare-mastw/GAPS.md.",
-  "description": "Install PlaneWave Instruments telescope control software (PWI4) and PS3 CLI tools.",
+  "version": "pwi-4.1.6/shutter-1.15.0",
+  "description": "Install PlaneWave Instruments telescope control software (PWI4) and PS3 CLI tools. Pinned to mastw/mast00.",
   "order": 110,
   "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-planewave.ps1\" -AssetsRoot \".\"",
   "commandfiles": [
     "provide-planewave.ps1",
     "verify-planewave.ps1",
-    "assets/Setup_PWI_4.1.8_Final.exe",
-    "assets/Setup_PWShutter_1.12.0.exe",
+    "assets/Setup_PWI_4.1.6_Final.exe",
+    "assets/Setup_PWShutter_1.15.0.exe",
     "assets/ps3cli.zip"
   ],
   "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\verify-planewave.ps1\""

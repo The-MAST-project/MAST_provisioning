@@ -26,7 +26,7 @@ try {
     Write-MastPwLog "Starting PlaneWave installation..."
 
     # Install PWI4 (Inno Setup 6.x per vendor log -- use Inno silent flags, not NSIS /S.)
-    ${pwi4InstallerPath} = Join-Path ${AssetsRoot} "Setup_PWI_4.1.8_Final.exe"
+    ${pwi4InstallerPath} = Join-Path ${AssetsRoot} "Setup_PWI_4.1.6_Final.exe"
     if (-not (Test-Path ${pwi4InstallerPath})) {
         throw "PWI4 installer not found at ${pwi4InstallerPath}"
     }
@@ -41,7 +41,7 @@ try {
     )
     ${p} = Start-Process -FilePath ${pwi4InstallerPath} -ArgumentList ${argList} -PassThru -Wait -NoNewWindow
     try { ${p}.Refresh() } catch {}
-    Write-MastPwLog ("Setup_PWI_4.1.8_Final.exe exit code: {0}" -f ${p}.ExitCode)
+    Write-MastPwLog ("Setup_PWI_4.1.6_Final.exe exit code: {0}" -f ${p}.ExitCode)
     if ($null -ne ${p}.ExitCode -and ${p}.ExitCode -ne 0) {
         throw ("PWI4 installer exited with code {0}. See Inno log: {1}" -f ${p}.ExitCode, ${innoLog})
     }
@@ -82,7 +82,7 @@ try {
     }
 
     # Install PWShutter
-    ${pwShutterInstallerPath} = Join-Path ${AssetsRoot} "Setup_PWShutter_1.12.0.exe"
+    ${pwShutterInstallerPath} = Join-Path ${AssetsRoot} "Setup_PWShutter_1.15.0.exe"
     if (-not (Test-Path ${pwShutterInstallerPath})) {
         throw "PWShutter installer not found at ${pwShutterInstallerPath}"
     }
@@ -90,7 +90,7 @@ try {
     ${argListShutter} = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-')
     ${pShutter} = Start-Process -FilePath ${pwShutterInstallerPath} -ArgumentList ${argListShutter} -PassThru -Wait -NoNewWindow
     try { ${pShutter}.Refresh() } catch {}
-    Write-MastPwLog ("Setup_PWShutter_1.12.0.exe exit code: {0}" -f ${pShutter}.ExitCode)
+    Write-MastPwLog ("Setup_PWShutter_1.15.0.exe exit code: {0}" -f ${pShutter}.ExitCode)
     if ($null -ne ${pShutter}.ExitCode -and ${pShutter}.ExitCode -ne 0) {
         throw ("PWShutter installer exited with code {0}" -f ${pShutter}.ExitCode)
     }

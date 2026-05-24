@@ -1,14 +1,13 @@
 ﻿{
   "name": "phd2",
-  "version": "2.6.13dev7mast04",
-  "pin_target": "2.6.14dev1mast03 (mastw); current 2.6.13dev7mast04 - acquire newer mastw build to align. See compare-mastw/GAPS.md.",
-  "description": "Install PHD2 (PHD Guiding) for telescope autoguiding support.",
+  "version": "2.6.14dev1mast03",
+  "description": "Install PHD2 (PHD Guiding) for telescope autoguiding support. Pinned to mastw/mast00.",
   "order": 90,
   "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-phd2.ps1\" -AssetsRoot \".\" -InstallRoot \"C:\\Program Files\\PHD2\"",
   "commandfiles": [
     "provide-phd2.ps1",
     "verify-phd2.ps1",
-    "assets/phd2-x64-2.6.13dev7mast04-installer.exe"
+    "assets/phd2-x64-2.6.14dev1mast03-installer.exe"
   ],
   "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\verify-phd2.ps1\""
 }

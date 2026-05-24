@@ -25,7 +25,7 @@ Set-Content -LiteralPath ${logFile} -Encoding UTF8 -Value ("[{0}] VS Code provid
 try {
     Write-VscodeLog "Starting VS Code installation (UserSetup = per-user LOCALAPPDATA)."
 
-    ${installerPath} = Join-Path ${AssetsRoot} "VSCodeUserSetup-x64-1.105.1.exe"
+    ${installerPath} = Join-Path ${AssetsRoot} "VSCodeUserSetup-x64-1.121.0.exe"
     if (-not (Test-Path ${installerPath})) {
         throw "VS Code installer not found at ${installerPath}"
     }

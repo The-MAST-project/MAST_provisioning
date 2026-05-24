@@ -21,7 +21,7 @@ function Write-Phd2Log {
 Set-Content -LiteralPath ${logFile} -Encoding UTF8 -Value ("[{0}] provide-phd2.ps1 started." -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))
 
 try {
-    ${installerPath} = Join-Path ${AssetsRoot} "phd2-x64-2.6.13dev7mast04-installer.exe"
+    ${installerPath} = Join-Path ${AssetsRoot} "phd2-x64-2.6.14dev1mast03-installer.exe"
     if (-not (Test-Path ${installerPath})) {
         throw "PHD2 installer not found at ${installerPath}"
     }

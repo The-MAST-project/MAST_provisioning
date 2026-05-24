@@ -2,7 +2,7 @@
 [CmdletBinding()]
 param(
     [string]${AssetsRoot} = ${PSScriptRoot},
-    [string]${Installer}  = "python-3.12.0-amd64.exe",
+    [string]${Installer}  = "python-3.12.2-amd64.exe",
     [string]${InstallDir} = "C:\Python312"
 )
 

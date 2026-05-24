@@ -7,7 +7,7 @@
   - Enables NetFx3 using Enable-WindowsOptionalFeature, then (if that fails under WinRM)
     a one-shot scheduled task running dism.exe as SYSTEM, then in-session DISM with media sources.
   - Installs:
-      * ASCOMPlatform710.4707.exe
+      * AscomPlatform700.rc4.4448.exe
       * AscomDeveloper662.4294.NewCertificate (exe or msi; extension optional)
   - Writes logs under <SystemDrive>\MAST\logs\sessions\<timestamp>
   - Designed for WCD provisioning (unattended / no UI / no reboot).
@@ -291,18 +291,18 @@ if (-not $NoNet) {
 }
 
 # --- Locate installers ---
-$ascomPlatform = Get-InstallerPath -AssetsFolder $assets -BaseName "ASCOMPlatform710.4707"
+$ascomPlatform = Get-InstallerPath -AssetsFolder $assets -BaseName "AscomPlatform700.rc4.4448"
 
 if (-not $ascomPlatform) {
   Stop-Transcript | Out-Null
-  throw "ASCOM Platform installer not found (expected 'ASCOMPlatform710.4707.*' under $assets)."
+  throw "ASCOM Platform installer not found (expected 'AscomPlatform700.rc4.4448.*' under $assets)."
 }
 
 Write-Host "Found ASCOM Platform: $ascomPlatform"
 
 # --- Installers (order: Platform -> Developer) ---
 try {
-  Install-Silent -InstallerPath $ascomPlatform -DisplayName "ASCOM Platform 7.1.0"
+  Install-Silent -InstallerPath $ascomPlatform -DisplayName "ASCOM Platform 7.0 RC4"
   Write-Host "ASCOM Platform installed."
 } catch {
   Write-Warning "ASCOM Platform install failed: $($_.Exception.Message)"

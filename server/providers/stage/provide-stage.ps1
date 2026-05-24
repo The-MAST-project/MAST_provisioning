@@ -28,7 +28,7 @@ Set-Content -LiteralPath ${logFile} -Encoding UTF8 -Value `
     ("[{0}] provide-stage.ps1 started." -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))
 
 try {
-    ${installerPath} = Join-Path ${AssetsRoot} "xilab-1.20.19-win32_win64.exe"
+    ${installerPath} = Join-Path ${AssetsRoot} "xilab-1.20.12-win32_win64.exe"
     if (-not (Test-Path ${installerPath})) {
         throw "Stage installer not found at ${installerPath}"
     }
