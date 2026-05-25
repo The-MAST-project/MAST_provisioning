@@ -56,37 +56,13 @@ try {
         throw ("Wireshark executable not found after installation at {0}" -f ${wiresharkExe})
     }
 
-    # --- Npcap (optional, mastw ships it) ---
-    # Match mastw: install Npcap so live packet capture works. The Npcap
-    # installer is shipped under assets/ if available; if absent, log a
-    # warning and continue (Wireshark itself works without Npcap, captures
-    # just need to be on .pcap files).
-    ${npcapCandidates} = @(Get-ChildItem -Path ${AssetsRoot} -Filter 'npcap-*.exe' -File -ErrorAction SilentlyContinue)
-    if (${npcapCandidates}.Count -eq 0) {
-        Write-WiresharkLog "[WARN] No npcap-*.exe under AssetsRoot; skipping Npcap install (matches mastw's npcapwatchdog scheduled task purpose)."
+    # Npcap is installed by the dedicated 'npcap' provider (order 45, before this one).
+    # Verify it landed so Wireshark can actually capture; warn if not, do not fail.
+    ${npcapSvc} = Get-Service -Name 'npcap' -ErrorAction SilentlyContinue
+    if ($null -eq ${npcapSvc}) {
+        Write-WiresharkLog "[WARN] Npcap service not present; live capture will not work. Check the npcap provider."
     } else {
-        ${npcapPath} = ${npcapCandidates}[0].FullName
-        Write-WiresharkLog ("Running Npcap installer: {0}" -f ${npcapPath})
-        # Npcap supports an NSIS-style silent install with feature flags:
-        # /loopback_support=yes - capture from loopback adapter (matches mastw)
-        # /winpcap_mode=yes     - WinPcap compat for legacy callers
-        # /admin_only=no        - allow non-admin Wireshark sessions
-        ${npcapArgs} = @('/S', '/loopback_support=yes', '/winpcap_mode=yes', '/admin_only=no')
-        ${pn} = Start-Process -FilePath ${npcapPath} -ArgumentList ${npcapArgs} -PassThru -WindowStyle Hidden
-        ${ok} = ${pn}.WaitForExit(300000)
-        try { ${pn}.Refresh() } catch {}
-        if (-not ${ok}) {
-            try { ${pn}.Kill() } catch {}
-            Write-WiresharkLog "[WARN] Npcap installer timed out after 300s; continuing without."
-        } else {
-            Write-WiresharkLog ("Npcap installer exited. ExitCode={0}" -f ${pn}.ExitCode)
-            ${npcapSvc} = Get-Service -Name 'npcap' -ErrorAction SilentlyContinue
-            if ($null -eq ${npcapSvc}) {
-                Write-WiresharkLog "[WARN] Npcap service not registered after install."
-            } else {
-                Write-WiresharkLog ("Npcap service state: {0}" -f ${npcapSvc}.Status)
-            }
-        }
+        Write-WiresharkLog ("Npcap service state: {0}" -f ${npcapSvc}.Status)
     }
 
     Write-WiresharkLog "Wireshark installation completed successfully."

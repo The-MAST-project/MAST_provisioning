@@ -1,13 +1,14 @@
 <#
 .SYNOPSIS
-  Provision NoMachine: install Enterprise Client & Desktop, allocate and install a license.
+  Provision NoMachine: install Enterprise Desktop (server-side) and apply license if provided.
 
 .DESCRIPTION
   - Expects these under ${AssetsRoot}\nomachine\assets:
-      nomachine-enterprise-client_9.0.188_11_x64.exe
       nomachine-enterprise-desktop_9.0.188_11_x64.exe
       nomachine.lic .. server-10.lic
-  - Installs both packages silently (multiple flag attempts).
+  - Enterprise Desktop is the server-capable single-workstation product; it accepts
+    incoming NoMachine sessions. The Client is intentionally NOT installed.
+  - Installs silently (multiple flag attempts).
   - Allocates a license based on ${env:COMPUTERNAME} if not already allocated.
   - Installs the license file into the NoMachine licenses directory.
   - Tries to restart NoMachine service so license is picked up.
@@ -60,7 +61,6 @@ USAGE:
   .\provide-nomachine.ps1 [-AssetsRoot <path>] [-InstallDir <dir>] [-RequireLicense] [-Verbose] [-Help]
 
 FILES (under ${AssetsRoot}, preferably nomachine\assets):
-  nomachine-enterprise-client_9.0.188_11_x64.exe
   nomachine-enterprise-desktop_9.0.188_11_x64.exe
   nomachine.lic (optional unless -RequireLicense)
 "@ | Write-Host
@@ -77,14 +77,6 @@ Write-Verbose "Log: ${LogFile}"
 # --- Paths & Inputs ---
 ${assets} = ${AssetsRoot}
 ${nmAssets} = Join-Path ${assets} 'nomachine\assets'
-
-${clientExe} = $null
-foreach (${c} in @(
-    (Join-Path ${nmAssets} 'nomachine-enterprise-client_9.0.188_11_x64.exe'),
-    (Join-Path ${assets} 'nomachine-enterprise-client_9.0.188_11_x64.exe')
-  )) {
-  if (Test-Path -LiteralPath ${c}) { ${clientExe} = ${c}; break }
-}
 
 ${serverExe} = $null
 foreach (${c} in @(
@@ -104,10 +96,6 @@ foreach (${c} in @(
 }
 
 if (-not (Test-Path ${assets})) { Stop-Transcript | Out-Null; throw "Assets not found: ${assets}" }
-if (-not ${clientExe}) {
-  Stop-Transcript | Out-Null
-  throw "Missing Enterprise Client under ${nmAssets} or ${assets}"
-}
 if (-not ${serverExe}) {
   Stop-Transcript | Out-Null
   throw "Missing Enterprise Desktop under ${nmAssets} or ${assets}"
@@ -247,16 +235,12 @@ function Install-License {
 if (Test-NoMachineInstalled) {
   Write-Host "NoMachine already installed and nxservice running; skipping installer execution."
 } else {
-  # --- Install Client & Server (Desktop) ---
+  # --- Install Server (Enterprise Desktop) ---
   # The Inno Setup wrapper for NoMachine Enterprise Desktop has been observed to
   # not exit cleanly under /verysilent even after the service is up and binaries
   # are in place. Use a success probe + grace + forced terminate to avoid hangs.
   ${desktopProbe} = { Test-NoMachineInstalled }
-  ${clientProbe}  = { Test-Path -LiteralPath (Join-Path ${InstallDir} 'bin\nxplayer.exe') }
 
-  if (-not (Try-InstallExe -FilePath ${clientExe} -Tag 'NoMachine Client' -TimeoutSec 600 -SuccessProbe ${clientProbe})) {
-    Write-Warning "NoMachine Enterprise Client install may have failed. Check logs."
-  }
   if (-not (Try-InstallExe -FilePath ${serverExe} -Tag 'NoMachine Enterprise Desktop' -TimeoutSec 600 -SuccessProbe ${desktopProbe})) {
     Write-Warning "NoMachine Enterprise Desktop (server) install may have failed. Check logs."
   }
