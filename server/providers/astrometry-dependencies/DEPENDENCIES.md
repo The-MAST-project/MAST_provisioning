@@ -45,6 +45,56 @@ mid-solve -- hours of debugging if you didn't know to look here.
 | `netpbm`         | `pnmfile`, `pnmtofits`, `jpegtopnm` | `solve-field` calls `pnmfile` to identify uploaded image data. |
 | `python39-numpy` | `numpy.linalg` + extensions         | `removelines` and `uniformize` are Python helpers in `solve-field`'s pipeline; they `import numpy.linalg`. |
 
+## `cyglapack-0.dll` and the lapack PATH gotcha
+
+Cygwin's `lapack` package installs `cyglapack-0.dll` to
+`/usr/lib/lapack/` (NOT `/usr/bin/`) and ships
+`/etc/profile.d/lapack0.sh` which appends that directory to `PATH` in
+**interactive login shells only**. `numpy.linalg._umath_linalg.dll`
+depends on `cyglapack-0.dll`. When `solve-field` forks a non-login
+`/bin/sh` to invoke `removelines` or `uniformize`, the lapack path is
+never injected and the numpy DLL load fails with
+`ImportError: No such file or directory`.
+
+`provide-astrometry-dependencies.ps1` works around this by calling
+`Add-ToSystemPath -Dir C:\cygwin64\lib\lapack` after setup.exe runs,
+so the lapack directory is on the machine-scope `PATH` and every
+Cygwin subprocess inherits it regardless of how it was spawned.
+
+## Python `fitsio` (shipped as a wheel asset)
+
+`astrometry/util/fits.py` imports the first of `fitsio`, `pyfits`,
+`astropy.io.fits` it finds; none of the three are packaged for Cygwin.
+Of the three, `fitsio` is the smallest by far (a thin ctypes/cython
+wrapper around `cfitsio`, which we already have via `libcfitsio-devel`),
+so we ship a pre-built `fitsio-*-cp39-cp39-cygwin_*_x86_64.whl` as a
+provider asset and pip-install it at provision time. The provider step
+is offline (`--no-index`) and skips dependency resolution
+(`--no-deps`, because the dep is `numpy` which is already installed
+from Cygwin).
+
+### Building the fitsio wheel (one-time, per Cygwin minor bump)
+
+When `cygwin1.dll` or Python's minor version changes, the bundled
+wheel needs to be rebuilt because Cygwin Python wheels are tagged
+`cp39-cp39-cygwin_<cygver>_x86_64`. On a host that already has
+`astrometry-dependencies` installed:
+
+```bash
+FITSIO_USE_SYSTEM_FITSIO=1 \
+  CFLAGS='-I/usr/include/cfitsio' \
+  LDFLAGS='-L/usr/lib' \
+  python3 -m pip wheel --no-deps --no-build-isolation \
+    -w /tmp/fitsio-build fitsio
+```
+
+The `.whl` lands in `/tmp/fitsio-build/`; copy it to
+`server/providers/astrometry-dependencies/assets/` and bump the
+provider commit. The `FITSIO_USE_SYSTEM_FITSIO=1` flag tells the
+build to link against the Cygwin `cygcfitsio-10.dll` instead of
+fitsio's bundled C source (which fails to link on Cygwin because
+its build script does not pass `-lz`).
+
 ## Transitive dependencies (pulled in by the above)
 
 ### cfitsio's remote-fetch chain (curl + auth)

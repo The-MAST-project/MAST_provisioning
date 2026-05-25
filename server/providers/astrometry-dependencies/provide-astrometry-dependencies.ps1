@@ -86,6 +86,23 @@ try {
     }
     Write-Host "setup-x86_64.exe completed (exit ${exit})."
 
+    # Add the Cygwin lapack DLL directory to the *machine* PATH. Cygwin's
+    # lapack package installs cyglapack-0.dll under /usr/lib/lapack (NOT
+    # /usr/bin) and ships /etc/profile.d/lapack0.sh to append that path
+    # in interactive login shells. solve-field forks /bin/sh non-interactively,
+    # those subshells never source /etc/profile.d, and numpy's
+    # _umath_linalg.dll (which is reachable from removelines + uniformize,
+    # both Python helpers in solve-field's pipeline) fails to load with
+    # "ImportError: No such file or directory" because cyglapack-0.dll
+    # cannot be found. Putting the dir on the *machine* PATH means every
+    # process started after this provider runs inherits it, login shell or
+    # not.
+    ${lapackDir} = Join-Path ${CygwinRoot} 'lib\lapack'
+    if (Test-Path ${lapackDir}) {
+        Add-ToSystemPath -Dir ${lapackDir}
+        Write-Host "Added ${lapackDir} to system PATH (cyglapack-0.dll discovery)."
+    }
+
     # Run any pending Cygwin postinstall scripts that the new packages queued.
     # This is the same pattern used by provide-cygwin.ps1 and is what runs
     # peflagsall / rebaseall / passwd-grp / etc. Skipping this step leaves DLLs
@@ -104,6 +121,35 @@ exit 0
     if ($LASTEXITCODE -ne 0) {
         throw "Cygwin postinstall scripts failed (exit ${LASTEXITCODE})."
     }
+
+    # Install the bundled fitsio Python wheel. astrometry's util/fits.py
+    # imports fitsio (preferred backend) or astropy.io.fits or pyfits at
+    # runtime; without one, removelines/uniformize raise
+    # "'NoPyfits' object has no attribute 'open'" mid-pipeline. fitsio is
+    # not packaged for Cygwin, and pip-building it from PyPI on a target
+    # would require gcc + cfitsio-devel + numpy build deps and would also
+    # need to be online. We pre-build the wheel against the system
+    # cygcfitsio-10.dll once (see DEPENDENCIES.md "Building the fitsio
+    # wheel") and ship it as a provider asset so install is offline and
+    # deterministic.
+    ${fitsioWheel} = Get-ChildItem ${AssetsRoot} -Filter 'fitsio-*-cp39-cp39-cygwin_*_x86_64.whl' `
+        -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($null -eq ${fitsioWheel}) {
+        throw "fitsio wheel not found in assets/; expected fitsio-*-cp39-cp39-cygwin_*.whl"
+    }
+    Write-Host ("Installing bundled fitsio wheel: {0} ..." -f ${fitsioWheel}.Name)
+    # Translate the Windows path to a Cygwin path via cygpath, then pip-install.
+    & ${bashExe} -lc ("python3 -m pip install --quiet --no-warn-script-location --no-deps --no-index ""$(cygpath -u '{0}')""" `
+        -f ${fitsioWheel}.FullName)
+    if ($LASTEXITCODE -ne 0) {
+        throw "pip install of bundled fitsio wheel failed (exit ${LASTEXITCODE})."
+    }
+    # Confirm the import works after install.
+    & ${bashExe} -lc 'python3 -c "import fitsio; import sys; sys.exit(0 if fitsio.__version__ else 1)"'
+    if ($LASTEXITCODE -ne 0) {
+        throw "fitsio installed but cannot be imported (exit ${LASTEXITCODE})."
+    }
+    Write-Host "fitsio installed and importable."
 
     # Verification: spot-check that the key runtime DLLs landed in C:\cygwin64\bin.
     ${verifyDir} = Get-MastVerifyDir

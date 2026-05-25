@@ -2,6 +2,88 @@
 
 ---
 
+## [2026-05-25] Bundle fitsio wheel in astrometry-deps; put Cygwin lapack dir on machine PATH
+
+**Why:** After today's clean-rebase + Cygwin reinstall + reboot, the astrometry
+FITS smoke (`solve-field` on `C:\MAST\full-frame.fits`) still failed at
+`removelines` with two distinct errors -- traced through after a fair amount
+of debugging:
+
+1. `astrometry/util/fits.py` imports the first of `fitsio`, `pyfits`,
+   `astropy.io.fits` it finds. None of the three are packaged for Cygwin.
+   Without one, `fits.py` falls through to a `NoPyfits` sentinel and
+   `removelines` raises `AttributeError: 'NoPyfits' object has no attribute
+   'open'` mid-pipeline.
+2. `numpy.linalg._umath_linalg.dll` (Cygwin's numpy ships it under
+   `/usr/lib/python3.9/site-packages/numpy/linalg/`) depends on
+   `cyglapack-0.dll`, which Cygwin's `lapack` package installs to
+   `/usr/lib/lapack/` rather than `/usr/bin/`. Cygwin ships
+   `/etc/profile.d/lapack0.sh` that appends that dir to `PATH`, but only in
+   **interactive login shells**. `solve-field` forks `/bin/sh` non-interactively
+   to invoke Python helpers, the lapack path is never sourced, and the numpy
+   DLL load fails with `ImportError: No such file or directory` (the
+   Cygwin-specific Windows-loader translation of `ERROR_MOD_NOT_FOUND`).
+   This was the failure mode we spent the longest on today and at first
+   misdiagnosed as a rebase issue.
+
+Both failures only manifest in non-login subprocesses, which is the dominant
+pattern on a real provisioning unit (no interactive shells; everything runs
+under WinRM or scheduled tasks).
+
+**What:**
+
+- **fitsio wheel shipped as a provider asset.** Pre-built once on the dev box
+  with `FITSIO_USE_SYSTEM_FITSIO=1` (links against `cygcfitsio-10.dll`
+  instead of fitsio's bundled C source, which fails to link on Cygwin) and
+  copied to
+  `server/providers/astrometry-dependencies/assets/fitsio-1.2.6-cp39-cp39-cygwin_3_6_9_x86_64.whl`.
+  `provide-astrometry-dependencies.ps1` runs
+  `python3 -m pip install --no-index --no-deps <wheel>` after setup.exe
+  finishes, and verifies the import works. This is offline by design --
+  no PyPI dependency at provision time. `DEPENDENCIES.md` documents the
+  build recipe for the wheel ("Building the fitsio wheel" section) so the
+  next Cygwin minor bump knows how to refresh it.
+- **Machine PATH gains `C:\cygwin64\lib\lapack`.** Added via
+  `Add-ToSystemPath -Dir` in `provide-astrometry-dependencies.ps1`
+  immediately after setup.exe runs. Every Cygwin process started after this
+  provider (including all non-login `/bin/sh` children of solve-field)
+  inherits the new PATH, so `cyglapack-0.dll` is reachable without
+  requiring an interactive login shell to source
+  `/etc/profile.d/lapack0.sh`. `DEPENDENCIES.md` documents the
+  cyglapack-0.dll discovery problem and why this PATH addition is the
+  right fix.
+- **module.json**: `assets/fitsio-1.2.6-cp39-cp39-cygwin_3_6_9_x86_64.whl`
+  added to `commandfiles`; description updated to mention the lapack PATH
+  and fitsio steps so a glance at the provider lists tells you what runs
+  here.
+
+After both fixes, the FITS smoke against
+`C:\MAST\full-frame.fits` solves end-to-end on the dev box:
+`Field center: (RA,Dec) = (286.910786, 35.936774) deg` (Cygnus,
+36.3 x 24.7 arcmin field), with `.solved`, `.wcs`, `.axy`, `.corr`,
+`.match`, `.rdls`, and `.xyls` artifacts produced. The same fix path
+should work unchanged on a freshly-provisioned target.
+
+**Implications:**
+
+- The astrometry-dependencies provider now does three distinct things:
+  setup.exe install -> machine PATH extension -> bundled wheel install ->
+  postinstalls drain -> verify. The provider is no longer "just call
+  setup.exe"; if it ever needs to be re-derived for a different Cygwin
+  version, all four steps must be reproduced.
+- The bundled wheel is Cygwin-version-tagged
+  (`cygwin_3_6_9_x86_64`). When Cygwin in the baseline bumps a minor
+  version, the wheel must be rebuilt with the new tag. Stale wheels will
+  produce a clear pip error rather than a silent fallback, so this is
+  loud-failing.
+- `C:\cygwin64\lib\lapack` is now part of the system-wide PATH, which is
+  a small precedent: previously only providers that installed a Windows
+  app touched system PATH. The convention is now "if your provider needs
+  a non-`/usr/bin` Cygwin directory to be visible to non-login children,
+  add it explicitly."
+
+---
+
 ## [2026-05-25] Add netpbm + python39-numpy to astrometry-deps; add phd2-log-viewer and usbpcap providers; close several GAPS items
 
 **Why:** End-to-end debugging of the astrometry FITS smoke against
