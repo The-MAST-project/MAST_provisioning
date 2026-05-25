@@ -10,17 +10,22 @@ if (-not (Test-Path ${mastLogDot})) { ${mastLogDot} = Join-Path ${PSScriptRoot} 
 ${logDir}     = Get-MastLogSessionDir
 New-Item -ItemType Directory -Path ${logDir} -Force | Out-Null
 ${logFile}    = Join-Path ${logDir} "stage-install.log"
-# Also write to provisioning-execute.log so the orchestrator poller sees progress live.
-${execLog}    = Join-Path ${logDir} "provisioning-execute.log"
 
+# Do NOT also write to provisioning-execute.log directly. The orchestrator
+# (execute-mast-provisioning.ps1) holds that file open via Tee-Object for
+# the duration of every provider invocation; an unrelated Add-Content from
+# in here races into ERROR_SHARING_VIOLATION, which then bubbles up
+# (Stop-mode), the catch block tries to write its own error to the SAME
+# file, that throws again, and the orchestrator deadlocks reading a pipe
+# that never closed. Trust the orchestrator's stream capture -- our
+# Write-Host below is already mirrored to provisioning-execute.log by
+# the parent. (Discovered 2026-05-25; see DECISIONS.md.)
 function Write-StageLog {
     param([AllowEmptyString()][string]${Line})
     ${ts}  = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
     ${msg} = ("[{0}] [stage] {1}" -f ${ts}, ${Line})
-    Add-Content -LiteralPath ${logFile} -Encoding UTF8 -Value ${msg}
-    if (Test-Path -LiteralPath ${execLog}) {
-        Add-Content -LiteralPath ${execLog} -Encoding UTF8 -Value ${msg}
-    }
+    try { Add-Content -LiteralPath ${logFile} -Encoding UTF8 -Value ${msg} -ErrorAction Stop }
+    catch { Write-Host ("[stage] [WARN] stage-install.log write failed: {0}" -f $_.Exception.Message) }
     Write-Host ${Line}
 }
 
@@ -161,10 +166,22 @@ try {
 }
 catch {
     ${errorMsg} = ("Stage installation failed: {0}" -f $_)
+    # Write-Host first so the orchestrator's stream capture gets it; then try
+    # the file write. NEVER call Add-Content on provisioning-execute.log from
+    # in here (see Write-StageLog comment). Defensive try/catch so a file-lock
+    # failure on stage-install.log can't re-throw and orphan installer children.
     Write-Host ${errorMsg}
-    Add-Content -LiteralPath ${logFile} -Encoding UTF8 -Value ${errorMsg}
-    if (Test-Path -LiteralPath ${execLog}) {
-        Add-Content -LiteralPath ${execLog} -Encoding UTF8 -Value ${errorMsg}
+    try { Add-Content -LiteralPath ${logFile} -Encoding UTF8 -Value ${errorMsg} -ErrorAction Stop }
+    catch { Write-Host ("[stage] [WARN] could not write error to stage-install.log: {0}" -f $_.Exception.Message) }
+
+    # Best-effort: if the installer or any descendant is still alive at this
+    # point, kill the whole tree. Previously a thrown exception in Write-StageLog
+    # left xilab.exe orphaned for 30+ min before manual intervention.
+    if (${installerPid}) {
+        try {
+            Write-Host ("[stage] catch-cleanup taskkill /F /T /PID {0}" -f ${installerPid})
+            & taskkill /F /T /PID ${installerPid} 2>&1 | Out-Null
+        } catch {}
     }
     exit 1
 }

@@ -12,30 +12,12 @@ param(
         $true
     })]
   [string]${HostName},
-  [string[]]${Modules} = @(
-    'proxy',
-    'openssh-server',
-    'ascom',
-    'chrome',
-    'cygwin',
-    'diagnostics',
-    'git',
-    'mast',
-    'mongodb-client',
-    'nomachine',
-    'nssm',
-    'phd2',
-    'planewave',
-    'python',
-    'stage',
-    'sysinternals',
-    'vcredist2013',
-    'vscode',
-    'wireshark',
-    'zwo',
-    'windows-exporter-monitoring',
-    'reboot'
-    ), # your module order
+  # Modules to build. When not provided (or empty), the default is the full
+  # set of providers discovered on disk under server/providers/, sorted by
+  # their module.json 'order' field. Pass an explicit list to build a subset.
+  # See Resolve-DefaultModules below for the discovery logic; see
+  # server/providers/*/module.json for the source of truth.
+  [string[]]${Modules} = @(),
   # Dev/test: allow missing NoMachine license files (skip staging nomachine.lic).
   [switch]${AllowMissingNoMachineLicense},
   # Dev/test: allow missing GitHub token file (skip staging mast_github.txt).
@@ -87,6 +69,19 @@ function Read-ModuleManifest {
     $path = Join-Path (Join-Path ${providersRoot} $ModuleName) 'module.json'
     if (-not (Test-Path $path)) { throw "Missing module.json for module '$ModuleName' at $path" }
     return Get-Content $path -Raw | ConvertFrom-Json
+}
+
+# If no -Modules were passed (or the normalization above collapsed to empty),
+# default to the providers discovered on disk. Get-AllProviderModules lives in
+# server/lib/mast-modules.psm1 (no admin required) so build-mast can call it
+# even when running non-elevated; check-and-provision.ps1 imports the same
+# module so both use the single source of truth.
+if ($null -eq ${Modules} -or ${Modules}.Count -eq 0) {
+    ${modulesLib} = Join-Path ${serverRoot} 'lib\mast-modules.psm1'
+    if (-not (Test-Path ${modulesLib})) { throw "Missing mast-modules.psm1 at ${modulesLib}" }
+    Import-Module ${modulesLib} -Force -DisableNameChecking
+    ${Modules} = Get-AllProviderModules -ProvidersRoot ${providersRoot}
+    Write-Host ("Modules defaulted to {0} providers discovered under {1}." -f ${Modules}.Count, ${providersRoot})
 }
 
 # Return $true if the commandfiles entry is under assets/
@@ -274,9 +269,26 @@ ${stagingTop} = Join-Path ${OutRoot} ${HostName}
 New-Item -ItemType Directory -Force -Path ${stagingTop} | Out-Null
 
 ${clientRoot} = Join-Path ${Top} 'client'
+
+# Helper: ensure a staging stage exists AND is empty before we populate it.
+# Without this, files from prior builds (e.g. an older installer version that
+# the provider's asset dir no longer ships) linger in staging forever, inflate
+# the SMB transfer to the unit, and can confuse unit-side scripts looking for
+# "the" installer by glob. New-Item -Force only creates-if-missing; the wipe
+# below is what guarantees idempotence.
+function Reset-StagingStage {
+    param([Parameter(Mandatory)][string]$Path)
+    if (Test-Path -LiteralPath $Path) {
+        # Wipe contents, keep the directory itself in case anything is watching the path.
+        Get-ChildItem -LiteralPath $Path -Force | Remove-Item -Recurse -Force
+    } else {
+        New-Item -ItemType Directory -Force -Path $Path | Out-Null
+    }
+}
+
 # Preparations
 ${staging} = Join-Path ${stagingTop} "00-preparation"
-New-Item -ItemType Directory -Force -Path ${staging} | Out-Null
+Reset-StagingStage -Path ${staging}
 ${prepScript} = Join-Path ${clientRoot} 'prepare-mast-client.ps1'
 if (Test-Path ${prepScript}) {
     Copy-Item -Force ${prepScript} (Join-Path ${staging} 'prepare-mast-client.ps1')
@@ -288,7 +300,7 @@ Write-Host "Populating preparation stage ${staging} ..."
 
 # Actual provisioning
 ${staging} = Join-Path ${stagingTop} "01-provisioning"
-New-Item -ItemType Directory -Force -Path ${staging} | Out-Null
+Reset-StagingStage -Path ${staging}
 Write-Host "Populating provisioning stage ${staging} ..."
 
 # Always place provisioning.psm1 into staging

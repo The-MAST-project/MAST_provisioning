@@ -139,12 +139,23 @@ Edit the file to describe each unit you want to manage. Minimum entry:
   {
     "hostname": "mast01",
     "timezone": "Israel Standard Time",
-    "maintenance_window": { "start_hour": 10, "end_hour": 16 },
-    "modules": [
-      "ascom", "chrome", "cygwin", "git", "mast", "mongodb-client",
-      "nomachine", "nssm", "phd2", "planewave", "python",
-      "sysinternals", "vscode", "wireshark", "zwo"
-    ]
+    "maintenance_window": { "start_hour": 10, "end_hour": 16 }
+  }
+]
+```
+
+To restrict a unit to a subset of providers (rare; usually for debugging or
+half-staged units), add a `modules` field listing the provider names you want.
+Otherwise omit it and the full set discovered under `server/providers/` is
+used.
+
+```json
+[
+  {
+    "hostname": "mast-debug-01",
+    "timezone": "Israel Standard Time",
+    "maintenance_window": { "start_hour": 0, "end_hour": 24 },
+    "modules": ["cygwin", "astrometry-dependencies", "astrometry"]
   }
 ]
 ```
@@ -155,8 +166,11 @@ Notes:
 - `timezone` must be a Windows timezone name (run `tzutil /l` for the list).
 - `maintenance_window` hours are in the unit's local time. Set `start_hour: 0,
   end_hour: 24` to allow provisioning at any time (useful while setting up).
-- `modules` controls which providers `build-mast.ps1` stages. Omit `stage` until
-  it is re-enabled (see DECISIONS.md). List only modules whose assets are present.
+- `modules` (optional) controls which providers `build-mast.ps1` stages.
+  Omitted or empty means "every provider discovered on disk", sorted by each
+  provider's `module.json` `order` field. The canonical list lives at
+  `server/providers/`; `Get-AllProviderModules` in
+  `server/lib/mast-modules.psm1` is the helper that derives it.
 
 ---
 

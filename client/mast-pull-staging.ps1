@@ -42,29 +42,45 @@ param(
 
 $smbRoot = "\\$ProvServer\mast-staging"
 
-# Remove stale mapping from any previous crashed run (ignore errors).
-& net use $smbRoot /delete /yes 2>&1 | Out-Null
-
-# Mount share with explicit credentials (workgroup -- no Kerberos).
-# /persistent:no avoids storing credentials on the unit.
-Write-Host "NET_USE_ATTEMPT user=$SmbUser share=$smbRoot"
-$netOut = & net use $smbRoot $SmbPass /user:$SmbUser /persistent:no 2>&1
-$netRc  = $LASTEXITCODE
-if ($netRc -ne 0) {
-    Write-Host "NET_USE_RETRY (rc=$netRc) waiting 10s..."
-    Start-Sleep -Seconds 10
-    $netOut = & net use $smbRoot $SmbPass /user:$SmbUser /persistent:no 2>&1
-    $netRc  = $LASTEXITCODE
+<#
+Bounded `net use`: when the host SMB server is misconfigured (e.g. the
+RejectUnencryptedAccess / EncryptData mismatch we hit 2026-05-25), `net use`
+never returns and retries fork-bomb into zombie net.exe processes. Wrap each
+invocation in Start-Job + Wait-Job so we fail fast with a meaningful rc.
+#>
+function Invoke-NetUseBounded {
+    param([string[]]$ArgsList, [int]$TimeoutSeconds = 30, [string]$Label = 'net use')
+    $j = Start-Job { param($a) $o = & net.exe @a 2>&1; @{rc=$LASTEXITCODE; out=($o|Out-String)} } -ArgumentList (,$ArgsList)
+    if (-not (Wait-Job $j -Timeout $TimeoutSeconds)) {
+        Stop-Job $j -ErrorAction SilentlyContinue
+        Remove-Job $j -Force -ErrorAction SilentlyContinue
+        return @{ rc=-1; out="$Label hung ${TimeoutSeconds}s (host SMB misconfigured?)"; hung=$true }
+    }
+    $r = Receive-Job $j
+    Remove-Job $j -Force -ErrorAction SilentlyContinue
+    $r.hung = $false
+    return $r
 }
-if ($netRc -ne 0) {
-    Write-Host "NET_USE_FAIL rc=$netRc"
+
+[void](Invoke-NetUseBounded -ArgsList @('use', $smbRoot, '/delete', '/yes') -TimeoutSeconds 10 -Label 'net use /delete (cleanup)')
+
+Write-Host "NET_USE_ATTEMPT user=$SmbUser share=$smbRoot"
+$mountArgs = @('use', $smbRoot, $SmbPass, "/user:$SmbUser", '/persistent:no')
+$mount = Invoke-NetUseBounded -ArgsList $mountArgs -TimeoutSeconds 30 -Label 'net use (mount)'
+if ($mount.rc -ne 0) {
+    Write-Host "NET_USE_RETRY (rc=$($mount.rc)) waiting 10s..."
+    Start-Sleep -Seconds 10
+    $mount = Invoke-NetUseBounded -ArgsList $mountArgs -TimeoutSeconds 30 -Label 'net use (mount retry)'
+}
+if ($mount.rc -ne 0) {
+    Write-Host "NET_USE_FAIL rc=$($mount.rc)"
     return [pscustomobject]@{
-        outcome = 'NET_USE_FAIL'
-        rc      = $netRc
-        detail  = ($netOut | Out-String).Trim()
+        outcome = $(if ($mount.hung) { 'NET_USE_HUNG' } else { 'NET_USE_FAIL' })
+        rc      = $mount.rc
+        detail  = $mount.out.Trim()
     }
 }
-Write-Host "NET_USE_OK output=$(($netOut | Out-String).Trim())"
+Write-Host "NET_USE_OK output=$($mount.out.Trim())"
 
 try {
     # robocopy creates $UnitStage if absent.
@@ -97,6 +113,6 @@ try {
     }
 } finally {
     # Always unmount, even if robocopy failed.
-    & net use $smbRoot /delete /yes 2>&1 | Out-Null
+    [void](Invoke-NetUseBounded -ArgsList @('use', $smbRoot, '/delete', '/yes') -TimeoutSeconds 10 -Label 'net use /delete (final)')
     Write-Host "NET_USE_DISCONNECTED"
 }

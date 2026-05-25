@@ -2,6 +2,128 @@
 
 ---
 
+## [2026-05-25] vm/run-prov-test.py calls Get-AllProviderModules instead of duplicating the JSON walk
+
+**Why:** Follow-up audit of yesterday-the-same-day's discovery refactor: the
+first pass landed `Get-AllProviderModules` in `server/lib/mast-modules.psm1`
+(used by `build-mast.ps1` and `check-and-provision.ps1`) **and**
+`_discover_all_modules` in `vm/run-prov-test.py` -- two implementations of
+the same JSON walk, one PS and one Python. They happen to agree today, but
+that is exactly the seam where drift creeps in: once the PS impl gains a
+feature (e.g. filtering out providers marked disabled in `module.json`),
+the Python forgets to mirror it and silently behaves differently. Per
+CLAUDE.md "Single source of truth / DRY" and specifically "the PS file is
+the source of truth; Python is the caller", consolidate.
+
+**What:**
+
+- `_discover_all_modules()` in `vm/run-prov-test.py` now spawns
+  `powershell.exe` once at module load, imports `mast-modules.psm1`,
+  calls `Get-AllProviderModules`, and pipes one name per line through
+  `-OutputFormat Text`. Stderr (which carries `Write-Warning` from
+  malformed `module.json` files) is forwarded so the operator sees
+  parse warnings at run start. The Python-side JSON parsing logic is
+  deleted; `json` is still imported elsewhere in the file.
+- The PowerShell side is unchanged. `Get-AllProviderModules` remains
+  the single authoritative implementation of "scan
+  `server/providers/*/module.json`, sort by `order`, return names".
+
+**Implications:**
+
+- One extra ~250 ms powershell.exe spawn at `run-prov-test.py` startup
+  (measured cold on the dev box). Acceptable: runs once per invocation;
+  the script is already several-second-startup with pywinrm and friends.
+- Adding a feature (filter disabled providers, alternate orderings,
+  whatever) lands in exactly one place. Python automatically picks it up.
+- Failure mode change: if `mast-modules.psm1` is missing or
+  `Get-AllProviderModules` errors, the Python script exits with a clear
+  message instead of silently returning a stale list. Loud failure is
+  the right default here -- a misconfigured discovery should not
+  ghost-run with the wrong module set.
+
+---
+
+## [2026-05-25] Provider list derived from disk instead of hardcoded; new mast-modules.psm1 helper
+
+**Why:** Audit triggered by realizing `vm/run-prov-test.py`'s `ALL_MODULES`
+was 13 entries behind the actual `server/providers/` tree. Sweep found
+the same drift in four other places:
+
+- `build/build-mast.ps1:15-38` -- `${Modules}` default (22 of 29, missing
+  today's astrometry-dependencies, astrometry, gh, imdisk, npcap,
+  usbpcap, phd2-log-viewer). This is the **actual build entry point**, so
+  when `check-and-provision.ps1` invokes it with nothing in `-Modules`,
+  this default was what got staged. Every unit was silently missing those
+  7 providers until someone explicitly listed them.
+- `server/unit-registry.json:5` -- per-unit `modules` array, 16 of 29.
+  Stale since the early days.
+- `server/unit-registry.json.template:6` -- 16 entries **plus** a typo:
+  `"mongodb"`, which is not a real provider (the actual name is
+  `mongodb-client`). Any user copying the template would silently
+  configure a non-existent provider.
+- `docs/provisioning-server-setup.md:144` -- documentation example
+  showing 14 of 29 entries.
+
+Per CLAUDE.md "Single source of truth / DRY": parallel hardcoded lists
+across scripts and JSON are exactly the pattern that produced this drift.
+Switch everything to derive from `server/providers/*/module.json`.
+
+**What:**
+
+- **`server/lib/mast-modules.psm1`** (new): exports
+  `Get-AllProviderModules -ProvidersRoot <path>`, which scans
+  `*/module.json` and returns names sorted by the `order` field.
+  Tolerates UTF-8 BOM, missing/non-integer `order`, malformed JSON.
+  Lives in its **own** .psm1 (not in `provisioning.psm1`) because
+  provisioning.psm1 carries `#Requires -RunAsAdministrator` -- the rest
+  of its functions are admin operations -- but discovery is pure
+  file-system reads and must run from `build-mast.ps1`, which is allowed
+  to run non-elevated.
+- **`vm/run-prov-test.py`**: `ALL_MODULES` is now produced by
+  `_discover_all_modules()` reading the same module.json files.
+- **`build/build-mast.ps1`**: `${Modules}` default is `@()`; if the
+  caller passes nothing, the script imports `mast-modules.psm1` and
+  fills in `Get-AllProviderModules` output. Hardcoded 22-entry list
+  removed.
+- **`server/check-and-provision.ps1`**: imports `mast-modules.psm1` at
+  the top, caches `$AllProviderModules` once per run. The per-unit
+  precedence order is now: `-Modules` CLI > `$unit.modules` from the
+  registry > `$AllProviderModules`. Previously a registry entry without
+  a `modules` field would leave `$modules` null, which silently zeroed
+  out the smoke-check loop at line 634 and falsely reported PASS.
+- **`server/unit-registry.json`**: stale 16-entry `modules` array
+  removed; defaulting kicks in. Entry now has only `hostname`,
+  `maintenance_window`, `timezone`.
+- **`server/unit-registry.json.template`**: same simplification; the
+  `mongodb` typo is gone with the list. A new `_comment` documents that
+  `modules` is optional and the default is "every provider on disk".
+- **`docs/provisioning-server-setup.md`**: minimal example dropped the
+  `modules` array; a separate example shows when to use it (deliberate
+  subset for debugging or half-staged units); notes point at
+  `Get-AllProviderModules` and the providers directory as the canonical
+  source.
+
+**Implications:**
+
+- Adding a new provider on disk now requires zero touches to module-list
+  files. Just drop `server/providers/<name>/module.json` and it's
+  included automatically on the next build.
+- Registry entries lose the ability to "freeze" a unit's module set
+  unless they explicitly list it. This is the right default: most units
+  want everything, and the few that don't are exceptions that should be
+  written down deliberately rather than implied by stale data.
+- `mast-modules.psm1` is **host-side only**. It is not staged to units --
+  units work off the pre-resolved `commands.json` that
+  `build-mast.ps1` emits, and never need to discover providers
+  themselves.
+- Anyone who had a real per-unit `modules` filter in their local
+  `unit-registry.json` (gitignored when populated with creds) will still
+  have it. This change only refreshed the committed
+  `unit-registry.json` whose modules array was stale demo data, not a
+  meaningful filter.
+
+---
+
 ## [2026-05-25] Bundle fitsio wheel in astrometry-deps; put Cygwin lapack dir on machine PATH
 
 **Why:** After today's clean-rebase + Cygwin reinstall + reboot, the astrometry

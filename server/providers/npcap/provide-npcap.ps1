@@ -21,6 +21,17 @@ function Write-NpcapLog {
 
 Set-Content -LiteralPath ${logFile} -Encoding UTF8 -Value ("[{0}] provide-npcap.ps1 started." -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))
 
+# Elevation status at startup. Npcap registers a kernel driver, which requires
+# a token with BUILTIN\Administrators in its effective groups. Under a WinRM
+# network logon the admin group is often filtered out of the token even when
+# the user is an Administrator, and the driver-install step silently no-ops.
+# Logging this up front means a missing-service failure later has a known
+# first-stop-to-look.
+${id}     = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+${princ}  = New-Object System.Security.Principal.WindowsPrincipal(${id})
+${isAdm}  = ${princ}.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)
+Write-NpcapLog ("ELEVATION user={0} isAdmin={1} authType={2} (driver install needs isAdmin=True)" -f ${id}.Name, ${isAdm}, ${id}.AuthenticationType)
+
 try {
     # Resolve assets dir: prefer .\assets next to this script, fall back to AssetsRoot
     ${assetsDir} = Join-Path ${PSScriptRoot} 'assets'

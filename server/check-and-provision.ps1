@@ -91,6 +91,17 @@ if (-not $UnitRegistry) { $UnitRegistry = Join-Path $RepoTop 'server\unit-regist
 if (-not $VaultCreds)   { $VaultCreds   = Join-Path $RepoTop 'vault\creds.json' }
 
 . (Join-Path $RepoTop 'server\lib\mast-log.ps1')
+Import-Module (Join-Path $RepoTop 'server\lib\mast-modules.psm1') -Force -DisableNameChecking
+
+# Cached "all modules discovered on disk" list. Used as the fall-back when
+# neither -Modules nor the unit's registry entry specifies modules. See
+# Get-AllProviderModules in server\lib\mast-modules.psm1 for the source of truth.
+$AllProviderModules = Get-AllProviderModules -ProvidersRoot (Join-Path $RepoTop 'server\providers')
+
+# Dot-source the SMB pre-flight helper. The actual check call is below,
+# after vault/creds are loaded (line ~320), so we have the transfer
+# password to run the loopback auth smoke test.
+. (Join-Path $RepoTop 'server\lib\preflight-smb.ps1')
 
 $mastLogsBase   = Get-MastLogsBase
 $provLogsStable = Get-MastProvLogsBase
@@ -292,6 +303,25 @@ $smbUser    = $creds.smb.user
 $smbPass    = $creds.smb.pass
 $provServer = $env:COMPUTERNAME
 
+# Host-side SMB pre-flight: catches the failure family that used to hang
+# units on `net use` for many minutes (empty SmbServerNetworkInterface,
+# RejectUnencryptedAccess vs share EncryptData mismatch, mast-transfer
+# auth drift). Loud-fails the whole check-and-provision run rather than
+# letting each unit independently rediscover the broken share.
+# Source of truth: server\lib\preflight-smb.ps1.
+$smbCheck = Test-MastSmbHostReady `
+    -ShareNames @('mast-staging','mast-shared') `
+    -TransferUser $smbUser `
+    -TransferPass $smbPass `
+    -Quiet
+if (-not $smbCheck.Ok) {
+    Log-Event 'PREFLIGHT_SMB_FAIL' @{ failures = @($smbCheck.Failures) }
+    Write-Host "SMB pre-flight FAILED. Cannot provision any units."
+    $smbCheck.Failures | ForEach-Object { Write-Host ("  - {0}" -f $_) }
+    exit 1
+}
+Log-Event 'PREFLIGHT_SMB_OK' @{}
+
 if ($OnlyHosts) {
     $units = $units | Where-Object { $OnlyHosts -contains $_.hostname }
 }
@@ -307,7 +337,16 @@ foreach ($unit in $units) {
     $unitStart = Get-Date
     $hostname = $unit.hostname
     # Hostname is the identity / WinRM target (DNS must resolve). Legacy 'ip' field is ignored.
-    $modules  = if ($Modules) { $Modules } else { $unit.modules }
+    # Precedence: -Modules CLI override > registry entry's "modules" > full disk-discovered set.
+    # The third fallback exists so units can omit "modules" from unit-registry.json and pick up
+    # newly-added providers automatically -- no per-unit list refresh needed.
+    if ($Modules) {
+        $modules = $Modules
+    } elseif ($unit.PSObject.Properties.Match('modules').Count -gt 0 -and $unit.modules) {
+        $modules = $unit.modules
+    } else {
+        $modules = $AllProviderModules
+    }
     $payloadHash = ''
     $gitSha      = ''
 

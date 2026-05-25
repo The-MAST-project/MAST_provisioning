@@ -50,13 +50,23 @@ try {
     # InnoSetup installer (per upstream): /VERYSILENT /NORESTART are the
     # canonical unattended switches. /SP- suppresses the "ready to install"
     # prompt; /SUPPRESSMSGBOXES catches stray modal dialogs that some
-    # InnoSetup builds raise even with /VERYSILENT.
-    Write-Host ("Installing PHDLogView from {0} ..." -f ${installerPath})
+    # InnoSetup builds raise even with /VERYSILENT. /LOG=<path> dumps the
+    # installer's own decisions to a file so a failed install is debuggable
+    # without re-running.
+    ${innoLog} = Join-Path (Get-MastLogSessionDir) 'phd2-log-viewer-inno.log'
+    Confirm-Dir (Split-Path -Parent ${innoLog})
+    Write-Host ("Installing PHDLogView from {0} (inno log: {1}) ..." -f ${installerPath}, ${innoLog})
     ${p} = Start-Process -FilePath ${installerPath} `
-        -ArgumentList @('/VERYSILENT', '/SP-', '/SUPPRESSMSGBOXES', '/NORESTART') `
+        -ArgumentList @('/VERYSILENT', '/SP-', '/SUPPRESSMSGBOXES', '/NORESTART', "/LOG=`"${innoLog}`"") `
         -PassThru -Wait -WindowStyle Hidden
     try { ${p}.Refresh() } catch {}
     ${rc} = ${p}.ExitCode
+    Write-Host ("PHDLogView installer exit code: {0}" -f ${rc})
+    if (Test-Path -LiteralPath ${innoLog}) {
+        Write-Host ("--- inno install log tail (last 8 lines of {0}) ---" -f ${innoLog})
+        Get-Content -LiteralPath ${innoLog} -Tail 8 -ErrorAction SilentlyContinue |
+            ForEach-Object { Write-Host ("  {0}" -f $_) }
+    }
     if ($null -eq ${rc}) {
         throw "PHDLogView installer did not report an exit code (treating as failure)."
     }

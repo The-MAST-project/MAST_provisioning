@@ -36,6 +36,17 @@ function Get-InstalledUsbPcapCmd {
 
 ${log} = Start-ProvisionLog -Component 'provide-usbpcap'
 try {
+    # Same admin-token consideration as the npcap provider: USBPcap registers
+    # a kernel driver and needs BUILTIN\Administrators in the effective token.
+    # WinRM network logons often filter that group out; log up front so a
+    # missing-service failure later points clearly here.
+    ${id}    = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+    ${princ} = New-Object System.Security.Principal.WindowsPrincipal(${id})
+    Write-Host ("ELEVATION user={0} isAdmin={1} authType={2} (driver install needs isAdmin=True)" `
+        -f ${id}.Name,
+           ${princ}.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator),
+           ${id}.AuthenticationType)
+
     ${existing} = Get-InstalledUsbPcapCmd
     if (${existing}) {
         Write-Host ("USBPcap already present at {0}; nothing to do." -f ${existing})

@@ -1,12 +1,7 @@
 [
   {
     "hostname": "mast01",
-    "modules": [
-      "ascom","chrome","cygwin","git","mast","mongodb-client","nomachine","nssm",
-      "phd2","planewave","python","stage","sysinternals","vscode","wireshark","zwo"
-    ],
     "maintenance_window": { "start_hour": 0, "end_hour": 24 },
     "timezone": "Asia/Jerusalem"
   }
 ]
-

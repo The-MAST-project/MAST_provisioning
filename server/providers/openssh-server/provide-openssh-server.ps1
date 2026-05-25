@@ -3,7 +3,6 @@ param(
 )
 
 ${ErrorActionPreference} = "Stop"
-
 ${mastLogDot} = Join-Path ${PSScriptRoot} 'mast-log.ps1'
 if (-not (Test-Path ${mastLogDot})) { ${mastLogDot} = Join-Path ${PSScriptRoot} '..\..\lib\mast-log.ps1' }
 . ${mastLogDot}
@@ -19,49 +18,77 @@ function Write-SshLog {
     Write-Host ${Line}
 }
 
-Set-Content -LiteralPath ${logFile} -Encoding UTF8 -Value ("[{0}] provide-openssh-server.ps1 started." -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))
+Set-Content -LiteralPath ${logFile} -Encoding UTF8 -Value `
+    ("[{0}] provide-openssh-server.ps1 started." -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))
 
-# Match mastw: sshd is the canonical inbound shell into the unit (used for
-# the compare-mastw diff capture, among other things). Install via the
-# in-box Windows optional capability so we do not have to ship a binary.
+<#
+Post-bootstrap OpenSSH idempotency / drift check.
+
+Bootstrap (client\bootstrap-winrm.ps1) owns the heavy work: installs the
+OpenSSH.Server Windows capability, sets sshd + ssh-agent to Automatic,
+starts them, opens firewall TCP 22, and asserts PasswordAuthentication yes
+in sshd_config. That all has to happen in an interactive admin shell --
+Add-WindowsCapability is rejected by DISM under the WinRM network logon
+used by provisioning, even when the user is a full admin (see 2026-05-25
+DECISIONS entry).
+
+This provider runs at provision-time over WinRM and just asserts the
+bootstrap configuration didn't drift:
+  - sshd service is registered and Running with StartType=Automatic
+  - inbound TCP 22 firewall rule exists
+  - sshd_config still has PasswordAuthentication yes
+
+If something is off, log a clear warning and start sshd (Start-Service IS
+allowed under WinRM, only the capability install is not). Never try to
+Add-WindowsCapability here -- it'll just fail with Access is denied and
+mask the real problem.
+#>
+
 try {
-    Write-SshLog "Checking OpenSSH.Server capability state..."
-    ${cap} = Get-WindowsCapability -Online -Name 'OpenSSH.Server~~~~0.0.1.0' -ErrorAction Stop
-    Write-SshLog ("OpenSSH.Server state: {0}" -f ${cap}.State)
-    if (${cap}.State -ne 'Installed') {
-        Write-SshLog "Adding OpenSSH.Server capability..."
-        Add-WindowsCapability -Online -Name 'OpenSSH.Server~~~~0.0.1.0' -ErrorAction Stop | Out-Null
-        Write-SshLog "OpenSSH.Server capability installed."
-    } else {
-        Write-SshLog "OpenSSH.Server already installed; skipping Add-WindowsCapability."
+    # 1. sshd service must exist (means bootstrap installed the capability).
+    ${svc} = Get-Service -Name 'sshd' -ErrorAction SilentlyContinue
+    if ($null -eq ${svc}) {
+        throw "sshd service is not registered. Run client\bootstrap-winrm.ps1 on this unit (interactive, admin) to install the OpenSSH.Server capability. This provider cannot do it over WinRM."
+    }
+    Write-SshLog ("sshd: Status={0} StartType={1}" -f ${svc}.Status, ${svc}.StartType)
+
+    # 2. StartType should be Automatic; correct it if not.
+    if (${svc}.StartType -ne 'Automatic') {
+        Write-SshLog ("Setting sshd StartType Automatic (was {0})." -f ${svc}.StartType)
+        Set-Service -Name 'sshd' -StartupType Automatic -ErrorAction Stop
     }
 
-    Write-SshLog "Setting sshd service to Automatic and starting..."
-    Set-Service -Name 'sshd' -StartupType Automatic -ErrorAction Stop
-    Start-Service -Name 'sshd' -ErrorAction Stop
-    Write-SshLog "sshd service running."
+    # 3. Status should be Running; start it if not.
+    if (${svc}.Status -ne 'Running') {
+        Write-SshLog "sshd not running; starting..."
+        Start-Service -Name 'sshd' -ErrorAction Stop
+        # Refresh and brief settle so the verify step sees Running.
+        Start-Sleep -Seconds 2
+        ${svc} = Get-Service -Name 'sshd' -ErrorAction SilentlyContinue
+        Write-SshLog ("sshd post-start: Status={0}" -f ${svc}.Status)
+    }
 
-    # ssh-agent is helpful but not strictly required; align it too if present.
+    # 4. Best-effort: ssh-agent service alignment (mirrors bootstrap behavior).
     ${agentSvc} = Get-Service -Name 'ssh-agent' -ErrorAction SilentlyContinue
     if ($null -ne ${agentSvc}) {
-        Set-Service -Name 'ssh-agent' -StartupType Automatic -ErrorAction SilentlyContinue
-        Start-Service -Name 'ssh-agent' -ErrorAction SilentlyContinue
-        Write-SshLog "ssh-agent service started."
+        if (${agentSvc}.StartType -ne 'Automatic') {
+            Set-Service -Name 'ssh-agent' -StartupType Automatic -ErrorAction SilentlyContinue
+        }
+        if (${agentSvc}.Status -ne 'Running') {
+            Start-Service -Name 'ssh-agent' -ErrorAction SilentlyContinue
+        }
     }
 
+    # 5. Firewall rule. Cheap to re-create idempotently.
     ${fwRuleName} = 'MAST OpenSSH Server (TCP 22)'
     if (-not (Get-NetFirewallRule -DisplayName ${fwRuleName} -ErrorAction SilentlyContinue)) {
+        Write-SshLog ("Firewall rule '{0}' missing; creating." -f ${fwRuleName})
         New-NetFirewallRule -DisplayName ${fwRuleName} -Direction Inbound -Action Allow `
             -Protocol TCP -LocalPort 22 -Profile Any -ErrorAction Stop | Out-Null
-        Write-SshLog ("Firewall rule created: {0}" -f ${fwRuleName})
-    } else {
-        Write-SshLog ("Firewall rule already exists: {0}" -f ${fwRuleName})
     }
 
-    # sshd_config: Windows OpenSSH ships with PasswordAuthentication yes by
-    # default, but mastw confirmed password auth as the entry point so we
-    # assert it explicitly. Touch the file only if needed to keep this run
-    # idempotent.
+    # 6. sshd_config drift check. The bootstrap script wrote
+    # PasswordAuthentication yes; if something else flipped it, fix it.
     ${cfgPath} = 'C:\ProgramData\ssh\sshd_config'
     if (Test-Path -LiteralPath ${cfgPath}) {
         ${cfg} = Get-Content -LiteralPath ${cfgPath} -Raw -Encoding UTF8
@@ -77,23 +104,22 @@ try {
         if (${newCfg} -ne ${cfg}) {
             Set-Content -LiteralPath ${cfgPath} -Value ${newCfg} -Encoding UTF8
             Restart-Service -Name 'sshd' -Force -ErrorAction SilentlyContinue
-            Write-SshLog "sshd_config updated; sshd restarted."
-        } else {
-            Write-SshLog "sshd_config already permits password auth; no change."
         }
     } else {
-        Write-SshLog ("WARNING: sshd_config not found at {0}; relying on defaults." -f ${cfgPath})
+        Write-SshLog ("WARN: sshd_config not found at {0}." -f ${cfgPath})
     }
 
+    # 7. Drop the smoke marker so the verify step's content matches the
+    # existing module.json verify (which expects sshd Running anyway).
     ${smokeDir} = Get-MastSmokeDir
     New-Item -ItemType Directory -Path ${smokeDir} -Force | Out-Null
     Set-Content -LiteralPath (Join-Path ${smokeDir} 'openssh-server-smoke.txt') -Encoding UTF8 -Value 'openssh_server_ok'
 
-    Write-SshLog "OpenSSH server provisioning completed successfully."
+    Write-SshLog "OpenSSH post-bootstrap idempotency check completed successfully."
     exit 0
 }
 catch {
-    ${errorMsg} = ("OpenSSH server provisioning failed: {0}" -f $_)
+    ${errorMsg} = ("OpenSSH provisioning failed: {0}" -f $_)
     Write-Host ${errorMsg}
     Add-Content -LiteralPath ${logFile} -Encoding UTF8 -Value ${errorMsg}
     exit 1

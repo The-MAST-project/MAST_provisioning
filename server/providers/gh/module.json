@@ -6,7 +6,7 @@
   "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-gh.ps1\" -AssetsRoot \".\"",
   "commandfiles": [
     "provide-gh.ps1",
-    "assets/gh_2.92.0_windows_amd64.msi"
+    "assets/gh_2.92.0_windows_amd64.zip"
   ],
-  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -Command \"$log = Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\verify\\gh-verify.log'; $candidates = @((Join-Path $env:ProgramFiles 'GitHub CLI\\gh.exe'), 'C:\\Program Files\\GitHub CLI\\gh.exe', 'C:\\Program Files (x86)\\GitHub CLI\\gh.exe'); $gh = $null; foreach ($p in $candidates) { if (Test-Path -LiteralPath $p) { $gh = $p; break } }; if ($gh) { & $gh --version | Out-File -FilePath $log -Encoding UTF8; Set-Content -Path (Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\smoke\\gh-smoke.txt') -Value 'gh_ok' } else { 'gh.exe not found' | Out-File -FilePath $log -Encoding UTF8; exit 1 }\""
+  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -Command \"$log = Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\verify\\gh-verify.log'; $candidates = @((Join-Path $env:ProgramFiles 'GitHub CLI\\bin\\gh.exe'), (Join-Path $env:ProgramFiles 'GitHub CLI\\gh.exe'), 'C:\\Program Files\\GitHub CLI\\bin\\gh.exe', 'C:\\Program Files\\GitHub CLI\\gh.exe', 'C:\\Program Files (x86)\\GitHub CLI\\bin\\gh.exe'); $gh = $null; foreach ($p in $candidates) { if (Test-Path -LiteralPath $p) { $gh = $p; break } }; if ($gh) { & $gh --version | Out-File -FilePath $log -Encoding UTF8; Set-Content -Path (Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\smoke\\gh-smoke.txt') -Value 'gh_ok' } else { 'gh.exe not found' | Out-File -FilePath $log -Encoding UTF8; exit 1 }\""
 }

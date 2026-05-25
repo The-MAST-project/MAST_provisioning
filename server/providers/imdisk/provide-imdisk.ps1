@@ -71,6 +71,34 @@ try {
     }
     Write-ImDiskLog ("ImDisk found at: {0}" -f ${imdiskExe})
 
+    # install.bat unconditionally drops three shortcuts on the current user's
+    # desktop (and sometimes the Public desktop, depending on ImDiskTk
+    # version). There is no documented flag to suppress them. Clean them up
+    # so operator desktops are not cluttered with tools no human needs to
+    # invoke directly -- we drive ImDisk via the scheduled task only.
+    ${shortcutNames} = @(
+        'ImDisk Virtual Disk Driver.lnk',
+        'Mount Image File.lnk',
+        'RamDisk Configuration.lnk'
+    )
+    ${desktopDirs} = @(
+        (Join-Path ${env:USERPROFILE} 'Desktop'),
+        (Join-Path ${env:PUBLIC} 'Desktop'),
+        'C:\Users\Public\Desktop'
+    ) | Sort-Object -Unique
+    foreach (${dd} in ${desktopDirs}) {
+        if (-not (Test-Path -LiteralPath ${dd})) { continue }
+        foreach (${sn} in ${shortcutNames}) {
+            ${lnk} = Join-Path ${dd} ${sn}
+            if (Test-Path -LiteralPath ${lnk}) {
+                Remove-Item -LiteralPath ${lnk} -Force -ErrorAction SilentlyContinue
+                if (-not (Test-Path -LiteralPath ${lnk})) {
+                    Write-ImDiskLog ("Removed desktop shortcut: {0}" -f ${lnk})
+                }
+            }
+        }
+    }
+
     ${imageDir} = Split-Path -Parent ${ImagePath}
     if (-not (Test-Path -LiteralPath ${imageDir})) {
         New-Item -ItemType Directory -Path ${imageDir} -Force | Out-Null

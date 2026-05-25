@@ -3,9 +3,9 @@
   "version": "mongosh-2.2.6/tools-100.9.4",
   "description": "Install MongoDB client tools: mongosh, Database Tools, and Compass (GUI). Does NOT install or start mongod.",
   "order": 900,
-  "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-mongodb.ps1\" -AssetsRoot \".\" -InstallRoot \"C:\\Program Files\\MongoDB\"",
+  "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-mongodb-client.ps1\" -AssetsRoot \".\" -InstallRoot \"C:\\Program Files\\MongoDB\"",
   "commandfiles": [
-    "provide-mongodb.ps1",
+    "provide-mongodb-client.ps1",
     "assets/mongosh-2.2.6-win32-x64.zip",
     "assets/mongodb-database-tools-windows-x86_64-100.9.4.zip",
     "assets/mongodb-compass-1.43.0-win32-x64.exe"

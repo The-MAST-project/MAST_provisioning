@@ -86,6 +86,20 @@ except ImportError:
         "Then re-run this script."
     )
 
+# Force stdout/stderr to UTF-8 with safe replacement. The default Windows
+# console codepage (often cp1252) chokes on characters like U+FFFD (the
+# replace-char emitted by .decode(errors="replace") for invalid bytes),
+# which has happened during long pip-install spew that contained ANSI
+# screen-clear escapes. A single print raise crashed the streaming log
+# poller mid-run, leaving the operator blind for the rest of the cycle.
+# Reconfiguring to UTF-8 with errors="replace" makes the poller resilient
+# to whatever the unit emits.
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
+except (AttributeError, OSError):
+    pass
+
 import vm_lib
 from vm_lib import (
     VAULT_CREDS,
@@ -129,11 +143,63 @@ MAST_LOGS_BASE = "C:\\MAST\\logs"
 SMOKE_LOG_DIR = f"{MAST_LOGS_BASE}\\smoke"
 VERIFY_LOG_DIR = f"{MAST_LOGS_BASE}\\verify"
 
-ALL_MODULES = [
-    "ascom", "chrome", "cygwin", "git", "mast", "mongodb-client", "nomachine",
-    "nssm", "phd2", "planewave", "python", "stage",
-    "sysinternals", "vscode", "wireshark", "zwo",
-]
+def _discover_all_modules() -> list[str]:
+    """Return module names in execution order by calling the PowerShell helper
+    Get-AllProviderModules in server/lib/mast-modules.psm1.
+
+    Why subprocess instead of a Python-side JSON walk: the same discovery is
+    needed by build-mast.ps1 and check-and-provision.ps1 (both PowerShell),
+    so the canonical reader lives there. Per CLAUDE.md's DRY rule, "the PS
+    file is the source of truth; Python is the caller" -- having a parallel
+    Python implementation that happens to agree today is exactly the seam
+    where drift creeps in once the PS impl gains a feature (e.g. filtering
+    disabled providers) the Python forgets to mirror.
+
+    Cost: one ~300-500 ms powershell.exe spawn at script load, amortized
+    over the rest of the run.
+    """
+    mast_modules_psm1 = REPO_ROOT / "server" / "lib" / "mast-modules.psm1"
+    providers_root = REPO_ROOT / "server" / "providers"
+    if not mast_modules_psm1.is_file():
+        sys.exit(f"ERROR: mast-modules.psm1 not found at {mast_modules_psm1}")
+
+    # One-liner: import the helper, run it, emit one name per line.
+    # Note: -OutputFormat Text + the line-per-name pipe avoids any pywinrm/
+    # XML formatting that ConvertTo-Json or default formatters would add.
+    ps_cmd = (
+        f"Import-Module '{mast_modules_psm1}' -Force -DisableNameChecking; "
+        f"Get-AllProviderModules -ProvidersRoot '{providers_root}' "
+        f"| ForEach-Object {{ $_ }}"
+    )
+    proc = subprocess.run(
+        [
+            "powershell.exe",
+            "-NoProfile", "-NonInteractive",
+            "-ExecutionPolicy", "Bypass",
+            "-OutputFormat", "Text",
+            "-Command", ps_cmd,
+        ],
+        text=True, capture_output=True,
+    )
+    if proc.returncode != 0:
+        sys.exit(
+            f"ERROR: Get-AllProviderModules failed (exit {proc.returncode}). "
+            f"stderr: {proc.stderr.strip()}"
+        )
+    if proc.stderr.strip():
+        # Get-AllProviderModules emits Write-Warning for malformed module.json.
+        # Forward those so the operator sees them at run start.
+        print(proc.stderr.rstrip(), file=sys.stderr)
+
+    return [ln.strip() for ln in proc.stdout.splitlines() if ln.strip()]
+
+
+ALL_MODULES = _discover_all_modules()
+if not ALL_MODULES:
+    sys.exit(
+        f"ERROR: no providers discovered under {REPO_ROOT / 'server' / 'providers'}. "
+        "Check the repo layout."
+    )
 
 VALID_PHASES = frozenset(("build", "transfer", "execute", "verify-run", "verify", "reset"))
 DEFAULT_PHASES = frozenset(("build", "transfer", "execute", "verify", "reset"))
@@ -198,6 +264,32 @@ def timed(label: str) -> Generator[None, None, None]:
     finally:
         elapsed = time.monotonic() - t0
         log(f"=== {label} done in {_format_elapsed(elapsed)} ===")
+
+
+# ---------------------------------------------------------------------------
+# WinRM payload minifier
+# ---------------------------------------------------------------------------
+# pywinrm base64-encodes scripts for -EncodedCommand; the WinRM service caps
+# arguments at ~8192 chars. Strip everything that doesn't change behavior so
+# we stay under that limit: block comments (<#...#>), whole-line # comments,
+# and blank lines. Mid-line trailing # comments are NOT stripped (PS treats
+# some of those as syntactic in rare cases; not worth the surprise).
+def _minify_ps(raw: str) -> str:
+    s = re.sub(r'<#.*?#>', '', raw, flags=re.DOTALL)
+    out: list[str] = []
+    for ln in s.splitlines():
+        stripped = ln.strip()
+        if not stripped:
+            continue
+        if stripped.startswith('#'):
+            continue
+        # PS doesn't care about leading whitespace; dedent every line so
+        # heavily-nested function bodies don't blow the encoded-command
+        # size budget. (Whitespace-sensitive constructs like here-strings
+        # are uncommon in our client scripts; if a future script breaks,
+        # mark it for FilePath-based dispatch instead of minifying.)
+        out.append(stripped)
+    return '\n'.join(out)
 
 
 # ---------------------------------------------------------------------------
@@ -376,13 +468,10 @@ def phase_transfer(
         )
 
         pull_script = REPO_ROOT / "client" / "mast-pull-staging.ps1"
-        raw = pull_script.read_text(encoding="ascii")
-        # pywinrm base64-encodes the script for -EncodedCommand, which has an ~8192-char
-        # argument limit on the WinRM service. Strip the block comment (.SYNOPSIS) and
-        # blank lines to stay under that limit. check-and-provision.ps1 uses
-        # Invoke-Command -FilePath which sends the full file without this constraint.
-        script_text = re.sub(r'<#.*?#>', '', raw, flags=re.DOTALL)
-        script_text = '\n'.join(ln for ln in script_text.splitlines() if ln.strip())
+        # See _minify_ps for why we strip aggressively. check-and-provision.ps1
+        # uses Invoke-Command -FilePath which sends the full file without this
+        # constraint; this path is only for direct WinRM session.run_ps.
+        script_text = _minify_ps(pull_script.read_text(encoding="ascii"))
 
         ps = (
             f"$r=&{{\n{script_text}\n}}"
@@ -683,10 +772,7 @@ def phase_pull_repos(unit: winrm.Session) -> None:
     with timed("PULL-REPOS PHASE"):
         if not PULL_REPOS_SCRIPT.exists():
             raise FileNotFoundError(f"pull-mast-repos.ps1 not found: {PULL_REPOS_SCRIPT}")
-        raw = PULL_REPOS_SCRIPT.read_text(encoding="ascii")
-        # Strip block comments so the encoded command stays under the WinRM 8192-char limit.
-        script_text = re.sub(r'<#.*?#>', '', raw, flags=re.DOTALL)
-        script_text = '\n'.join(ln for ln in script_text.splitlines() if ln.strip())
+        script_text = _minify_ps(PULL_REPOS_SCRIPT.read_text(encoding="ascii"))
         ps = (
             f"&{{\n{script_text}\n}}"
             f" -CloneRoot '{CLONE_ROOT}'\n"

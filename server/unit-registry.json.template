@@ -1,11 +1,7 @@
 [
   {
-    "_comment": "Template entry. Copy this file to unit-registry.json and edit. unit-registry.json is gitignored when it contains real secrets/credentials.",
+    "_comment": "Template entry. Copy this file to unit-registry.json and edit. unit-registry.json is gitignored when it contains real secrets/credentials. The 'modules' field is OPTIONAL: omit it (or leave empty) to provision every provider discovered under server/providers/. Specify it only to deliberately restrict a unit to a subset.",
     "hostname": "mast01",
-    "modules": [
-      "ascom","chrome","cygwin","git","mast","mongodb","nomachine","nssm",
-      "phd2","planewave","python","stage","sysinternals","vscode","wireshark","zwo"
-    ],
     "maintenance_window": { "start_hour": 10, "end_hour": 16 },
     "timezone": "Asia/Jerusalem"
   }

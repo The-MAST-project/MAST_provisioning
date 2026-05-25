@@ -6,7 +6,8 @@
   "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-usbpcap.ps1\" -AssetsRoot \".\"",
   "commandfiles": [
     "provide-usbpcap.ps1",
+    "verify-usbpcap.ps1",
     "assets/USBPcapSetup-1.5.4.0.exe"
   ],
-  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -Command \"$log = Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\verify\\usbpcap-verify.log'; $smoke = Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\smoke\\usbpcap-smoke.txt'; $candidates = @((Join-Path $env:ProgramFiles 'USBPcap\\USBPcapCMD.exe'), 'C:\\Program Files\\USBPcap\\USBPcapCMD.exe', 'C:\\Program Files (x86)\\USBPcap\\USBPcapCMD.exe'); $exe = $null; foreach ($p in $candidates) { if (Test-Path -LiteralPath $p) { $exe = $p; break } }; $svc = Get-Service -Name 'USBPcap' -ErrorAction SilentlyContinue; if ($exe -and $svc) { Set-Content -Path $log -Value (('USBPcapCMD at ' + $exe) + ('; service status=' + $svc.Status)); Set-Content -Path $smoke -Value 'usbpcap_ok' } else { ('USBPcap missing: exe=' + ($exe -ne $null) + ' service=' + ($svc -ne $null)) | Out-File -FilePath $log -Encoding UTF8; exit 1 }\""
+  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\verify-usbpcap.ps1\""
 }

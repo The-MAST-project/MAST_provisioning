@@ -62,18 +62,41 @@ try {
     ${pkgCache} = Join-Path ${CygwinRoot} 'var\cache\setup'
     Confirm-Dir ${pkgCache}
 
+    # Probe the configured proxy. On a unit with direct internet access (e.g.,
+    # the VirtualBox dev VM behind NAT to the host), the Weizmann internal
+    # proxy is unreachable and forcing `--proxy` makes setup.exe fail every
+    # fetch with WinINet error 12007. Only pass the proxy if it actually
+    # answers on its port; otherwise let setup.exe go direct.
+    ${useProxy} = $false
+    if (${ProxyHost}) {
+        ${pp} = ${ProxyHost} -split ':'
+        if (${pp}.Count -eq 2) {
+            ${proxyHostName} = ${pp}[0]; ${proxyPort} = [int]${pp}[1]
+            try {
+                ${tc} = Test-NetConnection -ComputerName ${proxyHostName} -Port ${proxyPort} `
+                    -WarningAction SilentlyContinue -InformationLevel Quiet -ErrorAction Stop
+                ${useProxy} = [bool]${tc}
+            } catch { ${useProxy} = $false }
+            Write-Host ("Proxy '{0}' reachable: {1}" -f ${ProxyHost}, ${useProxy})
+        } else {
+            Write-Host ("WARN: -ProxyHost '{0}' not in host:port form; skipping." -f ${ProxyHost})
+        }
+    }
+
     ${setupArgs} = @(
         '--quiet-mode',
         '--no-shortcuts','--no-desktop','--no-startmenu','--no-write-registry',
         '--upgrade-also',
         '--root', ${CygwinRoot},
         '--site', ${MirrorSite},
-        '--proxy', ${ProxyHost},
         '--local-package-dir', ${pkgCache},
         '--packages', ${Packages}
     )
+    if (${useProxy}) {
+        ${setupArgs} = @('--proxy', ${ProxyHost}) + ${setupArgs}
+    }
 
-    Write-Host "Running ${setupPath} for packages: ${Packages}"
+    Write-Host ("Running ${setupPath} for packages: ${Packages} (proxy={0})" -f $(if (${useProxy}) { ${ProxyHost} } else { 'direct' }))
     ${proc} = Start-Process -FilePath ${setupPath} -ArgumentList ${setupArgs} `
         -Wait -PassThru -NoNewWindow
     try { ${proc}.Refresh() } catch {}

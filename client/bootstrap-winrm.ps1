@@ -392,6 +392,100 @@ try {
     Write-BootstrapMsg '--- Firewall TCP 5985 ---' 'Cyan'
     Ensure-MastWinRmFirewallRule5985 -RuleDisplayName 'MAST - WinRM HTTP'
 
+    # --- OpenSSH Server (capability + service + firewall + password auth) ---
+    #
+    # Installs the Windows in-box OpenSSH.Server optional capability and
+    # makes it operational. Owned by bootstrap (not by the openssh-server
+    # provider) because Add-WindowsCapability is rejected by DISM/CBS under
+    # the WinRM network logon used by the provider pipeline, even when the
+    # user is a full admin (the network-logon token isn't enough for
+    # CBS_E_NOT_APPLICABLE-style checks). Bootstrap runs interactively as
+    # admin, so the install just works here. See compare-mastw/GAPS.md +
+    # the 2026-05-25 DECISIONS entry.
+    #
+    # Steps mirrored from the previous provide-openssh-server.ps1:
+    #   1. Add-WindowsCapability OpenSSH.Server (idempotent)
+    #   2. Set sshd Automatic, Start-Service
+    #   3. Same for ssh-agent (helpful, not strictly required)
+    #   4. Firewall: inbound TCP 22 (using the same helper as 5985)
+    #   5. sshd_config: assert PasswordAuthentication yes (matches mastw's
+    #      working entry point of mast / physics over SSH)
+    Write-BootstrapMsg '' 'Cyan'
+    Write-BootstrapMsg '--- OpenSSH Server ---' 'Cyan'
+    try {
+        $sshCap = Get-WindowsCapability -Online -Name 'OpenSSH.Server~~~~0.0.1.0' -ErrorAction Stop
+        if ($sshCap.State -ne 'Installed') {
+            Write-BootstrapMsg ("  Adding OpenSSH.Server capability (current state: {0})..." -f $sshCap.State) 'White'
+            Add-WindowsCapability -Online -Name 'OpenSSH.Server~~~~0.0.1.0' -ErrorAction Stop | Out-Null
+            Write-BootstrapMsg '  OpenSSH.Server capability installed.' 'Green'
+        } else {
+            Write-BootstrapMsg '  OpenSSH.Server capability already installed.' 'DarkGray'
+        }
+    } catch {
+        Write-BootstrapMsg ("  WARN: Add-WindowsCapability failed: {0}" -f $_.Exception.Message) 'Yellow'
+        Write-BootstrapMsg '  SSH provider verify on this unit will fail until the capability is installed by another means.' 'Yellow'
+    }
+
+    foreach ($svc in @('sshd', 'ssh-agent')) {
+        $s = Get-Service -Name $svc -ErrorAction SilentlyContinue
+        if ($null -eq $s) {
+            Write-BootstrapMsg ("  Service '{0}' not registered (capability install failed?); skipping." -f $svc) 'Yellow'
+            continue
+        }
+        try {
+            Set-Service -Name $svc -StartupType Automatic -ErrorAction Stop
+            if ($s.Status -ne 'Running') {
+                Start-Service -Name $svc -ErrorAction Stop
+            }
+            Write-BootstrapMsg ("  {0}: StartType=Automatic, Status=Running." -f $svc) 'Green'
+        } catch {
+            Write-BootstrapMsg ("  WARN: configuring '{0}' failed: {1}" -f $svc, $_.Exception.Message) 'Yellow'
+        }
+    }
+
+    # Inbound TCP 22. Reuse the firewall-rule pattern from 5985.
+    $sshFwRule = 'MAST OpenSSH Server (TCP 22)'
+    if (Test-MastNetFirewallRuleExists -DisplayName $sshFwRule) {
+        Write-BootstrapMsg "  Firewall rule '$sshFwRule' already exists." 'DarkGray'
+    } else {
+        try {
+            New-NetFirewallRule -DisplayName $sshFwRule `
+                -Direction Inbound -Protocol TCP -LocalPort 22 `
+                -Action Allow -Profile Any -ErrorAction Stop | Out-Null
+            Write-BootstrapMsg "  Firewall rule '$sshFwRule' created." 'Green'
+        } catch {
+            Write-BootstrapMsg ("  WARN: New-NetFirewallRule for TCP 22 failed: {0}" -f $_.Exception.Message) 'Yellow'
+        }
+    }
+
+    # sshd_config: assert PasswordAuthentication yes. Touch the file only if
+    # needed so the run stays idempotent. mastw uses password auth as the
+    # canonical entry point (mast / physics over SSH).
+    $sshdCfg = 'C:\ProgramData\ssh\sshd_config'
+    if (Test-Path -LiteralPath $sshdCfg) {
+        try {
+            $cfg = Get-Content -LiteralPath $sshdCfg -Raw -Encoding UTF8
+            $new = $cfg
+            if ($new -match '(?m)^\s*PasswordAuthentication\s+no\b') {
+                $new = [regex]::Replace($new, '(?m)^\s*PasswordAuthentication\s+no\b', 'PasswordAuthentication yes')
+            }
+            if ($new -notmatch '(?m)^\s*PasswordAuthentication\s+yes\b') {
+                $new = $new.TrimEnd() + "`r`nPasswordAuthentication yes`r`n"
+            }
+            if ($new -ne $cfg) {
+                Set-Content -LiteralPath $sshdCfg -Value $new -Encoding UTF8
+                Restart-Service -Name 'sshd' -Force -ErrorAction SilentlyContinue
+                Write-BootstrapMsg "  sshd_config: PasswordAuthentication asserted yes (sshd restarted)." 'Green'
+            } else {
+                Write-BootstrapMsg '  sshd_config: PasswordAuthentication already yes; no change.' 'DarkGray'
+            }
+        } catch {
+            Write-BootstrapMsg ("  WARN: sshd_config patch failed: {0}" -f $_.Exception.Message) 'Yellow'
+        }
+    } else {
+        Write-BootstrapMsg ("  sshd_config not found at {0} (capability may have failed earlier)." -f $sshdCfg) 'Yellow'
+    }
+
     # --- Computer rename ---
     if (-not $SkipComputerRename) {
         Write-BootstrapMsg '' 'Cyan'

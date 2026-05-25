@@ -31,6 +31,15 @@ if (-not (Test-Path ${solveField})) {
     exit 1
 }
 
+# Put C:\cygwin64\bin and the astrometry bin on PATH up front. solve-field.exe
+# links against cygwin1.dll + the package DLLs that astrometry-dependencies
+# installed under C:\cygwin64\bin, and the banner check below invokes the
+# binary directly. Without this prefix, even the banner exits with
+# STATUS_DLL_NOT_FOUND (0xC0000135 / -1073741515) because the loader can't
+# find cygwin1.dll. The same PATH also covers the forked /bin/sh children
+# launched during the real plate solve below.
+${env:PATH} = 'C:\cygwin64\bin;' + (Join-Path ${InstallRoot} 'bin') + ';' + ${env:PATH}
+
 # ---------------------------------------------------------------------------
 # Smoke 1: banner. solve-field with no args must exit 0 and print the
 # version banner. Proves the binary loads, all DLL deps resolve, and the
@@ -124,10 +133,8 @@ Set-Content -LiteralPath ${cfgPath} -Encoding ASCII -Value @(
 )
 Write-VLog ("astrometry.cfg: cpulimit 300; add_path {0}; autoindex" -f ${cygIndex})
 
-# Make sure Cygwin's bin is on PATH so the solver's child processes
-# (image2xy, fits2fits, uniformize, removelines, etc.) can find cygwin1.dll
-# and the package DLLs that astrometry-dependencies installed.
-${env:PATH} = 'C:\cygwin64\bin;' + (Join-Path ${InstallRoot} 'bin') + ';' + ${env:PATH}
+# PATH was already pre-set near the top of this script (before the banner
+# check); leaving the line above for back-compat with that earlier setup.
 
 ${solveOut} = Join-Path ${env:TEMP} 'astro-solve-out.txt'
 ${solveErr} = Join-Path ${env:TEMP} 'astro-solve-err.txt'

@@ -210,6 +210,42 @@ Ensure-MastSmbShare `
     -EveryoneSid $everyoneSid
 
 # ---------------------------------------------------------------------------
+# Align share encryption with the server's RejectUnencryptedAccess setting.
+#
+# Win11 24H2+ ships with RejectUnencryptedAccess=True by default. If we leave
+# shares as EncryptData=False, EVERY remote client gets blocked (the unit
+# sees `net use` hang or return error 67). The simplest robust fix is to
+# enable per-share encryption: it costs a couple of percent CPU, works
+# regardless of the server-level setting, and stays correct across future
+# Windows updates that flip more defaults.
+foreach ($sn in @('mast-staging','mast-shared')) {
+    $s = Get-SmbShare -Name $sn -ErrorAction SilentlyContinue
+    if ($s -and -not $s.EncryptData) {
+        Set-SmbShare -Name $sn -EncryptData $true -Force -ErrorAction Stop | Out-Null
+        Write-Host "Enabled SMB encryption on '$sn' (required when host has RejectUnencryptedAccess=True)."
+    }
+}
+
+# ---------------------------------------------------------------------------
+# Pre-flight: assert the host is actually in a state where units can pull.
+# Catches the failure family that bit us on 2026-05-25: empty SMB interfaces,
+# RejectUnencryptedAccess/EncryptData mismatch, loopback auth drift.
+# ---------------------------------------------------------------------------
+. (Join-Path $PSScriptRoot 'lib\preflight-smb.ps1')
+$preflight = Test-MastSmbHostReady `
+    -ShareNames @('mast-staging','mast-shared') `
+    -TransferUser $smbUser `
+    -TransferPass $smbPass
+if (-not $preflight.Ok) {
+    Write-Host ""
+    Write-Host "==========================================" -ForegroundColor Red
+    Write-Host "SMB pre-flight FAILED after setup. Fix before running provisioning:" -ForegroundColor Red
+    $preflight.Failures | ForEach-Object { Write-Host ("  - {0}" -f $_) -ForegroundColor Red }
+    Write-Host "==========================================" -ForegroundColor Red
+    exit 1
+}
+
+# ---------------------------------------------------------------------------
 # Done
 # ---------------------------------------------------------------------------
 Write-Host ""
