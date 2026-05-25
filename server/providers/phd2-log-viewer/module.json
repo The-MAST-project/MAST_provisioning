@@ -1,0 +1,12 @@
+{
+  "name": "phd2-log-viewer",
+  "version": "0.6.4",
+  "description": "Install PHDLogView (Andy Galasso's offline PHD2 guide-log analyzer). Companion to the phd2 provider (separate app, separate installer).",
+  "order": 1450,
+  "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-phd2-log-viewer.ps1\" -AssetsRoot \".\"",
+  "commandfiles": [
+    "provide-phd2-log-viewer.ps1",
+    "assets/phdlogview_setup-0.6.4.exe"
+  ],
+  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -Command \"$log = Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\verify\\phd2-log-viewer-verify.log'; $smoke = Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\smoke\\phd2-log-viewer-smoke.txt'; $candidates = @((Join-Path $env:ProgramFiles 'PHDLogView\\phdlogview.exe'), 'C:\\Program Files\\PHDLogView\\phdlogview.exe', 'C:\\Program Files (x86)\\PHDLogView\\phdlogview.exe'); $exe = $null; foreach ($p in $candidates) { if (Test-Path -LiteralPath $p) { $exe = $p; break } }; if ($exe) { Set-Content -Path $log -Value ('PHDLogView at ' + $exe); Set-Content -Path $smoke -Value 'phd2_log_viewer_ok' } else { 'phdlogview.exe not found' | Out-File -FilePath $log -Encoding UTF8; exit 1 }\""
+}

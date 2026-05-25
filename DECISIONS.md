@@ -2,6 +2,86 @@
 
 ---
 
+## [2026-05-25] Add netpbm + python39-numpy to astrometry-deps; add phd2-log-viewer and usbpcap providers; close several GAPS items
+
+**Why:** End-to-end debugging of the astrometry FITS smoke against
+`C:\MAST\full-frame.fits` on the dev host surfaced two real holes in
+`astrometry-dependencies`' package list, plus several lower-priority GAPS
+items the user asked to close in the same pass.
+
+Both new astrometry-deps gaps were undetectable via `cygcheck` because
+they are not *linked* dependencies of the astrometry binaries:
+
+1. `solve-field` calls `pnmfile` through `/bin/sh -c pnmfile ...` to
+   detect image type. `pnmfile` lives in the `netpbm` package (the
+   binaries package), distinct from `libnetpbm10` (the runtime library
+   package, which was already listed). Without `netpbm`, solve-field
+   fails mid-pipeline with `pnmfile: command not found`.
+2. `removelines` and `uniformize` are Python helpers in solve-field's
+   pipeline that `import numpy.linalg`. Without `python39-numpy`, they
+   fail with `ImportError: No such file or directory` on
+   `numpy.linalg._umath_linalg`. The error surfaces deep inside a fork
+   chain and is easy to misdiagnose as a Cygwin fork/rebase bug
+   (which is what consumed a fair amount of time today before tracing
+   it back to the missing numpy package).
+
+**What:**
+
+- **`server/providers/astrometry-dependencies/`**:
+  - `provide-astrometry-dependencies.ps1` `$Packages` list extended to
+    include `netpbm` (runtime binaries) and `python39-numpy` (Python
+    runtime import). The comment above the list explains why these two
+    cannot be discovered by `cygcheck` and must be enumerated by hand.
+  - `DEPENDENCIES.md` gained a new "Runtime PATH-resolved helpers"
+    section documenting both, the failure modes they cause when omitted,
+    and why `cygcheck` does not catch them.
+- **`server/providers/phd2-log-viewer/`** (new, order 1450): ships
+  `phdlogview_setup-0.6.4.exe` (Andy Galasso's PHDLogView 0.6.4),
+  silent InnoSetup install
+  (`/VERYSILENT /SP- /SUPPRESSMSGBOXES /NORESTART`). Verify checks for
+  `phdlogview.exe` under Program Files. Lives next to existing `phd2`
+  provider (order 1400). Closes the corresponding GAPS.md item.
+- **`server/providers/usbpcap/`** (new, order 1050): ships
+  `USBPcapSetup-1.5.4.0.exe`, silent NSIS install (`/S`). Verify checks
+  for `USBPcapCMD.exe` and the `USBPcap` Windows service. Sits between
+  `npcap` (1000) and `wireshark` (1100). Closes the corresponding
+  GAPS.md item.
+- **`server/providers/wireshark/module.json`**: added a `pin_target`
+  field documenting that 4.6.0 is deliberately newer than mastw's 4.4.3
+  ("Do NOT downgrade this provider to match mastw -- newer Wireshark is
+  a deliberate exception in compare-mastw/GAPS.md"). Mirrors the
+  existing `pin_target` on `zwo/module.json` so the convention is
+  consistent and the answer to "why is this version not matching mastw"
+  lives in the module.json itself.
+- **`compare-mastw/GAPS.md`**: large pass marking ImDisk, NoMachine
+  server, windows_exporter, MongoDB Compass, GitHub CLI, proxy env
+  vars, SSH server, and reboot orchestrator (both halves) as [DONE];
+  marking Visual Studio Build Tools + VS Community + Windows SDK + WPT
+  as [WON'T DO] (production telescope units don't compile anything on
+  themselves); narrowing the open list to ZWO + ASIStudio downgrades,
+  XIMEA/XILab no-provider, XIMEA/Pleora env vars (deferred until
+  XIMEA driver itself lands as a provider), and the autounattend
+  "create mast user, don't rename" change.
+
+**Implications:**
+
+- The astrometry smoke against a real FITS will now actually solve
+  end-to-end on a freshly-provisioned unit. Previously the smoke would
+  pass on the banner check but the FITS solve would have failed (silent
+  skip via the `solve=skipped` marker) because `pnmfile` or numpy was
+  missing.
+- The pin-target convention now applies to both downgrade-pending
+  providers (`zwo`) and intentional-upgrade providers (`wireshark`).
+  Future audits asking "why does this version not match mastw" should
+  always be answerable from the module.json alone.
+- `gh` (added earlier today) plus `phd2-log-viewer` and `usbpcap` close
+  the bulk of the GAPS.md "new provider needed" list. The remaining
+  open items are either decisions waiting on someone (ZWO/ASIStudio
+  installer hunts), upstream-driver dependencies (XIMEA env vars), or
+  bootstrap-stage work (mast user creation in autounattend).
+
+---
+
 ## [2026-05-25] Promote imdisk to order 250 with immediate mount; add gh provider; switch astrometry smoke to a real telescope FITS
 
 **Why:** Three small changes that interlock around the astrometry verify step.

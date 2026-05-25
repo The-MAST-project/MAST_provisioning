@@ -26,11 +26,24 @@ it at a frozen mirror snapshot.
 | `cygwin`          | 3.6.9-1        | `cygwin1.dll`             | Cygwin runtime; ABI-compat host required.  |
 | `libcfitsio10`    | 4.6.4-1        | `cygcfitsio-10.dll`       | FITS I/O. Used by solve-field and friends. |
 | `libwcs4`         | 4.18-1         | `cygwcs-4.dll`            | WCSLIB; world-coordinate-system math.      |
-| `libnetpbm10`     | 10.80.00-1     | `cygnetpbm-10.dll`        | PNM utilities (image2pnm, fitstopnm).      |
+| `libnetpbm10`     | 10.80.00-1     | `cygnetpbm-10.dll`        | PNM utilities linked deps.                 |
 | `libcairo2`       | 1.18.4-1       | `cygcairo-2.dll`          | Plot rendering (plot-constellations etc.). |
 | `libpng16`        | 1.6.47-2       | `cygpng16-16.dll`         | PNG output for plot tools.                 |
 | `libjpeg8`        | 3.1.4.1-1      | `cygjpeg-8.dll`           | JPEG support.                              |
 | `python39`        | 3.9.16-1       | `libpython3.9.dll`        | Required by the SWIG-generated `_*.dll`s.  |
+
+## Runtime PATH-resolved helpers (not linked, but solve-field forks them)
+
+These are **not** discoverable via `cygcheck` since `solve-field` invokes them
+through `/bin/sh -c <tool>`, not via dynamic linking. They must be enumerated
+explicitly in the package list. Missing them produces failures like
+`pnmfile: command not found` or `ImportError: No such file or directory`
+mid-solve -- hours of debugging if you didn't know to look here.
+
+| Package          | Provides (runtime)                  | Why                                                            |
+|------------------|-------------------------------------|----------------------------------------------------------------|
+| `netpbm`         | `pnmfile`, `pnmtofits`, `jpegtopnm` | `solve-field` calls `pnmfile` to identify uploaded image data. |
+| `python39-numpy` | `numpy.linalg` + extensions         | `removelines` and `uniformize` are Python helpers in `solve-field`'s pipeline; they `import numpy.linalg`. |
 
 ## Transitive dependencies (pulled in by the above)
 
@@ -102,10 +115,14 @@ setup-x86_64.exe ^
 
 Cygwin's `setup-x86_64.exe` resolves dependencies recursively, so listing
 only the top-level packages (`libcfitsio10`, `libwcs4`, `libnetpbm10`,
-`libcairo2`, `libpng16`, `libjpeg8`, `python39`) is enough in practice -
-the rest will be pulled in automatically. The full 42-package list above
-exists so the install is deterministic and reproducible without trusting
-upstream dep metadata to be stable across Cygwin point releases.
+`libcairo2`, `libpng16`, `libjpeg8`, `python39`) is enough in practice for
+the linked-DLL closure. The full 42-package list above exists so the install
+is deterministic and reproducible without trusting upstream dep metadata to
+be stable across Cygwin point releases.
+
+`netpbm` and `python39-numpy` are *not* in any of those transitive trees
+because nothing links against them at build time -- they are only invoked
+at runtime via PATH. They must be listed explicitly.
 
 ## How to regenerate this list
 

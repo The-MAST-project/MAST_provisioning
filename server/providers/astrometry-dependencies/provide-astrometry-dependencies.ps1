@@ -8,18 +8,24 @@ param(
     [string]${SetupName}   = 'setup-x86_64.exe'
 )
 
-# Top-level Cygwin packages whose runtime DLLs astrometry.net 0.97 links against.
-# setup-x86_64.exe resolves the transitive dependency closure automatically; see
-# ../cygwin/ASTROMETRY-DEPS.md for the full 42-package closure that this resolves to.
+# Top-level Cygwin packages whose runtime DLLs *and* runtime PATH tools
+# astrometry.net 0.97 needs. setup-x86_64.exe resolves the transitive dependency
+# closure automatically; see DEPENDENCIES.md for the full 42-package DLL
+# closure this resolves to. We also list a few packages whose contribution is
+# *not* a linked DLL but a PATH-resolved helper that solve-field invokes
+# through /bin/sh -- those cannot be discovered by cygcheck, so they are
+# enumerated explicitly here.
 ${Packages} = @(
     'cygwin',
     'libcfitsio10',
     'libwcs4',
-    'libnetpbm10',
+    'libnetpbm10',     # cygnetpbm-10.dll (linked dep of solve-field/wcs tools)
+    'netpbm',          # pnmfile etc. on PATH; solve-field calls 'pnmfile' via /bin/sh
     'libcairo2',
     'libpng16',
     'libjpeg8',
-    'python39'
+    'python39',
+    'python39-numpy'   # removelines/uniformize import numpy.linalg at runtime
 ) -join ','
 
 # --- Import shared helpers from provisioning.psm1 (PS 5.1 safe) ---
