@@ -1,0 +1,13 @@
+﻿{
+  "name": "astrometry-dependencies",
+  "version": "0.97-deps",
+  "description": "Install Cygwin packages required by astrometry.net (cfitsio, wcslib, netpbm, cairo, python39, and their transitive deps) via setup-x86_64.exe.",
+  "order": 400,
+  "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-astrometry-dependencies.ps1\" -AssetsRoot \".\" -CygwinRoot \"C:\\cygwin64\"",
+  "commandfiles": [
+    "provide-astrometry-dependencies.ps1",
+    "assets/setup-x86_64.exe"
+  ],
+  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -Command \"$bash='C:\\cygwin64\\bin\\bash.exe'; $log=Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\verify\\astrometry-dependencies-verify.log'; $smoke=Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\smoke\\astrometry-dependencies-smoke.txt'; $null=New-Item -ItemType Directory -Force -Path (Split-Path $log -Parent), (Split-Path $smoke -Parent); $required=@('cygcfitsio-10.dll','cygwcs-4.dll','cygnetpbm-10.dll','cygcairo-2.dll','cygpng16-16.dll','cygjpeg-8.dll','cygcurl-4.dll','libpython3.9.dll'); $missing=@(); foreach ($d in $required) { if (-not (Test-Path (Join-Path 'C:\\cygwin64\\bin' $d))) { $missing += $d } }; if ($missing.Count -gt 0) { ('Missing DLLs: ' + ($missing -join ', ')) | Out-File -FilePath $log -Encoding UTF8; exit 1 } else { 'All astrometry runtime DLLs present in C:\\cygwin64\\bin' | Out-File -FilePath $log -Encoding UTF8; Set-Content -Path $smoke -Value 'astrometry_deps_ok' -Encoding ASCII }\""
+}
+

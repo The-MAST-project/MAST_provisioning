@@ -2,7 +2,7 @@
   "name": "python",
   "version": "3.12.2",
   "description": "Install Python 3.12.2 and virtualenv. Pinned to mastw/mast00.",
-  "order": 20,
+  "order": 600,
   "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-python.ps1\" -AssetsRoot \".\" -InstallDir \"C:\\Python312\"",
   "commandfiles": [
     "provide-python.ps1",
@@ -10,3 +10,4 @@
   ],
   "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -Command \"$py = 'C:\\Python312\\python.exe'; $log = Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\verify\\python-verify.log'; if (Test-Path $py) { & $py --version | Out-File -FilePath $log -Encoding UTF8; & $py -m virtualenv --version | Out-File -FilePath $log -Append -Encoding UTF8; Set-Content -Path (Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\smoke\\python-smoke.txt') -Value 'python_ok' } else { 'python.exe not found' | Out-File -FilePath $log -Encoding UTF8; exit 1 }\""
 }
+

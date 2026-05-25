@@ -2,7 +2,7 @@
   "name": "sysinternals",
   "version": "rolling",
   "description": "Install Sysinternals Suite tools for system diagnostics and monitoring.",
-  "order": 140,
+  "order": 2000,
   "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-sysinternals.ps1\" -AssetsRoot \".\" -InstallRoot \"C:\\Program Files\\Sysinternals\"",
   "commandfiles": [
     "provide-sysinternals.ps1",
@@ -10,3 +10,4 @@
   ],
   "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -Command \"${sysintPath}='C:\\Program Files\\Sysinternals'; ${log}=Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\verify\\sysinternals-verify.log'; if (Test-Path ${sysintPath}) { Set-Content -Path ${log} -Value 'Sysinternals installed successfully'; Set-Content -Path (Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\smoke\\sysinternals-smoke.txt') -Value 'sysinternals_ok' } else { 'Sysinternals directory not found at ' + ${sysintPath} | Out-File -FilePath ${log} -Encoding UTF8; exit 1 }\""
 }
+

@@ -2,7 +2,7 @@
   "name": "nomachine",
   "version": "9.0.188",
   "description": "Install NoMachine Enterprise Desktop (server-side, accepts incoming sessions) and apply license if provided. Client is intentionally not installed.",
-  "order": 70,
+  "order": 1300,
   "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-nomachine.ps1\" -AssetsRoot \".\"",
   "commandfiles": [
     "provide-nomachine.ps1",
@@ -11,3 +11,4 @@
   ],
   "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\verify-nomachine.ps1\""
 }
+

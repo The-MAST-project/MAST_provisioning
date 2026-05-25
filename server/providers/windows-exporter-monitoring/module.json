@@ -1,8 +1,8 @@
-{
+﻿{
   "name": "windows-exporter-monitoring",
   "version": "0.31.7",
   "description": "Install Prometheus windows_exporter (LocalSystem service, TCP 9182) to match mastw host-level metrics export. Optionally repairs missing Windows performance counters first.",
-  "order": 180,
+  "order": 2400,
   "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-windows-exporter-monitoring.ps1\" -AssetsRoot \".\"",
   "commandfiles": [
     "provide-windows-exporter-monitoring.ps1",
@@ -11,3 +11,4 @@
   ],
   "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -Command \"${log}=Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\verify\\windows-exporter-verify.log'; try { ${r}=Invoke-WebRequest -Uri 'http://127.0.0.1:9182/metrics' -UseBasicParsing -TimeoutSec 10 -ErrorAction Stop; if (${r}.StatusCode -eq 200 -and ${r}.Content -match '# HELP') { Set-Content -Path ${log} -Value ('http 200 bytes=' + ${r}.RawContentLength); Set-Content -Path (Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\smoke\\windows-exporter-smoke.txt') -Value 'windows_exporter_ok' } else { ('unexpected response status=' + ${r}.StatusCode) | Out-File -FilePath ${log} -Encoding UTF8; exit 1 } } catch { ('exception=' + $_.Exception.Message) | Out-File -FilePath ${log} -Encoding UTF8; exit 1 }\""
 }
+

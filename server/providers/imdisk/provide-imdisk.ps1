@@ -106,6 +106,42 @@ try {
         -ErrorAction Stop | Out-Null
     Write-ImDiskLog ("Scheduled task created: {0}" -f ${TaskName})
 
+    # Mount D: immediately if (a) the image is present and (b) D: is not
+    # already in use. This means provisioning steps that run later in the
+    # same session (e.g. astrometry's smoke solve, which needs the index
+    # files on D:\mast-indexes) do not have to wait for a reboot. The
+    # scheduled task above still re-establishes the mount on every boot,
+    # so the immediate mount and the persistent mount stay consistent.
+    if (-not (Test-Path -LiteralPath ${ImagePath})) {
+        Write-ImDiskLog ("[INFO] Skipping immediate mount: image not present at {0}. Boot task will pick it up later." -f ${ImagePath})
+    } elseif (Test-Path -LiteralPath 'D:\') {
+        Write-ImDiskLog "[INFO] D: already in use; skipping immediate mount. Existing mount left intact."
+    } else {
+        Write-ImDiskLog ("Mounting D: from {0} via ImDisk (immediate) ..." -f ${ImagePath})
+        ${mountArgs} = @('-a', '-m', 'D:', '-f', ${ImagePath})
+        ${mp} = Start-Process -FilePath ${imdiskExe} -ArgumentList ${mountArgs} `
+            -PassThru -Wait -WindowStyle Hidden
+        try { ${mp}.Refresh() } catch {}
+        ${mountExit} = ${mp}.ExitCode
+        if ($null -eq ${mountExit}) {
+            throw "imdisk -a -m D: did not report an exit code (treating as failure)."
+        }
+        if (${mountExit} -ne 0) {
+            throw ("imdisk -a -m D: exited {0}. Boot-time task is still registered, but the immediate mount failed." -f ${mountExit})
+        }
+        # Confirm the mount actually surfaced as a drive. ImDisk can return 0 even
+        # if the mount silently misbehaved, so probe the drive root explicitly.
+        ${tries} = 0
+        while ((-not (Test-Path -LiteralPath 'D:\')) -and (${tries} -lt 10)) {
+            Start-Sleep -Milliseconds 200
+            ${tries}++
+        }
+        if (-not (Test-Path -LiteralPath 'D:\')) {
+            throw "imdisk reported success but D:\ is not visible after 2s. Check imdisk service state."
+        }
+        Write-ImDiskLog "D: mounted successfully (immediate)."
+    }
+
     Remove-Item -Path ${extractDir} -Recurse -Force -ErrorAction SilentlyContinue
 
     Write-ImDiskLog "ImDisk installation completed successfully."

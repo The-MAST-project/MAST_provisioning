@@ -2,7 +2,7 @@
   "name": "stage",
   "version": "xilab-1.20.12",
   "description": "Install Stage (telescope mount control software) for mount automation and tracking.",
-  "order": 100,
+  "order": 1600,
   "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-stage.ps1\" -AssetsRoot \".\" -InstallRoot \"C:\\Program Files\\Stage\"",
   "commandfiles": [
     "provide-stage.ps1",
@@ -12,3 +12,4 @@
   ],
   "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\verify-stage.ps1\""
 }
+

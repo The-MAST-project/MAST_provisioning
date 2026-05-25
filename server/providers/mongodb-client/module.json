@@ -2,7 +2,7 @@
   "name": "mongodb-client",
   "version": "mongosh-2.2.6/tools-100.9.4",
   "description": "Install MongoDB client tools: mongosh, Database Tools, and Compass (GUI). Does NOT install or start mongod.",
-  "order": 40,
+  "order": 900,
   "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-mongodb.ps1\" -AssetsRoot \".\" -InstallRoot \"C:\\Program Files\\MongoDB\"",
   "commandfiles": [
     "provide-mongodb.ps1",
@@ -12,3 +12,4 @@
   ],
   "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -Command \"$log = Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\verify\\mongodb-client-verify.log'; $mongosh = Get-ChildItem 'C:\\Program Files\\MongoDB' -Recurse -Filter 'mongosh.exe' -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName; if ($mongosh) { & $mongosh --nodb --eval 'print(version())' | Out-File $log; Set-Content -Path (Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\smoke\\mongodb-client-smoke.txt') -Value 'mongodb-client_ok' } else { 'mongosh.exe not found' | Out-File $log; exit 1 }\""
 }
+

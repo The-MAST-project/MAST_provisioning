@@ -2,6 +2,229 @@
 
 ---
 
+## [2026-05-25] Promote imdisk to order 250 with immediate mount; add gh provider; switch astrometry smoke to a real telescope FITS
+
+**Why:** Three small changes that interlock around the astrometry verify step.
+
+1. The astrometry smoke now solves `C:\MAST\full-frame.fits` (8288x5644
+   mast00 frame, no WCS) instead of the bundled `apod5.xyls`. The real
+   solve exercises the full pipeline (image2xy + fits2fits + uniformize +
+   the engine itself); the xyls smoke only proved augment-xylist's
+   star-list path worked. The mast00 frame needs an index file that
+   covers a ~12 arcmin field; the operational index set lives on D:
+   under `D:\mast-indexes` (series 5202+5203).
+2. `imdisk` (which mounts D: from `C:\MAST\Shared\MAST-15GB-indexes-5202+5203.img`)
+   was at order 2300 and only mounted D: at the next reboot. With the
+   astrometry smoke at order 500, D: would not be reachable yet, and the
+   smoke would have to either fail or skip the solve. Moving imdisk to
+   order 250 puts the mount in place before any provider that needs D:.
+3. We have started using `gh` interactively for PR + issue ops on units
+   (alongside `git`). Adding it as a first-class provider gets it into
+   the staged set and on PATH automatically.
+
+**What:**
+
+- **`server/providers/imdisk/`**:
+  - `module.json` order 2300 -> 250.
+  - `provide-imdisk.ps1` extended: after registering the boot-time
+    scheduled task, if the backing image is present AND D: is not already
+    in use, immediately runs `imdisk -a -m D: -f $ImagePath` and waits
+    for `D:\` to surface (up to 2s, 200ms poll). If the image is missing,
+    logs an `[INFO]` and falls back on the boot task as before. The
+    scheduled-task path is unchanged, so the mount stays consistent
+    across reboots.
+- **`server/providers/astrometry/verify-astrometry.ps1`**:
+  - Smoke 2 input switched from bundled demo data to
+    `C:\MAST\full-frame.fits`.
+  - Index discovery walks an ordered list of candidate dirs
+    (`D:\mast-indexes`, `C:\cygwin64\usr\local\astrometry\data`) and uses
+    the first that actually contains `index-*.fits`. If no indexes are
+    reachable the verify gracefully skips the solve, logs the reason, and
+    passes on banner-only -- keeping the provider tractable when the
+    `imdisk` image has not yet been staged onto the host.
+  - Solve args tuned for the mast00 plate scale: `--downsample 4`,
+    `--scale-units arcsecperpix --scale-low 0.05 --scale-high 0.30`
+    (covers ~0.09 arcsec/pix with margin for focus/temperature drift),
+    `--no-verify --no-plots`, and `-N none --new-fits none` so the
+    solver only emits the small artifacts we actually inspect (`.solved`
+    marker and `.wcs` header).
+  - On success the smoke marker now records `revision`, `wcs_bytes`, and
+    the recovered `CRVAL1/CRVAL2` so a glance at the file tells you the
+    plate solved to a real sky position, not just "ran without crashing."
+- **`server/providers/gh/`** (new):
+  - Ships `gh_2.92.0_windows_amd64.msi`, runs `msiexec /qn /norestart`
+    with a per-session MSI log, and ensures `C:\Program Files\GitHub CLI`
+    is on system PATH. Verify checks the binary exists, runs
+    `gh --version`, writes the standard smoke marker.
+  - Order 750, between `git` (700) and `ascom` (800).
+
+**Implications:**
+
+- D: is now mounted during provisioning, not after the first reboot.
+  Anything that depends on D: being absent during stage-2 provisioning
+  (none known) would change behavior.
+- The astrometry smoke is now a real plate-solve test. It needs a
+  presolvable FITS at `C:\MAST\full-frame.fits` and at least one index
+  file under one of the configured search paths. Both are met on a
+  standard MAST unit; on a stripped-down test VM neither will be present,
+  the solve will skip, and the smoke will pass on the banner check alone.
+  This is intentional: the smoke degrades cleanly instead of producing
+  spurious failures in test scenarios.
+- New runtime dependency: `gh` is on PATH after provisioning. Code that
+  shells out to `gh` (none in-repo yet) can assume it is available
+  starting at order 750.
+
+---
+
+## [2026-05-25] Renumber providers to 100-step grid; drop install-clean-cygwin.ps1
+
+**Why:** Provider `order` values were assigned ad-hoc as features landed
+(`proxy=5, openssh-server=8, cygwin=10, python=20, git=25, ascom=30, ...`).
+Two problems compounded:
+
+1. `build/build-mast.ps1:265` emits a synthetic verify step at
+   `provider.order + 1`. So `cygwin` (order 10) actually occupies slots 10
+   AND 11. The astrometry split landed today at `order=11` and `order=12`,
+   which collided with `cygwin`-verify and `astrometry-dependencies`-verify
+   respectively. The provisioning sort would still run them in roughly the
+   right sequence (ties broken by file enumeration), but two providers at
+   the same numeric order is a footgun waiting for a real incident.
+2. Even where no collision existed, several adjacent providers were one
+   slot apart (`proxy=5, openssh=8` -> gap of 3, of which 1 is consumed
+   by openssh-verify). Inserting a new provider between two of those
+   required also bumping every downstream provider.
+
+Rather than patch this incrementally we picked an absolute grid up front.
+
+**What:**
+
+- Every `module.json` `order` was multiplied so that, sorted by current
+  position, providers sit at `100, 200, 300, ...` with `reboot` pinned at
+  `9999`. Concretely:
+
+  ```
+  proxy                       5  -> 100
+  openssh-server              8  -> 200
+  cygwin                     10  -> 300
+  astrometry-dependencies    11  -> 400
+  astrometry                 12  -> 500
+  python                     20  -> 600
+  git                        25  -> 700
+  ascom                      30  -> 800
+  mongodb-client             40  -> 900
+  npcap                      45  -> 1000
+  wireshark                  50  -> 1100
+  nssm                       60  -> 1200
+  nomachine                  70  -> 1300
+  phd2                       90  -> 1400
+  vcredist2013               95  -> 1500
+  stage                     100  -> 1600
+  planewave                 110  -> 1700
+  zwo                       120  -> 1800
+  vscode                    130  -> 1900
+  sysinternals              140  -> 2000
+  chrome                    150  -> 2100
+  mast                      160  -> 2200
+  imdisk                    170  -> 2300
+  windows-exporter-monitoring 180 -> 2400
+  diagnostics               200  -> 2500
+  reboot                    999  -> 9999
+  ```
+
+- `vm/test-suite.py` `BOMB_ORDER` moved `65 -> 1250` (still in the gap
+  between `nssm-verify` at 1201 and `nomachine` at 1300) and the
+  accompanying comment + scenario description updated.
+- Stale inline references in `wireshark/provide-wireshark.ps1` (npcap
+  order callout) and the prior 2026-05-25 DECISIONS entry above were
+  updated to the new numbers.
+- `server/providers/cygwin/install-clean-cygwin.ps1` deleted. It was a
+  one-line developer recipe for re-downloading the source Cygwin set with
+  `setup-x86_64.exe --download`, used originally to produce
+  `cygwin64-clean.tgz`. It was never part of any provisioning command and
+  the same invocation (with corrected `--root` semantics) now lives
+  exemplified in the `astrometry-dependencies` provider, so the standalone
+  file is now misleading dead code.
+
+**Implications:**
+
+- Every adjacent provider pair now has 98 free `order` slots between them
+  (e.g. inserting a new step between `cygwin`=300 and
+  `astrometry-dependencies`=400 picks any value in 302..399). Reboot has
+  ~7400 free slots above it.
+- Absolute `order` values are not stable across renumbers. Any external
+  log/metric/dashboard that has hardcoded a numeric order for a specific
+  module (we don't think there are any -- search turned up only the bomb
+  and one in-source code comment) will need to be re-pinned.
+- `commands.json` is rewritten by `build-mast.ps1` from `module.json`, so
+  units pick up the new ordering automatically on the next build; no
+  unit-side data migration is required.
+
+---
+
+## [2026-05-25] Split astrometry install into three ordered providers
+
+**Why:** The `cygwin` provider was responsible for three logically distinct
+concerns: expanding the base Cygwin tree, installing astrometry-specific
+runtime packages (it was not, actually -- those were silently missing), and
+expanding the prebuilt astrometry.tgz. The omission of the package install
+step worked only by accident: any unit that ran setup-x86_64.exe manually
+afterwards happened to pull the deps in. Worse, the astrometry binaries link
+against ~35 Cygwin packages (cfitsio, wcslib, netpbm, cairo, python39 plus
+the curl/krb5/ldap/sasl/X11/freetype/fontconfig closure) that
+`cygwin64-clean.tgz` does not include, so a fresh-from-the-archive unit
+would fail `solve-field` with `STATUS_ENTRYPOINT_NOT_FOUND` or
+`child_info_fork::abort`. Bundling those DLLs inside `astrometry.tgz` was
+considered but rejected: Cygwin enforces one cygwin1.dll per process tree,
+and any forked helper (solve-field calls `removelines`, `uniformize`,
+`fits2fits`, `image2xy`) crashes when parent and child resolve different
+on-disk copies. The canonical Cygwin tool for staging additional packages
+is `setup-x86_64.exe -P`, and it already runs `peflagsall`/`rebaseall` in
+its postinstall, which is what makes fork() reliable in the first place.
+
+**What:**
+
+- **`server/providers/cygwin/`** (order 300) now only expands
+  `cygwin64-clean.tgz`. The astrometry-expansion block was removed from
+  `provide-cygwin.ps1` and `astrometry.tgz` was dropped from
+  `commandfiles`. The asset moved to the new `astrometry/` provider.
+- **`server/providers/astrometry-dependencies/`** (order 400, new) ships
+  `setup-x86_64.exe` and invokes it with the top-level package list
+  `cygwin,libcfitsio10,libwcs4,libnetpbm10,libcairo2,libpng16,libjpeg8,
+  python39`. setup.exe resolves the transitive closure (~33 additional
+  packages; see `DEPENDENCIES.md` in the same dir for the exact list,
+  versions, and per-DLL mapping). After install the script drains
+  `/etc/postinstall/*.sh` so peflagsall/rebaseall fire, then verifies a
+  spot-check of expected DLLs landed in `C:\cygwin64\bin\`.
+- **`server/providers/astrometry/`** (order 500, new) expands the existing
+  prebuilt `astrometry.tgz` (with debug symbols, as originally committed)
+  to `C:\cygwin64\usr\local\astrometry\` and runs two smoke tests in its
+  `verify-astrometry.ps1`: (1) `solve-field.exe` with no args asserts the
+  binary loads and prints `Revision <n>`; (2) a real plate solve of the
+  bundled `examples/apod5.xyls` against `examples/index-4119.fits` must
+  produce `apod5.solved` and a non-trivial `apod5.wcs` within 120s. The
+  scale window matches the upstream README recipe (`--scale-low 30` for
+  index-4119, which we widened to `0.4..1.2` degwidth to absorb the
+  apod5.jpg 900x675 field size).
+
+**Implications:**
+
+- Provider ordering is now load-bearing. The dependency provider
+  (`order: 400`) **must** run between `cygwin` and `astrometry`. The plain
+  numeric ordering enforces this; nothing else does.
+- Targets now need outbound HTTPS to `cygwin.itefix.net` (via
+  `bcproxy.weizmann.ac.il:8080`) during provisioning, since `setup.exe`
+  downloads packages on the fly. For airgapped staging we will need to
+  build a local mirror snapshot and point `--site` at it; that is not
+  done yet.
+- `astrometry.tgz` is no longer touched by the `cygwin` provider. Anyone
+  who was relying on rolling `astrometry.tgz` updates through
+  `cygwin/assets/` must instead update `astrometry/assets/astrometry.tgz`.
+- The verify step now genuinely exercises the solver end-to-end, not just
+  loader resolution. Regressions in any dep (e.g. an incompatible
+  cygcfitsio.dll ABI bump) will be caught at provision time.
+
+---
+
 ## [2026-05-24] Merge upstream/main: monitoring assets, astrometry.tgz, imdisk filename
 
 **Why:** The upstream The-MAST-project/MAST_provisioning `main` advanced

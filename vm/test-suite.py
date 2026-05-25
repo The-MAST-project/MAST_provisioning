@@ -61,8 +61,8 @@ RUN_PROV_TEST = Path(__file__).parent / "run-prov-test.py"
 STAGING_ROOT = REPO_ROOT / "staging"
 SUITE_LOG_ROOT = Path(r"C:\MAST\logs\dev\tests")
 
-# Bomb sits between nssm-verify (61) and nomachine (70). See plan.
-BOMB_ORDER = 65
+# Bomb sits between nssm-verify (1201) and nomachine (1300). See plan.
+BOMB_ORDER = 1250
 BOMB_MODULE = "test-bomb"
 SPORADIC_BOMB_MODULE = "test-sporadic-bomb"
 
@@ -143,7 +143,7 @@ SCENARIOS: list[Scenario] = [
     Scenario(
         name="interrupted-inject-fail",
         description=(
-            "Inject deterministic bomb at order=65, expect non-zero on first "
+            "Inject deterministic bomb at order=1250, expect non-zero on first "
             "attempt; after snapshot reset, clean re-run must pass."
         ),
         phases="",   # custom multi-sub-run flow; not used directly

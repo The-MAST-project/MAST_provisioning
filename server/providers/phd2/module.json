@@ -2,7 +2,7 @@
   "name": "phd2",
   "version": "2.6.14dev1mast03",
   "description": "Install PHD2 (PHD Guiding) for telescope autoguiding support. Pinned to mastw/mast00.",
-  "order": 90,
+  "order": 1400,
   "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-phd2.ps1\" -AssetsRoot \".\" -InstallRoot \"C:\\Program Files\\PHD2\"",
   "commandfiles": [
     "provide-phd2.ps1",
@@ -11,3 +11,4 @@
   ],
   "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\verify-phd2.ps1\""
 }
+

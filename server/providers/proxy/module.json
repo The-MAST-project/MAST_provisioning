@@ -1,11 +1,12 @@
-{
+﻿{
   "name": "proxy",
   "version": "1.0",
   "description": "Set machine-scope http_proxy/https_proxy/no_proxy env vars to match mastw (Weizmann web proxy).",
-  "order": 5,
+  "order": 100,
   "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-proxy.ps1\"",
   "commandfiles": [
     "provide-proxy.ps1"
   ],
   "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -Command \"${expected}='http://bcproxy.weizmann.ac.il:8080'; ${got}=[Environment]::GetEnvironmentVariable('http_proxy','Machine'); ${log}=Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\verify\\proxy-verify.log'; if (${got} -eq ${expected}) { Set-Content -Path ${log} -Value ('http_proxy=' + ${got}); Set-Content -Path (Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\smoke\\proxy-smoke.txt') -Value 'proxy_ok' } else { ('http_proxy mismatch: got=' + ${got} + ' expected=' + ${expected}) | Out-File -FilePath ${log} -Encoding UTF8; exit 1 }\""
 }
+

@@ -1,8 +1,8 @@
 ﻿{
   "name": "imdisk",
   "version": "imdisktk-x64",
-  "description": "Install ImDisk virtual disk driver and register a boot-time task that mounts D: from C:\\MAST\\Shared\\MAST-10GB-with-indexes.img (matches mastw; image supplied out-of-band).",
-  "order": 170,
+  "description": "Install ImDisk virtual disk driver, mount D: from C:\\MAST\\Shared\\MAST-15GB-indexes-5202+5203.img immediately if the image is present, and register a boot-time task so the mount persists across reboots. Ordered before astrometry (500) so D:\\mast-indexes is reachable during astrometry's smoke solve.",
+  "order": 250,
   "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -Command \"${wd} = Split-Path -Parent ${PSCommandPath}; & powershell.exe -ExecutionPolicy Bypass -NoProfile -File (Join-Path ${wd} 'provide-imdisk.ps1') -AssetsRoot ${wd}\"",
   "commandfiles": [
     "provide-imdisk.ps1",
@@ -10,3 +10,4 @@
   ],
   "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -Command \"${log} = Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\verify\\imdisk-verify.log'; if (Test-Path 'C:\\Windows\\System32\\imdisk.exe') { 'ImDisk installed successfully' | Out-File -FilePath ${log} -Encoding UTF8; Set-Content -Path (Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\smoke\\imdisk-smoke.txt') -Value 'imdisk_ok' } else { 'ImDisk executable not found' | Out-File -FilePath ${log} -Encoding UTF8; exit 1 }\""
 }
+

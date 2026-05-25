@@ -2,12 +2,12 @@
   "name": "cygwin",
   "version": "cygwin64-snapshot",
   "description": "Install Cygwin from a prebuilt cygwin64.tgz, run postinstall, add to PATH, and verify.",
-  "order": 10,
+  "order": 300,
   "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-cygwin.ps1\" -AssetsRoot \".\" -InstallRoot \"C:\\cygwin64\"",
   "commandfiles": [
     "provide-cygwin.ps1",
-    "assets/cygwin64-clean.tgz",
-    "assets/astrometry.tgz"
+    "assets/cygwin64-clean.tgz"
   ],
   "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -Command \"$bin='C:\\cygwin64\\bin'; $bash=Join-Path $bin 'bash.exe'; $log=Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\verify\\cygwin-verify.log'; if (Test-Path $bash) { & $bash -lc 'uname -a' | Out-File -FilePath $log -Encoding UTF8; & $bash -lc 'cygcheck -V' | Out-File -FilePath $log -Append -Encoding UTF8; Set-Content -Path (Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\smoke\\cygwin-smoke.txt') -Value 'cygwin_ok' } else { 'bash.exe not found' | Out-File -FilePath $log -Encoding UTF8; exit 1 }\""
 }
+

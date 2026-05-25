@@ -3,7 +3,6 @@
 param(
     [string]${AssetsRoot}  = ${PSScriptRoot},
     [string]${ArchiveName} = 'cygwin64-clean.tgz',
-    [string]${AstrometryArchiveName} = 'astrometry.tgz',
     [string]${InstallRoot} = 'C:\cygwin64'
 )
 
@@ -94,17 +93,8 @@ exit 0
     Set-Content -Path (Join-Path (Get-MastSmokeDir) 'cygwin-smoke.txt') -Value 'cygwin_ok' -Encoding ASCII
 
     Write-Host "Cygwin installed to ${InstallRoot}. PATH updated. Verification log at ${verifyLog}."
-
-    # Optional: Astrometry.net payload can be very large and may not be present in
-    # dev/test runs. Skip gracefully if missing.
-    ${astrometryArchivePath} = Join-Path ${AssetsRoot} ${AstrometryArchiveName}
-    if (Test-Path ${astrometryArchivePath}) {
-        Write-Host "Expanding Astrometry.net ..."
-        Expand-AnyArchive -ArchivePath ${astrometryArchivePath} -Destination "C:\cygwin64\usr\local\astrometry"
-        Write-Host "Astrometry.net expanded."
-    } else {
-        Write-Warning "Astrometry archive not found: ${astrometryArchivePath}. Skipping (dev/test mode)."
-    }
+    # Astrometry.net is now staged by the dedicated 'astrometry' provider (order 500),
+    # which runs after 'astrometry-dependencies' (order 400) installs cfitsio/wcs/etc.
 }
 finally {
     Stop-ProvisionLog

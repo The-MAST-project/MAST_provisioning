@@ -56,7 +56,7 @@ try {
         throw ("Wireshark executable not found after installation at {0}" -f ${wiresharkExe})
     }
 
-    # Npcap is installed by the dedicated 'npcap' provider (order 45, before this one).
+    # Npcap is installed by the dedicated 'npcap' provider (order 1000, before this one).
     # Verify it landed so Wireshark can actually capture; warn if not, do not fail.
     ${npcapSvc} = Get-Service -Name 'npcap' -ErrorAction SilentlyContinue
     if ($null -eq ${npcapSvc}) {

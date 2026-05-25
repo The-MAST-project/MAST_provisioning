@@ -2,7 +2,7 @@
   "name": "chrome",
   "version": "stable",
   "description": "Install Google Chrome web browser.",
-  "order": 150,
+  "order": 2100,
   "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-chrome.ps1\" -AssetsRoot \".\"",
   "commandfiles": [
     "provide-chrome.ps1",
@@ -10,3 +10,4 @@
   ],
   "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -Command \"${chromePath}='C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'; ${log}=Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\verify\\chrome-verify.log'; if (Test-Path ${chromePath}) { Set-Content -Path ${log} -Value 'Chrome installed successfully'; Set-Content -Path (Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\smoke\\chrome-smoke.txt') -Value 'chrome_ok' } else { 'Chrome executable not found at ' + ${chromePath} | Out-File -FilePath ${log} -Encoding UTF8; exit 1 }\""
 }
+

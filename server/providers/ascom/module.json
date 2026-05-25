@@ -2,7 +2,7 @@
   "name": "ascom",
   "version": "7.0-RC4",
   "description": "Install ASCOM Platform 7.0 RC4 and ASCOM Developer tools, enabling .NET 3.5 if needed. Pinned to mastw/mast00.",
-  "order": 30,
+  "order": 800,
   "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-ascom.ps1\" -AssetsRoot \".\"",
   "commandfiles": [
     "provide-ascom.ps1",
@@ -10,3 +10,4 @@
   ],
   "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -Command \"$ErrorActionPreference='Stop'; $log = Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\verify\\ascom-verify.log'; $kNative = 'HKLM:\\SOFTWARE\\ASCOM'; $kWow = 'HKLM:\\SOFTWARE\\WOW6432Node\\ASCOM'; $item = $null; if (Test-Path -LiteralPath $kNative) { $item = Get-Item -LiteralPath $kNative } elseif (Test-Path -LiteralPath $kWow) { $item = Get-Item -LiteralPath $kWow }; if ($item) { $item | Format-List * | Out-File -FilePath $log; Set-Content -Path (Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\smoke\\ascom-smoke.txt') -Value 'ascom_ok' } else { 'ASCOM registry key not found' | Out-File -FilePath $log; exit 1 }\""
 }
+

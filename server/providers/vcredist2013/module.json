@@ -2,7 +2,7 @@
   "name": "vcredist2013",
   "version": "2013",
   "description": "Install Visual C++ 2013 (MSVC120) x64 and x86 redistributables required by XILabs.",
-  "order": 95,
+  "order": 1500,
   "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-vcredist2013.ps1\" -AssetsRoot \".\"",
   "commandfiles": [
     "provide-vcredist2013.ps1",
@@ -12,3 +12,4 @@
   ],
   "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\verify-vcredist2013.ps1\""
 }
+

@@ -1,8 +1,8 @@
-{
+﻿{
   "name": "npcap",
   "version": "1.88",
   "description": "Install Npcap packet capture driver (WinPcap-compat, loopback, non-admin). Matches mastw, which also runs npcapwatchdog scheduled task to keep the npcap service alive. Wireshark and any other capture-based tooling depend on this.",
-  "order": 45,
+  "order": 1000,
   "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-npcap.ps1\" -AssetsRoot \".\"",
   "commandfiles": [
     "provide-npcap.ps1",
@@ -10,3 +10,4 @@
   ],
   "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -Command \"${log}=Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\verify\\npcap-verify.log'; ${smoke}=Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\smoke\\npcap-smoke.txt'; ${svc}=Get-Service -Name 'npcap' -ErrorAction SilentlyContinue; ${drv}='C:\\Windows\\System32\\Npcap\\npcap.sys'; if (${svc} -and (Test-Path -LiteralPath ${drv})) { Set-Content -Path ${log} -Value ('npcap Status=' + ${svc}.Status + ' StartType=' + ${svc}.StartType + ' driver=' + ${drv}); Set-Content -Path ${smoke} -Value 'npcap_ok' } else { ('npcap service or driver missing (svc=' + ${svc} + ' drvExists=' + (Test-Path -LiteralPath ${drv}) + ')') | Out-File -FilePath ${log} -Encoding UTF8; exit 1 }\""
 }
+

@@ -3,7 +3,7 @@
   "version": "asistudio-1.16.2/ascom-6.5.32/driver-3.25",
   "pin_target": "ZWO ASCOM 6.5.20 and ASIStudio 1.14.0.0 on mastw - acquire older installers to downgrade. See compare-mastw/GAPS.md.",
   "description": "Install ZWO camera drivers, ASI Studio, and ASCOM driver.",
-  "order": 120,
+  "order": 1800,
   "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-zwo.ps1\" -AssetsRoot \".\"",
   "commandfiles": [
     "provide-zwo.ps1",
@@ -13,3 +13,4 @@
   ],
   "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -Command \"$log = Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\verify\\zwo-verify.log'; $smoke = Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\smoke\\zwo-smoke.txt'; $a1 = 'C:\\Program Files\\ASIStudio\\ASIStudio.exe'; $a2 = 'C:\\Program Files (x86)\\ASIStudio\\ASIStudio.exe'; if ((Test-Path -LiteralPath $a1) -or (Test-Path -LiteralPath $a2)) { Set-Content -Path $log -Value 'ZWO ASI Studio installed'; Set-Content -Path $smoke -Value 'zwo_ok' } else { 'ASIStudio.exe not found under Program Files' | Out-File -FilePath $log -Encoding UTF8; exit 1 }\""
 }
+
