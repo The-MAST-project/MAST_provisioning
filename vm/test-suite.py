@@ -266,6 +266,66 @@ SCENARIOS: list[Scenario] = [
         expected_rc=0,
         status="STUB",
     ),
+    # STUB: end-to-end reboot exercise. Today provide-reboot.ps1 only DETECTS
+    # pending reboot and writes the flag; run-prov-test.py resets the VM to
+    # snapshot at end of cycle so the question "does the system actually
+    # reboot, come back, and re-pass smoke?" is never asked. See
+    # autonomous-provisioning-requirements.md "Reboot orchestration is
+    # detected-and-flagged, not actually executed" for full assertions; the
+    # harness additions needed to promote to ACTIVE:
+    #   1. drive a full provision that LEAVES the unit with pending-reboot
+    #      flag set (force a PendingFileRenameOperations, or schedule any
+    #      /norestart install whose post-step requires reboot)
+    #   2. invoke the prod-style reboot driver path (either
+    #      check-and-provision.ps1 or a thin equivalent in the harness that
+    #      reads C:\MAST\state\reboot-requested.flag and calls
+    #      Restart-Computer on the unit)
+    #   3. observe the unit drops off WinRM (poll TCP :5985 closes)
+    #   4. wait for WinRM to come back (reuse wait_for_winrm) within boot SLA
+    #   5. re-run verify phase and assert all pre-reboot smoke markers still
+    #      pass -- catches providers that left transient process-only state
+    #   6. assert C:\MAST\state\reboot-requested.flag was cleared (next
+    #      detector run does not re-flag)
+    # MUST run against a VM that can be cold-rebooted without losing the
+    # snapshot under us; consider a dedicated "post-prepare-with-reboot"
+    # snapshot or a stricter assertion that the snapshot was NOT restored.
+    Scenario(
+        name="reboot-occurs-and-unit-recovers",
+        description=(
+            "End-to-end reboot: provision a unit that ends with the pending-reboot "
+            "flag set, drive the reboot through to actual Restart-Computer, wait "
+            "for WinRM to return, re-verify all smoke markers, and assert the "
+            "flag is cleared. Prerequisite for declaring Windows Update + reboot "
+            "orchestration safe."
+        ),
+        phases="",
+        modules="",
+        repeat=1,
+        expected_rc=0,
+        status="STUB",
+    ),
+    # STUB: companion to the above. Tests that an out-of-window reboot request
+    # is DEFERRED, not executed -- a safety property we get for free by
+    # honoring the maintenance window, but currently not asserted anywhere.
+    #   1. provision normally, leave reboot flag set
+    #   2. set the unit's maintenance_window to a slot that does NOT cover now
+    #   3. invoke the driver; assert it logs outcome=DEFER_REBOOT (or
+    #      equivalent) and does NOT call Restart-Computer
+    #   4. assert the unit is still up + responsive on WinRM
+    #   5. flip the window to cover now, re-invoke, assert reboot occurs
+    Scenario(
+        name="reboot-deferred-outside-maintenance-window",
+        description=(
+            "Out-of-window pending reboot must be DEFERRED, not executed. Asserts "
+            "the driver honors maintenance_window before issuing Restart-Computer "
+            "and that the deferred state is recoverable on the next in-window run."
+        ),
+        phases="",
+        modules="",
+        repeat=1,
+        expected_rc=0,
+        status="STUB",
+    ),
 ]
 
 SCENARIOS_BY_NAME = {s.name: s for s in SCENARIOS}

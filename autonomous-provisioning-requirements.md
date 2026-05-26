@@ -690,6 +690,48 @@ from `SKIP` (already-current / dry-run).
 
 ---
 
+### Dev test runs vs. production: deviations matrix
+
+A scannable index of every known way the dev test harness
+(`vm/run-prov-test.py` driving a VirtualBox VM from this host) differs from
+the production autonomous loop (`server/check-and-provision.ps1` driving real
+physical units from the on-campus prov server).
+
+The point of this table is to give an auditor or future-self a single place
+to answer "what is the dev run *not* exercising" without crawling the rest of
+the document. The detailed reasoning + exit criteria for each release-blocker
+deviation lives in **Test-mode exceptions** below; this matrix just points at
+them and at the harness scenario (if any) that exists or should exist to
+exercise the prod path.
+
+**Maintenance rule:** whenever you add a new dev-vs-prod deviation -- a new
+`-TestMode` flag, a new "skip if not on a real unit" branch, a new operator
+flag plumbed only for the VM, a new prod-only piece of orchestration --
+add a row here. If the deviation is a release blocker, also add a detailed
+"Test-mode exception" entry below. If it is exercisable, file a STUB
+scenario in `vm/test-suite.py` and reference it from the row.
+
+| # | Area                                         | Dev behavior                                                                                                | Prod behavior                                                                                                                | Status / blocker          | Exercise                                            |
+|---|----------------------------------------------|-------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------|---------------------------|-----------------------------------------------------|
+| 1 | Asset transfer                               | SMB pull from prov server                                                                                   | SMB pull from prov server                                                                                                    | **DONE** (Exception #1)   | scenario `full-provision`                           |
+| 2 | NoMachine license                            | `-AllowMissingNoMachineLicense`; `.lic` not staged                                                          | License required; build fails loud if missing                                                                                | blocker (Exception #2)    | needs scenario                                      |
+| 3 | GitHub token (`mast_github.txt`)             | `-AllowMissingGithubToken`; `mast` module fetch skipped or unauthenticated                                  | Authenticated via Credential Manager / deploy key on prov server                                                             | blocker (Exception #3)    | needs scenario                                      |
+| 4 | Astrometry payload (`astrometry.tgz` + .img) | `-TestMode`; optional, sometimes absent; smoke degrades to skip                                             | Payload mandatory and version-verified; failure to fetch blocks the run                                                      | blocker (Exception #4)    | scenario `full-provision` (when payload present)    |
+| 5 | Bootstrap security posture                   | WinRM HTTP (5985) + Basic + AllowUnencrypted=true                                                           | HTTPS (5986) + cert-validated transport; HTTP only for first-boot onboarding                                                 | blocker (Exception #5)    | needs scenario                                      |
+| 6 | Proxy mode end-to-end                        | `--proxy-mode direct` (dev VM on home network can't reach bcproxy)                                          | `--proxy-mode weizmann` (default); cygwin setup.exe + WinINet + WinHTTP all route through `bcproxy.weizmann.ac.il:8080`      | blocker (Exception #6)    | STUB `proxy-weizmann-on-campus`                     |
+| 7 | Reboot orchestration                         | `provide-reboot.ps1` detects pending reboot and writes `C:\MAST\state\reboot-requested.flag`; harness ignores it and resets the VM to snapshot at end of cycle | `check-and-provision.ps1` consumes the flag, schedules the reboot inside the maintenance window, waits for WinRM to return, re-verifies smoke state | blocker (Exception #7)    | STUB `reboot-occurs-and-unit-recovers`              |
+| 8 | Cycle isolation                              | VM snapshot reset between cycles -- every cycle starts from `post-prepare`                                  | No rollback; unit state persists across runs. Idempotency is load-bearing.                                                   | covered indirectly        | scenarios `idempotent-after-manifest-wipe`, `idempotent-reprovision` (STUB) |
+| 9 | Maintenance window enforcement               | Harness runs whenever invoked; windows not honored                                                          | `check-and-provision.ps1` honors per-unit `maintenance_window`; outside the window units get `outcome=SKIP_MAINTENANCE`      | **DONE** in prod driver   | not exercisable in harness (driver-only)            |
+| 10 | Availability lease / TTL                    | Harness writes `available=true` at start, doesn't always honor stale leases                                 | Lease + TTL + stale-recover path is load-bearing for "stuck on provisioning" autonomy                                        | covered                   | needs scenario `availability-stale-recover` (STUB)  |
+| 11 | Windows Updates                             | Auto-update **disabled** during runs (`Disable-WindowsAutoUpdate` in prepare)                               | Steady-state policy (Phase 2): scheduled in maintenance window, capped reboot loops, etc.                                    | Phase 2 not landed        | not exercisable yet                                 |
+| 12 | MAST application repo authentication        | Token file `vault/tokens/mast_github.txt` (gitignored)                                                      | Credential Manager / deploy key / device flow -- unset                                                                       | covered by Exception #3   | --                                                  |
+| 13 | Long-running installer transport timeout    | pywinrm Receive ceiling at ~600s; long ASCOM/ASIStudio installs sometimes hit `ConnectionResetError`         | Same code path; same issue can hit prod. Mitigation patterns (heartbeat probe, periodic state writes) only partly applied.   | open                      | needs scenario `install-exceeds-receive-timeout`    |
+| 14 | Driver installs under WinRM filtered token  | Worked around by `Invoke-ExeAsSystem` for npcap/usbpcap/DISM-NetFx3                                          | Same workaround applies in prod -- the token-filter behavior is a property of the WinRM transport, not the harness           | **DONE** (2026-05-26)     | scenario `full-provision` exercises all three       |
+| 15 | First-boot vs warm-reset state              | Cycles start from a "post-prepare" snapshot -- many install steps see existing artifacts                    | First provisioning of a real unit starts from a clean OS install; subsequent runs are warm                                   | open                      | needs scenario `cold-bootstrap`                     |
+| 16 | NetFx3 source for ASCOM provider            | `-AllowMissingNetFx3Sxs`; build proceeds without staged SxS; provider falls back to online DISM (WU CDN)    | Build fails loud if `assets/sxs/*.cab` not present; DISM enables NetFx3 from the staged Windows IoT 11 LTSC SxS source       | blocker (Exception #8)    | scenario `full-provision` (when SxS bundle present) |
+
+---
+
 ### Test-mode exceptions (blockers before production)
 
 While stabilizing the end-to-end flow against a disposable VirtualBox VM, the repo relies
@@ -772,6 +814,68 @@ but the code path is correct. This exception is resolved.
   Tracked as STUB scenario `proxy-weizmann-on-campus` in `vm/test-suite.py`; promote to
   ACTIVE once it has been run successfully against a Weizmann-reachable unit at least once
   and the assertion code is in the harness.
+
+#### 7. Reboot orchestration is detected-and-flagged, not actually executed
+
+- **Current exception:** `server/providers/reboot/provide-reboot.ps1` (order 9999) is a
+  **detector**: it inspects the standard "pending reboot" signals (CBS RebootPending,
+  PendingFileRenameOperations, Component Servicing, Auto Update RebootRequired) and, if
+  any are set, writes a small marker at `C:\MAST\state\reboot-requested.flag` and exits
+  0. It does **not** call `Restart-Computer`. In dev, `vm/run-prov-test.py` ignores the
+  flag and resets the VM to the `post-prepare` snapshot at the end of the cycle, so the
+  "did the system actually reboot, come back healthy, and re-pass smoke?" question is
+  never asked of the unit. Run #9 (2026-05-26) wrote the flag for a real pending reboot
+  (`PendingFileRenameOperations` + `CBS RebootPending`) and the harness simply ended.
+- **Why it's a blocker:** the production loop **must** reboot the unit when the flag
+  is present, **inside the maintenance window**, then wait for WinRM to return, then
+  re-run the verify phase, and only then mark the cycle complete. Without exercising
+  this end-to-end, we do not know that: (a) the reboot actually happens; (b) the unit
+  comes back within the SLA; (c) post-reboot the unit's services (MAST-unit, npcap,
+  windows_exporter, etc.) start cleanly and the smoke markers re-validate; (d) the
+  reboot loop guard (Phase 2 -- cap consecutive reboots per window) trips correctly
+  when a unit is in a wedged install state.
+- **Exit criteria:** a documented test scenario that:
+  1. Drives a full provision that **deliberately** leaves the unit with the reboot
+     flag set (e.g. force a pending file rename, install something with `/norestart`).
+  2. Hands off to a driver path that consumes the flag (`check-and-provision.ps1` or
+     a thin equivalent in the harness).
+  3. Observes that `Restart-Computer` was actually issued, the unit drops off WinRM,
+     and a new WinRM session establishes within the boot SLA.
+  4. Re-runs the verify phase against the post-reboot unit and asserts every smoke
+     marker that was OK pre-reboot is still OK -- catching any provider that depends
+     on transient process state (services not set to Automatic, env-var-only state,
+     etc.).
+  5. Asserts the pending-reboot flag is cleared (the post-reboot detector run should
+     not re-flag).
+  6. Bonus: a sister scenario that triggers reboot **outside** the maintenance window
+     and asserts the driver skips the reboot, logs `outcome=DEFER_REBOOT`, and the
+     unit remains usable.
+
+  Tracked as STUB scenarios `reboot-occurs-and-unit-recovers` and
+  `reboot-deferred-outside-maintenance-window` in `vm/test-suite.py`. The first is a
+  prerequisite for declaring Phase 2's Windows Update + reboot orchestration safe.
+
+#### 8. NetFx3 SxS source for ASCOM is operator-supplied; dev runs allow it missing
+
+- **Current exception:** `vm/run-prov-test.py` passes `-AllowMissingNetFx3Sxs` to
+  `build-mast.ps1`. With that flag, the build proceeds even when
+  `server/providers/ascom/assets/sxs/` is empty, and the ASCOM provider falls back
+  to `dism.exe /Online /Enable-Feature` at runtime (downloading NetFx3 from the
+  Windows Update CDN). Without the flag, the build fails loudly with a message
+  pointing at the provider README.
+- **Why it's a blocker:** the online DISM path is the very dependency we want
+  to remove. Every production run gated on WU CDN reachability + throughput +
+  no transient 5xx is a run that can quietly take 5-15 minutes longer than
+  necessary, or fail entirely. The whole point of this project is consistency
+  and reliability; relying on an external CDN for a setup step we can ship
+  ourselves contradicts that.
+- **Exit criteria:** in production builds (`server/check-and-provision.ps1` and
+  any non-dev driver) `-AllowMissingNetFx3Sxs` is NOT passed, the SxS bundle is
+  present at `server/providers/ascom/assets/sxs/`, and the bundle matches the
+  Windows IoT 11 LTSC 2024 version of the target image. The provider's runtime
+  log shows `[ascom] NetFx3 source: bundled SxS at ...`, not the online-DISM
+  warning. Source-pinning is documented in the provider's README; the file is
+  fetched once per Windows servicing release (analogous to NoMachine `.lic`).
 
 ---
 
