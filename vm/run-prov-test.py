@@ -412,7 +412,7 @@ class ExecuteLogPoller:
 # Phases
 # ---------------------------------------------------------------------------
 
-def phase_build(hostname: str, modules: list[str]) -> None:
+def phase_build(hostname: str, modules: list[str], proxy_mode: str) -> None:
     """Build runs LOCALLY on this Windows host (no VM, no WinRM)."""
     with timed("BUILD PHASE"):
         build_script = REPO_ROOT / "build" / "build-mast.ps1"
@@ -430,6 +430,7 @@ def phase_build(hostname: str, modules: list[str]) -> None:
             "-TestMode",
             "-AllowMissingNoMachineLicense",
             "-AllowMissingGithubToken",
+            "-ProxyMode", proxy_mode,
         ]
         if sorted(modules) != sorted(ALL_MODULES):
             cmd += ["-Modules", ",".join(modules)]
@@ -793,7 +794,7 @@ def phase_clear_unit_logs(unit: winrm.Session) -> None:
     """Stop MAST_unit and delete its NSSM stdout/stderr logs so the next run starts clean."""
     with timed("CLEAR UNIT LOGS PHASE"):
         ps = (
-            "Stop-Service -Name 'MAST-Unit' -Force -ErrorAction SilentlyContinue\n"
+            "Stop-Service -Name 'mast-unit' -Force -ErrorAction SilentlyContinue\n"
             f"$d = '{MAST_UNIT_SVC_LOG_DIR}'\n"
             "foreach ($f in @('stdout.log', 'stderr.log')) {\n"
             "    $p = Join-Path $d $f\n"
@@ -816,7 +817,7 @@ def phase_start_mast_unit(unit: winrm.Session) -> None:
     log("[start-mast-unit] Starting MAST_unit service...")
     r = run_ps(
         unit,
-        "Start-Service -Name 'MAST-Unit' -ErrorAction SilentlyContinue; "
+        "Start-Service -Name 'mast-unit' -ErrorAction SilentlyContinue; "
         "Write-Host '[start-mast-unit] done'",
         label="start-mast-unit",
         timeout_s=60,
@@ -977,6 +978,23 @@ def parse_args() -> argparse.Namespace:
             "Example: --phases transfer,execute,verify"
         ),
     )
+    p.add_argument(
+        "--proxy-mode",
+        choices=["weizmann", "direct"],
+        default="weizmann",
+        help=(
+            "Proxy mode baked into the staged commands.json (default: weizmann). "
+            "'weizmann' configures env vars, WinINet, WinHTTP, and cygwin setup.exe "
+            "to route through bcproxy.weizmann.ac.il:8080 (required when the unit is "
+            "inside the Weizmann campus network). 'direct' clears all proxy surfaces "
+            "and forces cygwin setup.exe net-method=Direct (required when the unit "
+            "cannot reach bcproxy -- e.g. provisioning from a home network or a "
+            "satellite site without the Weizmann VPN). The choice is purely about "
+            "the unit's current network reachability, not whether this is a dev or "
+            "prod run -- a dev test from on-campus uses 'weizmann'; a prod cycle "
+            "against an off-campus unit uses 'direct'."
+        ),
+    )
     p.add_argument("--vbox-vm", default="mast-unit", help="VirtualBox VM name (default: 'mast-unit')")
     p.add_argument("--snapshot", default="post-prepare", help="Snapshot name to restore between cycles (default: 'post-prepare')")
     p.add_argument("--no-reset", action="store_true", help="Do not reset the VM between cycles (debug)")
@@ -1016,6 +1034,21 @@ def main() -> None:
         WINRM_TIMEOUT_S = max(WINRM_TIMEOUT_S, args.winrm_call_timeout_s)
 
     modules = args.modules.split(",") if args.modules else ALL_MODULES
+
+    # Banner -- print the chosen proxy mode prominently before any work so it
+    # is obvious in scrollback when triaging "why did setup.exe / pip / git
+    # fail to reach the network." Banner is duplicated by build-mast.ps1 and
+    # the proxy/astrometry-deps providers so it appears at every layer.
+    _proxy_banner = (
+        "*** WEIZMANN-PROXY MODE ***"
+        if args.proxy_mode == "weizmann"
+        else "*** NO-WEIZMANN-PROXY (DIRECT) MODE ***"
+    )
+    log("===================================================================")
+    log(f"[run-prov-test] {_proxy_banner}")
+    log(f"[run-prov-test] --proxy-mode {args.proxy_mode}")
+    log("===================================================================")
+
     creds = load_creds()
     if "unit" not in creds:
         sys.exit("ERROR: vault/creds.json must contain a 'unit' block.")
@@ -1063,7 +1096,7 @@ def main() -> None:
                     if not passed:
                         _fetch_diagnostics(unit_session)
                 else:  # rebuild_repos
-                    phase_build(args.hostname, ["mast"])
+                    phase_build(args.hostname, ["mast"], args.proxy_mode)
                     unit_stage = phase_transfer(
                         unit_session, args.hostname, run_id,
                         creds["smb"]["user"], creds["smb"]["pass"],
@@ -1107,7 +1140,7 @@ def main() -> None:
 
                     # BUILD
                     if "build" in phases and (not built or args.rebuild):
-                        phase_build(args.hostname, modules)
+                        phase_build(args.hostname, modules, args.proxy_mode)
                         built = True
 
                     # WINRM (needed for any non-build phase)

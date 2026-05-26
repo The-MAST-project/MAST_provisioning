@@ -5,7 +5,23 @@ param(
     [string]${CygwinRoot}  = 'C:\cygwin64',
     [string]${MirrorSite}  = 'https://cygwin.itefix.net',
     [string]${ProxyHost}   = 'bcproxy.weizmann.ac.il:8080',
-    [string]${SetupName}   = 'setup-x86_64.exe'
+    [string]${SetupName}   = 'setup-x86_64.exe',
+    # Explicit proxy mode for setup-x86_64.exe. Defaults to 'use' (matching
+    # the provider-level default in provide-proxy.ps1 and the common case of
+    # a unit inside the Weizmann campus network). build-mast.ps1 -ProxyMode
+    # flips this to 'direct' for runs against a unit that cannot reach
+    # bcproxy (off-campus, no VPN, etc.) -- independent of whether the run
+    # itself is a dev/test or a prod cycle.
+    #
+    # 'direct' is NOT the same as "just don't pass --proxy". setup-x86_64.exe
+    # defaults to IE5 net-method which does WinINet+WPAD autodiscovery and
+    # can still pick up a proxy even when HKCU ProxyEnable=0 -- which is why
+    # earlier runs saw `net: Proxy` and 12007 errors despite the proxy
+    # provider correctly clearing every other surface. The conclusive fix:
+    # pre-write setup.rc with net-method=Direct so setup.exe skips IE5
+    # entirely.
+    [ValidateSet('use','direct')]
+    [string]${ProxyMode}   = 'use'
 )
 
 # Top-level Cygwin packages whose runtime DLLs *and* runtime PATH tools
@@ -62,26 +78,39 @@ try {
     ${pkgCache} = Join-Path ${CygwinRoot} 'var\cache\setup'
     Confirm-Dir ${pkgCache}
 
-    # Probe the configured proxy. On a unit with direct internet access (e.g.,
-    # the VirtualBox dev VM behind NAT to the host), the Weizmann internal
-    # proxy is unreachable and forcing `--proxy` makes setup.exe fail every
-    # fetch with WinINet error 12007. Only pass the proxy if it actually
-    # answers on its port; otherwise let setup.exe go direct.
-    ${useProxy} = $false
-    if (${ProxyHost}) {
-        ${pp} = ${ProxyHost} -split ':'
-        if (${pp}.Count -eq 2) {
-            ${proxyHostName} = ${pp}[0]; ${proxyPort} = [int]${pp}[1]
-            try {
-                ${tc} = Test-NetConnection -ComputerName ${proxyHostName} -Port ${proxyPort} `
-                    -WarningAction SilentlyContinue -InformationLevel Quiet -ErrorAction Stop
-                ${useProxy} = [bool]${tc}
-            } catch { ${useProxy} = $false }
-            Write-Host ("Proxy '{0}' reachable: {1}" -f ${ProxyHost}, ${useProxy})
-        } else {
-            Write-Host ("WARN: -ProxyHost '{0}' not in host:port form; skipping." -f ${ProxyHost})
-        }
+    # Explicit proxy mode (no probing). See -ProxyMode param-block comment
+    # for the rationale; tl;dr setup-x86_64.exe with no --proxy defaults to
+    # IE5 net-method and finds a proxy via WPAD even when HKCU ProxyEnable=0,
+    # so "just clear env vars" is not enough -- we must positively tell
+    # setup.exe which net-method to use via setup.rc.
+    ${useProxy} = (${ProxyMode} -eq 'use')
+    ${modeBanner} = if (${useProxy}) { '*** WEIZMANN-PROXY MODE ***' } else { '*** NO-WEIZMANN-PROXY (DIRECT) MODE ***' }
+    Write-Host "==================================================================="
+    Write-Host ("[astrometry-deps] {0}" -f ${modeBanner})
+    Write-Host "==================================================================="
+
+    # Pre-write <root>\etc\setup\setup.rc with the chosen net-method. Format
+    # matches what setup-x86_64.exe itself writes: key on one line, value
+    # on the next line, blank line between records. setup.exe reads this
+    # at startup before any CLI parsing, so it overrides the IE5 default.
+    ${setupRcDir}  = Join-Path ${CygwinRoot} 'etc\setup'
+    Confirm-Dir ${setupRcDir}
+    ${setupRcPath} = Join-Path ${setupRcDir} 'setup.rc'
+    ${netMethod}   = if (${useProxy}) { 'Proxy' } else { 'Direct' }
+    ${rcLines} = @(
+        'last-cache',
+        ${pkgCache},
+        '',
+        'net-method',
+        ${netMethod},
+        ''
+    )
+    if (${useProxy}) {
+        ${rcLines} += @('http-proxy', ${ProxyHost}, '')
+        ${rcLines} += @('ftp-proxy',  ${ProxyHost}, '')
     }
+    Set-Content -LiteralPath ${setupRcPath} -Encoding ASCII -Value (${rcLines} -join "`n")
+    Write-Host ("Wrote setup.rc with net-method={0} to {1}" -f ${netMethod}, ${setupRcPath})
 
     ${setupArgs} = @(
         '--quiet-mode',

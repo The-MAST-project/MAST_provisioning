@@ -742,6 +742,37 @@ but the code path is correct. This exception is resolved.
   the autonomous loop uses HTTPS by default, with HTTP allowed only for first-boot
   onboarding.
 
+#### 6. Proxy-mode `weizmann` end-to-end coverage
+
+- **Current exception:** the dev VirtualBox VM lives on the host's NAT-ed home network and
+  cannot reach `bcproxy.weizmann.ac.il:8080`, so the only proxy mode regularly exercised by
+  `vm/run-prov-test.py` is `--proxy-mode direct`. The `weizmann` code paths
+  (`provide-proxy.ps1 -ForceMode use`, `provide-astrometry-dependencies.ps1 -ProxyMode use`
+  pre-writing `setup.rc` with `net-method=Proxy`, `netsh winhttp set proxy bcproxy:8080`,
+  WinINet `ProxyEnable=1`) are unit-test-grade -- they run on every build through the
+  argument-plumbing path but their actual network effect against a live proxy is unverified.
+- **Why it's a blocker:** production units inside the campus are 100% reliant on the
+  `weizmann` path. A regression there would not surface in `direct`-mode dev runs and
+  could ship undetected. The risk is concrete: this exact scenario (env vars cleared but
+  setup.exe still picking a proxy via IE5/WPAD) was the bug that triggered the
+  2026-05-26 redesign; the inverse (env vars set, but setup.exe ignoring them or hitting
+  bcproxy at the wrong port) is just as plausible.
+- **Exit criteria:** a documented test scenario, runnable on demand against a unit with
+  campus-network reachability, that:
+  1. Provisions with `--proxy-mode weizmann`.
+  2. Asserts `verify-proxy.ps1` exits 0 with smoke body `mode=use ie_enable=1
+     ie_server='bcproxy.weizmann.ac.il:8080'`.
+  3. Asserts `astrometry-dependencies` succeeds (real download through bcproxy completes).
+  4. Asserts a fresh `setup-x86_64.exe` log line says `net: Proxy` and the package fetch
+     URLs resolve through the proxy (no 12007s).
+  5. Asserts `netsh winhttp show proxy` reports `Proxy Server(s) :
+     bcproxy.weizmann.ac.il:8080`.
+  6. Asserts HKCU `Internet Settings\ProxyEnable=1`, `ProxyServer=bcproxy.weizmann.ac.il:8080`.
+
+  Tracked as STUB scenario `proxy-weizmann-on-campus` in `vm/test-suite.py`; promote to
+  ACTIVE once it has been run successfully against a Weizmann-reachable unit at least once
+  and the assertion code is in the harness.
+
 ---
 
 ### Autonomous recovery from common failure modes

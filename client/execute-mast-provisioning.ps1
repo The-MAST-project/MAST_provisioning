@@ -245,9 +245,20 @@ try {
                 Write-Log "SUCCESS: $($cmd.module) (exit code: ${exitCode})"
                 ${successCount}++
 
-                # Write smoke test file
+                # Fallback smoke marker: write the literal "success" only if
+                # the smoke file is missing or whitespace-only. Providers
+                # that write rich structured smoke from the provider script
+                # (e.g. proxy: 'proxy_ok mode=direct ie_enable=0 ...') keep
+                # their content; modules without a verify still get a marker.
+                # See DECISIONS.md 2026-05-26 for the full reasoning.
                 ${smokeTestFile} = Join-Path ${smokeDir} "$($cmd.module)-smoke.txt"
-                Set-Content -Path ${smokeTestFile} -Value "success" -Force
+                ${existingBody} = $null
+                if (Test-Path -LiteralPath ${smokeTestFile}) {
+                    try { ${existingBody} = Get-Content -LiteralPath ${smokeTestFile} -Raw -ErrorAction Stop } catch {}
+                }
+                if ([string]::IsNullOrWhiteSpace(${existingBody})) {
+                    Set-Content -Path ${smokeTestFile} -Value "success" -Force
+                }
             }
             else {
                 Write-Log "[FAIL] $($cmd.module) (exit code: ${exitCode})"

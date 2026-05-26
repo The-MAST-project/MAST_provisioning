@@ -23,7 +23,21 @@ param(
   # Dev/test: allow missing GitHub token file (skip staging mast_github.txt).
   [switch]${AllowMissingGithubToken},
   # Dev/test: allow missing large optional assets (skip with warning).
-  [switch]${TestMode}
+  [switch]${TestMode},
+  # Proxy mode for this build, baked into the staged commands.json:
+  #   weizmann -> proxy provider gets -ForceMode use; astrometry-dependencies
+  #               gets -ProxyMode use (passes --proxy bcproxy:8080 to setup.exe
+  #               and writes setup.rc with net-method=Proxy).
+  #   direct   -> proxy provider gets -ForceMode direct; astrometry-dependencies
+  #               gets -ProxyMode direct (writes setup.rc with net-method=Direct
+  #               so setup.exe skips IE5/WPAD discovery).
+  # Default is 'weizmann' (the common on-campus case). Runs against a unit
+  # that cannot reach bcproxy MUST override to 'direct' -- regardless of
+  # whether the run is dev or prod; the deciding factor is purely the
+  # unit's network reachability. `vm/run-prov-test.py --proxy-mode direct`
+  # is the canonical way to do so. See DECISIONS.md 2026-05-26.
+  [ValidateSet('weizmann','direct')]
+  [string]${ProxyMode} = 'weizmann'
 )
 
 # Normalize -Modules: subprocess passes comma-joined strings as a single element.
@@ -245,6 +259,20 @@ ${allocRows} = Load-AllocCsv ${allocCsv}
 # allLicFiles
 ${allLicFiles} = Get-ChildItem -Path ${licensesVault} -Filter '*.lic' -File -ErrorAction SilentlyContinue | Sort-Object Name
 
+# Translate the build-level ProxyMode (weizmann|direct) into the values that
+# the individual providers expect on their own command lines.
+${proxyForceMode}    = if (${ProxyMode} -eq 'weizmann') { 'use' } else { 'direct' }
+${astroDepProxyMode} = ${proxyForceMode}   # provide-astrometry-dependencies.ps1 uses identical naming
+
+# Banner: print the chosen mode prominently so an operator scanning a build
+# log can tell at a glance which mode this staging directory was built for.
+${proxyBanner} = if (${ProxyMode} -eq 'weizmann') { '*** WEIZMANN-PROXY MODE ***' } else { '*** NO-WEIZMANN-PROXY (DIRECT) MODE ***' }
+Write-Host "==================================================================="
+Write-Host ("[build-mast] {0}" -f ${proxyBanner})
+Write-Host ("[build-mast] proxy provider           -> -ForceMode {0}" -f ${proxyForceMode})
+Write-Host ("[build-mast] astrometry-dependencies  -> -ProxyMode {0}" -f ${astroDepProxyMode})
+Write-Host "==================================================================="
+
 # Build commands list once (same for all), then tweak per host only if we add a SingleLicensePath
 function Generate-Commands([string[]]${Mods}) {
   ${cmds}=@()
@@ -253,6 +281,19 @@ function Generate-Commands([string[]]${Mods}) {
 
     # base command from manifest
     ${cmd} = [string]${mf}.command
+
+    # Per-module command tweaks driven by build-time -ProxyMode. We bake the
+    # mode into the command string here (rather than communicating via env
+    # vars or smoke markers at runtime) so it is visible in commands.json
+    # and survives across the WinRM boundary unambiguously.
+    switch (${m}) {
+      'proxy' {
+        ${cmd} = ${cmd} + (" -ForceMode {0}" -f ${proxyForceMode})
+      }
+      'astrometry-dependencies' {
+        ${cmd} = ${cmd} + (" -ProxyMode {0}" -f ${astroDepProxyMode})
+      }
+    }
 
     ${cmds} += [pscustomobject]@{ order = [int]${mf}.order; desc = [string]${mf}.description; cmd = ${cmd}; module = ${m} }
 

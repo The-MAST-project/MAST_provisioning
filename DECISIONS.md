@@ -2,6 +2,132 @@
 
 ---
 
+## [2026-05-26] Proxy mode is explicit (`--proxy-mode {weizmann,direct}`), no longer probed
+
+**Why:** The proxy provider's earlier "soft probe" approach (introduced
+2026-05-25) detected proxy reachability at runtime and picked `use` or
+`direct` automatically. In practice the probe was both unnecessary and
+incomplete:
+
+1. **Unnecessary:** the operator already knows whether the unit can reach
+   `bcproxy.weizmann.ac.il:8080` at the time they kick off provisioning --
+   it is a function of where the unit lives (campus / VPN / satellite
+   site), not anything the script needs to discover.
+2. **Incomplete:** cygwin `setup-x86_64.exe` defaults to the IE5
+   net-method, which does WinINet + WPAD autodiscovery and **still picks
+   up a proxy** even when we have cleared HKCU `ProxyEnable=0` and every
+   env var. Run #8 (2026-05-26) confirmed: proxy provider reported all
+   surfaces clear, verify-proxy readback showed `ProxyEnable=0
+   ProxyServer=''`, and setup.exe immediately logged `net: Proxy` and
+   failed with 12007 anyway. Probing-then-clearing does not actually
+   guarantee a direct path for setup.exe.
+
+The orthogonal point: "dev vs prod" is **not** the same axis as "on the
+Weizmann network vs not". A dev run from on-campus uses `weizmann`; a
+prod cycle against a satellite-site unit uses `direct`. The deciding
+factor is purely network reachability of the proxy host.
+
+**What:**
+
+- **`vm/run-prov-test.py`**: new `--proxy-mode {weizmann,direct}` flag
+  (default `weizmann`). Forwarded to the build phase. Prints a tall
+  three-line banner at startup -- `*** WEIZMANN-PROXY MODE ***` or
+  `*** NO-WEIZMANN-PROXY (DIRECT) MODE ***` -- so the mode is unmissable
+  in scrollback when triaging "why did network X fail."
+- **`build/build-mast.ps1`**: new `-ProxyMode weizmann|direct` parameter
+  (default `weizmann`). Bakes the chosen mode into `commands.json` by
+  appending `-ForceMode use|direct` to the proxy provider's command and
+  `-ProxyMode use|direct` to astrometry-dependencies'. Mode is also
+  banner-printed at build time. No runtime communication between
+  providers; the choice is baked into the staged artifact and visible
+  in `commands.json`.
+- **`server/providers/proxy/provide-proxy.ps1`**: `probe` mode removed.
+  `-ForceMode` now accepts only `use|direct`, defaulting to `use`
+  (matches the prod-on-campus common case for any direct invocation
+  outside the build pipeline). Banner printed at provider entry and
+  exit.
+- **`server/providers/astrometry-dependencies/provide-astrometry-dependencies.ps1`**:
+  the previous "probe bcproxy reachability" block is gone. New
+  `-ProxyMode use|direct` parameter (default `use`). The provider now
+  **pre-writes `<cygwin>\etc\setup\setup.rc`** with `net-method=Direct`
+  (for direct mode) or `net-method=Proxy` plus the bcproxy address
+  (for proxy mode) before invoking setup-x86_64.exe. This is the
+  conclusive fix for setup.exe ignoring the cleared registry/env vars:
+  the `.rc` file tells setup.exe to skip IE5 entirely.
+
+**Implications:**
+
+- Day-to-day operation from inside Weizmann needs no flag (the default
+  is `weizmann`).
+- Operators running against a unit that can't reach bcproxy (home
+  network, off-VPN satellite site, etc.) **must** pass
+  `--proxy-mode direct` -- without it the proxy provider will dutifully
+  point every surface at bcproxy and downstream installs that fetch
+  from the internet will fail.
+- `commands.json` now varies by `-ProxyMode`. Two builds with different
+  proxy modes produce two distinct staging directories (even though all
+  other inputs match). That is intentional: the staged artifact carries
+  the mode end-to-end.
+- The auto-probe is gone, including its diagnostics. If you want to
+  know whether bcproxy is reachable from a particular vantage point,
+  `Test-NetConnection bcproxy.weizmann.ac.il -Port 8080` is one line.
+- Builds that need to support both modes without re-staging would need
+  the mode-injection to move out of `build-mast.ps1` and into a runtime
+  context-aware launcher. We are deliberately not solving that until
+  there is a concrete need.
+
+---
+
+## [2026-05-26] Smoke marker overwrite in executor made conditional; provider-written rich smoke preserved
+
+**Why:** `execute-mast-provisioning.ps1` unconditionally wrote the literal
+string `"success"` to `<module>-smoke.txt` after every successful provider
+exit (line 250). The original module-manifest design (2026-05-04 entry below,
+"verify -- optional smoke-test command written to `*-smoke.txt` on pass")
+treats the smoke marker as the verify step's output. The orchestrator's
+unconditional write was meant as a fallback for modules without a verify,
+but it ran for *every* successful provider regardless and clobbered the
+content when a provider script wrote its own rich marker before verify ran.
+
+This bit `provide-proxy.ps1` (2026-05-26): the provider wrote
+`proxy_ok mode=direct ie_enable=0 ie_server=''` to the smoke file,
+the orchestrator immediately overwrote it with `success`, and then
+`verify-proxy.ps1` failed with `smoke body did not contain mode=use|direct:
+'success'`. Other providers that write their own smoke from the *provider*
+script (`provide-cygwin.ps1`, `provide-astrometry-dependencies.ps1`,
+`provide-openssh-server.ps1`, `provide-reboot.ps1`) had the same data loss,
+but had no verify reading the body to surface it.
+
+**What:**
+
+- `client/execute-mast-provisioning.ps1` (around line 250): the
+  `Set-Content -Value "success"` fallback now runs only if the smoke file
+  is missing or whitespace-only. Existing non-empty content (whether
+  written by the provider script or by verify) is preserved unchanged.
+  In-line comment points future readers at this entry.
+
+Considered but rejected: a wider refactor that moves all smoke writes out
+of provider scripts and into verify scripts, to match the original
+architecture exactly. Would touch ~6 providers and the new
+`provide-proxy.ps1`. Rejected as pure churn -- the conditional fallback
+gets the same observable behavior in one line.
+
+**Implications:**
+
+- Providers may now write rich, structured smoke markers from the provider
+  script (mode, parsed metrics, version, configured endpoints, etc.)
+  without having them silently destroyed. Verify scripts can read those
+  bodies and check semantic correctness, not just file existence.
+- Modules with no verify, or with a verify that does not write a smoke
+  marker, still get the legacy `success` marker -- their behavior is
+  unchanged.
+- A buggy provider that writes garbage to its smoke file would also
+  preserve that garbage now (instead of being papered over by `success`).
+  This is the right trade-off: a failing verify will surface the garbage
+  immediately, whereas the old behavior hid it.
+
+---
+
 ## [2026-05-25] vm/run-prov-test.py calls Get-AllProviderModules instead of duplicating the JSON walk
 
 **Why:** Follow-up audit of yesterday-the-same-day's discovery refactor: the

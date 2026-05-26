@@ -224,11 +224,11 @@ try {
     Add-DiagResult -Name 'PHD2-rpc-port' -Ok $false -Detail ("exception: {0}" -f $_.Exception.Message)
 }
 
-# --- 7. MAST-Unit HTTP heartbeat ---
+# --- 7. mast-unit HTTP heartbeat ---
 try {
-    ${mastSvc} = Get-Service -Name 'MAST-Unit' -ErrorAction SilentlyContinue
+    ${mastSvc} = Get-Service -Name 'mast-unit' -ErrorAction SilentlyContinue
     if ($null -ne ${mastSvc} -and ${mastSvc}.Status -ne 'Running') {
-        Start-Service -Name 'MAST-Unit' -ErrorAction SilentlyContinue
+        Start-Service -Name 'mast-unit' -ErrorAction SilentlyContinue
     }
     ${heartbeatUrl} = ("http://127.0.0.1:{0}/mast/api/v1/unit/status" -f ${MastUnitPort})
     ${resp} = $null
@@ -242,9 +242,9 @@ try {
         }
     }
     ${hbOk} = $null -ne ${resp} -and ${resp}.StatusCode -ge 200 -and ${resp}.StatusCode -lt 300
-    Add-DiagResult -Name 'MAST-Unit-heartbeat' -Ok ${hbOk} -Detail ("url={0} status={1}" -f ${heartbeatUrl}, $(if ($null -ne ${resp}) { ${resp}.StatusCode } else { 'no-response' }))
+    Add-DiagResult -Name 'mast-unit-heartbeat' -Ok ${hbOk} -Detail ("url={0} status={1}" -f ${heartbeatUrl}, $(if ($null -ne ${resp}) { ${resp}.StatusCode } else { 'no-response' }))
 } catch {
-    Add-DiagResult -Name 'MAST-Unit-heartbeat' -Ok $false -Detail ("exception: {0}" -f $_.Exception.Message)
+    Add-DiagResult -Name 'mast-unit-heartbeat' -Ok $false -Detail ("exception: {0}" -f $_.Exception.Message)
 }
 
 # --- Summary ---

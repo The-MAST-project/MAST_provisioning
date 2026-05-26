@@ -235,6 +235,37 @@ SCENARIOS: list[Scenario] = [
         expected_rc=0,
         status="STUB",
     ),
+    # STUB: requires a unit with reachability to bcproxy.weizmann.ac.il:8080
+    # (campus network or Weizmann VPN). The dev VirtualBox VM on the home
+    # network cannot exercise this path -- everything from build-mast.ps1's
+    # -ProxyMode plumbing to provide-astrometry-dependencies.ps1's setup.rc
+    # net-method=Proxy is currently only unit-test-grade for the 'weizmann'
+    # case. See autonomous-provisioning-requirements.md item "Proxy-mode
+    # 'weizmann' end-to-end coverage" for full assertions; the harness
+    # additions needed to promote to ACTIVE:
+    #   1. spawn run-prov-test.py with --proxy-mode weizmann
+    #   2. parse verify-proxy smoke body, assert mode=use ie_enable=1
+    #      ie_server='bcproxy.weizmann.ac.il:8080'
+    #   3. parse astrometry-dependencies log, assert net: Proxy seen and no
+    #      12007s; package fetches completed
+    #   4. read HKCU Internet Settings/ProxyEnable, ProxyServer via WinRM
+    #   5. parse 'netsh winhttp show proxy' output on the unit
+    # Promote to ACTIVE only after a first successful run against a
+    # bcproxy-reachable unit.
+    Scenario(
+        name="proxy-weizmann-on-campus",
+        description=(
+            "Full provision with --proxy-mode weizmann against a unit that can "
+            "reach bcproxy.weizmann.ac.il:8080. Asserts that all three proxy "
+            "surfaces (env vars, WinINet, WinHTTP) are configured AND that "
+            "cygwin setup.exe actually downloads through the proxy (no 12007)."
+        ),
+        phases="",
+        modules="",
+        repeat=1,
+        expected_rc=0,
+        status="STUB",
+    ),
 ]
 
 SCENARIOS_BY_NAME = {s.name: s for s in SCENARIOS}

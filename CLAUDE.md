@@ -6,7 +6,9 @@ Do **not** introduce non-ASCII characters into executable scripts or modules und
 
 Applies at minimum to: `*.ps1`, `*.psm1`, `*.py`, `*.sh`, `*.bat`, `*.cmd`.
 
-**Why:** Windows PowerShell 5.1 often loads `.ps1` files using a legacy code page. UTF-8 sequences (smart punctuation, emoji, arrows, em dashes) can be mis-decoded and **break parsing** (unterminated strings, bogus errors far from the real line).
+**Does NOT apply to** Markdown (`*.md`) or other prose documents (`*.txt`, `*.rst`, etc.) — those are read by humans and tooling that handles UTF-8 fine. Existing `.md` files in this repo already contain em-dashes, smart quotes, and similar in headings/prose; do not "fix" them, and you may use such characters in new `.md` content (including `DECISIONS.md` entries, `README.md`, `GAPS.md`).
+
+**Why:** Windows PowerShell 5.1 often loads `.ps1` files using a legacy code page. UTF-8 sequences (smart punctuation, emoji, arrows, em dashes) can be mis-decoded and **break parsing** (unterminated strings, bogus errors far from the real line). Markdown has no such parser fragility.
 
 **Use plain ASCII instead**, for example:
 
