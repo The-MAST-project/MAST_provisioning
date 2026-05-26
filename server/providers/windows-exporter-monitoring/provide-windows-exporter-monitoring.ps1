@@ -1,16 +1,20 @@
 param(
     [string]${AssetsRoot}        = ".",
-    # Default collector set. This is the original broad MAST observability
-    # list that lived in server/providers/monitoring/assets/install-windows_exporter.ps1
-    # (provider renamed/refactored 2026-05-24 in commit 05175b9, which
-    # silently slimmed this list and dropped 'cpu_info'). Restored here
-    # 2026-05-26, with one change: the 'cs' (computer system) collector
-    # has been deprecated/removed in windows_exporter >= 0.31.x. Leaving
-    # 'cs' in makes the service crash with 'unknown collector cs' and
-    # restart-loop forever (run #12 confirmed via service event log:
-    #   couldn't enable collectors err="unknown collector cs"
-    # ). Equivalent data lives in 'cpu_info', 'os', and 'system'.
-    [string]${EnabledCollectors} = "cpu,cpu_info,logical_disk,physical_disk,memory,net,os,process,service,system,tcp,textfile,thermalzone,time,scheduled_task,terminal_services,smbclient,smb,dns,dhcp,iis,logon",
+    # Default collector set. Restored from the original broad MAST
+    # observability list that lived in server/providers/monitoring/assets/
+    # install-windows_exporter.ps1 (silently slimmed and dropped 'cpu_info'
+    # in the 2026-05-24 refactor commit 05175b9). Two collectors removed
+    # from that historical list because windows_exporter 0.31.x rejects
+    # them at startup:
+    #   - 'cs' (computer system) -- removed; service crashed with
+    #     'unknown collector cs' in run #12.
+    #   - 'logon' -- removed; service crashed with 'unknown collector
+    #     logon' in run #13. Same restart-loop pattern.
+    # Equivalent data is in 'cpu_info', 'os', 'system'. If a future bump
+    # of windows_exporter drops more collectors, the provider's strict
+    # health-check (Status=Running + port bound + Application event log
+    # tail) will surface the offending name; trim accordingly.
+    [string]${EnabledCollectors} = "cpu,cpu_info,logical_disk,physical_disk,memory,net,os,process,service,system,tcp,textfile,thermalzone,time,scheduled_task,terminal_services,smbclient,smb,dns,dhcp,iis",
     [int]   ${ListenPort}        = 9182
 )
 

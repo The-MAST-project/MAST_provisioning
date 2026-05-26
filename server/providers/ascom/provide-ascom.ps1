@@ -190,12 +190,18 @@ function Enable-NetFx3Feature {
   if ($FoDSource) { $candidateSources += $FoDSource }
   $candidateSources += @('A:\sources\sxs', 'D:\sources\sxs', 'E:\sources\sxs', 'F:\sources\sxs', 'G:\sources\sxs')
 
-  $dismTries = @('/Online /Enable-Feature /FeatureName:NetFx3 /All /NoRestart /Quiet')
+  # Order matters: try ALL /Source-bound attempts first. Run #13 (2026-05-26)
+  # showed that the online attempt "succeeds" but takes 12+ minutes pulling
+  # from the WU CDN, so it was always winning over the bundled SxS attempt
+  # that was correctly listed afterwards. Online attempt is the LAST-resort
+  # fallback now.
+  $dismTries = @()
   foreach ($src in ($candidateSources | Get-Unique)) {
     if (Test-Path -LiteralPath $src) {
       $dismTries += "/Online /Enable-Feature /FeatureName:NetFx3 /All /NoRestart /LimitAccess /Source:$src /Quiet"
     }
   }
+  $dismTries += '/Online /Enable-Feature /FeatureName:NetFx3 /All /NoRestart /Quiet'
 
   foreach ($dismArgs in $dismTries) {
     Write-Host "Trying NetFx3 via SYSTEM scheduled task: dism.exe $dismArgs"
@@ -312,12 +318,20 @@ if (-not $NoNet) {
     if (Test-Path -LiteralPath $bundledSxs) {
       $hasCab = @(Get-ChildItem -LiteralPath $bundledSxs -Filter '*.cab' -File -Recurse -ErrorAction SilentlyContinue).Count -gt 0
       if ($hasCab) {
-        $FoDSource = $bundledSxs
+        # Resolve to absolute path. The provider is invoked with
+        # -AssetsRoot ".", so without resolution this would end up as
+        # ".\sxs" and the SYSTEM-side DISM task would fail with
+        # "Error: 0x800f081f / The source files could not be found"
+        # because the task's WorkingDirectory is not where DISM thinks
+        # it is. Run #14 (2026-05-26) showed this exactly -- bundled-sxs
+        # attempt failed in <1s, online fallback then took 7+ minutes.
+        $FoDSource = (Resolve-Path -LiteralPath $bundledSxs).Path
         $netFx3Path = 'bundled-sxs'
-        Write-Host ("[ascom] NetFx3 source: bundled SxS at {0}" -f $bundledSxs)
+        Write-Host ("[ascom] NetFx3 source: bundled SxS at {0}" -f $FoDSource)
       }
     }
   } else {
+    $FoDSource = (Resolve-Path -LiteralPath $FoDSource).Path
     $netFx3Path = 'explicit-FoDSource'
     Write-Host ("[ascom] NetFx3 source: explicit -FoDSource {0}" -f $FoDSource)
   }

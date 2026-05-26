@@ -255,6 +255,12 @@ function Invoke-ExeAsSystem {
   if (-not (Test-Path -LiteralPath ${Executable})) {
     throw ("Invoke-ExeAsSystem: executable not found: {0}" -f ${Executable})
   }
+  # Resolve to absolute path. Relative paths break under SYSTEM-side cmd.exe
+  # invocation because the task's WorkingDirectory isn't always honored the
+  # way we expect: run #13 had usbpcap fail with '"".\\USBPcapSetup-...exe""'
+  # is not recognized as an internal or external command' because cmd ran
+  # in System32 and couldn't find the relative path.
+  ${Executable} = (Resolve-Path -LiteralPath ${Executable}).Path
   # WorkingDirectory: scheduled tasks default to %WINDIR%\System32, which
   # breaks installers that look for relative paths (asset .sys/.cat/.inf
   # alongside the installer, bundled DLLs, etc.). Default to the
@@ -262,23 +268,27 @@ function Invoke-ExeAsSystem {
   ${workDir} = [System.IO.Path]::GetDirectoryName(${Executable})
 
   # Capture stdout + stderr from the SYSTEM-side process. Without this we
-  # are flying blind whenever an installer fails -- run #12 had usbpcap
-  # exit with HRESULT 0x80070002 (ERROR_FILE_NOT_FOUND) and we had no idea
-  # which file. Wrap the action in cmd.exe so we can redirect stdout/stderr
-  # to disk; the helper reads the log files at the end and surfaces tails
-  # back to the caller's host.
+  # are flying blind whenever an installer fails. Approach: write a tiny
+  # batch file that wraps the call + redirects, and run that. This avoids
+  # the cmd.exe `/c "..."` quote-collapsing rules that bit us in run #13
+  # (relative path .\USBPcapSetup-...exe came through as a literal '".\...exe"'
+  # token cmd then tried to invoke as a command).
   ${stdoutLog} = Join-Path ${env:TEMP} ("${taskName}.out.log")
   ${stderrLog} = Join-Path ${env:TEMP} ("${taskName}.err.log")
-  Remove-Item -LiteralPath ${stdoutLog}, ${stderrLog} -Force -ErrorAction SilentlyContinue
-  # cmd.exe /c "<exe>" <args> 1> "<out>" 2> "<err>"
-  # Quote the exe path; arguments are passed as-is (caller's responsibility
-  # to quote any internal spaces). cmd's redirects bind to the inner exe.
-  ${cmdArgs} = ('/c ""' + ${Executable} + '"')
-  if (-not [string]::IsNullOrEmpty(${Arguments})) {
-    ${cmdArgs} = ${cmdArgs} + ' ' + ${Arguments}
-  }
-  ${cmdArgs} = ${cmdArgs} + (' 1> "{0}" 2> "{1}""' -f ${stdoutLog}, ${stderrLog})
-  ${action} = New-ScheduledTaskAction -Execute 'cmd.exe' -Argument ${cmdArgs} -WorkingDirectory ${workDir}
+  ${runBat}    = Join-Path ${env:TEMP} ("${taskName}.run.bat")
+  Remove-Item -LiteralPath ${stdoutLog}, ${stderrLog}, ${runBat} -Force -ErrorAction SilentlyContinue
+  # Batch contents: @echo off + chdir to WorkingDirectory + run the exe
+  # with its args + redirect both streams. We use 8.3-style quoting around
+  # the absolute exe path; arguments are appended verbatim (caller's
+  # responsibility to quote any internal spaces).
+  ${batLines} = @(
+    '@echo off',
+    ('cd /d "{0}"' -f ${workDir}),
+    ('"{0}" {1} 1> "{2}" 2> "{3}"' -f ${Executable}, ${Arguments}, ${stdoutLog}, ${stderrLog}),
+    'exit /b %ERRORLEVEL%'
+  )
+  Set-Content -LiteralPath ${runBat} -Encoding ASCII -Value (${batLines} -join "`r`n")
+  ${action} = New-ScheduledTaskAction -Execute 'cmd.exe' -Argument ('/c "' + ${runBat} + '"') -WorkingDirectory ${workDir}
   ${principal} = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
   ${settings}  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
     -ExecutionTimeLimit ([TimeSpan]::FromMinutes(${TimeoutMinutes} + 5)) -MultipleInstances IgnoreNew
@@ -308,17 +318,21 @@ function Invoke-ExeAsSystem {
       }
       Start-Sleep -Seconds 4
     }
+    ${timedOut} = $false
     ${st} = Get-ScheduledTask -TaskName ${taskName} -ErrorAction Stop
     if (${st}.State -eq 'Running') {
+      ${timedOut} = $true
       Write-Warning ("Invoke-ExeAsSystem: task still Running after {0}m; killing." -f ${TimeoutMinutes})
       try { Stop-ScheduledTask -TaskName ${taskName} -ErrorAction SilentlyContinue } catch {}
-      return [long]-2
+      # Give the process a moment to actually exit + flush its redirected
+      # streams to disk before we read them. Without this the stdout file
+      # is often empty even though the process has been writing to it.
+      Start-Sleep -Seconds 3
     }
     # Surface captured stdout / stderr from the SYSTEM-side process before
-    # returning. Doing this AFTER the task has stopped guarantees the cmd
-    # redirect has been flushed and closed. The redirected logs live under
-    # %TEMP%; we tail them to the caller's host and then leave the full
-    # files on disk for post-mortem.
+    # returning. Run in BOTH the success path AND the timeout path -- without
+    # this, a hang at the 15-min ceiling gave us a -2 return with zero
+    # visibility into what the installer was actually doing (run #14 npcap).
     foreach (${pair} in @(@{label='stdout';path=${stdoutLog}}, @{label='stderr';path=${stderrLog}})) {
       if (Test-Path -LiteralPath ${pair}.path) {
         ${sz} = (Get-Item -LiteralPath ${pair}.path).Length
@@ -329,6 +343,7 @@ function Invoke-ExeAsSystem {
         }
       }
     }
+    if (${timedOut}) { return [long]-2 }
     # LastTaskResult is exposed as a UInt32 by PowerShell; values >= 0x80000000
     # (HRESULTs like 0x80070002 = ERROR_FILE_NOT_FOUND) overflow Int32 and
     # blow up an [int] cast. Use [long] so callers can compare to small
@@ -341,6 +356,9 @@ function Invoke-ExeAsSystem {
     try { Stop-ScheduledTask -TaskName ${taskName} -ErrorAction SilentlyContinue } catch {}
     Start-Sleep -Milliseconds 500
     Unregister-ScheduledTask -TaskName ${taskName} -Confirm:$false -ErrorAction SilentlyContinue
+    # Leave stdout/stderr logs on disk for post-mortem (operator can grep
+    # %TEMP%\MAST-*); clean up just the wrapper batch.
+    Remove-Item -LiteralPath ${runBat} -Force -ErrorAction SilentlyContinue
   }
 }
 
