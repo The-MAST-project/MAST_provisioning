@@ -22,6 +22,12 @@ param(
   [switch]${AllowMissingNoMachineLicense},
   # Dev/test: allow missing GitHub token file (skip staging mast_github.txt).
   [switch]${AllowMissingGithubToken},
+  # Dev/test: allow missing NetFx3 SxS source (skip staging sxs\; provider
+  # falls back to online DISM with a warning). Production builds MUST have
+  # the bundled SxS present -- the online DISM path depends on WU CDN
+  # reachability + throughput, which contradicts the project's reliability
+  # goal. See server/providers/ascom/assets/sxs/README.md.
+  [switch]${AllowMissingNetFx3Sxs},
   # Dev/test: allow missing large optional assets (skip with warning).
   [switch]${TestMode},
   # Proxy mode for this build, baked into the staged commands.json:
@@ -462,6 +468,33 @@ if (${Modules} -contains 'mast') {
         Write-Warning "GitHub token '$tokenPath' missing; continuing due to -AllowMissingGithubToken."
     } else {
         throw "GitHub token '$tokenPath' missing. Create it or pass -AllowMissingGithubToken for dev/test."
+    }
+}
+
+# NetFx3 SxS source for the ASCOM provider. Required asset in production:
+# the alternative is DISM /Online /Enable-Feature pulling from the Windows
+# Update CDN, which adds three external dependencies to every run (WU
+# reachability, CDN throughput, no transient 5xx). Fail-loud at build time
+# unless the dev/test override is in effect. Operators are pointed at the
+# provider's own README to populate the directory once -- this is a
+# bounded, documented fetch quest, not an open-ended hunt.
+if (${Modules} -contains 'ascom') {
+    ${sxsSrc} = Join-Path ${providersRoot} 'ascom\assets\sxs'
+    ${sxsCabs} = @()
+    if (Test-Path -LiteralPath ${sxsSrc}) {
+        ${sxsCabs} = @(Get-ChildItem -LiteralPath ${sxsSrc} -Filter '*.cab' -File -Recurse -ErrorAction SilentlyContinue)
+    }
+    if (${sxsCabs}.Count -gt 0) {
+        # Stage the whole sxs\ subtree under the ascom staging area; the
+        # provider points DISM at this path via -FoDSource.
+        ${sxsDst} = Join-Path ${staging} 'sxs'
+        New-Item -ItemType Directory -Force -Path ${sxsDst} | Out-Null
+        Copy-Item -Force -Recurse -Path (Join-Path ${sxsSrc} '*') -Destination ${sxsDst}
+        Write-Host (" Staged NetFx3 SxS source ({0} .cab file(s)) -> {1}" -f ${sxsCabs}.Count, ${sxsDst})
+    } elseif (${AllowMissingNetFx3Sxs}) {
+        Write-Warning "NetFx3 SxS source under '$sxsSrc' is empty; continuing due to -AllowMissingNetFx3Sxs (provider will fall back to online DISM)."
+    } else {
+        throw "NetFx3 SxS source missing under '$sxsSrc'. Drop the Windows IoT 11 LTSC SxS files there (see provider README), or pass -AllowMissingNetFx3Sxs for dev/test."
     }
 }
 

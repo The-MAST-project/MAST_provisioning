@@ -178,101 +178,171 @@ if (-not ${NoCompass}) {
   #      /verysilent) each ALSO hangs in -Wait, so a fallback loop is
   #      worse than useless -- the first hang ends the run.
   #
-  # Lessons baked into this loop from run #8 (2026-05-26) where Compass
-  # appeared on disk under app-1.43.0\ but the install was actually broken
-  # (no wrapper at %LocalAppData%\MongoDBCompass\MongoDBCompass.exe, no
-  # Start Menu entry):
+  # Lessons baked into this loop from runs #6-#9 (2026-05-25 .. 2026-05-26),
+  # where the previous strategies all produced a half-installed Compass:
   #
-  #  1. Compass is Electron -- a single launch spawns a main MongoDBCompass.exe
-  #     plus several renderer/GPU/utility helpers ALSO named MongoDBCompass.exe.
-  #     Seeing many GUI PIDs is normal, NOT a sign the installer is hung or
-  #     respawning. Do not use "GUI quiet" as a done-signal.
+  #  Run #8 broke by killing Squirrel/Update by path-match (those are the
+  #  installer machinery, not the GUI -- killing them aborted extraction
+  #  mid-flight). Fix: kill ONLY by name (MongoDBCompass / Compass).
   #
-  #  2. Squirrel.exe and Update.exe under %LocalAppData%\MongoDBCompass\ ARE
-  #     the install machinery, not the GUI. The previous filter caught them
-  #     by path and killed them mid-extraction; result was a partial install
-  #     that fooled a lenient "any MongoDBCompass.exe on disk" verify. Now
-  #     we only kill processes by NAME (MongoDBCompass, Compass); never by
-  #     path-match.
+  #  Run #9 (current strategy before this patch) killed Compass.exe the
+  #  *instant* it appeared. Installer exited in 12s and the wrapper file
+  #  showed up, but no Start Menu shortcut existed afterwards. Root cause:
+  #  Squirrel uses Compass's --squirrel-firstrun handler to register
+  #  shortcuts and uninstaller entries. Killing Compass before that handler
+  #  ran left the install missing user-visible pieces even though files
+  #  were on disk.
   #
-  #  3. The installer's post-extract step is "launch Compass with --squirrel-
-  #     firstrun and wait for it to exit." Killing the GUI returns control to
-  #     the installer, which then does its final shortcut/wrapper/uninstaller
-  #     work and exits naturally. Done signal = installer process exited.
+  #  This strategy: phase the loop so we give Compass's --squirrel-firstrun
+  #  handler the ~30s it typically needs before we kill anything. The
+  #  installer is then allowed to exit naturally on its own. We only
+  #  force-kill GUI processes once extraction has clearly completed AND
+  #  the firstrun handler has had time to register itself.
   #
-  #  4. Verification must check BOTH the per-version binary (proves extraction
-  #     reached the app-X.Y.Z stage) AND the wrapper at %LocalAppData%\
-  #     MongoDBCompass\MongoDBCompass.exe (proves Squirrel's final pinning
-  #     step ran -- this is what Start Menu and the uninstaller actually
-  #     point at; without it the install is functionally broken even though
-  #     bytes are on disk).
-  Write-Host "Installing MongoDB Compass silently (non-blocking, GUI-only-kill loop)..."
+  #  Note: Compass is Electron, so a single "launch" spawns a main
+  #  MongoDBCompass.exe plus several renderer/GPU/utility helpers ALSO
+  #  named MongoDBCompass.exe. Seeing many PIDs at once is normal.
+  Write-Host "Installing MongoDB Compass silently (phased non-blocking loop)..."
   ${installer} = Start-Process -FilePath ${exeCompass} -ArgumentList '/S' `
       -PassThru -WindowStyle Hidden
   Write-Host ("  Compass installer PID={0}" -f ${installer}.Id)
 
-  # Generous budget: a fresh Compass install can take 5-8 minutes to extract
-  # ~250 MB on slow disks. We only force-kill the installer if it has not
-  # exited by then; otherwise we wait for it to finish naturally.
-  ${budgetSec}    = 600
-  ${sw}           = [System.Diagnostics.Stopwatch]::StartNew()
-  ${killedCount}  = 0
+  ${waitForGuiSec}   = 240   # phase 1: wait up to 4 min for Compass to launch
+  # phase 2: let --squirrel-firstrun do its work. Bumped 30s -> 90s after
+  # run #10 (2026-05-26) where extraction completed cleanly (177MB exe, 360MB
+  # app dir, wrapper present) but the Start Menu shortcut was missing -- 30s
+  # was not enough for Squirrel's shortcut-registration step to finish.
+  ${firstrunGraceSec}= 90
+  ${killBudgetSec}   = 300   # phase 3: from start of kill loop until force-kill
+  ${overallBudgetSec}= 720   # absolute wall clock from installer start
 
-  while (${sw}.Elapsed.TotalSeconds -lt ${budgetSec}) {
-    Start-Sleep -Seconds 2
+  ${sw}    = [System.Diagnostics.Stopwatch]::StartNew()
+  ${guiAppeared}    = $false
+  ${guiAppearedAt}  = $null
+
+  # ----- Phase 1: wait for the GUI to appear (proves extraction reached
+  # the "launch the app for firstrun" stage). Do NOT kill anything here.
+  while (${sw}.Elapsed.TotalSeconds -lt ${waitForGuiSec}) {
     try { ${installer}.Refresh() } catch {}
-
-    # Kill ONLY GUI processes, by NAME. Do not touch Squirrel/Update --
-    # those are the installer machinery; killing them aborts the install.
-    # @() wrap so PS 5.1 always returns an array (0-item -> $null without
-    # this, which blows up .Count under StrictMode).
-    ${guiProcs} = @(Get-Process -Name 'MongoDBCompass','Compass' -ErrorAction SilentlyContinue)
-    foreach (${p} in ${guiProcs}) {
-      try {
-        Stop-Process -Id ${p}.Id -Force -ErrorAction Stop
-        ${killedCount}++
-        Write-Host ("  killed {0} PID={1}" -f ${p}.Name, ${p}.Id)
-      } catch {
-        Write-Warning ("  could not kill {0} PID={1}: {2}" -f ${p}.Name, ${p}.Id, $_.Exception.Message)
-      }
-    }
-
-    ${installerAlive} = $false
-    try { ${installerAlive} = -not ${installer}.HasExited } catch { ${installerAlive} = $false }
-    if (-not ${installerAlive}) {
-      Write-Host ("  installer exited naturally (elapsed={0:N0}s, killed={1} GUI procs)" -f ${sw}.Elapsed.TotalSeconds, ${killedCount})
+    ${gui} = @(Get-Process -Name 'MongoDBCompass','Compass' -ErrorAction SilentlyContinue)
+    if (${gui}.Count -gt 0) {
+      ${guiAppeared}   = $true
+      ${guiAppearedAt} = ${sw}.Elapsed.TotalSeconds
+      Write-Host ("  Compass GUI launched at t={0:N0}s (PID(s)={1})" -f ${guiAppearedAt}, ((${gui}.Id) -join ','))
       break
     }
+    if (${installer}.HasExited) {
+      Write-Warning ("  Installer exited at t={0:N0}s WITHOUT launching Compass -- extraction may have failed." -f ${sw}.Elapsed.TotalSeconds)
+      break
+    }
+    Start-Sleep -Seconds 2
   }
-
-  if (${sw}.Elapsed.TotalSeconds -ge ${budgetSec}) {
-    Write-Warning ("Compass installer did not exit within {0}s; force-killing PID={1}." -f ${budgetSec}, ${installer}.Id)
+  if (-not ${guiAppeared} -and -not ${installer}.HasExited) {
+    Write-Warning ("  Compass GUI never appeared within {0}s; killing installer." -f ${waitForGuiSec})
     try { Stop-Process -Id ${installer}.Id -Force -ErrorAction Stop } catch {}
   }
 
-  # Final sweep: Electron may have respawned helpers between our last kill
-  # and the installer's exit.
+  # ----- Phase 2: grace period. Compass's --squirrel-firstrun handler
+  # writes Start Menu shortcut, registers protocol handlers, writes
+  # uninstaller registry entries. Empirically completes in <10s on the
+  # dev VM; we give 30s for safety. Do NOT kill during this window.
+  if (${guiAppeared}) {
+    Write-Host ("  Phase 2: firstrun grace ({0}s) so Squirrel can register shortcut/registry..." -f ${firstrunGraceSec})
+    Start-Sleep -Seconds ${firstrunGraceSec}
+  }
+
+  # ----- Phase 3: kill GUI to unblock the installer's wait-for-app-exit;
+  # then wait for the installer to exit naturally. The installer's final
+  # work after the GUI exits (cleanup, finalize) is usually <5s.
+  ${killStartSec} = ${sw}.Elapsed.TotalSeconds
+  ${killedCount}  = 0
+  Write-Host ("  Phase 3: kill GUI + wait for installer exit (budget={0}s)..." -f ${killBudgetSec})
+  while (${sw}.Elapsed.TotalSeconds -lt (${killStartSec} + ${killBudgetSec}) -and
+         ${sw}.Elapsed.TotalSeconds -lt ${overallBudgetSec}) {
+    try { ${installer}.Refresh() } catch {}
+    ${gui} = @(Get-Process -Name 'MongoDBCompass','Compass' -ErrorAction SilentlyContinue)
+    foreach (${p} in ${gui}) {
+      try {
+        Stop-Process -Id ${p}.Id -Force -ErrorAction Stop
+        ${killedCount}++
+        Write-Host ("    killed {0} PID={1}" -f ${p}.Name, ${p}.Id)
+      } catch {
+        Write-Warning ("    could not kill {0} PID={1}: {2}" -f ${p}.Name, ${p}.Id, $_.Exception.Message)
+      }
+    }
+    if (${installer}.HasExited) {
+      Write-Host ("  installer exited naturally (total elapsed={0:N0}s, killed={1} GUI procs)" -f ${sw}.Elapsed.TotalSeconds, ${killedCount})
+      break
+    }
+    Start-Sleep -Seconds 2
+  }
+
+  if (-not ${installer}.HasExited) {
+    Write-Warning ("Compass installer still running at t={0:N0}s; force-killing PID={1}." -f ${sw}.Elapsed.TotalSeconds, ${installer}.Id)
+    try { Stop-Process -Id ${installer}.Id -Force -ErrorAction Stop } catch {}
+  }
+
+  # Final sweep.
   Start-Sleep -Seconds 2
   foreach (${p} in @(Get-Process -Name 'MongoDBCompass','Compass' -ErrorAction SilentlyContinue)) {
     try { Stop-Process -Id ${p}.Id -Force -ErrorAction Stop } catch {}
   }
 
-  # Verification: BOTH the wrapper AND the versioned extraction must exist.
-  # Throwing on partial install is the right policy here -- a half-installed
-  # Compass that bytes-exist-but-doesn't-launch is worse than a clean failure
-  # the operator can re-trigger.
-  ${compassRoot} = Join-Path ${env:LOCALAPPDATA} 'MongoDBCompass'
-  ${wrapperExe}  = Join-Path ${compassRoot} 'MongoDBCompass.exe'
-  ${appDirs}     = @(Get-ChildItem -LiteralPath ${compassRoot} -Directory -Filter 'app-*' -ErrorAction SilentlyContinue)
-  ${haveWrapper} = Test-Path -LiteralPath ${wrapperExe}
-  ${haveAppDir}  = (${appDirs}.Count -gt 0) -and (Test-Path -LiteralPath (Join-Path ${appDirs}[0].FullName 'MongoDBCompass.exe'))
-  if (${haveWrapper} -and ${haveAppDir}) {
-    Write-Host ("Compass installed: wrapper={0}, app={1}" -f ${wrapperExe}, ${appDirs}[0].FullName)
-  } else {
-    Write-Warning ("Compass install verification: wrapperExists={0}, appDirCount={1}, appDirHasExe={2}" `
-        -f ${haveWrapper}, ${appDirs}.Count, ${haveAppDir})
-    throw "MongoDB Compass install is incomplete. Expected wrapper at ${wrapperExe} and a populated app-* dir under ${compassRoot}."
+  # Verification: wrapper + app dir + extracted app size + Start Menu shortcut
+  # all must be present. Bare existence is not enough -- run #9 had wrapper
+  # and app dir but no shortcut; the install was functionally broken.
+  ${compassRoot}   = Join-Path ${env:LOCALAPPDATA} 'MongoDBCompass'
+  ${wrapperExe}    = Join-Path ${compassRoot} 'MongoDBCompass.exe'
+  ${appDirs}       = @(Get-ChildItem -LiteralPath ${compassRoot} -Directory -Filter 'app-*' -ErrorAction SilentlyContinue)
+  ${haveWrapper}   = Test-Path -LiteralPath ${wrapperExe}
+  ${appExeBytes}   = 0
+  ${appDirBytes}   = 0
+  ${appDirPath}    = $null
+  if (${appDirs}.Count -gt 0) {
+    ${appDirPath} = ${appDirs}[0].FullName
+    ${appExe}     = Join-Path ${appDirPath} 'MongoDBCompass.exe'
+    if (Test-Path -LiteralPath ${appExe}) {
+      ${appExeBytes} = (Get-Item -LiteralPath ${appExe}).Length
+    }
+    ${appDirBytes} = (Get-ChildItem -LiteralPath ${appDirPath} -Recurse -File -ErrorAction SilentlyContinue |
+                       Measure-Object -Property Length -Sum).Sum
   }
+
+  # Start Menu shortcut: Squirrel writes a .lnk somewhere under the user's
+  # or all-users Start Menu Programs dir. Path varies by Squirrel version
+  # ("MongoDB Inc\" subfolder or not, "MongoDB Compass" vs "Compass" name).
+  # Search recursively across both user-scope and machine-scope Start Menu
+  # roots and accept any .lnk whose name matches /compass/i. Log everything
+  # found (or empty result) so we have actionable data if we miss again.
+  ${startMenuRoots} = @(
+    (Join-Path ${env:APPDATA}     'Microsoft\Windows\Start Menu'),
+    (Join-Path ${env:ProgramData} 'Microsoft\Windows\Start Menu')
+  ) | Where-Object { Test-Path -LiteralPath $_ }
+  ${shortcutHits} = @()
+  foreach (${root} in ${startMenuRoots}) {
+    ${found} = @(Get-ChildItem -LiteralPath ${root} -Filter '*.lnk' -Recurse -ErrorAction SilentlyContinue |
+                  Where-Object { $_.Name -match 'compass' })
+    if (${found}.Count -gt 0) { ${shortcutHits} += ${found} }
+  }
+  Write-Host ("Compass shortcut search: roots=[{0}] hits={1}" -f (${startMenuRoots} -join ' ; '), ${shortcutHits}.Count)
+  foreach (${h} in ${shortcutHits}) { Write-Host ("  found: {0}" -f ${h}.FullName) }
+  ${shortcutPath} = if (${shortcutHits}.Count -gt 0) { ${shortcutHits}[0].FullName } else { $null }
+  ${haveShortcut} = $null -ne ${shortcutPath}
+
+  Write-Host ("Compass verify: wrapper={0} appDir={1} appExeBytes={2:N0} appDirBytes={3:N0} shortcut={4}" `
+      -f ${haveWrapper}, ${appDirPath}, ${appExeBytes}, ${appDirBytes}, $(if (${haveShortcut}) { ${shortcutPath} } else { '<missing>' }))
+
+  ${issues} = @()
+  if (-not ${haveWrapper})              { ${issues} += "wrapper missing at ${wrapperExe}" }
+  if ($null -eq ${appDirPath})          { ${issues} += "no app-* dir under ${compassRoot}" }
+  if (${appExeBytes} -lt 100000000)     { ${issues} += ("app exe too small ({0} bytes; expect >100MB)" -f ${appExeBytes}) }
+  if (${appDirBytes} -lt 200000000)     { ${issues} += ("app dir too small ({0} bytes total; expect >200MB)" -f ${appDirBytes}) }
+  if (-not ${haveShortcut})             { ${issues} += "no Start Menu shortcut at any expected path" }
+
+  if (${issues}.Count -gt 0) {
+    throw ("MongoDB Compass install is incomplete: " + (${issues} -join '; '))
+  }
+  Write-Host "Compass install verified."
 } else {
   Write-Verbose "Skipping Compass (-NoCompass)."
 }

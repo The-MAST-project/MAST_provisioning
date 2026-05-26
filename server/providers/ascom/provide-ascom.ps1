@@ -87,6 +87,29 @@ Start-Transcript -Path $LogFile -Append | Out-Null
 
 Write-Verbose "Log file: $LogFile"
 
+# --- Per-step timing ---
+# ASCOM is the longest single step in the run (15-17 min observed). Two heavy
+# sub-steps (NetFx3 DISM + ASCOM Platform installer with NGEN) used to be
+# invisible inside that block. With these timers, the install log shows
+# "STEP <name>: started" and "STEP <name>: NN.Ns" so we can target whichever
+# is actually slow rather than guessing.
+$Script:_stepStopwatch = $null
+$Script:_stepName      = $null
+function Start-Step {
+  param([Parameter(Mandatory)][string]$Name)
+  $Script:_stepName      = $Name
+  $Script:_stepStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+  Write-Host ("[ascom] STEP {0}: started at {1}" -f $Name, (Get-Date -Format 'HH:mm:ss'))
+}
+function Stop-Step {
+  if (-not $Script:_stepStopwatch) { return }
+  $Script:_stepStopwatch.Stop()
+  $elapsed = $Script:_stepStopwatch.Elapsed
+  Write-Host ("[ascom] STEP {0}: {1:N1}s ({2:hh\:mm\:ss})" -f $Script:_stepName, $elapsed.TotalSeconds, $elapsed)
+  $Script:_stepName      = $null
+  $Script:_stepStopwatch = $null
+}
+
 # --- Helpers ---
 function Test-Admin {
   try {
@@ -105,66 +128,51 @@ function Invoke-Proc {
     [Parameter(Mandatory)][string]$FilePath,
     [string]$Arguments = "",
     [int[]]$SuccessCodes = @(0),
-    [string]$LogTag = "proc"
+    [string]$LogTag = "proc",
+    [int]$HeartbeatSeconds = 30
   )
+  # Previously this used StandardOutput.ReadToEnd() + StandardError.ReadToEnd()
+  # which are BLOCKING calls that don't return until the process exits. The
+  # ASCOM Platform installer takes ~10 minutes (NGEN sweep) and inside that
+  # window we had zero log output -- "stuck or working?" is unanswerable from
+  # the host side. Switched to file-redirect + WaitForExit(intervalMs) polling
+  # so we can emit a heartbeat line every $HeartbeatSeconds. stdout/stderr
+  # files are kept under $LogRoot for post-mortem diagnostics.
+  $safeTag    = $LogTag -replace '[^\w]', '_'
+  $stdoutPath = Join-Path $LogRoot ("{0}.proc.stdout.log" -f $safeTag)
+  $stderrPath = Join-Path $LogRoot ("{0}.proc.stderr.log" -f $safeTag)
   Write-Verbose "${LogTag}: $FilePath $Arguments"
-  $p = New-Object System.Diagnostics.Process
-  $p.StartInfo.FileName = $FilePath
-  $p.StartInfo.Arguments = $Arguments
-  $p.StartInfo.UseShellExecute = $false
-  $p.StartInfo.RedirectStandardOutput = $true
-  $p.StartInfo.RedirectStandardError  = $true
-  $null = $p.Start()
-  $stdOut = $p.StandardOutput.ReadToEnd()
-  $stdErr = $p.StandardError.ReadToEnd()
-  $p.WaitForExit()
+  Write-Host ("[{0}] starting: {1} {2}" -f $LogTag, $FilePath, $Arguments)
+  $p = Start-Process -FilePath $FilePath -ArgumentList $Arguments -PassThru -NoNewWindow `
+        -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
+  $sw = [System.Diagnostics.Stopwatch]::StartNew()
+  while (-not $p.WaitForExit($HeartbeatSeconds * 1000)) {
+    Write-Host ("[{0}] still running, elapsed={1:N0}s, pid={2}" -f $LogTag, $sw.Elapsed.TotalSeconds, $p.Id)
+  }
   try { $p.Refresh() } catch {}
+  Write-Host ("[{0}] exited with code {1} after {2:N0}s" -f $LogTag, $p.ExitCode, $sw.Elapsed.TotalSeconds)
+  $stdOut = (Get-Content -LiteralPath $stdoutPath -Raw -ErrorAction SilentlyContinue)
+  $stdErr = (Get-Content -LiteralPath $stderrPath -Raw -ErrorAction SilentlyContinue)
   if ($stdOut) { Write-Verbose "$LogTag OUT: $stdOut" }
   if ($stdErr) { Write-Verbose "$LogTag ERR: $stdErr" }
   if ($null -ne $p.ExitCode -and $SuccessCodes -notcontains $p.ExitCode) {
-    throw "$LogTag failed with exit code $($p.ExitCode)."
+    throw "$LogTag failed with exit code $($p.ExitCode). See $stdoutPath / $stderrPath."
   }
 }
 
+# SYSTEM-task helper was previously inlined here as Invoke-DismViaSystemTask.
+# Extracted 2026-05-26 to provisioning.psm1::Invoke-ExeAsSystem so npcap and
+# usbpcap can share the same battle-tested implementation. Thin wrapper kept
+# for callsite readability and the dism.exe path lookup.
 function Invoke-DismViaSystemTask {
   param(
     [Parameter(Mandatory)][string]$Arguments,
     [int]$TimeoutMinutes = 45
   )
-  # WinRM often returns "Access is denied" for Enable-WindowsOptionalFeature even for local
-  # Administrators. A one-shot scheduled task running dism.exe as SYSTEM usually succeeds.
-  $taskName = 'MAST-NetFx3-' + ([guid]::NewGuid().ToString('N').Substring(0, 12))
   $dismExe = Join-Path $env:SystemRoot 'System32\dism.exe'
   if (-not (Test-Path -LiteralPath $dismExe)) { $dismExe = 'dism.exe' }
-  $action = New-ScheduledTaskAction -Execute $dismExe -Argument $Arguments
-  $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
-  $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
-    -ExecutionTimeLimit ([TimeSpan]::FromHours(2)) -MultipleInstances IgnoreNew
-  try {
-    Register-ScheduledTask -TaskName $taskName -Action $action -Principal $principal -Settings $settings -Force | Out-Null
-  } catch {
-    Write-Warning "Could not register SYSTEM DISM task: $($_.Exception.Message)"
-    return -1
-  }
-  try {
-    Start-ScheduledTask -TaskName $taskName
-    $deadline = (Get-Date).AddMinutes($TimeoutMinutes)
-    while ((Get-Date) -lt $deadline) {
-      $st = Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
-      if ($st.State -ne 'Running') { break }
-      Start-Sleep -Seconds 4
-    }
-    $st = Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
-    if ($st.State -eq 'Running') {
-      Write-Warning "SYSTEM DISM task still Running after ${TimeoutMinutes}m."
-      return -2
-    }
-    return [int](Get-ScheduledTaskInfo -TaskName $taskName).LastTaskResult
-  } finally {
-    try { Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue } catch { }
-    Start-Sleep -Milliseconds 500
-    Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
-  }
+  return (Invoke-ExeAsSystem -Executable $dismExe -Arguments $Arguments `
+            -TimeoutMinutes $TimeoutMinutes -TaskNamePrefix 'MAST-NetFx3')
 }
 
 function Enable-NetFx3Feature {
@@ -285,7 +293,41 @@ Write-Host "Using assets folder: $assets"
 
 # --- Enable .NET 3.5 (unless skipped) ---
 if (-not $NoNet) {
+  # NetFx3 source-selection policy:
+  #
+  #   1. If the caller passed -FoDSource explicitly, honor it.
+  #   2. Otherwise look for a bundled SxS at $assets\sxs\*.cab. Build-mast.ps1
+  #      checks for these files at build time and fails the build if they
+  #      are missing unless -AllowMissingNetFx3Sxs is passed. So when we get
+  #      here in a production build, the bundle is guaranteed present.
+  #   3. If neither (1) nor (2) yielded a source, fall back to online DISM
+  #      ONLY because the dev/test override let the build skip the bundle.
+  #      Log the path clearly so the operator knows which one ran. The
+  #      online path is documented as less reliable and is the very path
+  #      we are trying to avoid in production -- see
+  #      assets/sxs/README.md.
+  $netFx3Path = 'unknown'
+  if (-not $FoDSource) {
+    $bundledSxs = Join-Path $assets 'sxs'
+    if (Test-Path -LiteralPath $bundledSxs) {
+      $hasCab = @(Get-ChildItem -LiteralPath $bundledSxs -Filter '*.cab' -File -Recurse -ErrorAction SilentlyContinue).Count -gt 0
+      if ($hasCab) {
+        $FoDSource = $bundledSxs
+        $netFx3Path = 'bundled-sxs'
+        Write-Host ("[ascom] NetFx3 source: bundled SxS at {0}" -f $bundledSxs)
+      }
+    }
+  } else {
+    $netFx3Path = 'explicit-FoDSource'
+    Write-Host ("[ascom] NetFx3 source: explicit -FoDSource {0}" -f $FoDSource)
+  }
+  if ($netFx3Path -eq 'unknown') {
+    $netFx3Path = 'online-DISM'
+    Write-Warning "[ascom] NetFx3 source: no bundled SxS available -- falling back to online DISM (slower, depends on Windows Update CDN). This path is allowed only because the build was run with -AllowMissingNetFx3Sxs."
+  }
+  Start-Step ("netfx3-enable (" + $netFx3Path + ")")
   Enable-NetFx3Feature -FoDSource $FoDSource | Out-Null
+  Stop-Step
 } else {
   Write-Host "Skipping NetFx3 enablement (-NoNet)."
 }
@@ -302,7 +344,9 @@ Write-Host "Found ASCOM Platform: $ascomPlatform"
 
 # --- Installers (order: Platform -> Developer) ---
 try {
+  Start-Step 'ascom-platform-install'
   Install-Silent -InstallerPath $ascomPlatform -DisplayName "ASCOM Platform 7.0 RC4"
+  Stop-Step
   Write-Host "ASCOM Platform installed."
 } catch {
   Write-Warning "ASCOM Platform install failed: $($_.Exception.Message)"

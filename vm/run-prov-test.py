@@ -430,6 +430,7 @@ def phase_build(hostname: str, modules: list[str], proxy_mode: str) -> None:
             "-TestMode",
             "-AllowMissingNoMachineLicense",
             "-AllowMissingGithubToken",
+            "-AllowMissingNetFx3Sxs",
             "-ProxyMode", proxy_mode,
         ]
         if sorted(modules) != sorted(ALL_MODULES):

@@ -23,13 +23,31 @@ catch {
 }
 
 function Get-InstalledPhdLogViewExe {
+    # Direct candidates first (fast common case).
     ${candidates} = @(
-        (Join-Path ${env:ProgramFiles} 'PHDLogView\phdlogview.exe'),
+        (Join-Path ${env:ProgramFiles}        'PHDLogView\phdlogview.exe'),
+        (Join-Path ${env:ProgramFiles}        'PHD2 Log Viewer\phdlogview.exe'),
+        (Join-Path ${env:ProgramFiles}        'PHD2 Log Viewer\PHD2 Log Viewer.exe'),
         'C:\Program Files\PHDLogView\phdlogview.exe',
-        'C:\Program Files (x86)\PHDLogView\phdlogview.exe'
+        'C:\Program Files\PHD2 Log Viewer\phdlogview.exe',
+        'C:\Program Files\PHD2 Log Viewer\PHD2 Log Viewer.exe',
+        'C:\Program Files (x86)\PHDLogView\phdlogview.exe',
+        'C:\Program Files (x86)\PHD2 Log Viewer\phdlogview.exe',
+        'C:\Program Files (x86)\PHD2 Log Viewer\PHD2 Log Viewer.exe'
     )
     foreach (${p} in ${candidates}) {
         if (Test-Path -LiteralPath ${p}) { return ${p} }
+    }
+    # Fallback: recursive search under Program Files. The Inno installer for
+    # this app has changed its install dir name across versions ("PHDLogView"
+    # historically, "PHD2 Log Viewer" in 0.6.4 -- run #10 confirmed Start
+    # Menu folder name is now "PHD2 Log Viewer"). Catch any future rename.
+    foreach (${root} in @('C:\Program Files', 'C:\Program Files (x86)')) {
+        if (-not (Test-Path -LiteralPath ${root})) { continue }
+        ${hit} = Get-ChildItem -LiteralPath ${root} -Recurse -File `
+                    -Include 'phdlogview.exe','PHD2 Log Viewer.exe' `
+                    -ErrorAction SilentlyContinue -Depth 3 | Select-Object -First 1
+        if (${hit}) { return ${hit}.FullName }
     }
     return $null
 }

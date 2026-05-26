@@ -58,17 +58,38 @@ try {
         throw "USBPcap installer not found: ${installerPath}"
     }
 
-    # USBPcap installer is NSIS-based. /S is silent. The installer also drops
-    # an Npcap-style kernel driver, so a reboot may be requested (exit 3010);
-    # we accept that and let the 'reboot' provider (order 9999) handle it.
-    Write-Host ("Installing USBPcap from {0} ..." -f ${installerPath})
-    ${p} = Start-Process -FilePath ${installerPath} -ArgumentList @('/S') `
-        -PassThru -Wait -WindowStyle Hidden
-    try { ${p}.Refresh() } catch {}
-    ${rc} = ${p}.ExitCode
-    if ($null -eq ${rc}) {
-        throw "USBPcap installer did not report an exit code (treating as failure)."
+    # Pre-trust the USBPcap installer's Authenticode publisher so the kernel
+    # driver install does not block on a Session-0 "trust this publisher?"
+    # prompt that nothing can dismiss. See provide-npcap.ps1 for the full
+    # rationale -- same mechanism, same trade-off.
+    Write-Host "Extracting Authenticode publisher cert from USBPcap installer for TrustedPublisher pre-trust..."
+    try {
+        ${sig} = Get-AuthenticodeSignature -FilePath ${installerPath} -ErrorAction Stop
+        if ($null -eq ${sig}.SignerCertificate) {
+            Write-Host "[WARN] USBPcap installer has no Authenticode signer; driver-trust prompt may still hang the install."
+        } else {
+            ${signer} = ${sig}.SignerCertificate
+            Write-Host ("Publisher: {0} (thumbprint {1})" -f ${signer}.Subject, ${signer}.Thumbprint)
+            ${store} = New-Object System.Security.Cryptography.X509Certificates.X509Store('TrustedPublisher', 'LocalMachine')
+            ${store}.Open('ReadWrite')
+            try { ${store}.Add(${signer}) } finally { ${store}.Close() }
+            Write-Host "Added USBPcap publisher to LocalMachine\TrustedPublisher."
+        }
+    } catch {
+        Write-Host ("[WARN] Could not pre-trust USBPcap publisher: {0}" -f $_.Exception.Message)
     }
+
+    # USBPcap installer is NSIS-based. /S is silent. The installer drops a
+    # kernel driver and registers a service for it -- both require an
+    # unfiltered admin token. Under WinRM the calling user has a filtered
+    # NTLM token (BUILTIN\Admins stripped from effective groups); in run #9
+    # the install reported success but `sc create USBPcap` silently no-op'd,
+    # leaving the verify to fail with "service not registered". Run via
+    # SYSTEM scheduled task instead so the install has full driver-install
+    # rights. A reboot may still be requested (exit 3010); we accept that.
+    Write-Host ("Installing USBPcap from {0} as SYSTEM (scheduled task)..." -f ${installerPath})
+    ${rc} = Invoke-ExeAsSystem -Executable ${installerPath} -Arguments '/S' `
+        -TimeoutMinutes 10 -TaskNamePrefix 'MAST-USBPcapInstall'
     if (${rc} -ne 0 -and ${rc} -ne 3010) {
         throw ("USBPcap installer exited with code {0}" -f ${rc})
     }

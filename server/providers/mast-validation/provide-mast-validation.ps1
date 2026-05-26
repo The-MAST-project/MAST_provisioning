@@ -69,8 +69,7 @@ if (-not (Test-Path -LiteralPath ${validatePy})) {
 ${env:PATH} = 'C:\cygwin64\bin' + ';' + ${env:PATH}
 
 ${stdoutLog} = Join-Path ${logRoot} 'verify\mast-validation.stdout.log'
-${stderrLog} = Join-Path ${logRoot} 'verify\mast-validation.stderr.log'
-Remove-Item -LiteralPath ${stdoutLog}, ${stderrLog} -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath ${stdoutLog} -Force -ErrorAction SilentlyContinue
 
 # Pass MAST_PROJECT=unit so any Config touch resolves the unit profile.
 ${env:MAST_PROJECT} = 'unit'
@@ -83,31 +82,40 @@ ${argList} = @(
 )
 Write-VLog ("Invoking: {0} {1}" -f ${venvPython}, (${argList} -join ' '))
 
-${proc} = Start-Process -FilePath ${venvPython} -ArgumentList ${argList} `
-    -NoNewWindow -PassThru `
-    -RedirectStandardOutput ${stdoutLog} -RedirectStandardError ${stderrLog}
-
-${finished} = ${proc}.WaitForExit(${TimeoutSeconds} * 1000)
-if (-not ${finished}) {
-    try { ${proc}.Kill() } catch {}
-    Write-VLog ("FAIL: validator timed out after {0}s" -f ${TimeoutSeconds})
-    exit 1
-}
-try { ${proc}.Refresh() } catch {}
-${rc} = ${proc}.ExitCode
-if ($null -eq ${rc}) {
-    Write-VLog "FAIL: validator exit code was null"
+# Direct invocation (not Start-Process). Run #9 hit a PS 5.1 race where
+# Start-Process -PassThru + WaitForExit(ms) returned $true but the handle
+# disposed before .ExitCode could be read -- we got $null and wrongly
+# threw, even though the validator had exited 0 and written its smoke
+# marker. Direct & invocation makes $LASTEXITCODE reliable, and merging
+# stderr via 2>&1 keeps everything in one stream.
+${rc} = $null
+try {
+    & ${venvPython} @argList 2>&1 | Tee-Object -FilePath ${stdoutLog} -Append | Out-Host
+    ${rc} = $LASTEXITCODE
+} catch {
+    Write-VLog ("FAIL: invoker threw: {0}" -f $_.Exception.Message)
     exit 1
 }
 
 Write-VLog ("validator exit={0}" -f ${rc})
 if (Test-Path -LiteralPath ${stdoutLog}) {
-    Write-VLog "--- validator stdout tail ---"
+    Write-VLog "--- validator output tail ---"
     Get-Content -LiteralPath ${stdoutLog} -Tail 30 -ErrorAction SilentlyContinue | ForEach-Object { Write-VLog ${_} }
 }
-if ((${rc} -ne 0) -and (Test-Path -LiteralPath ${stderrLog})) {
-    Write-VLog "--- validator stderr tail ---"
-    Get-Content -LiteralPath ${stderrLog} -Tail 30 -ErrorAction SilentlyContinue | ForEach-Object { Write-VLog ${_} }
+
+# If $LASTEXITCODE is null (rare; should not happen with & invocation but
+# guard anyway), fall back to inspecting the smoke marker the Python side
+# always writes -- if the marker has a recognizable body, the validator
+# completed even if we lost the exit code.
+if ($null -eq ${rc}) {
+    if ((Test-Path -LiteralPath ${smokeFile}) -and `
+        ((Get-Content -LiteralPath ${smokeFile} -Raw -ErrorAction SilentlyContinue) -match '^mastrometry_ok ')) {
+        Write-VLog ("INFO: \$LASTEXITCODE was null but smoke marker present -- treating as success.")
+        ${rc} = 0
+    } else {
+        Write-VLog "FAIL: validator exit code null and no smoke marker; cannot determine outcome."
+        exit 1
+    }
 }
 
 if (${rc} -ne 0) {

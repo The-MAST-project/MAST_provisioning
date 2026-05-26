@@ -1,6 +1,16 @@
 param(
     [string]${AssetsRoot}        = ".",
-    [string]${EnabledCollectors} = "cpu,cs,logical_disk,net,os,service,system,textfile",
+    # Default collector set. This is the original broad MAST observability
+    # list that lived in server/providers/monitoring/assets/install-windows_exporter.ps1
+    # (provider renamed/refactored 2026-05-24 in commit 05175b9, which
+    # silently slimmed this list and dropped 'cpu_info'). Restored here
+    # 2026-05-26, with one change: the 'cs' (computer system) collector
+    # has been deprecated/removed in windows_exporter >= 0.31.x. Leaving
+    # 'cs' in makes the service crash with 'unknown collector cs' and
+    # restart-loop forever (run #12 confirmed via service event log:
+    #   couldn't enable collectors err="unknown collector cs"
+    # ). Equivalent data lives in 'cpu_info', 'os', and 'system'.
+    [string]${EnabledCollectors} = "cpu,cpu_info,logical_disk,physical_disk,memory,net,os,process,service,system,tcp,textfile,thermalzone,time,scheduled_task,terminal_services,smbclient,smb,dns,dhcp,iis,logon",
     [int]   ${ListenPort}        = 9182
 )
 
@@ -75,7 +85,84 @@ try {
     }
 
     Set-Service -Name 'windows_exporter' -StartupType Automatic -ErrorAction Stop
-    Start-Service -Name 'windows_exporter' -ErrorAction SilentlyContinue
+
+    # Start the service and verify it actually reached Running + bound the
+    # listen port. Previous version used Start-Service -ErrorAction
+    # SilentlyContinue and marked the provider successful regardless --
+    # which is how run #11 ended up with msiexec=0 + smoke marker written
+    # but no service on port 9182 (verify caught it but the provider lied).
+    # Surface the real failure with the most useful diagnostics we can
+    # collect on the unit: service state, ServicesPipeTimeout-style hangs,
+    # last few Application/System event log entries for the service.
+    try {
+        Start-Service -Name 'windows_exporter' -ErrorAction Stop
+    } catch {
+        Write-ExpLog ("Start-Service threw: {0}" -f $_.Exception.Message)
+        # Don't throw yet -- fall through to the post-start poll; some
+        # transient errors clear on their own and the service ends up
+        # Running anyway.
+    }
+
+    # Poll for Running + port bound. windows_exporter starts in <5s when
+    # healthy, but allow 60s for first-boot perf-counter rebuild after the
+    # fix-perf-counters.ps1 step above.
+    ${runningOk} = $false
+    ${portOk}    = $false
+    ${deadline}  = (Get-Date).AddSeconds(60)
+    while ((Get-Date) -lt ${deadline}) {
+        ${svc} = Get-Service -Name 'windows_exporter' -ErrorAction SilentlyContinue
+        if (${svc}.Status -eq 'Running') { ${runningOk} = $true }
+        ${portOk} = [bool](Get-NetTCPConnection -State Listen -LocalPort ${ListenPort} -ErrorAction SilentlyContinue)
+        if (${runningOk} -and ${portOk}) { break }
+        Start-Sleep -Seconds 3
+    }
+
+    if (-not (${runningOk} -and ${portOk})) {
+        Write-ExpLog ("FAIL: service Running={0} port{1}Bound={2}" -f ${runningOk}, ${ListenPort}, ${portOk})
+        ${svc} = Get-Service -Name 'windows_exporter' -ErrorAction SilentlyContinue
+        if ($null -ne ${svc}) {
+            Write-ExpLog ("service Name={0} Status={1} StartType={2}" -f ${svc}.Name, ${svc}.Status, ${svc}.StartType)
+        } else {
+            Write-ExpLog "service 'windows_exporter' is not registered."
+        }
+        # WMI status code: 0 = OK, anything else explains the failure.
+        try {
+            ${wmi} = Get-CimInstance -ClassName Win32_Service -Filter "Name='windows_exporter'" -ErrorAction Stop
+            if ($null -ne ${wmi}) {
+                Write-ExpLog ("Win32_Service Name={0} State={1} StartMode={2} PathName={3} ExitCode={4} ServiceSpecificExitCode={5}" `
+                    -f ${wmi}.Name, ${wmi}.State, ${wmi}.StartMode, ${wmi}.PathName, ${wmi}.ExitCode, ${wmi}.ServiceSpecificExitCode)
+            }
+        } catch { Write-ExpLog ("Win32_Service query failed: {0}" -f $_.Exception.Message) }
+
+        Write-ExpLog "--- last 20 System event log entries for the windows_exporter service ---"
+        try {
+            Get-WinEvent -FilterHashtable @{ LogName = 'System'; ProviderName = 'Service Control Manager' } -MaxEvents 50 -ErrorAction Stop |
+                Where-Object { $_.Message -match 'windows_exporter' } |
+                Select-Object -First 20 |
+                ForEach-Object { Write-ExpLog ("  [{0}] {1}: {2}" -f $_.TimeCreated, $_.LevelDisplayName, ($_.Message -replace "`r?`n", ' / ')) }
+        } catch { Write-ExpLog ("System log query failed: {0}" -f $_.Exception.Message) }
+
+        Write-ExpLog "--- last 20 Application event log entries for the windows_exporter service ---"
+        try {
+            Get-WinEvent -FilterHashtable @{ LogName = 'Application' } -MaxEvents 200 -ErrorAction Stop |
+                Where-Object { $_.ProviderName -match 'windows_exporter' -or $_.Message -match 'windows_exporter' } |
+                Select-Object -First 20 |
+                ForEach-Object { Write-ExpLog ("  [{0}] {1} (src={2}): {3}" -f $_.TimeCreated, $_.LevelDisplayName, $_.ProviderName, ($_.Message -replace "`r?`n", ' / ')) }
+        } catch { Write-ExpLog ("Application log query failed: {0}" -f $_.Exception.Message) }
+
+        # PathName tells us where windows_exporter.exe lives -- include a
+        # quick spot-check that the binary exists, in case the MSI shifted
+        # its install layout in some version.
+        if (${wmi} -and ${wmi}.PathName) {
+            ${binPath} = (${wmi}.PathName -split '"')[1]
+            if (-not ${binPath}) { ${binPath} = (${wmi}.PathName -split ' ')[0] }
+            Write-ExpLog ("Service binary path: {0}  exists={1}" -f ${binPath}, (Test-Path -LiteralPath ${binPath}))
+        }
+
+        throw ("windows_exporter service did not reach Running+port-bound within 60s (Running={0}, port{1}Bound={2})." `
+                -f ${runningOk}, ${ListenPort}, ${portOk})
+    }
+    Write-ExpLog ("windows_exporter healthy: Status=Running listening on TCP {0}." -f ${ListenPort})
 
     ${fwRuleName} = ("MAST windows_exporter (TCP {0})" -f ${ListenPort})
     if (-not (Get-NetFirewallRule -DisplayName ${fwRuleName} -ErrorAction SilentlyContinue)) {

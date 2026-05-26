@@ -17,12 +17,28 @@ Set-Content -LiteralPath $verifyLog -Encoding UTF8 -Value ("[{0}] verify-phd2-lo
 
 $candidates = @(
     (Join-Path $env:ProgramFiles 'PHDLogView\phdlogview.exe'),
+    (Join-Path $env:ProgramFiles 'PHD2 Log Viewer\phdlogview.exe'),
+    (Join-Path $env:ProgramFiles 'PHD2 Log Viewer\PHD2 Log Viewer.exe'),
     'C:\Program Files\PHDLogView\phdlogview.exe',
-    'C:\Program Files (x86)\PHDLogView\phdlogview.exe'
+    'C:\Program Files\PHD2 Log Viewer\phdlogview.exe',
+    'C:\Program Files\PHD2 Log Viewer\PHD2 Log Viewer.exe',
+    'C:\Program Files (x86)\PHDLogView\phdlogview.exe',
+    'C:\Program Files (x86)\PHD2 Log Viewer\phdlogview.exe',
+    'C:\Program Files (x86)\PHD2 Log Viewer\PHD2 Log Viewer.exe'
 )
 $exe = $null
 foreach ($p in $candidates) {
     if (Test-Path -LiteralPath $p) { $exe = $p; break }
+}
+# Fallback: recursive search (matches the provider's strategy).
+if (-not $exe) {
+    foreach ($root in @('C:\Program Files', 'C:\Program Files (x86)')) {
+        if (-not (Test-Path -LiteralPath $root)) { continue }
+        $hit = Get-ChildItem -LiteralPath $root -Recurse -File `
+                   -Include 'phdlogview.exe','PHD2 Log Viewer.exe' `
+                   -ErrorAction SilentlyContinue -Depth 3 | Select-Object -First 1
+        if ($hit) { $exe = $hit.FullName; break }
+    }
 }
 
 if ($exe) {
