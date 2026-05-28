@@ -170,3 +170,13 @@ Always make changes in the canonical source locations:
 - Provider scripts: `server/providers/<name>/`
 - Client scripts: `client/`
 - Shared lib: `server/lib/`
+
+## Do not write to git unless explicitly asked
+
+Do **not** run `git commit`, `git push`, `git rm`, `git reset`, `git rebase`, `git lfs migrate`, `git filter-repo`, `git tag`, or any other history- or remote-mutating git operation **unless the user has specifically asked for it in the current request**. Read-only operations (`git log`, `git status`, `git diff`, `git show`, `git rev-parse`, `git ls-files`, `git lfs ls-files`, `git lfs migrate info`, `git fetch` of a read-only remote, etc.) are fine.
+
+This applies even when an edit you just made feels "finished" and a commit looks like the obvious next step. Leave the working tree dirty and surface what you changed. Do not offer to commit "for tidiness"; wait to be asked.
+
+When asked to commit/push, do exactly the scope requested. Do not fold in unrelated working-tree changes "while you're there", do not amend prior commits the user did not name, and do not push to remotes the user did not name.
+
+**Why:** git history and remote state are the user's review surface. Premature commits force them to undo or amend; premature pushes can broadcast in-progress work, trigger CI, or move shared refs in ways collaborators see. The cost of a wasted commit/push is asymmetric -- doing it later when asked is cheap, undoing it after the fact is expensive.
