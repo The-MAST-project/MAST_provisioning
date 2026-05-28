@@ -319,6 +319,14 @@ function Generate-Commands([string[]]${Mods}) {
       if (${TestMode} -and ${m} -eq 'astrometry') {
           ${verifyCmd} = ${verifyCmd} + ' -AllowMissingAvx'
       }
+      # Dev-VM escape: verify-usbpcap.ps1 requires the kernel driver service
+      # to be registered, which only happens after the post-install reboot we
+      # do not perform inside the WinRM run. Under -TestMode forward
+      # -AllowPendingReboot so the "exe present + service absent" state is
+      # treated as SKIPPED instead of FAIL. Production MUST NOT pass TestMode.
+      if (${TestMode} -and ${m} -eq 'usbpcap') {
+          ${verifyCmd} = ${verifyCmd} + ' -AllowPendingReboot'
+      }
       ${cmds} += [pscustomobject]@{ order = [int](${mf}.order + 1); desc = "[verify] " + [string]${mf}.name; cmd = ${verifyCmd}; module="${m}-verify" }
     }
   }

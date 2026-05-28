@@ -1,6 +1,21 @@
 #requires -Version 5.1
 [CmdletBinding()]
-param()
+param(
+    # Dev-VM-only escape: provide-usbpcap.ps1 itself prints
+    # "[WARN] USBPcap service not registered; capture will not work until a
+    # reboot or manual sc create." -- the installer runs cleanly but the kernel
+    # driver service entry only becomes queryable after the post-install reboot.
+    # Our provisioning pipeline is reboot-free (the `reboot` module at order
+    # 9999 only emits a flag), so on a VM run -- where iteration speed depends
+    # on staying inside one WinRM session and snapshot-restore is the reset
+    # model -- the service registration cannot complete inside the cycle.
+    # build-mast.ps1 injects -AllowPendingReboot only under -TestMode; prod
+    # MUST NOT pass it. With the flag, the "exe present + service absent"
+    # state is treated as SKIPPED (smoke `usbpcap_skipped reason=pending_reboot`)
+    # instead of FAIL. exe-absent stays a hard FAIL regardless -- that
+    # indicates the installer itself didn't run.
+    [switch]${AllowPendingReboot}
+)
 
 # Verify USBPcap installed AND its kernel driver service registered.
 # On failure, dump diagnostics inline so we don't have to WinRM back in to
@@ -34,8 +49,20 @@ if ($exe -and $svc) {
     exit 0
 }
 
+# Dev-VM escape: exe is present but the kernel driver service entry won't
+# appear until after a reboot. With -AllowPendingReboot we treat this as a
+# SKIP -- the installer demonstrably ran (binary on disk) and service
+# registration is deferred to a reboot we are not going to perform inside
+# this WinRM run. exe-absent stays a hard FAIL: that means the installer
+# itself failed and there is no way a reboot would resolve it.
+if ($AllowPendingReboot -and $exe -and -not $svc) {
+    W ("SKIP USBPcapCMD={0} but svc 'USBPcap' not registered -- pending reboot. -AllowPendingReboot set; treating as skipped." -f $exe)
+    Set-Content -Path $smokeFile -Encoding ASCII -Value 'usbpcap_skipped reason=pending_reboot'
+    exit 0
+}
+
 # ---- failure path: dump diagnostics ----
-W ("FAIL exe={0} svc={1}" -f ($exe -ne $null), ($svc -ne $null))
+W ("FAIL exe={0} svc={1} AllowPendingReboot={2}" -f ($exe -ne $null), ($svc -ne $null), [bool]$AllowPendingReboot)
 
 W "--- elevation status of verify process ---"
 $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent()

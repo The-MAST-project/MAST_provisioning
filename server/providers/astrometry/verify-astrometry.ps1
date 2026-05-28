@@ -189,8 +189,19 @@ if ($null -eq ${rc}) {
         Write-VLog "WARN: solve-field exit code unreadable but .solved marker present; treating as success."
         ${rc} = 0
     } else {
-        Write-VLog "FAIL: solve-field exit code was null and no .solved marker produced."
-        exit 1
+        # Don't FAIL here yet. The SIGILL crash path on a CPU without AVX/AVX2/FMA
+        # produces exactly this state (process gone before PS can read ExitCode,
+        # no .solved marker written), and bailing now would bypass BOTH the
+        # corrupt-index hard-FAIL check (lines ~231+) AND the SIGILL+
+        # -AllowMissingAvx skip path (lines ~252+, ~274+) -- losing the dev-VM
+        # escape and any chance of surfacing a corrupt index. Use a non-zero
+        # sentinel so the downstream rc!=0 branch handles outcome:
+        #   - if stderr names failed indexes -> hard FAIL (correct, no skip)
+        #   - else if SIGILL + -AllowMissingAvx -> SKIP with avx_missing reason
+        #   - else hard FAIL
+        # This bit 2026-05-28 weizmann run #7 (vm/run-logs/run-20260528-141902).
+        Write-VLog "WARN: solve-field exit code unreadable and no .solved marker; deferring outcome to corrupt-index + SIGILL checks below."
+        ${rc} = -1
     }
 }
 function Get-FailedIndexFiles {
