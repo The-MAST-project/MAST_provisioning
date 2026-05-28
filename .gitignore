@@ -17,3 +17,11 @@ server/providers/mast/assets/mast_github.txt
 
 # vm/run-prov-test.py session logs are local debug artifacts -- do not commit.
 vm/run-logs/*.log
+
+# vm/autounattend-mast.iso is a generated build artifact from vm/build-autounattend-iso.ps1.
+# Was tracked historically and slipped back in by accident -- now ignored.
+vm/autounattend-mast.iso
+
+# Stray *.tgz.bak-orig backups left during provider asset updates do not belong
+# in the repo. Keep them out so they cannot be committed by mistake.
+*.bak-orig
