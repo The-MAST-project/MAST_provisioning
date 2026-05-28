@@ -222,8 +222,18 @@ exit 0
     if ($LASTEXITCODE -ne 0) {
         throw "pip install of bundled fitsio wheel failed (exit ${LASTEXITCODE})."
     }
-    # Confirm the import works after install.
-    & ${bashExe} -lc 'python3 -c "import fitsio; import sys; sys.exit(0 if fitsio.__version__ else 1)"'
+    # Confirm the import works after install. Quoting note: an earlier version of
+    # this line used PS single-quote outer + double-quote inner around the
+    # `python3 -c "..."` argument:
+    #     & ${bashExe} -lc 'python3 -c "import fitsio; ..."'
+    # In Windows PowerShell 5.1, that strips the embedded double quotes when
+    # building the native-process command line, so bash sees
+    # `python3 -c import fitsio; ...` and python runs `-c import` -> SyntaxError
+    # at "<string>", line 1. Flip the nesting: PS double-quote outer (no
+    # interpolation hazards here since we use no `$` vars inside) wrapping a
+    # bash single-quoted python script. Single quotes survive the PS->native
+    # boundary verbatim and bash forwards them to python intact.
+    & ${bashExe} -lc "python3 -c 'import fitsio, sys; sys.exit(0 if fitsio.__version__ else 1)'"
     if ($LASTEXITCODE -ne 0) {
         throw "fitsio installed but cannot be imported (exit ${LASTEXITCODE})."
     }
