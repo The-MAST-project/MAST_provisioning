@@ -1,0 +1,13 @@
+{
+  "name": "ds9",
+  "version": "8.7",
+  "description": "Install SAOImage DS9 8.7 astronomical imaging and data visualization application. DS9 is a standalone app (no real installer); the Windows 'Install.exe' is a self-extracting zip that we extract to C:\\Program Files\\SAOImageDS9 with the in-box tar.exe, then drop a Start Menu shortcut.",
+  "order": 2600,
+  "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-ds9.ps1\" -AssetsRoot \".\" -InstallRoot \"C:\\Program Files\\SAOImageDS9\"",
+  "commandfiles": [
+    "provide-ds9.ps1",
+    "verify-ds9.ps1",
+    "assets/SAOImageDS9 8.7 Install.exe"
+  ],
+  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\verify-ds9.ps1\" -InstallRoot \"C:\\Program Files\\SAOImageDS9\""
+}

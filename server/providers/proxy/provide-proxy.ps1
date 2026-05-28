@@ -124,6 +124,77 @@ function Set-WinINetProxy {
     }
 }
 
+function New-WinINetConnBlob {
+    # Build a minimal-but-valid DefaultConnectionSettings binary blob.
+    # Layout: [u32 version=0x46][u32 counter][u32 flags]
+    #         [u32 len + proxyserver][u32 len + bypass][u32 len + pac-url=0]
+    #         [32 trailing zero bytes].
+    param([int]$Flags, [string]$HostPort, [string]$Bypass)
+    $ms = New-Object System.IO.MemoryStream
+    $bw = New-Object System.IO.BinaryWriter($ms)
+    $bw.Write([uint32]0x46)
+    $bw.Write([uint32]1)
+    $bw.Write([uint32]$Flags)
+    $srv = if (($Flags -band 0x02) -and $HostPort) { $HostPort } else { '' }
+    $byp = if ($Flags -band 0x02) { $Bypass } else { '' }
+    $sb = [System.Text.Encoding]::ASCII.GetBytes($srv); $bw.Write([uint32]$sb.Length); if ($sb.Length) { $bw.Write($sb) }
+    $bb = [System.Text.Encoding]::ASCII.GetBytes($byp); $bw.Write([uint32]$bb.Length); if ($bb.Length) { $bw.Write($bb) }
+    $bw.Write([uint32]0)
+    $bw.Write((New-Object byte[] 32))
+    $bw.Flush()
+    return $ms.ToArray()
+}
+
+function Set-WinINetConnectionFlags {
+    # The legacy ProxyEnable/ProxyServer values set above are NOT authoritative on
+    # their own: WinINet reads the flags byte (offset 8) of the binary
+    # DefaultConnectionSettings / SavedLegacySettings blobs. A stray WPAD
+    # auto-detect bit (0x08) there makes the OS probe for a proxy even when we
+    # have configured an explicit one -- and on a multi-homed host (e.g. a dev VM
+    # with a dead-end host-only NIC) that probe makes CryptoAPI's revocation fetch
+    # (cryptnet) fail with ERROR_INVALID_PARAMETER -> CRYPT_E_REVOCATION_OFFLINE,
+    # which then hard-fails any installer that enforces TLS revocation (cygwin
+    # setup-x86_64.exe, Chrome's online stub). We therefore force an EXPLICIT
+    # config here: manual-proxy-only (0x02) in 'use' mode, direct-only (0x01) in
+    # 'direct' mode -- never 0x08 (WPAD) or 0x04 (PAC). This is the WinINet
+    # counterpart of "proxy mode is explicit, not probed". See DECISIONS.md.
+    param(
+        [Parameter(Mandatory)][bool]$Enable,
+        [string]$HostPort,
+        [string]$NoProxyList
+    )
+    $k = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings\Connections'
+    if (-not (Test-Path $k)) { New-Item -Path $k -Force | Out-Null }
+    $flags = if ($Enable) { 0x02 } else { 0x01 }
+    $bypass = if ($NoProxyList) { ($NoProxyList -split ',') -join ';' } else { '' }
+    foreach ($name in @('DefaultConnectionSettings', 'SavedLegacySettings')) {
+        $existing = $null
+        try { $existing = (Get-ItemProperty -Path $k -Name $name -ErrorAction Stop).$name } catch {}
+        if ($existing -and $existing.Length -ge 12) {
+            # In-place: just clear/flip the flags byte and bump the change counter
+            # (offset 4) so WinINet reloads, leaving the rest of the blob intact.
+            $b = [byte[]]$existing.Clone()
+            $b[8] = [byte]$flags
+            $ctr = [System.BitConverter]::ToUInt32($b, 4) + 1
+            [System.Array]::Copy([System.BitConverter]::GetBytes([uint32]$ctr), 0, $b, 4, 4)
+        } else {
+            $b = New-WinINetConnBlob -Flags $flags -HostPort $HostPort -Bypass $bypass
+        }
+        Set-ItemProperty -Path $k -Name $name -Value $b -Type Binary
+    }
+}
+
+function Get-WinINetAutoDetect {
+    # Returns $true if the WPAD auto-detect bit (0x08) is set in
+    # DefaultConnectionSettings, else $false.
+    $k = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings\Connections'
+    try {
+        $v = (Get-ItemProperty -Path $k -Name 'DefaultConnectionSettings' -ErrorAction Stop).DefaultConnectionSettings
+        if ($v -and $v.Length -ge 9) { return [bool]($v[8] -band 0x08) }
+    } catch {}
+    return $false
+}
+
 function Get-WinINetProxyState {
     $k = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings'
     $h = @{ Enable = 0; Server = ''; Override = '' }
@@ -194,9 +265,13 @@ try {
         }
         Write-ProxyLog ("Setting WinINet proxy: ProxyEnable=1 ProxyServer={0} ProxyOverride={1}" -f ${hostPort}, ${NoProxy})
         Set-WinINetProxy -Enable $true -HostPort ${hostPort} -NoProxyList ${NoProxy}
+        Write-ProxyLog "Forcing WinINet connection flags to manual-only (clearing WPAD auto-detect 0x08 / PAC 0x04)."
+        Set-WinINetConnectionFlags -Enable $true -HostPort ${hostPort} -NoProxyList ${NoProxy}
     } else {
         Write-ProxyLog "Clearing WinINet proxy: ProxyEnable=0"
         Set-WinINetProxy -Enable $false
+        Write-ProxyLog "Forcing WinINet connection flags to direct-only (clearing WPAD auto-detect 0x08 / PAC 0x04)."
+        Set-WinINetConnectionFlags -Enable $false
     }
 
     # ----- (C) Machine WinHTTP -----
@@ -220,12 +295,16 @@ try {
         }
     }
     ${ie} = Get-WinINetProxyState
-    Write-ProxyLog ("WinINet readback: ProxyEnable={0} ProxyServer='{1}' ProxyOverride='{2}'" -f ${ie}.Enable, ${ie}.Server, ${ie}.Override)
+    ${autoDetect} = Get-WinINetAutoDetect
+    Write-ProxyLog ("WinINet readback: ProxyEnable={0} ProxyServer='{1}' ProxyOverride='{2}' wpadAutoDetect={3}" -f ${ie}.Enable, ${ie}.Server, ${ie}.Override, ${autoDetect})
     if ($ForceMode -eq 'use') {
         if (${ie}.Enable -ne 1) { throw "WinINet ProxyEnable should be 1 in 'use' mode but is $($ie.Enable)" }
         if (${ie}.Server -ne ${hostPort}) { throw "WinINet ProxyServer should be '${hostPort}' but is '$($ie.Server)'" }
     } else {
         if (${ie}.Enable -ne 0) { throw "WinINet ProxyEnable should be 0 in 'direct' mode but is $($ie.Enable)" }
+    }
+    if (${autoDetect}) {
+        throw "WinINet WPAD auto-detect (DefaultConnectionSettings flag 0x08) is still set after configuration; cryptnet revocation retrieval will fail on multi-homed hosts."
     }
 
     # Smoke marker (ASCII, no BOM). Includes mode so downstream verify and
@@ -234,7 +313,7 @@ try {
     ${smokeDir} = Get-MastSmokeDir
     New-Item -ItemType Directory -Path ${smokeDir} -Force | Out-Null
     Set-Content -LiteralPath (Join-Path ${smokeDir} 'proxy-smoke.txt') -Encoding ASCII `
-        -Value ("proxy_ok mode={0} ie_enable={1} ie_server='{2}'" -f $ForceMode, ${ie}.Enable, ${ie}.Server)
+        -Value ("proxy_ok mode={0} ie_enable={1} ie_server='{2}' wpad_autodetect={3}" -f $ForceMode, ${ie}.Enable, ${ie}.Server, ${autoDetect})
 
     Show-ProxyBanner -Mode $ForceMode
     Write-ProxyLog ("Proxy provisioning completed (mode={0})." -f $ForceMode)

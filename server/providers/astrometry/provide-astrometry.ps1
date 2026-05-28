@@ -64,6 +64,20 @@ try {
         throw "Extraction succeeded but ${solveField} is missing. The archive may be malformed."
     }
     Write-Host "Astrometry.net expanded. solve-field: ${solveField}"
+
+    # Place the smoke-solve FITS where verify-astrometry + mast-validation expect
+    # it (C:\MAST\full-frame.fits). build-mast stages it into the payload from the
+    # build host's C:\MAST\full-frame.fits. Required for a valid run -- the verify
+    # stages FAIL without it (the skip paths were removed).
+    ${stagedFits} = Join-Path ${AssetsRoot} 'full-frame.fits'
+    ${fitsTarget} = 'C:\MAST\full-frame.fits'
+    if (Test-Path -LiteralPath ${stagedFits}) {
+        Confirm-Dir (Split-Path -Parent ${fitsTarget})
+        Copy-Item -LiteralPath ${stagedFits} -Destination ${fitsTarget} -Force
+        Write-Host ("Placed smoke FITS: {0} ({1:N1} MB)" -f ${fitsTarget}, ((Get-Item ${fitsTarget}).Length / 1MB))
+    } else {
+        Write-Host ("[WARN] full-frame.fits not staged at {0}; astrometry verify + mast-validation will FAIL (no smoke FITS)." -f ${stagedFits})
+    }
 }
 finally {
     Stop-ProvisionLog

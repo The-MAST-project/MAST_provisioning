@@ -1,5 +1,6 @@
 param(
-    [string]${AssetsRoot} = "."
+    [string]${AssetsRoot} = ".",
+    [string]${InstallerName} = "GoogleChromeStandaloneEnterprise64.msi"
 )
 
 ${ErrorActionPreference} = "Stop"
@@ -20,40 +21,40 @@ function Write-ChromeLog {
 Set-Content -LiteralPath ${logFile} -Encoding UTF8 -Value ("[{0}] provide-chrome.ps1 started." -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))
 
 try {
-    ${installerPath} = Join-Path ${AssetsRoot} "ChromeSetup.exe"
+    ${installerPath} = Join-Path ${AssetsRoot} ${InstallerName}
     if (-not (Test-Path ${installerPath})) {
-        throw "Chrome installer not found at ${installerPath}"
+        throw "Chrome Enterprise MSI not found at ${installerPath}"
     }
+    # msiexec does NOT resolve a relative path (".\foo.msi") against the caller's
+    # working directory -- it fails with 1619 (ERROR_INSTALL_PACKAGE_OPEN_FAILED).
+    # Resolve to a full path before handing it to msiexec.
+    ${installerPath} = (Resolve-Path -LiteralPath ${installerPath}).Path
 
-    Write-ChromeLog ("Running Chrome installer: {0} /silent /install" -f ${installerPath})
-    # Avoid piping native stderr through PowerShell; Chrome's stub emits VERBOSE lines to
-    # stderr which become ErrorRecord and can terminate before we check chrome.exe.
-    ${stderrLog} = Join-Path ${logDir} "chrome-install-stderr.log"
-    ${stdoutLog} = Join-Path ${logDir} "chrome-install-stdout.log"
-    ${p} = Start-Process -FilePath ${installerPath} -ArgumentList @('/silent', '/install') -PassThru -WindowStyle Hidden `
-        -RedirectStandardOutput ${stdoutLog} -RedirectStandardError ${stderrLog}
-    Write-ChromeLog ("Installer PID: {0}; waiting up to 300s..." -f ${p}.Id)
-    ${finished} = ${p}.WaitForExit(300000)
+    # Offline Chrome Enterprise standalone MSI: installs entirely from the staged
+    # file with NO network access at install time. This deliberately replaces the
+    # old online ChromeSetup.exe stub, which downloads Chrome via WinHTTP/BITS and
+    # fails behind bcproxy -- the stub ignores the WinINet revocation knob, and
+    # the unit's CryptoAPI (cryptnet) revocation retrieval cannot complete through
+    # the proxy (0x80070057). The offline MSI sidesteps that entirely and matches
+    # how every other fleet app is installed (staged installer, not a net-fetching
+    # stub). See DECISIONS.md 2026-05-27.
+    ${msiLog} = Join-Path ${logDir} "chrome-msiexec.log"
+    ${msiArgs} = @('/i', ${installerPath}, '/qn', '/norestart', '/L*v', ${msiLog})
+    Write-ChromeLog ("Installing Chrome Enterprise MSI: msiexec.exe {0}" -f (${msiArgs} -join ' '))
+    ${p} = Start-Process -FilePath 'msiexec.exe' -ArgumentList ${msiArgs} -PassThru -Wait -WindowStyle Hidden
     try { ${p}.Refresh() } catch {}
-    if (-not ${finished}) {
-        try { ${p}.Kill() } catch {}
-        throw "Chrome installer timed out after 300s (process killed)."
-    }
-    Write-ChromeLog ("Chrome installer exited. ExitCode={0}" -f ${p}.ExitCode)
-    if (Test-Path -LiteralPath ${stdoutLog}) {
-        Add-Content -LiteralPath ${logFile} -Encoding UTF8 -Value '--- installer stdout ---'
-        Get-Content -LiteralPath ${stdoutLog} -ErrorAction SilentlyContinue | Add-Content -LiteralPath ${logFile} -Encoding UTF8
-    }
-    if (Test-Path -LiteralPath ${stderrLog}) {
-        Add-Content -LiteralPath ${logFile} -Encoding UTF8 -Value '--- installer stderr ---'
-        Get-Content -LiteralPath ${stderrLog} -ErrorAction SilentlyContinue | Add-Content -LiteralPath ${logFile} -Encoding UTF8
+    ${exit} = ${p}.ExitCode
+    Write-ChromeLog ("msiexec exited. ExitCode={0}" -f ${exit})
+    # 0 = success; 3010 = success, reboot required. A $null ExitCode is treated as
+    # inconclusive and falls through to the chrome.exe presence check below.
+    if ($null -ne ${exit} -and ${exit} -ne 0 -and ${exit} -ne 3010) {
+        throw ("msiexec failed installing Chrome (exit {0}). See {1}" -f ${exit}, ${msiLog})
     }
 
-    # The online stub may exit non-zero even when Chrome installs successfully.
-    # Treat presence of chrome.exe as the authoritative success criterion.
+    # Presence of chrome.exe is the authoritative success criterion.
     ${chromeExe} = "C:\Program Files\Google\Chrome\Application\chrome.exe"
     if (-not (Test-Path ${chromeExe})) {
-        throw ("Chrome executable not found after installation (installer exit: {0})" -f ${p}.ExitCode)
+        throw ("Chrome executable not found after installation (msiexec exit: {0})" -f ${exit})
     }
 
     Write-ChromeLog "Chrome installation completed successfully."

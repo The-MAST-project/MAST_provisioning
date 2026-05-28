@@ -4,7 +4,15 @@ param(
     [string]${InstallRoot}        = 'C:\cygwin64\usr\local\astrometry',
     [string]${SmokeFitsPath}      = 'C:\MAST\full-frame.fits',
     [string[]]${IndexSearchPaths} = @('D:\mast-indexes', 'C:\cygwin64\usr\local\astrometry\data'),
-    [int]   ${SolveTimeoutSeconds} = 300
+    [int]   ${SolveTimeoutSeconds} = 300,
+    # Dev-VM-only escape: when the guest CPU lacks AVX/AVX2/FMA, the prebuilt
+    # astrometry-engine binary crashes with signal 4 (SIGILL) the moment real
+    # solving starts. With -AllowMissingAvx, that specific failure (detected by
+    # "killed by signal 4" / "SIGILL" in stderr) is treated as a SKIP with a
+    # loud WARNING instead of a hard FAIL. build-mast.ps1 injects this only
+    # when -TestMode is set; production runs MUST NOT pass it. Corrupt index
+    # files are ALWAYS a hard FAIL -- this switch does not relax that.
+    [switch]${AllowMissingAvx}
 )
 
 ${ErrorActionPreference} = 'Stop'
@@ -75,20 +83,19 @@ Write-VLog ("PASS: banner OK, astrometry.net Revision {0}" -f ${revision})
 #
 # Requires (a) the FITS to be present, and (b) at least one astrometry index
 # file reachable. The operational layout puts index-5202-* / index-5203-*
-# on D:\mast-indexes (mounted at boot by the 'imdisk' provider at order
-# 2300). If neither D: nor /usr/local/astrometry/data has any index files
-# at the time this verify runs (which happens on a freshly-provisioned unit
-# before the first reboot), we skip the solve, log a clear note, and mark
-# the smoke as banner-only. That is intentional: smoke is a fast-path check
-# of provider integrity, not a substitute for an end-to-end ops test.
+# on D:\mast-indexes, supplied as the imdisk file-backed image and mounted by
+# the 'imdisk' provider (order 250, before this one) immediately in-session.
+#
+# These are HARD requirements, not skip conditions: a provisioning run that
+# cannot run a real plate solve is not a valid run (the index image + smoke
+# FITS must be staged and mounted). If the FITS or indexes are absent we FAIL
+# so the gap is surfaced loudly rather than passing a banner-only green.
 # ---------------------------------------------------------------------------
-Write-VLog "Smoke 2/2: real plate solve attempt"
+Write-VLog "Smoke 2/2: real plate solve (required)"
 
 if (-not (Test-Path ${SmokeFitsPath})) {
-    Write-VLog ("SKIP: smoke FITS not present at {0}; provider smoke is banner-only." -f ${SmokeFitsPath})
-    Set-Content -LiteralPath ${smokeFile} -Encoding ASCII `
-        -Value ("astrometry_ok revision={0} solve=skipped reason=no_fits" -f ${revision})
-    exit 0
+    Write-VLog ("FAIL: smoke FITS not present at {0}. The full-frame FITS must be staged to the unit; a run without a real solve is not valid." -f ${SmokeFitsPath})
+    exit 1
 }
 
 # Locate index files
@@ -106,11 +113,10 @@ foreach (${p} in ${IndexSearchPaths}) {
     }
 }
 if ($null -eq ${indexDir}) {
-    Write-VLog "SKIP: no astrometry index files reachable. Solve cannot run; provider smoke is banner-only."
-    Write-VLog "      (After 'imdisk' provider runs and the unit reboots, D:\mast-indexes will be mounted and this smoke will exercise the full solve.)"
-    Set-Content -LiteralPath ${smokeFile} -Encoding ASCII `
-        -Value ("astrometry_ok revision={0} solve=skipped reason=no_indexes" -f ${revision})
-    exit 0
+    Write-VLog "FAIL: no astrometry index files reachable (checked: $(${IndexSearchPaths} -join ', '))."
+    Write-VLog "      The index image must be staged and mounted (imdisk provider, order 250) BEFORE this verify runs."
+    Write-VLog "      A provisioning run that cannot exercise a real plate solve is not a valid run."
+    exit 1
 }
 Write-VLog ("Using index path: {0}" -f ${indexDir})
 
@@ -126,12 +132,13 @@ ${cygIndexDrive} = (${indexDir}.Substring(0,1)).ToLower()
 ${cygIndex}      = '/cygdrive/' + ${cygIndexDrive} + ((${indexDir}.Substring(2)) -replace '\\','/')
 
 ${cfgPath} = Join-Path ${work} 'astrometry.cfg'
-Set-Content -LiteralPath ${cfgPath} -Encoding ASCII -Value @(
-    'cpulimit 300',
-    "add_path ${cygIndex}",
-    'autoindex'
-)
-Write-VLog ("astrometry.cfg: cpulimit 300; add_path {0}; autoindex" -f ${cygIndex})
+# Write LF-only. This cfg is read by the cygwin solve-field/astrometry-engine;
+# Set-Content (CRLF) leaves a trailing \r on "add_path <dir>\r" so opendir()
+# fails silently and the solver reports "You must list at least one index in
+# the config file" despite indexes being present. Use WriteAllText with \n.
+${cfgText} = (@('cpulimit 300', "add_path ${cygIndex}", 'autoindex') -join "`n") + "`n"
+[System.IO.File]::WriteAllText(${cfgPath}, ${cfgText}, (New-Object System.Text.ASCIIEncoding))
+Write-VLog ("astrometry.cfg (LF): cpulimit 300; add_path {0}; autoindex" -f ${cygIndex})
 
 # PATH was already pre-set near the top of this script (before the banner
 # check); leaving the line above for back-compat with that earlier setup.
@@ -170,18 +177,87 @@ if (-not ${finished}) {
     Write-VLog ("FAIL: solve-field timed out after {0}s" -f ${SolveTimeoutSeconds})
     exit 1
 }
+# The WaitForExit(ms) overload can return $true while ExitCode is momentarily
+# unreadable ($null) under PS 5.1. A parameterless WaitForExit() after it flushes
+# the redirected streams and guarantees ExitCode is populated, closing the race.
+try { ${p2}.WaitForExit() } catch {}
 try { ${p2}.Refresh() } catch {}
 ${rc} = ${p2}.ExitCode
 if ($null -eq ${rc}) {
-    Write-VLog "FAIL: solve-field exit code was null"
+    ${baseNameTmp} = [IO.Path]::GetFileNameWithoutExtension(${SmokeFitsPath})
+    if (Test-Path (Join-Path ${work} ("{0}.solved" -f ${baseNameTmp}))) {
+        Write-VLog "WARN: solve-field exit code unreadable but .solved marker present; treating as success."
+        ${rc} = 0
+    } else {
+        Write-VLog "FAIL: solve-field exit code was null and no .solved marker produced."
+        exit 1
+    }
+}
+function Get-FailedIndexFiles {
+    # Scan solve-field stdout/stderr for any index the loader could not read
+    # (corrupt FITS/kdtree). Returns the deduplicated list of offending paths.
+    param([string]$StdoutPath, [string]$StderrPath)
+    $hits = New-Object System.Collections.Generic.List[string]
+    foreach ($src in @($StdoutPath, $StderrPath)) {
+        if (-not (Test-Path -LiteralPath $src)) { continue }
+        foreach ($ln in (Get-Content -LiteralPath $src -ErrorAction SilentlyContinue)) {
+            $m1 = [regex]::Match($ln, 'Failed to add index\s+"([^"]+)"')
+            if ($m1.Success) {
+                if (-not $hits.Contains($m1.Groups[1].Value)) { $hits.Add($m1.Groups[1].Value) }
+                continue
+            }
+            $m2 = [regex]::Match($ln, 'Failed to load index from path\s+(\S+)')
+            if ($m2.Success -and (-not $hits.Contains($m2.Groups[1].Value))) { $hits.Add($m2.Groups[1].Value) }
+        }
+    }
+    return ,$hits
+}
+function Test-AvxSigill {
+    # $true if stderr suggests the solve died from an illegal instruction --
+    # the symptom when astrometry-engine hits AVX/AVX2/FMA on an SSE-only guest.
+    param([string]$StderrPath)
+    if (-not (Test-Path -LiteralPath $StderrPath)) { return $false }
+    $t = Get-Content -LiteralPath $StderrPath -Raw -ErrorAction SilentlyContinue
+    if (-not $t) { return $false }
+    return ($t -match 'killed by signal 4\b' -or $t -match 'SIGILL')
+}
+
+# ---------------------------------------------------------------------------
+# Highest-priority check: any index file the loader could not read is a HARD
+# FAIL regardless of mode. The solver silently skips a corrupt index and
+# converges via the others, so this is otherwise invisible behind a green
+# solve. -AllowMissingAvx does NOT relax this. See DECISIONS.md 2026-05-28.
+# ---------------------------------------------------------------------------
+${failedIndexes} = Get-FailedIndexFiles -StdoutPath ${solveOut} -StderrPath ${solveErr}
+if (${failedIndexes}.Count -gt 0) {
+    Write-VLog "***************************************************************"
+    Write-VLog ("[FAIL] {0} astrometry index file(s) FAILED TO LOAD during the solve:" -f ${failedIndexes}.Count)
+    foreach (${fi} in ${failedIndexes}) { Write-VLog ("[FAIL]   {0}" -f ${fi}) }
+    Write-VLog "[FAIL] The file(s) above are corrupt/unreadable (e.g. missing kdtree header)."
+    Write-VLog "[FAIL] Rebuild or replace them in the index image before re-running."
+    Write-VLog "--- offending solver lines ---"
+    Get-Content -LiteralPath ${solveErr} -ErrorAction SilentlyContinue |
+        Where-Object { ${_} -match 'kdtree|index_reload|engine_add_index|Failed to (add|load|read)' } |
+        Select-Object -First 20 | ForEach-Object { Write-VLog ("  {0}" -f ${_}) }
+    Write-VLog "***************************************************************"
     exit 1
 }
+
 if (${rc} -ne 0) {
-    Write-VLog ("FAIL: solve-field exit={0}" -f ${rc})
+    Write-VLog ("solve-field exited {0}; inspecting output." -f ${rc})
     Write-VLog "--- stdout tail ---"
     Get-Content -LiteralPath ${solveOut} -Tail 30 -ErrorAction SilentlyContinue | ForEach-Object { Write-VLog ${_} }
     Write-VLog "--- stderr tail ---"
     Get-Content -LiteralPath ${solveErr} -Tail 30 -ErrorAction SilentlyContinue | ForEach-Object { Write-VLog ${_} }
+    if (${AllowMissingAvx} -and (Test-AvxSigill -StderrPath ${solveErr})) {
+        Write-VLog "WARN: stderr contains 'signal 4' / SIGILL -- guest CPU lacks AVX/AVX2/FMA."
+        Write-VLog "WARN: -AllowMissingAvx set (dev VM mode); treating astrometry solve as SKIPPED."
+        Write-VLog "WARN: production runs on real MAST hardware MUST NOT pass -AllowMissingAvx."
+        Set-Content -LiteralPath ${smokeFile} -Encoding ASCII `
+            -Value ("astrometry_ok revision={0} solve=skipped reason=avx_missing" -f ${revision})
+        exit 0
+    }
+    Write-VLog "FAIL: solve-field exited non-zero."
     exit 1
 }
 
@@ -192,9 +268,16 @@ ${solvedMarker} = Join-Path ${work} ("{0}.solved" -f ${baseName})
 ${wcsFile}      = Join-Path ${work} ("{0}.wcs" -f ${baseName})
 
 if (-not (Test-Path ${solvedMarker})) {
-    Write-VLog ("FAIL: {0} marker not produced (solver did not converge)" -f ${solvedMarker})
+    Write-VLog ("solve-field returned 0 but {0} marker was not produced." -f ${solvedMarker})
     Write-VLog "--- stdout tail ---"
     Get-Content -LiteralPath ${solveOut} -Tail 30 -ErrorAction SilentlyContinue | ForEach-Object { Write-VLog ${_} }
+    if (${AllowMissingAvx} -and (Test-AvxSigill -StderrPath ${solveErr})) {
+        Write-VLog "WARN: stderr SIGILL detected; -AllowMissingAvx -> skipping astrometry solve."
+        Set-Content -LiteralPath ${smokeFile} -Encoding ASCII `
+            -Value ("astrometry_ok revision={0} solve=skipped reason=avx_missing" -f ${revision})
+        exit 0
+    }
+    Write-VLog "FAIL: solver did not converge."
     exit 1
 }
 if (-not (Test-Path ${wcsFile})) {

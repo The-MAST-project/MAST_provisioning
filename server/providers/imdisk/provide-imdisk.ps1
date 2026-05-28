@@ -104,10 +104,20 @@ try {
         New-Item -ItemType Directory -Path ${imageDir} -Force | Out-Null
         Write-ImDiskLog ("Created image directory: {0}" -f ${imageDir})
     }
-    if (-not (Test-Path -LiteralPath ${ImagePath})) {
-        Write-ImDiskLog ("[WARN] Image file not present yet: {0}. Task will be registered; mount will succeed on first reboot after the image is placed." -f ${ImagePath})
+
+    # The index image is staged into this run's payload by build-mast (sourced
+    # from the build host's C:\MAST\<name>.img). Copy it into the persistent
+    # ImagePath so both the immediate mount below and the boot-time task can use
+    # it. One-time ~15GB copy; skipped if the image is already in place.
+    ${stagedImage} = Join-Path ${AssetsRoot} (Split-Path -Leaf ${ImagePath})
+    if (Test-Path -LiteralPath ${ImagePath}) {
+        Write-ImDiskLog ("Image file present at persistent path: {0}" -f ${ImagePath})
+    } elseif (Test-Path -LiteralPath ${stagedImage}) {
+        Write-ImDiskLog ("Copying staged index image -> persistent path: {0} -> {1} ({2:N1} GB)..." -f ${stagedImage}, ${ImagePath}, ((Get-Item ${stagedImage}).Length / 1GB))
+        Copy-Item -LiteralPath ${stagedImage} -Destination ${ImagePath} -Force
+        Write-ImDiskLog "Index image copied to persistent path."
     } else {
-        Write-ImDiskLog ("Image file present: {0}" -f ${ImagePath})
+        Write-ImDiskLog ("[WARN] No index image staged at {0} and none at {1}. D:\mast-indexes will be empty; astrometry + mast-validation will FAIL." -f ${stagedImage}, ${ImagePath})
     }
 
     Write-ImDiskLog "Creating boot-time file-backed mount scheduled task..."

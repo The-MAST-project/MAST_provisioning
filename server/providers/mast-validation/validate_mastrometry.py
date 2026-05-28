@@ -7,14 +7,13 @@ venv. The goal is to validate the full chain through the unit's *own* code:
 the per-repo venv, MAST_common imports, Filer/RAM disk wiring, astrometry
 binary discovery, and the on-RAM-disk index files.
 
-Skip semantics (exit 0, smoke marker with solve=skipped) when the
-preconditions are not yet in place on a freshly-provisioned unit:
-  - ImDisk RAM disk not mounted yet (first boot before mast-unit service)
-  - Index files not yet on the RAM disk
-  - Smoke FITS not present
-
-A hard fail (exit 1) is reserved for real breakage: import errors, missing
-solve-field, the solver running but not converging on a known-good frame.
+Preconditions are HARD requirements (exit 1), not skips: a provisioning run
+that cannot exercise a real end-to-end solve is not a valid run. The index
+image and smoke FITS must be staged and mounted (imdisk provider) before this
+runs. We therefore FAIL when:
+  - the smoke FITS is not present
+  - the ImDisk-mounted index drive / index files are not available
+  - import errors, missing solve-field, or the solver not converging
 """
 
 from __future__ import annotations
@@ -62,6 +61,13 @@ def main() -> int:
                     help="Path to the full-frame FITS to solve")
     ap.add_argument("--smoke-file", required=True,
                     help="Path of smoke marker to write")
+    ap.add_argument("--allow-missing-avx", action="store_true",
+                    help="Dev-VM-only escape: if the solver crashes with SIGILL "
+                         "(signal 4) because the guest CPU lacks AVX/AVX2/FMA, "
+                         "treat that specific failure as SKIPPED with a warning "
+                         "instead of FAIL. Corrupt index files are still a hard "
+                         "FAIL. Set by build-mast's -TestMode; MUST NOT be passed "
+                         "in production.")
     args = ap.parse_args()
 
     smoke_path = Path(args.smoke_file)
@@ -74,19 +80,17 @@ def main() -> int:
 
     os.environ.setdefault("MAST_PROJECT", "unit")
 
-    # Preconditions -- skip rather than fail if not met yet.
+    # Preconditions -- HARD FAIL if not met (a run without a real solve is invalid).
     if not fits_path.exists():
-        body = f"mastrometry_ok solve=skipped reason=no_fits path={fits_path}"
-        _write_smoke(smoke_path, body)
-        print(body)
-        return 0
+        print(f"FAIL: full-frame FITS not present at {fits_path}. "
+              "The smoke FITS must be staged to the unit; a run without a real solve is not valid.")
+        return 1
 
     ok, reason = _has_ramdisk_indexes()
     if not ok:
-        body = f"mastrometry_ok solve=skipped reason={reason}"
-        _write_smoke(smoke_path, body)
-        print(body)
-        return 0
+        print(f"FAIL: astrometry indexes not available ({reason}). "
+              "The index image must be staged and mounted (imdisk provider) before validation.")
+        return 1
 
     # Real work: import the production solver and drive it.
     try:
@@ -128,6 +132,37 @@ def main() -> int:
 
     if result is None or not getattr(result, "succeeded", False):
         errors = getattr(result, "errors", None) if result is not None else None
+        err_text = " ".join(str(e) for e in (errors or []))
+
+        # Highest-priority check: corrupt/unloadable index file in the staged
+        # image. Promoted to a hard FAIL regardless of mode (per DECISIONS.md
+        # 2026-05-28); --allow-missing-avx does NOT relax this.
+        import re as _re
+        corrupt = sorted(set(
+            _re.findall(r'Failed to add index\s+"([^"]+)"', err_text)
+            + _re.findall(r'Failed to load index from path\s+(\S+)', err_text)
+        ))
+        if corrupt:
+            print("FAIL: corrupt/unloadable astrometry index file(s) detected during the solve:")
+            for p in corrupt:
+                print(f"  {p}")
+            print("These files are corrupt (e.g. missing kdtree header) and must be rebuilt or "
+                  "replaced in the index image before re-running.")
+            return 1
+
+        # Dev-VM escape: astrometry-engine SIGILL when the guest CPU lacks
+        # AVX/AVX2/FMA. With --allow-missing-avx, treat as SKIPPED.
+        if args.allow_missing_avx and (
+            "killed by signal 4" in err_text or "SIGILL" in err_text
+        ):
+            body = "mastrometry_ok solve=skipped reason=avx_missing"
+            _write_smoke(smoke_path, body)
+            print("WARN: solver crashed with signal 4 / SIGILL -- guest CPU lacks AVX/AVX2/FMA.")
+            print("WARN: --allow-missing-avx set (dev VM mode); treating mast-validation as SKIPPED.")
+            print("WARN: production runs on real MAST hardware MUST NOT pass --allow-missing-avx.")
+            print(body)
+            return 0
+
         print(f"FAIL: solve did not converge. errors={errors}")
         return 1
 

@@ -62,6 +62,11 @@ catch {
     throw "Failed to import provisioning.psm1: $($_.Exception.Message)"
 }
 
+# Shared WinINet posture helpers (best-effort cert revocation through bcproxy).
+${_netDot} = Join-Path ${PSScriptRoot} 'mast-net.ps1'
+if (-not (Test-Path ${_netDot})) { ${_netDot} = Join-Path ${PSScriptRoot} '..\..\lib\mast-net.ps1' }
+. ${_netDot}
+
 ${log} = Start-ProvisionLog -Component 'provide-astrometry-dependencies'
 try {
     ${setupPath} = Join-Path ${AssetsRoot} ${SetupName}
@@ -126,10 +131,24 @@ try {
     }
 
     Write-Host ("Running ${setupPath} for packages: ${Packages} (proxy={0})" -f $(if (${useProxy}) { ${ProxyHost} } else { 'direct' }))
-    ${proc} = Start-Process -FilePath ${setupPath} -ArgumentList ${setupArgs} `
-        -Wait -PassThru -NoNewWindow
-    try { ${proc}.Refresh() } catch {}
-    ${exit} = ${proc}.ExitCode
+
+    # setup-x86_64.exe fetches over HTTPS via WinINet and HARD-fails the TLS
+    # handshake (error 12057) when the server-cert revocation check cannot
+    # complete -- which is the case through bcproxy, where CryptoAPI's cryptnet
+    # CRL/OCSP retrieval returns 0x80070057. Make revocation best-effort (the
+    # same posture git uses) for the duration of the setup.exe run only, then
+    # restore. See mast-net.ps1 / DECISIONS.md 2026-05-27.
+    ${prevRev} = Disable-WinINetCertRevocationCheck
+    Write-Host ("[astrometry-deps] WinINet server-cert revocation set best-effort for setup.exe (prev={0})." -f $(if ($null -eq ${prevRev}) { 'unset' } else { ${prevRev} }))
+    try {
+        ${proc} = Start-Process -FilePath ${setupPath} -ArgumentList ${setupArgs} `
+            -Wait -PassThru -NoNewWindow
+        try { ${proc}.Refresh() } catch {}
+        ${exit} = ${proc}.ExitCode
+    } finally {
+        Restore-WinINetCertRevocationCheck -Previous ${prevRev}
+        Write-Host "[astrometry-deps] WinINet server-cert revocation check restored."
+    }
     if ($null -eq ${exit}) {
         throw "setup-x86_64.exe did not report an exit code (treating as failure)."
     }
@@ -190,9 +209,16 @@ exit 0
         throw "fitsio wheel not found in assets/; expected fitsio-*-cp39-cp39-cygwin_*.whl"
     }
     Write-Host ("Installing bundled fitsio wheel: {0} ..." -f ${fitsioWheel}.Name)
-    # Translate the Windows path to a Cygwin path via cygpath, then pip-install.
-    & ${bashExe} -lc ("python3 -m pip install --quiet --no-warn-script-location --no-deps --no-index ""$(cygpath -u '{0}')""" `
-        -f ${fitsioWheel}.FullName)
+    # Translate the Windows path to a Cygwin /cygdrive path IN POWERSHELL. Do NOT
+    # use "$(cygpath -u ...)" inside the bash string: that $(...) is a PowerShell
+    # subexpression, so PowerShell runs `cygpath` on the *host* (it isn't on the
+    # host PATH -> CommandNotFoundException) and the wheel path never reaches pip.
+    # That bug shipped a unit with fitsio NOT installed, so astrometry's
+    # removelines/util.fits fell back to the NoPyfits stub and every solve died
+    # with "'NoPyfits' object has no attribute 'open'". See DECISIONS.md 2026-05-27.
+    ${wheelWin} = ${fitsioWheel}.FullName
+    ${wheelCyg} = '/cygdrive/' + (${wheelWin}.Substring(0,1).ToLower()) + ((${wheelWin}.Substring(2)) -replace '\\','/')
+    & ${bashExe} -lc ("python3 -m pip install --quiet --no-warn-script-location --no-deps --no-index '{0}'" -f ${wheelCyg})
     if ($LASTEXITCODE -ne 0) {
         throw "pip install of bundled fitsio wheel failed (exit ${LASTEXITCODE})."
     }

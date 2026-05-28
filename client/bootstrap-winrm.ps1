@@ -12,13 +12,17 @@
       2. Ensures 'mast' is a local administrator with the provisioning password.
       3. Suppresses Windows Update automatic installs.
       4. Enables WinRM over HTTP (5985) with Basic auth and opens firewall port 5985.
-      5. Renames the computer to -MastHostName (reboot required before the new name is live).
+      5. Installs the Npcap packet-capture driver via its interactive GUI (the free edition
+         has no working silent mode; operator clicks through once). The npcap installer
+         (npcap-*.exe) must sit next to this script or under .\assets.
+      6. Renames the computer to -MastHostName (reboot required before the new name is live).
 
     After this script completes successfully, the operator verifies the summary, reboots if prompted,
     then the provisioning server may run prepare-mast-client.ps1 over WinRM (HTTPS, TrustedHosts).
 
-    USB / DVD: copy client\bootstrap-winrm.cmd and bootstrap-winrm.ps1 together (or use the
-    autounattend ISO). Double-click bootstrap-winrm.cmd so Windows runs PowerShell (many PCs
+    USB / DVD: copy client\bootstrap-winrm.cmd, bootstrap-winrm.ps1, and the Npcap installer
+    (client\assets\npcap-*.exe) together (or use the autounattend ISO, which bundles all three).
+    Double-click bootstrap-winrm.cmd so Windows runs PowerShell (many PCs
     open .ps1 in Notepad by default). Or from an elevated PowerShell:
         cd <folder containing bootstrap-winrm.ps1>
         .\bootstrap-winrm.ps1 -MastHostName mast05
@@ -484,6 +488,58 @@ try {
         }
     } else {
         Write-BootstrapMsg ("  sshd_config not found at {0} (capability may have failed earlier)." -f $sshdCfg) 'Yellow'
+    }
+
+    # --- Npcap packet-capture driver ---
+    #
+    # Installed here (interactive bootstrap, full unfiltered admin token) rather
+    # than by the npcap provider over WinRM. The free Npcap edition has no
+    # working silent mode: /S and the feature flags are OEM-edition-only, so the
+    # installer always shows its InstallOptions page. Under the WinRM provider
+    # pipeline that page can never be dismissed (Session 0 is non-interactive,
+    # and the network-logon token has BUILTIN\Administrators filtered out of its
+    # effective groups, which the kernel-driver install also needs). Running the
+    # GUI here, with the operator present, sidesteps both problems. The npcap
+    # provider is now a post-bootstrap presence check + npcapwatchdog task.
+    # See DECISIONS.md 2026-05-27.
+    Write-BootstrapMsg '' 'Cyan'
+    Write-BootstrapMsg '--- Npcap packet-capture driver ---' 'Cyan'
+    $npcapSvc = Get-Service -Name 'npcap' -ErrorAction SilentlyContinue
+    if ($null -ne $npcapSvc) {
+        Write-BootstrapMsg ("  Npcap service already present (Status={0}); skipping install." -f $npcapSvc.Status) 'DarkGray'
+    } else {
+        # Locate the installer next to this script (ISO root) or under .\assets
+        # (client folder layout). Newest version wins if several are present.
+        $npcapSearchDirs = @($PSScriptRoot, (Join-Path $PSScriptRoot 'assets'))
+        $npcapInstaller = $null
+        foreach ($d in $npcapSearchDirs) {
+            if (-not (Test-Path -LiteralPath $d)) { continue }
+            $hit = Get-ChildItem -LiteralPath $d -Filter 'npcap-*.exe' -File -ErrorAction SilentlyContinue |
+                Sort-Object Name -Descending | Select-Object -First 1
+            if ($hit) { $npcapInstaller = $hit.FullName; break }
+        }
+        if (-not $npcapInstaller) {
+            Write-BootstrapMsg '  [WARN] No npcap-*.exe found next to this script or in .\assets.' 'Yellow'
+            Write-BootstrapMsg '  Copy the Npcap installer alongside bootstrap-winrm.ps1 and re-run, or install Npcap manually.' 'Yellow'
+            Write-BootstrapMsg '  Packet capture (Wireshark, etc.) will not work until Npcap is installed.' 'Yellow'
+        } else {
+            Write-BootstrapMsg ("  Launching Npcap installer GUI: {0}" -f $npcapInstaller) 'White'
+            Write-BootstrapMsg '  Click through the installer; recommended options: WinPcap-compatible mode + loopback support.' 'Yellow'
+            try {
+                $npcapProc = Start-Process -FilePath $npcapInstaller -PassThru -Wait
+                $npcapExit = $null
+                try { $npcapExit = $npcapProc.ExitCode } catch { }
+                $reSvc = Get-Service -Name 'npcap' -ErrorAction SilentlyContinue
+                if ($null -ne $reSvc) {
+                    Write-BootstrapMsg ("  Npcap installed (service Status={0}, installer exit={1})." -f $reSvc.Status, $npcapExit) 'Green'
+                } else {
+                    Write-BootstrapMsg ("  [WARN] Npcap installer exited (code={0}) but the 'npcap' service is not registered." -f $npcapExit) 'Yellow'
+                    Write-BootstrapMsg '  Re-run the installer (it is safe to re-run) or check the install was not cancelled.' 'Yellow'
+                }
+            } catch {
+                Write-BootstrapMsg ("  [WARN] Npcap install failed: {0}" -f $_.Exception.Message) 'Yellow'
+            }
+        }
     }
 
     # --- Computer rename ---

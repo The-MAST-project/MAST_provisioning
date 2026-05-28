@@ -310,7 +310,7 @@ Next steps (manual install):
      When done and at the desktop, inside the VM:
        - Prefer DHCP on the host-only adapter (enable VBox host-only DHCP or use
          a lease-friendly layout). Identity is the hostname (mast01), not a fixed IP.
-       - Copy bootstrap-winrm.cmd and bootstrap-winrm.ps1 together, then either:
+       - Copy bootstrap-winrm.cmd, bootstrap-winrm.ps1, and npcap-*.exe together, then either:
            Right-click bootstrap-winrm.cmd -> Run as administrator
          or from an elevated cmd.exe:
              D:\bootstrap-winrm.cmd -MastHostName mast05

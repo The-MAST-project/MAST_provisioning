@@ -1,14 +1,12 @@
-﻿{
+{
   "name": "npcap",
   "version": "1.88",
-  "description": "Install Npcap packet capture driver (WinPcap-compat, loopback, non-admin). Matches mastw, which also runs npcapwatchdog scheduled task to keep the npcap service alive. Wireshark and any other capture-based tooling depend on this.",
+  "description": "Verify the Npcap packet-capture driver (installed by bootstrap-winrm.ps1) is present, and register the npcapwatchdog scheduled task for mastw parity. The installer itself moved to bootstrap (interactive admin) because the free Npcap edition has no working silent mode under the WinRM filtered token / Session 0; see DECISIONS.md 2026-05-27. Wireshark and any other capture-based tooling depend on npcap being present.",
   "order": 1000,
   "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-npcap.ps1\" -AssetsRoot \".\"",
   "commandfiles": [
     "provide-npcap.ps1",
-    "verify-npcap.ps1",
-    "assets/npcap-1.88.exe"
+    "verify-npcap.ps1"
   ],
   "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\verify-npcap.ps1\""
 }
-

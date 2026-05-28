@@ -181,6 +181,21 @@ if (-not (Test-Path $bootstrapVmTestCmdPath)) {
     throw "bootstrap-winrm-vmtest.cmd not found at $bootstrapVmTestCmdPath"
 }
 
+# Npcap installer ships on the ISO next to bootstrap-winrm.ps1; bootstrap
+# installs it interactively (the free Npcap edition has no working silent mode
+# under the WinRM/Session-0 pipeline -- see DECISIONS.md 2026-05-27). Newest
+# npcap-*.exe under client\assets\ wins.
+$npcapInstallerPath = $null
+$npcapAssetsDir = Join-Path $RepoRoot 'client\assets'
+if (Test-Path $npcapAssetsDir) {
+    $npcapHit = Get-ChildItem -LiteralPath $npcapAssetsDir -Filter 'npcap-*.exe' -File -ErrorAction SilentlyContinue |
+        Sort-Object Name -Descending | Select-Object -First 1
+    if ($npcapHit) { $npcapInstallerPath = $npcapHit.FullName }
+}
+if (-not $npcapInstallerPath) {
+    Write-Warning "No npcap-*.exe found under $npcapAssetsDir; the ISO will not carry the Npcap installer and bootstrap will warn on the unit."
+}
+
 $resolvedExtras = @()
 foreach ($s in $ExtraScripts) {
     $candidate = if ([System.IO.Path]::IsPathRooted($s)) { $s } else { Join-Path $RepoRoot $s }
@@ -367,6 +382,10 @@ try {
     if (Test-Path $clientUtilPath) {
         Copy-Item -Force $clientUtilPath (Join-Path $staging 'mast-client-util.ps1')
         Write-Host "  Staged mast-client-util.ps1"
+    }
+    if ($npcapInstallerPath) {
+        Copy-Item -Force $npcapInstallerPath (Join-Path $staging (Split-Path $npcapInstallerPath -Leaf))
+        Write-Host "  Staged $(Split-Path $npcapInstallerPath -Leaf) (Npcap installer for bootstrap)"
     }
 
     foreach ($extra in $resolvedExtras) {

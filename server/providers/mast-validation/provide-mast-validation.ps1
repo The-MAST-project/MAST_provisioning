@@ -3,7 +3,12 @@
 param(
     [string]${ReposRoot}     = 'C:\MAST\repos',
     [string]${SmokeFitsPath} = 'C:\MAST\full-frame.fits',
-    [int]   ${TimeoutSeconds} = 300
+    [int]   ${TimeoutSeconds} = 300,
+    # Dev-VM-only escape: forwards --allow-missing-avx to the python validator
+    # so a SIGILL crash (guest CPU lacks AVX/AVX2/FMA) is treated as SKIPPED
+    # instead of FAIL. build-mast.ps1 injects this only under -TestMode; MUST
+    # NOT be passed in production. Corrupt index files remain a hard FAIL.
+    [switch]${AllowMissingAvx}
 )
 
 ${ErrorActionPreference} = 'Stop'
@@ -80,6 +85,7 @@ ${argList} = @(
     '--fits',        ${SmokeFitsPath},
     '--smoke-file',  ${smokeFile}
 )
+if (${AllowMissingAvx}) { ${argList} += '--allow-missing-avx' }
 Write-VLog ("Invoking: {0} {1}" -f ${venvPython}, (${argList} -join ' '))
 
 # Direct invocation (not Start-Process). Run #9 hit a PS 5.1 race where

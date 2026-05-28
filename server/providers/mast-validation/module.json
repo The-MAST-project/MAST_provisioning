@@ -1,7 +1,7 @@
 {
   "name": "mast-validation",
   "version": "1.0",
-  "description": "End-to-end validation: invoke MAST_unit's own MastrometryDotNet solver class against C:\\MAST\\full-frame.fits using the unit's venv. Confirms the full plate-solving chain works through production code paths (venv, MAST_common imports, Filer/RAM disk, astrometry binaries, indexes). Skips gracefully if RAM disk or indexes are not yet available.",
+  "description": "End-to-end validation: invoke MAST_unit's own MastrometryDotNet solver class against C:\\MAST\\full-frame.fits using the unit's venv. Confirms the full plate-solving chain works through production code paths (venv, MAST_common imports, Filer/RAM disk, astrometry binaries, indexes). HARD FAILS (no skip) if the index image or smoke FITS are not staged/mounted -- a run without a real end-to-end solve is not valid.",
   "order": 2900,
   "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-mast-validation.ps1\"",
   "commandfiles": [

@@ -2,6 +2,250 @@
 
 ---
 
+## [2026-05-28] Corrupt index = hard FAIL; AVX-SIGILL gated by -TestMode (dev-VM escape)
+
+**Why:** Two refinements after the 2026-05-27 astrometry validation work hit
+the wall on the dev VM:
+
+1. **Bad FITS index files must always fail the run.** The 2026-05-27 entry left
+   "corrupt index" as a loud WARNING with a `-FailOnIndexLoadError` switch to
+   promote it. That gave the wrong default -- a corrupt index file in the
+   staged image is a real problem and should block any run, dev or prod.
+2. **The VirtualBox dev VM's CPU can't run the astrometry binaries.** The
+   prebuilt `astrometry.tgz` is compiled with AVX/AVX2/FMA; the VBox guest on
+   the Meteor Lake host exposes only `sse4_2`, so `astrometry-engine` dies
+   with **SIGILL (signal 4)** the moment real solving starts. VBox extradata
+   (`VBoxInternal/CPUM/IsaExts/AVX[2] 1`) booted but did **not** actually
+   enable AVX in the guest (`IsProcessorFeaturePresent` still False), and
+   `--cpu-profile host` is already the default; there is no clean way to
+   expose AVX2 to this guest. We could not afford to keep fighting the
+   hypervisor for this. See [[astrometry-avx-vm]].
+
+**What:**
+
+- **`verify-astrometry.ps1`:**
+  - Removed `-FailOnIndexLoadError`. Corrupt-index detection
+    (`Failed to add index "..."` / `Failed to load index from path ...` /
+    `Kdtree header was not found`) is now **always a hard FAIL**, evaluated
+    BEFORE any other failure handling, and dumps the offending solver lines.
+    `-AllowMissingAvx` (see below) does NOT relax this.
+  - New `-AllowMissingAvx` switch: when `solve-field` exits non-zero (or
+    `.solved` is missing) AND stderr matches `killed by signal 4` / `SIGILL`
+    AND no corrupt index was detected, treat the failure as **SKIPPED** with
+    a loud WARNING and write `astrometry_ok solve=skipped reason=avx_missing`.
+    Production runs MUST NOT pass this switch.
+- **`validate_mastrometry.py` / `provide-mast-validation.ps1`:** mirror logic.
+  New `--allow-missing-avx` / `-AllowMissingAvx`. Corrupt-index detection in
+  `result.errors` is a hard FAIL regardless; SIGILL with the flag set =
+  `solve=skipped reason=avx_missing` exit 0.
+- **`build-mast.ps1`:** injects `-AllowMissingAvx` / `--allow-missing-avx`
+  into the astrometry-verify and mast-validation commands **only when
+  `-TestMode` is set** (the existing dev/VM flag, set by `vm/run-prov-test.py`).
+  Production builds therefore never relax the AVX failure.
+
+**Implications:**
+
+- Dev VM runs (TestMode): astrometry + mast-validation now SKIP gracefully on
+  the AVX/SIGILL crash with a clear `reason=avx_missing` smoke marker and
+  loud warnings; the cycle can pass green again. They still HARD FAIL on
+  corrupt indexes, missing indexes, missing FITS, or any non-SIGILL failure.
+- Production runs (no TestMode): all astrometry failures -- corrupt index,
+  no indexes/FITS, solve crash, or anything else -- are hard FAILs. Real
+  MAST hardware has AVX2, so the SIGILL path will not fire there.
+- The 2026-05-27 entry's "loud WARNING, promote later via flag" plan is
+  superseded: the flag is removed; corrupt-index is just FAIL.
+
+---
+
+## [2026-05-27] Astrometry validation is mandatory; index image staged through the pipeline; corrupt-index warning
+
+**Why:** The dev VM had never actually exercised a plate solve. The astrometry
+index data is a ~15GB ImDisk file-backed image
+(`MAST-15GB-indexes-5202+5203.img` -> mounted as `D:`, indexes at
+`D:\mast-indexes`) that was supplied *out-of-band* and was simply absent on the
+VM, and the smoke FITS (`C:\MAST\full-frame.fits`) was likewise never staged. As
+a result both `verify-astrometry.ps1` and `mast-validation`'s
+`validate_mastrometry.py` took their **skip** paths (`solve=skipped`) and exited
+0 -- the modules showed green every run without ever solving anything. A
+provisioning run that cannot run a real end-to-end solve is not a valid run.
+
+Separately, a corrupt index is invisible behind a green solve: `solve-field`
+silently skips an index it cannot load and converges via the others. Observed on
+a real unit with a damaged `index-5203-00.fits`:
+
+```
+stdout: Failed to add index "/cygdrive/d/mast-indexes/index-5203-00.fits".
+stderr: kdtree_fits_io.c: Kdtree header was not found in file ...
+        engine.c:engine_add_index: Failed to load index from path ...
+```
+
+The file is structurally valid FITS (so `fitsverify` passes) but its star kdtree
+is missing -- only the solver's own loader catches it, and only on stdout/stderr
+that the verify never inspected.
+
+**What:**
+
+- **No more skips (hard FAIL).** `verify-astrometry.ps1` and
+  `validate_mastrometry.py` now FAIL (exit 1) when the smoke FITS or the indexes
+  are absent, instead of writing a `solve=skipped` green marker.
+- **Corrupt-index detection.** `verify-astrometry.ps1` scans the solve's
+  stdout/stderr for `Failed to add index "..."` / `Failed to load index from
+  path ...` and emits a LOUD WARNING listing the offending file(s) even when the
+  solve converged. New `-FailOnIndexLoadError` switch promotes it to a hard FAIL
+  (default: warn). The smoke marker carries `index_load=ok|warn` +
+  `failed_indexes=`.
+- **Index image + smoke FITS delivered through the pipeline.** `build-mast.ps1`
+  stages `C:\MAST\MAST-15GB-indexes-5202+5203.img` and `C:\MAST\full-frame.fits`
+  from the build host (the canonical sources "for now" -- far too large for the
+  repo). `provide-imdisk.ps1` copies the staged image to the persistent
+  `C:\MAST\Shared\<name>.img` and mounts `D:` in-session; `provide-astrometry.ps1`
+  places `full-frame.fits` at `C:\MAST\full-frame.fits`.
+
+**Implications:**
+
+- The index image must exist at `C:\MAST\...img` on the build host or the build
+  warns and the run FAILS at astrometry/mast-validation (intended).
+- ~15GB now flows through staging + SMB transfer every run, and the
+  `build-manifest` payload hash now SHA256s the 15GB image (slower builds). Both
+  are accepted "for now"; a future optimization is a content-addressed / one-time
+  pre-seed delivery and excluding bulk assets from the payload hash.
+- Dev VM: `D:` must be free for the index mount (the VBox install/autounattend
+  ISOs default to `D:`/`E:`); the operator remaps the optical drive. On real
+  single-NIC units `D:` is free.
+- The corrupt-index path is currently a WARNING; promotion to FAIL is a one-flag
+  change (`-FailOnIndexLoadError`).
+
+---
+
+## [2026-05-27] WinINet proxy posture: kill WPAD, best-effort cert revocation behind bcproxy
+
+**Why:** The first on-campus (`--proxy-mode weizmann`) run failed every
+network-download installer that enforces TLS server-cert revocation -- cygwin
+`setup-x86_64.exe` (cascading `astrometry-dependencies` -> `astrometry`) and
+Chrome's online stub -- with WinINet error `12057`
+(`ERROR_INTERNET_SEC_CERT_REV_FAILED`). git, curl, and .NET all reached the
+internet through `bcproxy.weizmann.ac.il:8080` fine, and the actual CRL
+(`http://r12.c.lencr.org/...`) returned HTTP 200 via curl both through the proxy
+and direct. The failure was isolated to **Windows CryptoAPI revocation
+retrieval (`cryptnet`)**: `certutil -urlfetch` returns
+`0x80070057 ERROR_INVALID_PARAMETER` -> `CRYPT_E_REVOCATION_OFFLINE` for the
+CRL/AIA fetch, machine-wide (identical under the WinRM logon, as SYSTEM, with
+WinHTTP set to proxy or direct, and with/without a bypass list). git survives
+because Git-for-Windows does revocation best-effort; the installers hard-fail.
+
+Two distinct problems surfaced:
+
+1. **WPAD auto-detect was left on.** `provide-proxy.ps1` set the legacy
+   `ProxyEnable`/`ProxyServer` HKCU values but never wrote the authoritative
+   `DefaultConnectionSettings` binary blob, whose flags byte still had the WPAD
+   auto-detect bit (`0x08`) set. On the dev VM (multi-homed: a dead-end
+   host-only NIC carrying WinRM + a NAT NIC for internet) WPAD probing makes
+   things worse and is never what we want -- we configure proxy explicitly.
+
+2. **`cryptnet` cannot complete revocation through bcproxy.** Even with WPAD
+   off, the CRL fetch via `cryptnet`+`bcproxy` returns `0x80070057`. A real
+   campus unit (no direct internet, must use the proxy) would hit this too.
+
+**What:**
+
+- **`server/providers/proxy/provide-proxy.ps1`**: new `Set-WinINetConnectionFlags`
+  rewrites `DefaultConnectionSettings`/`SavedLegacySettings` to an EXPLICIT
+  config -- manual-proxy-only (`0x02`) in `use` mode, direct-only (`0x01`) in
+  `direct` mode -- clearing the WPAD (`0x08`) and PAC (`0x04`) bits and bumping
+  the change counter. The provider now also asserts WPAD is off in its readback
+  and records `wpad_autodetect=` in the smoke marker. This is the WinINet
+  counterpart of the 2026-05-26 "proxy mode is explicit, not probed" decision.
+- **`server/lib/mast-net.ps1`** (new shared lib): `Disable-/Restore-WinINetCertRevocationCheck`
+  toggle HKCU `Internet Settings\CertificateRevocation` and return/restore the
+  prior value.
+- **`provide-astrometry-dependencies.ps1`** and **`provide-chrome.ps1`** wrap
+  their WinINet-based installer (`setup-x86_64.exe`, `ChromeSetup.exe`) in
+  disable-before / restore-after calls, so revocation is best-effort **only for
+  the duration of that install**, scoped to the `mast` user -- matching git's
+  existing posture rather than weakening anything network-wide or removing the
+  internet dependency (git must pull the MAST repos; reliable internet inside
+  and outside the proxy is non-negotiable).
+- **`build/build-mast.ps1`** stages `mast-net.ps1` into `01-provisioning`
+  alongside `mast-log.ps1` (fail-loud if missing).
+
+**Validated:** with `CertificateRevocation=0`, a real `setup-x86_64.exe` run
+through bcproxy downloaded and installed all cygwin packages (all required
+DLLs present, `setup.log.full` clean, zero `12057`). WPAD clearing verified
+live (`flags 0x0B -> 0x02`, readback `wpadAutoDetect=False`).
+
+**Implications:**
+
+- Clearing WPAD alone is necessary hardening but NOT sufficient -- the
+  best-effort-revocation toggle is what actually unblocks the installs behind
+  the proxy.
+- Revocation is relaxed only transiently and only for those two installer
+  child processes; steady-state WinINet revocation returns to its prior value.
+- Chrome's stub uses WinINet/omaha; the same toggle is applied, but if a future
+  run shows the stub bypasses WinINet revocation, the fallback is the offline
+  Chrome Enterprise installer (still our-staged, no posture change).
+- Root cause of `cryptnet`+bcproxy `0x80070057` itself is unresolved (a
+  `cryptnet`<->forward-proxy incompatibility); best-effort revocation sidesteps
+  it without depending on the proxy ever proxying CRL/OCSP for CryptoAPI.
+
+---
+
+## [2026-05-27] Npcap install moves to bootstrap; new DS9 provider
+
+**Why:** The `npcap` provider could never install Npcap reliably over the
+WinRM provider pipeline. The free Npcap edition has **no working silent mode**
+-- `/S` and the feature flags (`/winpcap_mode`, `/loopback_support`, ...) are
+OEM-edition-only, so the installer always renders its InstallOptions page. Two
+things then conspire against the provider: (1) the WinRM network logon hands
+the provider a *filtered* NTLM token with `BUILTIN\Administrators` stripped
+from its effective groups, which the kernel-driver install needs; and (2)
+Session 0 is non-interactive, so the InstallOptions page can never be
+dismissed. The prior workaround (run the installer as SYSTEM via a scheduled
+task + pre-trust the Authenticode publisher cert) got past the token problem
+but still hung on the un-dismissable GUI page. `bootstrap-winrm.ps1` already
+runs interactively as a full, unfiltered admin -- the natural place to click
+through the installer once. The same run also separately motivated adding
+SAOImage DS9 to the provisioned tool set.
+
+**What:**
+
+- **`client/bootstrap-winrm.ps1`**: new "Npcap packet-capture driver" step
+  (before the computer rename). Idempotent (skips if the `npcap` service
+  exists), locates `npcap-*.exe` next to the script or under `.\assets`, and
+  launches the installer GUI with `Start-Process -Wait`. Non-fatal: warns and
+  continues if the installer is missing or the service does not register, so a
+  capture-driver hiccup never blocks the rest of bootstrap.
+- **`client/assets/npcap-1.88.exe`**: the installer moved here from
+  `server/providers/npcap/assets/` (it is now a bootstrap/USB-time asset, not a
+  provisioning-time one).
+- **`vm/build-autounattend-iso.ps1`**: stages the newest `client/assets/npcap-*.exe`
+  at the ISO root next to `bootstrap-winrm.ps1` so the operator's interactive
+  bootstrap finds it.
+- **`server/providers/npcap/`**: reduced to a **verify-only** provider.
+  `provide-npcap.ps1` no longer runs the installer; it asserts the service +
+  driver are present (fails loud if bootstrap was skipped), ensures the service
+  is running, and (re)registers the `npcapwatchdog` task for mastw parity. The
+  installer asset is dropped from `commandfiles`.
+- **`server/providers/ds9/`** (new, order 2600): installs SAOImage DS9 8.7.
+  DS9 is a standalone app with no real installer; the Windows "Install.exe" is
+  a self-extracting zip (MZ stub + appended zip). `provide-ds9.ps1` extracts it
+  with the in-box `tar.exe` (bsdtar reads past the MZ prefix; .NET
+  ZipArchive/Expand-Archive do not) into `C:\Program Files\SAOImageDS9` and
+  drops an All-Users Start Menu shortcut. `verify-ds9.ps1` checks `ds9.exe`.
+
+**Implications:**
+
+- Npcap is no longer installed during autonomous/WinRM provisioning. Any unit
+  that skips the interactive bootstrap will fail the `npcap` provider's
+  presence check (intended -- it surfaces the missed step rather than silently
+  shipping without a capture driver).
+- The autounattend ISO now carries the Npcap installer; manual USB copies of
+  bootstrap must include `npcap-*.exe` alongside the `.ps1`/`.cmd`.
+- Bumping the bundled Npcap version means dropping a new `npcap-*.exe` in
+  `client/assets/` (newest-by-name wins); no provider edit needed.
+- DS9 adds ~19 MB to the staged payload per host.
+
+---
+
 ## [2026-05-26] Proxy mode is explicit (`--proxy-mode {weizmann,direct}`), no longer probed
 
 **Why:** The proxy provider's earlier "soft probe" approach (introduced

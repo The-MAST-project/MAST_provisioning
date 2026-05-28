@@ -299,12 +299,27 @@ function Generate-Commands([string[]]${Mods}) {
       'astrometry-dependencies' {
         ${cmd} = ${cmd} + (" -ProxyMode {0}" -f ${astroDepProxyMode})
       }
+      'mast-validation' {
+        # Dev-VM escape: forward --allow-missing-avx to the python validator
+        # under -TestMode. astrometry-engine crashes with SIGILL on guest CPUs
+        # without AVX/AVX2/FMA (e.g. the VirtualBox dev VM); TestMode treats
+        # that specific failure as SKIPPED. Production MUST NOT pass TestMode.
+        # Corrupt index files remain a hard FAIL regardless. See DECISIONS.md.
+        if (${TestMode}) { ${cmd} = ${cmd} + ' -AllowMissingAvx' }
+      }
     }
 
     ${cmds} += [pscustomobject]@{ order = [int]${mf}.order; desc = [string]${mf}.description; cmd = ${cmd}; module = ${m} }
 
     if (${mf}.verify) {
-      ${cmds} += [pscustomobject]@{ order = [int](${mf}.order + 1); desc = "[verify] " + [string]${mf}.name; cmd = [string]${mf}.verify; module="${m}-verify" }
+      ${verifyCmd} = [string]${mf}.verify
+      # Same dev-VM escape on the verify side: verify-astrometry.ps1 understands
+      # -AllowMissingAvx (the only verify that runs a real solve and thus the
+      # only one exposed to the AVX SIGILL).
+      if (${TestMode} -and ${m} -eq 'astrometry') {
+          ${verifyCmd} = ${verifyCmd} + ' -AllowMissingAvx'
+      }
+      ${cmds} += [pscustomobject]@{ order = [int](${mf}.order + 1); desc = "[verify] " + [string]${mf}.name; cmd = ${verifyCmd}; module="${m}-verify" }
     }
   }
   return (${cmds} | Sort-Object order, desc)
@@ -355,6 +370,9 @@ Copy-Item -Force ${serverLib} (Join-Path ${staging} 'provisioning.psm1')
 ${mastLogLib} = Join-Path (Split-Path -Parent ${serverLib}) 'mast-log.ps1'
 if (-not (Test-Path ${mastLogLib})) { throw "Missing mast-log.ps1 at ${mastLogLib}" }
 Copy-Item -Force ${mastLogLib} (Join-Path ${staging} 'mast-log.ps1')
+${mastNetLib} = Join-Path (Split-Path -Parent ${serverLib}) 'mast-net.ps1'
+if (-not (Test-Path ${mastNetLib})) { throw "Missing mast-net.ps1 at ${mastNetLib}" }
+Copy-Item -Force ${mastNetLib} (Join-Path ${staging} 'mast-net.ps1')
 
 # Copy client execution script into staging
 ${executeScript} = Join-Path ${clientRoot} 'execute-mast-provisioning.ps1'
@@ -495,6 +513,33 @@ if (${Modules} -contains 'ascom') {
         Write-Warning "NetFx3 SxS source under '$sxsSrc' is empty; continuing due to -AllowMissingNetFx3Sxs (provider will fall back to online DISM)."
     } else {
         throw "NetFx3 SxS source missing under '$sxsSrc'. Drop the Windows IoT 11 LTSC SxS files there (see provider README), or pass -AllowMissingNetFx3Sxs for dev/test."
+    }
+}
+
+# Astrometry index image + smoke FITS. Sourced from C:\MAST\ on the build host
+# ("use these paths for now") -- both are far too large to keep in the repo. The
+# index image is mounted as D: by the imdisk provider (which copies it to the
+# persistent C:\MAST\Shared path on the unit); the smoke FITS is the solve input
+# placed by the astrometry provider. These are required for a VALID run: without
+# them the astrometry + mast-validation stages FAIL (the skip paths were removed),
+# so we warn loudly at build time but do not hard-block the build itself.
+${astroIndexImageSrc} = 'C:\MAST\MAST-15GB-indexes-5202+5203.img'
+${fullFrameFitsSrc}   = 'C:\MAST\full-frame.fits'
+if (${Modules} -contains 'imdisk') {
+    if (Test-Path -LiteralPath ${astroIndexImageSrc}) {
+        ${imgLeaf} = Split-Path -Leaf ${astroIndexImageSrc}
+        New-LinkOrCopy -Target ${astroIndexImageSrc} -LinkPath (Join-Path ${staging} ${imgLeaf})
+        Write-Host (" Staged astrometry index image: {0} ({1:N1} GB)" -f ${imgLeaf}, ((Get-Item ${astroIndexImageSrc}).Length / 1GB))
+    } else {
+        Write-Warning ("Astrometry index image missing at {0}; imdisk will have nothing to mount and astrometry/mast-validation will FAIL on the unit." -f ${astroIndexImageSrc})
+    }
+}
+if ((${Modules} -contains 'astrometry') -or (${Modules} -contains 'mast-validation')) {
+    if (Test-Path -LiteralPath ${fullFrameFitsSrc}) {
+        New-LinkOrCopy -Target ${fullFrameFitsSrc} -LinkPath (Join-Path ${staging} 'full-frame.fits')
+        Write-Host (" Staged smoke FITS: full-frame.fits ({0:N1} MB)" -f ((Get-Item ${fullFrameFitsSrc}).Length / 1MB))
+    } else {
+        Write-Warning ("Smoke FITS missing at {0}; astrometry + mast-validation will FAIL on the unit." -f ${fullFrameFitsSrc})
     }
 }
 

@@ -18,8 +18,15 @@ function W { param([string]$Line) Add-Content -LiteralPath $verifyLog -Encoding 
 Set-Content -LiteralPath $verifyLog -Encoding UTF8 -Value ("[{0}] verify-npcap.ps1 started" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))
 
 $svc       = Get-Service -Name 'npcap' -ErrorAction SilentlyContinue
-$drvPath   = 'C:\Windows\System32\Npcap\npcap.sys'
-$drvExists = Test-Path -LiteralPath $drvPath
+# Npcap registers its kernel driver at System32\drivers\npcap.sys; the
+# System32\Npcap\ directory holds only the user-mode helpers (wpcap.dll,
+# Packet.dll, NpcapHelper.exe). Older notes checked the latter path, which
+# never contains the .sys -- accept either location so a correctly installed
+# driver is not reported missing.
+$drvCandidates = @('C:\Windows\System32\drivers\npcap.sys', 'C:\Windows\System32\Npcap\npcap.sys')
+$drvPath   = $drvCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+$drvExists = [bool]$drvPath
+if (-not $drvExists) { $drvPath = $drvCandidates[0] }
 
 if ($svc -and $drvExists) {
     W ("PASS npcap Status={0} StartType={1} driver={2}" -f $svc.Status, $svc.StartType, $drvPath)

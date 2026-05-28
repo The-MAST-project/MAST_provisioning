@@ -281,7 +281,10 @@ Two levels:
 
 2. **Smoke test re-run** -- optional deeper check; re-run `verify` steps on the unit even
    when hashes match, to catch runtime drift (service stopped, file deleted, etc.) without
-   a full reprovisioning cycle.
+   a full reprovisioning cycle. This is the prov-server-driven form of what the unit must
+   also be able to run **on itself** -- see **Unit self-validation (tiered validation
+   levels the unit can answer)** in Phase 1, where the same `verify-<name>.ps1` scripts are
+   the level-2 (configuration) check.
 
 ---
 
@@ -655,6 +658,82 @@ manifests avoid contradicting the live system.
 The current `installed-manifest.json` written by `execute-mast-provisioning.ps1` is
 acceptable as an **optimization or audit artifact**, but the comparison logic should
 ultimately align with what a fresh inspection of the unit would produce.
+
+---
+
+### Unit self-validation (tiered validation levels the unit can answer)
+
+The manifest above answers *"what is installed"*. It does **not** answer *"is this unit
+actually installed and configured correctly, right now"*. Today that second question is
+only answerable from the **outside**: the provisioning server (or `vm/run-prov-test.py`)
+re-runs the per-module `verify-<name>.ps1` steps over WinRM and reads the
+`C:\MAST\logs\smoke\*-smoke.txt` markers (see **Version / Drift Detection**, level 2).
+A unit cannot, on its own, tell an operator or the MAST scheduler how healthy its own
+provisioning is without an orchestrator driving the checks into it.
+
+**Requirement:** each unit must be able to **validate itself**, on demand, **without the
+provisioning server and without an inbound WinRM session** -- a unit-side equivalent of
+the provisioning verification phase that the unit itself can answer. The validation is
+**tiered**, so a caller can pay for the depth it needs:
+
+| Level | Name | Question answered | Cost | Typical caller |
+|-------|------|-------------------|------|----------------|
+| **L0** | **liveness** | Are the MAST services and core processes running? | milliseconds | `/health` poll, MAST scheduler |
+| **L1** | **inventory** | Does the *computed* manifest (installed paths, versions, payload hash) match the desired build? | seconds | drift detection, dashboard |
+| **L2** | **configuration** | Re-run every module's `verify-<name>.ps1` and confirm each smoke marker is `*_ok`. | seconds-to-minutes | post-reboot recovery, periodic self-check |
+| **L3** | **functional** | Deep, hardware-touching checks: device connectivity (ASCOM connect, PWI4/PWShutter, ps3cli health, camera enumerate), end-to-end probes that a passing smoke marker does not guarantee. | minutes; may disturb hardware | operator on demand, pre-observation readiness |
+
+Properties the implementation must hold:
+
+- **Single entry point, unit-resident.** One script (for example `client/validate-unit.ps1`,
+  staged like the other client helpers) selects the level (`-Level liveness|inventory|configuration|functional`
+  or `0..3`) and runs entirely on the unit. It must succeed when run from a local console,
+  an operator SSH session, or invoked by the unit's own scheduled task -- not only from a
+  prov-server WinRM call.
+
+- **DRY: reuse the existing checks, do not fork them.** L1 reuses the **same** computed-manifest
+  logic as the **Unit provisioning manifest (source of truth)** probe. L2 invokes the **same**
+  `verify-<name>.ps1` each provider already ships -- the per-module verify script is the
+  single source of truth for "is this module healthy", invoked from two contexts (the
+  provisioning run and unit self-validation). Do **not** reimplement module checks inside
+  `validate-unit.ps1`; it is a dispatcher over the existing verifiers and the manifest probe.
+  The L2 smoke set must be **profile-aware** in exactly the same way the provisioning smoke
+  set is (see **Unit profiles** in Phase 2): a unit without a ZWO camera is not asked to pass
+  the ZWO check.
+
+- **Structured, self-describing result.** Each run writes `C:\MAST\status\validation.json`
+  atomically (tmp + rename), carrying: `level`, `run_id`, `started_utc`, `ended_utc`,
+  `overall` (`ok` | `degraded` | `fail`), and a per-check array (`module`/`component`,
+  `level`, `status`, `reason`, `detail`, observation `timestamp`). The `reason`/`detail`
+  shape must align with the expanded `why_not_operational` structure in **Open Questions**
+  so an L3 device failure is actionable ("transient -- retry" vs "needs hardware
+  intervention") rather than a bare tag. The same per-check events are emitted as
+  `SMOKE_RESULT`-style log lines so a self-validation run is correlatable with a
+  provisioning run.
+
+- **This is the unit's single source of truth for health, extended.** `validation.json`
+  joins `availability.json`, `installed-manifest.json`, `execute-lease.json`, and
+  `last-run.json` as the on-disk provisioning-state surface the unit owns. It is a
+  **reader/derivation** over the live system and the existing verifiers, never a parallel
+  ledger that can drift from them.
+
+**Fold into health checks (Phase 3 surfacing).** The tiered result is the natural backing
+for the unit's `/health` and `/status/*` endpoints (see **Unit state via HTTP endpoint**):
+
+- `/health` runs **L0** (and optionally a cached **L1**) so the liveness probe stays cheap.
+- A new `/status/validation` route returns the latest `validation.json`; `/status/manifest`
+  is the L1 computed manifest.
+- The MAST exporter emits per-check results as metrics (e.g.
+  `mast_validation_check{module,level,status}` and `mast_validation_overall`), so the
+  central dashboard can show a unit's self-reported validation grid next to its
+  provisioning state, and Alertmanager can fire on `overall=fail` independent of whether
+  a prov-server cycle has run recently.
+
+A scheduled unit-side task may run **L0/L1 frequently** and **L2 periodically** (e.g. after
+every boot and once per maintenance window) so the unit's self-validation is fresh even
+between provisioning cycles; **L3** is on-demand (operator or pre-observation) because it
+can disturb hardware. This makes the unit's health **self-evident from the unit itself**,
+closing the gap where only the prov server could answer "is mast03 correctly provisioned?"
 
 ---
 
@@ -1640,9 +1719,12 @@ already serves `/metrics`. Add status routes alongside it:
 | `/status/manifest` | Effective installed manifest (preferably from live inspection per the Phase 1 unit manifest section, falling back to `installed-manifest.json`). | Unit filesystem + `installed-manifest.json` |
 | `/status/lease` | Current `execute-lease.json` if one is held, else `{"held": false}`. | `C:\MAST\status\execute-lease.json` |
 | `/status/last-run` | The unit-side mirror of `last-run.json`: last completed `execute-mast-provisioning` run with `run_id`, `started_utc`, `ended_utc`, `outcome`, `failed_module`. | `C:\MAST\status\last-execute.json` (new file written by `execute-mast-provisioning.ps1`) |
+| `/status/validation` | Latest tiered self-validation result (`level`, `overall`, per-check array) from the unit running its own `verify-<name>.ps1` set. | `C:\MAST\status\validation.json` (see **Unit self-validation**, Phase 1) |
 
-**Health-check / heartbeat wiring:** `/health` is the heartbeat. It must reflect
-the full **provisioning state**, not just "MAST services are running":
+**Health-check / heartbeat wiring:** `/health` is the heartbeat. It runs the unit's own
+**level-0 (liveness)** self-validation and rolls in a cached **level-1 (inventory)** result
+(see **Unit self-validation**, Phase 1) so the probe stays cheap while still reflecting the
+full **provisioning state**, not just "MAST services are running":
 
 - `available: false` (from `availability.json`, with stale-lease recovery applied)
   -> `status: "unavailable"`, HTTP 503 with reason (`maintenance`, `provisioning`,
@@ -1731,6 +1813,7 @@ remain the **deep dive** for incidents. Prometheus and the central dashboard pro
 | 1b | Prov-server heartbeat: write `C:\MAST\status\last-run.json` at every cycle exit; emit 60s in-cycle progress lines so a hung driver is distinguishable from a slow one | **[DONE]** |
 | 2 | `payload_hash` generation in `build-mast.ps1` -> write `build-manifest.json` with git ref fields | **[DONE]** |
 | 3 | Unit-side effective state: inspection-based probe (or hardened `installed-manifest.json`) | **Phase 1** |
+| 3a | Unit self-validation dispatcher (`client/validate-unit.ps1`): tiered `-Level liveness\|inventory\|configuration\|functional`, reuses each provider's `verify-<name>.ps1` + the computed manifest, writes `C:\MAST\status\validation.json`; runnable on the unit without the prov server | **Phase 1** |
 | 4 | Per-module uninstall/reinstall paths; `build-mast.ps1` support for pinned git refs and rollback | **Phase 2** |
 | 5 | Migrate `check-and-provision.ps1` to non-elevated WinRM Basic + SMB pull transfer (retire `Copy-Item -ToSession`; provision share credentials) | **[DONE]** |
 | 6 | Confirm `git lfs pull` works on prov server (deploy key or stored credential) | **Phase 1** |
