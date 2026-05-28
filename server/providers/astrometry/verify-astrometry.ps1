@@ -39,14 +39,25 @@ if (-not (Test-Path ${solveField})) {
     exit 1
 }
 
-# Put C:\cygwin64\bin and the astrometry bin on PATH up front. solve-field.exe
-# links against cygwin1.dll + the package DLLs that astrometry-dependencies
-# installed under C:\cygwin64\bin, and the banner check below invokes the
-# binary directly. Without this prefix, even the banner exits with
-# STATUS_DLL_NOT_FOUND (0xC0000135 / -1073741515) because the loader can't
-# find cygwin1.dll. The same PATH also covers the forked /bin/sh children
-# launched during the real plate solve below.
-${env:PATH} = 'C:\cygwin64\bin;' + (Join-Path ${InstallRoot} 'bin') + ';' + ${env:PATH}
+# Put C:\cygwin64\bin, the cygwin lapack lib dir, and the astrometry bin on
+# PATH up front. solve-field.exe links against cygwin1.dll + the package DLLs
+# that astrometry-dependencies installed under C:\cygwin64\bin, and the banner
+# check below invokes the binary directly. Without C:\cygwin64\bin prefixed,
+# even the banner exits with STATUS_DLL_NOT_FOUND (0xC0000135 / -1073741515)
+# because the loader can't find cygwin1.dll.
+#
+# C:\cygwin64\lib\lapack must ALSO be prepended for solve-field's child
+# removelines/uniformize processes. Those fork into python3 -> numpy ->
+# numpy.linalg._umath_linalg, which dlopens cyglapack-0.dll. provide-
+# astrometry-dependencies.ps1 adds this dir to *system* PATH at install time,
+# but this verify runs in the same WinRM-spawned PS session that started
+# BEFORE the system-PATH update, so the in-process $env:PATH wasn't
+# refreshed. Without this prepend, the solve gets to "simplexy: found N
+# sources" and then dies at removelines with
+# "ImportError: No such file or directory" inside numpy._umath_linalg
+# load -- looks like a SIGILL but isn't. Bit 2026-05-28 weizmann run #8.
+# See [[project_astrometry_lapack_path]].
+${env:PATH} = 'C:\cygwin64\bin;C:\cygwin64\lib\lapack;' + (Join-Path ${InstallRoot} 'bin') + ';' + ${env:PATH}
 
 # ---------------------------------------------------------------------------
 # Smoke 1: banner. solve-field with no args must exit 0 and print the
