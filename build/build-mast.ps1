@@ -104,31 +104,6 @@ if ($null -eq ${Modules} -or ${Modules}.Count -eq 0) {
     Write-Host ("Modules defaulted to {0} providers discovered under {1}." -f ${Modules}.Count, ${providersRoot})
 }
 
-# Return $true if the commandfiles entry is under assets/
-# function Test-IsAssetEntry {
-#     param([Parameter(Mandatory)][string]$RelativePath)
-#     $norm = $RelativePath -replace '\\','/'
-#     return $norm.StartsWith('assets/', [System.StringComparison]::OrdinalIgnoreCase)
-# }
-
-# Copy an entry (file or directory) from module root to common cache
-# function Sync-Entry-ToCommon {
-#     param([Parameter(Mandatory)][string]$ModuleRoot,
-#           [Parameter(Mandatory)][string]$RelativePath,
-#           [Parameter(Mandatory)][string]$CommonModuleRoot)
-
-#     $src = Join-Path $ModuleRoot $RelativePath
-#     $dst = Join-Path $CommonModuleRoot $RelativePath
-#     $dstDir = Split-Path $dst -Parent
-#     New-Item -ItemType Directory -Force -Path $dstDir | Out-Null
-
-#     if (Test-Path $src -PathType Container) {
-#         robocopy "$src" "$dst" /MIR /NFL /NDL /NJH /NJS /NP | Out-Null
-#     } else {
-#         Copy-Item -Force $src $dst
-#     }
-# }
-
 # Create a junction/hardlink/symlink into staging; fallback to copy if linking not allowed
 function New-LinkOrCopy {
     param([Parameter(Mandatory)][string]$Target,
@@ -177,67 +152,6 @@ function New-LinkOrCopy {
         }
     }
 }
-
-# Sync all ASSET entries from module.json into common cache (once)
-# function Sync-ModuleAssetsToCommonFromManifest {
-#     param([Parameter(Mandatory)][string]$providersRoot,
-#           [Parameter(Mandatory)][string]$ModuleName,
-#           [Parameter(Mandatory)][string]$CommonAssetsRoot)
-
-#     $mf         = Read-ModuleManifest -providersRoot $providersRoot -ModuleName $ModuleName
-#     $moduleRoot = Join-Path $providersRoot $ModuleName
-#     $commonMod  = Join-Path $CommonAssetsRoot $ModuleName
-
-#     foreach ($rel in $mf.commandfiles) {
-#         if (Test-IsAssetEntry -RelativePath $rel) {
-#             Sync-Entry-ToCommon -ModuleRoot $moduleRoot -RelativePath $rel -CommonModuleRoot $commonMod
-#         }
-#     }
-# }
-
-# Stage a module from manifest: copy non-assets; link assets from common; optional filter for specific files
-# function Stage-ModuleFromManifest {
-#     param([Parameter(Mandatory)][string]$providersRoot,
-#           [Parameter(Mandatory)][string]$ModuleName,
-#           [Parameter(Mandatory)][string]$CommonAssetsRoot,
-#           [Parameter(Mandatory)][string]$StagingRoot,
-#           [string[]]$OnlyTheseAssetFiles)  # optional: whitelist specific asset files relative to assets/...
-
-#     $mf         = Read-ModuleManifest -providersRoot $providersRoot -ModuleName $ModuleName
-#     $moduleRoot = Join-Path $providersRoot $ModuleName
-#     $commonMod  = Join-Path $CommonAssetsRoot $ModuleName
-
-#     foreach ($rel in $mf.commandfiles) {
-#         $srcFromModule = Join-Path $moduleRoot $rel
-#         if (Test-IsAssetEntry -RelativePath $rel) {
-#             # If a whitelist is provided, skip asset entries that are not in it
-#             $relNorm = ($rel -replace '\\','/')
-
-#             $isFolder = Test-Path $srcFromModule -PathType Container
-#             $okay = $true
-#             if ($OnlyTheseAssetFiles -and -not $isFolder) {
-#                 # compare against 'assets/...' style
-#                 $okay = $OnlyTheseAssetFiles -contains $relNorm
-#             }
-#             if (-not $okay) { continue }
-
-#             $srcInCommon = Join-Path $commonMod $rel
-#             $dstInStage  = Join-Path $StagingRoot $rel
-#             New-LinkOrCopy -Target $srcInCommon -LinkPath $dstInStage
-#         } else {
-#             # Non-asset -> copy (scripts, etc.)
-#             $dst = Join-Path $StagingRoot $rel
-#             $dstDir = Split-Path $dst -Parent
-#             New-Item -ItemType Directory -Force -Path $dstDir | Out-Null
-#             if (Test-Path $srcFromModule -PathType Container) {
-#                 robocopy "$srcFromModule" "$dst" /E /NFL /NDL /NJH /NJS /NP | Out-Null
-#             } else {
-#                 Copy-Item -Force $srcFromModule $dst
-#             }
-#         }
-#     }
-# }
-
 
 # Optional: load/parse license allocation CSV (if preallocating)
 function Load-AllocCsv([string]${Path}) {

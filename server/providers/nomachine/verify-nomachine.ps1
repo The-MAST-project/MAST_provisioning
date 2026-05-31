@@ -3,10 +3,11 @@
 param()
 
 ${ErrorActionPreference} = 'Stop'
-${logRoot} = Join-Path (Join-Path ${env:SystemDrive} 'MAST') 'logs'
-${verifyLog} = Join-Path ${logRoot} 'verify\nomachine-verify.log'
-${smokeFile} = Join-Path ${logRoot} 'smoke\nomachine-smoke.txt'
-${null} = New-Item -ItemType Directory -Force -Path (Split-Path -Parent ${verifyLog}) -ErrorAction SilentlyContinue
+${mastLogDot} = Join-Path ${PSScriptRoot} 'mast-log.ps1'
+if (-not (Test-Path ${mastLogDot})) { ${mastLogDot} = Join-Path ${PSScriptRoot} '..\..\lib\mast-log.ps1' }
+. ${mastLogDot}
+Set-StrictMode -Off  # mast-log.ps1 enables StrictMode; verify scripts predate it and probe optional properties
+${verifyLog} = Get-MastVerifyLog -Module 'nomachine'
 ${svcMatches} = @(Get-Service -ErrorAction SilentlyContinue | Where-Object {
         ($PSItem.DisplayName -match 'NoMachine') -or ($PSItem.Name -match 'nx')
     })
@@ -21,5 +22,5 @@ if (Test-Path -LiteralPath 'C:\ProgramData\NoMachine\licenses') {
     (Get-ChildItem -LiteralPath 'C:\ProgramData\NoMachine\licenses' -Filter '*.lic' -ErrorAction SilentlyContinue |
         Select-Object -ExpandProperty Name) | Out-File -FilePath ${verifyLog} -Append -Encoding UTF8
 }
-Set-Content -Path ${smokeFile} -Value 'nomachine_ok' -Encoding UTF8
+Write-MastSmokeOk -Module 'nomachine' | Out-Null
 exit 0

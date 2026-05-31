@@ -106,25 +106,45 @@ This reads `commands.json`, runs only commands whose `module` name ends with `-v
 
 ## Module execution order
 
-| Order | Module       | Description                                  |
-|------:|--------------|----------------------------------------------|
-|    10 | `cygwin`     | Cygwin environment (prebuilt tgz)            |
-|    20 | `python`     | Python 3.12 + virtualenv                     |
-|    30 | `ascom`      | ASCOM Platform 7.1.0 + Developer tools       |
-|    40 | `mongodb`    | MongoDB client tools                         |
-|    50 | `wireshark`  | Wireshark network analyzer                   |
-|    60 | `nssm`       | Non-Sucking Service Manager                  |
-|    70 | `nomachine`  | NoMachine + license                          |
-|    80 | `mast`       | Clone MAST repos, install requirements       |
-|    90 | `phd2`       | PHD2 telescope autoguiding                   |
-|   100 | `stage`      | Optical stage control                        |
-|   110 | `planewave`  | PlaneWave PWI4 + PS3                         |
-|   120 | `zwo`        | ZWO camera drivers                           |
-|   130 | `vscode`     | Visual Studio Code                           |
-|   140 | `sysinternals`| Sysinternals Suite                          |
-|   150 | `chrome`     | Google Chrome                                |
+The order below is the source of truth in each provider's `module.json` (`order`
+field); this table is a generated snapshot of `server/providers/*/module.json` and
+must be regenerated when modules are added, removed, or reordered rather than
+hand-edited. Order numbers leave gaps so new modules can be inserted without
+renumbering.
 
-Order numbers leave gaps so new modules can be inserted without renumbering.
+| Order | Module | Description |
+|------:|--------|-------------|
+|   100 | `proxy` | Soft proxy: set (on-campus) or clear (home) machine/WinHTTP/WinINet proxy settings |
+|   200 | `openssh-server` | Drift check for OpenSSH Server (install/config owned by `bootstrap-winrm.ps1`) |
+|   250 | `imdisk` | ImDisk driver; mount D: from the astrometry index image, persist across reboots |
+|   300 | `cygwin` | Cygwin environment from a prebuilt tgz (postinstall, PATH) |
+|   400 | `astrometry-dependencies` | Cygwin packages for astrometry.net + bundled `fitsio` wheel |
+|   500 | `astrometry` | Prebuilt astrometry.net 0.97 tree into `C:\cygwin64\usr\local\astrometry` |
+|   600 | `python` | Python 3.12.2 + virtualenv |
+|   700 | `git` | Git for Windows (silent) + PATH |
+|   750 | `gh` | GitHub CLI (gh) + PATH (after git) |
+|   800 | `ascom` | ASCOM Platform 7.0 RC4 + Developer tools (enables .NET 3.5 if needed) |
+|   900 | `mongodb-client` | MongoDB client tools: mongosh, Database Tools, Compass (no mongod) |
+|  1000 | `npcap` | Verify Npcap driver (installed by bootstrap) + watchdog task |
+|  1050 | `usbpcap` | USBPcap USB capture driver + tools |
+|  1100 | `wireshark` | Wireshark 4.6.0 network analyzer |
+|  1200 | `nssm` | NSSM (Non-Sucking Service Manager) + PATH |
+|  1300 | `nomachine` | NoMachine Enterprise Desktop (server) + license |
+|  1400 | `phd2` | PHD2 telescope autoguiding |
+|  1450 | `phd2-log-viewer` | PHDLogView offline PHD2 guide-log analyzer |
+|  1500 | `vcredist2013` | Visual C++ 2013 (MSVC120) x64 + x86 redistributables (for XILabs) |
+|  1600 | `stage` | Optical stage / mount control software |
+|  1700 | `planewave` | PlaneWave PWI4 + PS3 CLI tools |
+|  1800 | `zwo` | ZWO camera drivers, ASI Studio, ASCOM driver |
+|  1900 | `vscode` | Visual Studio Code |
+|  2000 | `sysinternals` | Sysinternals Suite |
+|  2100 | `chrome` | Google Chrome (offline Enterprise MSI) |
+|  2200 | `mast` | Clone MAST repos, create per-repo virtualenvs, install requirements |
+|  2400 | `windows-exporter-monitoring` | Prometheus windows_exporter service (TCP 9182) |
+|  2500 | `diagnostics` | Post-smoke runtime checks (ASCOM, app launch, PHD2 RPC, heartbeat) |
+|  2600 | `ds9` | SAOImage DS9 8.7 imaging / data visualization |
+|  2900 | `mast-validation` | End-to-end plate-solve validation through production code paths |
+|  9999 | `reboot` | Detect pending-reboot state; drop a flag for the orchestrator |
 
 ---
 
@@ -375,4 +395,4 @@ Never commit secrets, tokens, or `.lic` files.
 - [docs/provisioning-server-setup.md](docs/provisioning-server-setup.md) - full installation guide (bare Windows -> running autonomous loop)
 - [DECISIONS.md](DECISIONS.md) - architecture decisions, in reverse-chronological order
 - [autonomous-provisioning-requirements.md](autonomous-provisioning-requirements.md) - design of the autonomous loop
-- [docs/provisioning-flow.md](docs/provisioning-flow.md) - protocol and privilege flow diagrams
+- [unit-config-open-questions.md](unit-config-open-questions.md) - open questions on per-unit MongoDB `UnitConfig` fields

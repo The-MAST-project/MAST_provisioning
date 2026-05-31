@@ -3,11 +3,11 @@
 param()
 
 ${ErrorActionPreference} = 'Stop'
-${logRoot} = Join-Path (Join-Path ${env:SystemDrive} 'MAST') 'logs'
-${verifyLog} = Join-Path ${logRoot} 'verify\stage-verify.log'
-${smokeFile} = Join-Path ${logRoot} 'smoke\stage-smoke.txt'
-
-${null} = New-Item -ItemType Directory -Force -Path (Split-Path -Parent ${verifyLog}) -ErrorAction SilentlyContinue
+${mastLogDot} = Join-Path ${PSScriptRoot} 'mast-log.ps1'
+if (-not (Test-Path ${mastLogDot})) { ${mastLogDot} = Join-Path ${PSScriptRoot} '..\..\lib\mast-log.ps1' }
+. ${mastLogDot}
+Set-StrictMode -Off  # mast-log.ps1 enables StrictMode; verify scripts predate it and probe optional properties
+${verifyLog} = Get-MastVerifyLog -Module 'stage'
 
 ${lines} = @()
 ${ok} = $true
@@ -40,7 +40,7 @@ if (${driverFound}) {
 
 ${lines} | Out-File -FilePath ${verifyLog} -Encoding UTF8
 if (${ok}) {
-    Set-Content -Path ${smokeFile} -Value 'stage_ok' -Encoding UTF8
+    Write-MastSmokeOk -Module 'stage' | Out-Null
     exit 0
 } else {
     exit 1

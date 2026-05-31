@@ -45,6 +45,43 @@ function Get-MastVerifyDir {
 }
 
 # ---------------------------------------------------------------------------
+# Per-module verify log + smoke marker helpers.
+#
+# Every verify-*.ps1 script shares the same boilerplate: write progress to
+# <logs>\verify\<module>-verify.log and, on success, a marker to
+# <logs>\smoke\<module>-smoke.txt. Use these instead of hardcoding
+# "Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs'" in each script.
+# Both create their parent directory (via Get-MastVerifyDir/Get-MastSmokeDir).
+# ---------------------------------------------------------------------------
+
+function Get-MastVerifyLog {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Module)
+    return (Join-Path (Get-MastVerifyDir) ($Module + '-verify.log'))
+}
+
+function Get-MastSmokeMarker {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Module)
+    return (Join-Path (Get-MastSmokeDir) ($Module + '-smoke.txt'))
+}
+
+function Write-MastSmokeOk {
+    # Write the smoke marker for a passing step. Defaults the contents to
+    # '<module>_ok'; pass -Value to override (e.g. a SKIP marker). Returns the
+    # marker path. ASCII encoding: marker contents are always plain ASCII.
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Module,
+        [string]$Value
+    )
+    if (-not $Value) { $Value = ($Module + '_ok') }
+    $path = Get-MastSmokeMarker -Module $Module
+    Set-Content -Path $path -Value $Value -Encoding ASCII
+    return $path
+}
+
+# ---------------------------------------------------------------------------
 # Provisioning-server log paths (C:\MAST\logs\prov\)
 # Dot-source this file in check-and-provision.ps1 instead of duplicating paths.
 # ---------------------------------------------------------------------------

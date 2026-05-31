@@ -4,9 +4,11 @@
 param()
 
 ${ErrorActionPreference} = 'Stop'
-${logRoot} = Join-Path (Join-Path ${env:SystemDrive} 'MAST') 'logs'
-${verifyLog} = Join-Path ${logRoot} 'verify\planewave-verify.log'
-${smokeFile} = Join-Path ${logRoot} 'smoke\planewave-smoke.txt'
+${mastLogDot} = Join-Path ${PSScriptRoot} 'mast-log.ps1'
+if (-not (Test-Path ${mastLogDot})) { ${mastLogDot} = Join-Path ${PSScriptRoot} '..\..\lib\mast-log.ps1' }
+. ${mastLogDot}
+Set-StrictMode -Off  # mast-log.ps1 enables StrictMode; verify scripts predate it and probe optional properties
+${verifyLog} = Get-MastVerifyLog -Module 'planewave'
 ${ps3cliPath} = 'C:\Users\mast\Documents\PlaneWave\ps3cli'
 ${pwiCandidates} = @(
     'C:\Program Files (x86)\PlaneWave Instruments\PlaneWave Interface 4\PWI4.exe',
@@ -40,11 +42,10 @@ else {
         [void]${issues}.Add("PS3 CLI directory empty: ${ps3cliPath}")
     }
 }
-${null} = New-Item -ItemType Directory -Force -Path (Split-Path -Parent ${verifyLog}) -ErrorAction SilentlyContinue
 if (${issues}.Count -gt 0) {
     (${issues} -join [Environment]::NewLine) | Out-File -FilePath ${verifyLog} -Encoding UTF8
     exit 1
 }
 ("PlaneWave OK: PWI4={0}" -f ${pwi}) | Out-File -FilePath ${verifyLog} -Encoding UTF8
-Set-Content -Path ${smokeFile} -Value 'planewave_ok' -Encoding UTF8
+Write-MastSmokeOk -Module 'planewave' | Out-Null
 exit 0

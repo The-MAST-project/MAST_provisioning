@@ -243,8 +243,9 @@ function Invoke-ExeAsSystem {
   #
   # The first user of this pattern was provide-ascom.ps1 (Invoke-DismViaSystemTask)
   # for NetFx3 enablement. Extracted here 2026-05-26 so npcap and usbpcap
-  # can share the same battle-tested implementation. ASCOM still has its
-  # inline copy; cleanup pass is a follow-up.
+  # can share the same battle-tested implementation. provide-ascom.ps1 now
+  # keeps only a thin Invoke-DismViaSystemTask wrapper (dism.exe path lookup)
+  # that delegates here.
   param(
     [Parameter(Mandatory)][string]${Executable},
     [string]${Arguments}             = '',
@@ -367,5 +368,6 @@ Export-ModuleMember -Function @(
   'Get-FileSha256', 'Invoke-Exe', 'Invoke-ExeSilent', 'Expand-AnyArchive', 'Restart-ServiceLike',
   'Read-SimpleCsv2', 'Write-SimpleCsv2', 'Get-WorkingDir', 'Test-IsAdmin', 'Enable-NetFx3',
   'Invoke-ExeAsSystem',
-  'Get-MastLogSessionDir', 'Get-MastSmokeDir', 'Get-MastVerifyDir'
+  'Get-MastLogSessionDir', 'Get-MastSmokeDir', 'Get-MastVerifyDir',
+  'Get-MastVerifyLog', 'Get-MastSmokeMarker', 'Write-MastSmokeOk'
 )

@@ -6,11 +6,12 @@ param(
 
 ${ErrorActionPreference} = 'Stop'
 
-${logRoot}   = Join-Path (Join-Path ${env:SystemDrive} 'MAST') 'logs'
-${verifyLog} = Join-Path ${logRoot} 'verify\proxy-verify.log'
-${smokeFile} = Join-Path ${logRoot} 'smoke\proxy-smoke.txt'
-
-${null} = New-Item -ItemType Directory -Force -Path (Split-Path -Parent ${verifyLog}) -ErrorAction SilentlyContinue
+${mastLogDot} = Join-Path ${PSScriptRoot} 'mast-log.ps1'
+if (-not (Test-Path ${mastLogDot})) { ${mastLogDot} = Join-Path ${PSScriptRoot} '..\..\lib\mast-log.ps1' }
+. ${mastLogDot}
+Set-StrictMode -Off  # mast-log.ps1 enables StrictMode; verify scripts predate it and probe optional properties
+${verifyLog} = Get-MastVerifyLog -Module 'proxy'
+${smokeFile} = Get-MastSmokeMarker -Module 'proxy'
 
 function Write-VLog {
     param([string]${Line})

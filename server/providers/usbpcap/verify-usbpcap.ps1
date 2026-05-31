@@ -24,10 +24,11 @@ param(
 # registration even though the user is nominally an admin.
 
 $ErrorActionPreference = 'Stop'
-$logRoot   = Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs'
-$verifyLog = Join-Path $logRoot 'verify\usbpcap-verify.log'
-$smokeFile = Join-Path $logRoot 'smoke\usbpcap-smoke.txt'
-$null = New-Item -ItemType Directory -Force -Path (Split-Path $verifyLog -Parent), (Split-Path $smokeFile -Parent) -ErrorAction SilentlyContinue
+$mastLogDot = Join-Path $PSScriptRoot 'mast-log.ps1'
+if (-not (Test-Path $mastLogDot)) { $mastLogDot = Join-Path $PSScriptRoot '..\..\lib\mast-log.ps1' }
+. $mastLogDot
+Set-StrictMode -Off  # mast-log.ps1 enables StrictMode; verify scripts predate it and probe optional properties
+$verifyLog = Get-MastVerifyLog -Module 'usbpcap'
 
 function W { param([string]$Line) Add-Content -LiteralPath $verifyLog -Encoding UTF8 -Value ("[{0}] {1}" -f (Get-Date -Format 'HH:mm:ss'), $Line) }
 Set-Content -LiteralPath $verifyLog -Encoding UTF8 -Value ("[{0}] verify-usbpcap.ps1 started" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))
@@ -45,7 +46,7 @@ $svc = Get-Service -Name 'USBPcap' -ErrorAction SilentlyContinue
 
 if ($exe -and $svc) {
     W ("PASS USBPcapCMD={0} svc Status={1} StartType={2}" -f $exe, $svc.Status, $svc.StartType)
-    Set-Content -Path $smokeFile -Encoding ASCII -Value 'usbpcap_ok'
+    Write-MastSmokeOk -Module 'usbpcap' | Out-Null
     exit 0
 }
 
@@ -57,7 +58,7 @@ if ($exe -and $svc) {
 # itself failed and there is no way a reboot would resolve it.
 if ($AllowPendingReboot -and $exe -and -not $svc) {
     W ("SKIP USBPcapCMD={0} but svc 'USBPcap' not registered -- pending reboot. -AllowPendingReboot set; treating as skipped." -f $exe)
-    Set-Content -Path $smokeFile -Encoding ASCII -Value 'usbpcap_skipped reason=pending_reboot'
+    Write-MastSmokeOk -Module 'usbpcap' -Value 'usbpcap_skipped reason=pending_reboot' | Out-Null
     exit 0
 }
 

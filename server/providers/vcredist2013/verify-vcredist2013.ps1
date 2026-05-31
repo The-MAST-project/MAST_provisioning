@@ -3,11 +3,11 @@
 param()
 
 ${ErrorActionPreference} = 'Stop'
-${logRoot} = Join-Path (Join-Path ${env:SystemDrive} 'MAST') 'logs'
-${verifyLog} = Join-Path ${logRoot} 'verify\vcredist2013-verify.log'
-${smokeFile} = Join-Path ${logRoot} 'smoke\vcredist2013-smoke.txt'
-${null} = New-Item -ItemType Directory -Force -Path (Split-Path -Parent ${verifyLog}) -ErrorAction SilentlyContinue
-${null} = New-Item -ItemType Directory -Force -Path (Split-Path -Parent ${smokeFile}) -ErrorAction SilentlyContinue
+${mastLogDot} = Join-Path ${PSScriptRoot} 'mast-log.ps1'
+if (-not (Test-Path ${mastLogDot})) { ${mastLogDot} = Join-Path ${PSScriptRoot} '..\..\lib\mast-log.ps1' }
+. ${mastLogDot}
+Set-StrictMode -Off  # mast-log.ps1 enables StrictMode; verify scripts predate it and probe optional properties
+${verifyLog} = Get-MastVerifyLog -Module 'vcredist2013'
 
 # VC++ 2013 (12.x) does NOT write to VisualStudio\12.0\VC\Runtimes (that is the 2015+ path).
 # It only appears in the standard Uninstall hive.
@@ -47,5 +47,5 @@ if (${missing}.Count -gt 0) {
 }
 
 "VC++ 2013 (MSVC120) x64 and x86 OK" | Out-File -FilePath ${verifyLog} -Encoding UTF8 -Append
-Set-Content -Path ${smokeFile} -Value 'vcredist2013_ok' -Encoding UTF8
+Write-MastSmokeOk -Module 'vcredist2013' | Out-Null
 exit 0

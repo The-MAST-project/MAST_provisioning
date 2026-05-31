@@ -2,6 +2,87 @@
 
 ---
 
+## [2026-05-31] Cleanup pass: shared verify helpers, WinRM helper reuse, README/dead-code hygiene
+
+**Why:** A repo-presentability pass surfaced several pieces of drift and
+duplication worth fixing as deliberate decisions (not just incidental tidying):
+the verify-*.ps1 scripts each hardcoded the `C:\MAST\logs` base and their own
+smoke/verify path logic; `tools/run-remote-script-winrm.py` reimplemented WinRM
+helpers that already live canonically in `vm/vm_lib.py` (against the DRY rules in
+CLAUDE.md); the README module-order table had fully diverged from the
+`module.json` files; and `build-mast.ps1` still carried a large block of
+commented-out "common asset cache" code from an abandoned build approach.
+
+**What:**
+
+- **Shared verify-log / smoke-marker helpers (`server/lib/mast-log.ps1`):** added
+  `Get-MastVerifyLog`, `Get-MastSmokeMarker`, and `Write-MastSmokeOk` (built on
+  the existing `Get-MastVerifyDir` / `Get-MastSmokeDir`). All 14 `verify-*.ps1`
+  scripts now dot-source `mast-log.ps1` and call these instead of hardcoding
+  `Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs'` and reconstructing the
+  `verify\<m>-verify.log` / `smoke\<m>-smoke.txt` paths. Exact marker contents and
+  filenames were preserved (including `phd2_log_viewer_ok` and usbpcap's
+  `usbpcap_skipped reason=pending_reboot` SKIP marker via the `-Value` override).
+  Helpers are also re-exported from `provisioning.psm1`.
+- **Verify scripts opt out of StrictMode.** `mast-log.ps1` sets
+  `Set-StrictMode -Version Latest`, which a dot-source leaks into the caller's
+  scope. The verify scripts were written and validated WITHOUT strict mode and
+  several probe optional object/registry properties (e.g.
+  `verify-vcredist2013.ps1` reading `.DisplayName` off Uninstall keys), which
+  throws `PropertyNotFoundException` under StrictMode. Each verify script now
+  calls `Set-StrictMode -Off` immediately after the dot-source to preserve its
+  original runtime semantics. Provider `provide-*.ps1` scripts keep strict mode
+  (unchanged).
+- **`tools/run-remote-script-winrm.py` now reuses `vm/vm_lib.py`** for
+  `_ps_escape`, `winrm_session`, and `_candidate_users` (adds `vm/` to
+  `sys.path`). Removed its private `ps_escape_single`, the inline
+  `.replace("'", "''")` chunk-escape, the duplicated candidate-user logic, and
+  the direct `winrm.Session(...)` construction (now via the factory, still with
+  the long per-run timeouts it needs since it calls `run_ps` directly rather than
+  the resilient-Receive loop).
+- **`vm_lib._candidate_users` fixes** found while centralizing: the IPv4
+  `<host>\user` branch never fired because the regex literal was
+  `r"^\\d{1,3}..."` (doubled backslashes -> matched a literal backslash, not a
+  digit); corrected to `r"^\d{1,3}..."`. Also added the `.\\user` candidate for a
+  bare local username so the helper is a strict superset of what
+  run-remote-script-winrm.py generated before. This makes `wait_for_winrm` try
+  more user forms for IP-addressed and bare-user hosts.
+- **README module-order table regenerated** from `server/providers/*/module.json`
+  (was 15 stale modules at orders 10-150; now the real 31 at 100-9999) and
+  flagged as a generated snapshot to discourage hand-editing. Removed the dead
+  `docs/provisioning-flow.md` "See also" link and added a link to
+  `unit-config-open-questions.md` (was orphaned).
+- **Dead code removed:** ~90 lines of commented-out `Test-IsAssetEntry` /
+  `Sync-*-ToCommon` / `Stage-ModuleFromManifest` functions in `build-mast.ps1`
+  (the superseded common-asset-cache approach; live code uses the direct
+  `New-LinkOrCopy` flatten). Refreshed the stale "ASCOM still has its inline
+  copy" comment in `provisioning.psm1` (ASCOM is already a thin wrapper over
+  `Invoke-ExeAsSystem`). Swept untracked `__pycache__` dirs and a 40 MB
+  `astrometry.tgz.bak-orig` from the working tree.
+
+**Implications:**
+
+- Adding a new module no longer requires touching the README table by hand, but
+  the table is a snapshot: regenerate it from the `module.json` `order`/`name`
+  fields when modules change.
+- New `verify-*.ps1` scripts should follow the same pattern: dot-source
+  `mast-log.ps1`, `Set-StrictMode -Off`, use `Get-MastVerifyLog` /
+  `Write-MastSmokeOk`. Do not reintroduce the hardcoded `MAST\logs` base.
+- `tools/run-remote-script-winrm.py` now imports from `vm/`; the two directories
+  are coupled at runtime via `sys.path` insertion. Keep WinRM/PS helpers in
+  `vm_lib.py` as the single source of truth.
+- The local per-script `W` / `Write-VLog` log-line helpers in the verify scripts
+  were intentionally left in place: factoring out ~50 diagnostic call sites was
+  high-churn, low-value, and the hardcoded-path + smoke-marker duplication was
+  the real smell.
+- Verification: all 16 touched PS files parse clean under the 5.1 parser; the
+  Python files compile; and all 14 verify scripts were dry-run on the host (11
+  exercised their failure path) with no StrictMode/runtime errors, and the
+  `Write-MastSmokeOk` success path was confirmed to write the correct marker
+  contents.
+
+---
+
 ## [2026-05-28] Corrupt index = hard FAIL; AVX-SIGILL gated by -TestMode (dev-VM escape)
 
 **Why:** Two refinements after the 2026-05-27 astrometry validation work hit

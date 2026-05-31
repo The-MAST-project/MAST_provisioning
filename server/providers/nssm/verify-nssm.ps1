@@ -3,11 +3,12 @@
 param()
 
 ${ErrorActionPreference} = 'Stop'
-${logRoot} = Join-Path (Join-Path ${env:SystemDrive} 'MAST') 'logs'
-${verifyLog} = Join-Path ${logRoot} 'verify\nssm-verify.log'
-${smokeFile} = Join-Path ${logRoot} 'smoke\nssm-smoke.txt'
+${mastLogDot} = Join-Path ${PSScriptRoot} 'mast-log.ps1'
+if (-not (Test-Path ${mastLogDot})) { ${mastLogDot} = Join-Path ${PSScriptRoot} '..\..\lib\mast-log.ps1' }
+. ${mastLogDot}
+Set-StrictMode -Off  # mast-log.ps1 enables StrictMode; verify scripts predate it and probe optional properties
+${verifyLog} = Get-MastVerifyLog -Module 'nssm'
 ${nssmExe} = 'C:\Program Files\nssm\nssm.exe'
-${null} = New-Item -ItemType Directory -Force -Path (Split-Path -Parent ${verifyLog}) -ErrorAction SilentlyContinue
 if (-not (Test-Path -LiteralPath ${nssmExe})) {
     ("nssm.exe not found: {0}" -f ${nssmExe}) | Out-File -FilePath ${verifyLog} -Encoding UTF8
     exit 1
@@ -32,5 +33,5 @@ try {
 finally {
     Remove-Item -LiteralPath ${so},${se} -Force -ErrorAction SilentlyContinue
 }
-Set-Content -Path ${smokeFile} -Value 'nssm_ok' -Encoding UTF8
+Write-MastSmokeOk -Module 'nssm' | Out-Null
 exit 0

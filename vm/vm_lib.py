@@ -209,10 +209,14 @@ def _candidate_users(host: str, raw_user: str) -> list[str]:
     candidates: list[str] = [u]
     if u.startswith(".\\"):
         candidates.append(u[2:])
-    if "\\" in u:
+    elif "\\" in u:
         candidates.append(u.split("\\")[-1])
+    else:
+        # Bare local user (e.g. 'mast'): also try the explicit local-machine
+        # form '.\\mast' that some hosts require for Basic auth.
+        candidates.append(f".\\{u}")
     # If host is an IPv4, try <host>\\user (workgroup-style).
-    if re.match(r"^\\d{1,3}(\\.\\d{1,3}){3}$", host):
+    if re.match(r"^\d{1,3}(\.\d{1,3}){3}$", host):
         base = u[2:] if u.startswith(".\\") else (u.split("\\")[-1] if "\\" in u else u)
         candidates.append(f"{host}\\{base}")
     # de-dupe preserving order

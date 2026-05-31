@@ -7,10 +7,11 @@ param()
 # something not available under WinRM (registry HKCU access, elevation).
 
 $ErrorActionPreference = 'Stop'
-$logRoot   = Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs'
-$verifyLog = Join-Path $logRoot 'verify\phd2-log-viewer-verify.log'
-$smokeFile = Join-Path $logRoot 'smoke\phd2-log-viewer-smoke.txt'
-$null = New-Item -ItemType Directory -Force -Path (Split-Path $verifyLog -Parent), (Split-Path $smokeFile -Parent) -ErrorAction SilentlyContinue
+$mastLogDot = Join-Path $PSScriptRoot 'mast-log.ps1'
+if (-not (Test-Path $mastLogDot)) { $mastLogDot = Join-Path $PSScriptRoot '..\..\lib\mast-log.ps1' }
+. $mastLogDot
+Set-StrictMode -Off  # mast-log.ps1 enables StrictMode; verify scripts predate it and probe optional properties
+$verifyLog = Get-MastVerifyLog -Module 'phd2-log-viewer'
 
 function W { param([string]$Line) Add-Content -LiteralPath $verifyLog -Encoding UTF8 -Value ("[{0}] {1}" -f (Get-Date -Format 'HH:mm:ss'), $Line) }
 Set-Content -LiteralPath $verifyLog -Encoding UTF8 -Value ("[{0}] verify-phd2-log-viewer.ps1 started" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))
@@ -43,7 +44,7 @@ if (-not $exe) {
 
 if ($exe) {
     W ("PASS phdlogview at {0}" -f $exe)
-    Set-Content -Path $smokeFile -Encoding ASCII -Value 'phd2_log_viewer_ok'
+    Write-MastSmokeOk -Module 'phd2-log-viewer' -Value 'phd2_log_viewer_ok' | Out-Null
     exit 0
 }
 

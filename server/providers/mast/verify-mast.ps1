@@ -22,9 +22,12 @@ catch {
     exit 1
 }
 
-${logRoot} = Join-Path (Join-Path ${env:SystemDrive} 'MAST') 'logs'
-${verifyLog} = Join-Path ${logRoot} 'verify\mast-verify.log'
-${smokeFile} = Join-Path ${logRoot} 'smoke\mast-smoke.txt'
+${mastLogDot} = Join-Path ${PSScriptRoot} 'mast-log.ps1'
+if (-not (Test-Path ${mastLogDot})) { ${mastLogDot} = Join-Path ${PSScriptRoot} '..\..\lib\mast-log.ps1' }
+. ${mastLogDot}
+Set-StrictMode -Off  # mast-log.ps1 enables StrictMode; verify scripts predate it and probe optional properties
+${verifyLog} = Get-MastVerifyLog -Module 'mast'
+${smokeFile} = Get-MastSmokeMarker -Module 'mast'
 
 ${issues} = New-Object 'System.Collections.Generic.List[string]'
 
@@ -60,8 +63,6 @@ foreach (${spec} in ${repoSpecs}) {
     }
 }
 
-${null} = New-Item -ItemType Directory -Force -Path (Split-Path -Parent ${verifyLog}) -ErrorAction SilentlyContinue
-
 if (${issues}.Count -gt 0) {
     (${issues} -join [Environment]::NewLine) | Out-File -FilePath ${verifyLog} -Encoding UTF8
     if (Test-Path -LiteralPath ${smokeFile}) {
@@ -71,7 +72,6 @@ if (${issues}.Count -gt 0) {
     exit 1
 }
 
-${null} = New-Item -ItemType Directory -Force -Path (Split-Path -Parent ${smokeFile}) -ErrorAction SilentlyContinue
 Set-Content -Path ${smokeFile} -Value 'mast_ok' -Encoding UTF8
 ("mast verify ok: {0} repos under {1}" -f ${repoSpecs}.Count, ${CloneRoot}) | Out-File -FilePath ${verifyLog} -Encoding UTF8
 Write-Host 'mast-verify OK'

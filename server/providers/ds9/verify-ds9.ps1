@@ -6,10 +6,11 @@ param(
 
 # Verify SAOImage DS9 extracted correctly: ds9.exe must be present and runnable.
 $ErrorActionPreference = 'Stop'
-$logRoot   = Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs'
-$verifyLog = Join-Path $logRoot 'verify\ds9-verify.log'
-$smokeFile = Join-Path $logRoot 'smoke\ds9-smoke.txt'
-$null = New-Item -ItemType Directory -Force -Path (Split-Path $verifyLog -Parent), (Split-Path $smokeFile -Parent) -ErrorAction SilentlyContinue
+$mastLogDot = Join-Path $PSScriptRoot 'mast-log.ps1'
+if (-not (Test-Path $mastLogDot)) { $mastLogDot = Join-Path $PSScriptRoot '..\..\lib\mast-log.ps1' }
+. $mastLogDot
+Set-StrictMode -Off  # mast-log.ps1 enables StrictMode; verify scripts predate it and probe optional properties
+$verifyLog = Get-MastVerifyLog -Module 'ds9'
 
 function W { param([string]$Line) Add-Content -LiteralPath $verifyLog -Encoding UTF8 -Value ("[{0}] {1}" -f (Get-Date -Format 'HH:mm:ss'), $Line) }
 Set-Content -LiteralPath $verifyLog -Encoding UTF8 -Value ("[{0}] verify-ds9.ps1 started" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))
@@ -19,7 +20,7 @@ if (Test-Path -LiteralPath $ds9Exe) {
     $ver = ''
     try { $ver = (Get-Item -LiteralPath $ds9Exe).VersionInfo.ProductVersion } catch { }
     W ("PASS ds9.exe present at {0} (ProductVersion={1})" -f $ds9Exe, $ver)
-    Set-Content -Path $smokeFile -Encoding ASCII -Value 'ds9_ok'
+    Write-MastSmokeOk -Module 'ds9' | Out-Null
     exit 0
 }
 

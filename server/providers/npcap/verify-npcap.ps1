@@ -9,10 +9,11 @@ param()
 # DECISIONS.md notes on the 2026-05-25 run).
 
 $ErrorActionPreference = 'Stop'
-$logRoot   = Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs'
-$verifyLog = Join-Path $logRoot 'verify\npcap-verify.log'
-$smokeFile = Join-Path $logRoot 'smoke\npcap-smoke.txt'
-$null = New-Item -ItemType Directory -Force -Path (Split-Path $verifyLog -Parent), (Split-Path $smokeFile -Parent) -ErrorAction SilentlyContinue
+$mastLogDot = Join-Path $PSScriptRoot 'mast-log.ps1'
+if (-not (Test-Path $mastLogDot)) { $mastLogDot = Join-Path $PSScriptRoot '..\..\lib\mast-log.ps1' }
+. $mastLogDot
+Set-StrictMode -Off  # mast-log.ps1 enables StrictMode; verify scripts predate it and probe optional properties
+$verifyLog = Get-MastVerifyLog -Module 'npcap'
 
 function W { param([string]$Line) Add-Content -LiteralPath $verifyLog -Encoding UTF8 -Value ("[{0}] {1}" -f (Get-Date -Format 'HH:mm:ss'), $Line) }
 Set-Content -LiteralPath $verifyLog -Encoding UTF8 -Value ("[{0}] verify-npcap.ps1 started" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))
@@ -30,7 +31,7 @@ if (-not $drvExists) { $drvPath = $drvCandidates[0] }
 
 if ($svc -and $drvExists) {
     W ("PASS npcap Status={0} StartType={1} driver={2}" -f $svc.Status, $svc.StartType, $drvPath)
-    Set-Content -Path $smokeFile -Encoding ASCII -Value 'npcap_ok'
+    Write-MastSmokeOk -Module 'npcap' | Out-Null
     exit 0
 }
 

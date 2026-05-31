@@ -17,11 +17,11 @@ param(
 
 ${ErrorActionPreference} = 'Stop'
 
-${logRoot}    = Join-Path (Join-Path ${env:SystemDrive} 'MAST') 'logs'
-${verifyLog}  = Join-Path ${logRoot} 'verify\diagnostics-verify.log'
-${smokeFile}  = Join-Path ${logRoot} 'smoke\diagnostics-smoke.txt'
-${null} = New-Item -ItemType Directory -Force -Path (Split-Path -Parent ${verifyLog}) -ErrorAction SilentlyContinue
-${null} = New-Item -ItemType Directory -Force -Path (Split-Path -Parent ${smokeFile}) -ErrorAction SilentlyContinue
+${mastLogDot} = Join-Path ${PSScriptRoot} 'mast-log.ps1'
+if (-not (Test-Path ${mastLogDot})) { ${mastLogDot} = Join-Path ${PSScriptRoot} '..\..\lib\mast-log.ps1' }
+. ${mastLogDot}
+Set-StrictMode -Off  # mast-log.ps1 enables StrictMode; verify scripts predate it and probe optional properties
+${verifyLog} = Get-MastVerifyLog -Module 'diagnostics'
 
 ${results} = @()
 ${failCount} = 0
@@ -160,7 +160,7 @@ try {
 
 # --- 5. XILabs (xilab.exe) launches ---
 try {
-    ${stageSmokeFile} = Join-Path ${logRoot} 'smoke\stage-smoke.txt'
+    ${stageSmokeFile} = Get-MastSmokeMarker -Module 'stage'
     if (-not (Test-Path -LiteralPath ${stageSmokeFile})) {
         Add-DiagResult -Name 'XILabs-launch' -Ok $true -Detail 'stage module not provisioned - skipped'
     } else {
@@ -256,5 +256,5 @@ if (${failCount} -gt 0) {
     exit 1
 }
 
-Set-Content -Path ${smokeFile} -Value 'diagnostics_ok' -Encoding UTF8
+Write-MastSmokeOk -Module 'diagnostics' | Out-Null
 exit 0
