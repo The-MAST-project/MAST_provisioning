@@ -2,30 +2,34 @@
 #Requires -RunAsAdministrator
 <#
 .SYNOPSIS
-  One-shot bootstrap script for a brand-new MAST unit (physical or VM).
+  Post-bootstrap onboarder for a MAST unit: provision, register, hand off.
 
 .DESCRIPTION
-  Brings a freshly installed Windows machine from "OS just booted" to
-  "fully provisioned, registered with the prov server, autonomous from
-  here on". Runs locally on the unit; no remote driver needed.
+  Assumes client\bootstrap-winrm.ps1 has ALREADY run on this machine.
+  bootstrap-winrm.ps1 is the single source of truth for first-time prep:
+  the 'mast' admin account, WinRM HTTP/5985 + Basic, firewall, OpenSSH, Npcap,
+  computer rename, and Windows Update suppression. This script does NOT repeat
+  any of that. Stage 0 only verifies bootstrap left the machine in the expected
+  state and fails fast (telling you to run bootstrap first) if it did not.
+
+  From there it drives the unit to steady state. Runs locally on the unit.
 
   Stages:
-    0  PREFLIGHT  Verify admin, network, prov server reachable
-    1  BOOTSTRAP  WinRM/mast setup (same as bootstrap-winrm.ps1; on unattended ISO installs run that script with -MastHostName first if you are not using this onboarder).
-    2  PREPARE    Set hostname, WinRM HTTPS, suppress Windows Update
-    3  PROVISION  Pull staged payload from prov server, run execute-mast-provisioning.ps1
-    4  REGISTER   Append unit to prov server's unit-registry.json
-    5  HANDOFF    Install scheduled task / mark availability=true
+    0  PREFLIGHT  Verify admin + that bootstrap ran (mast account, WinRM) + prov reachable
+    1  PROVISION  Trigger check-and-provision.ps1 on the prov server for this unit
+    2  REGISTER   Append this unit to the prov server's unit-registry.json
+    3  HANDOFF    Mark availability=true (ready for the autonomous loop)
 
   Idempotent. Re-running on a partially-onboarded machine resumes from
   the last completed stage (checkpoint at C:\ProgramData\MAST\onboarding-checkpoint.json).
 
   All progress is logged structured at C:\MAST\logs\onboarding\onboarding.log
-  and (from Stage 2 onward) mirrored to the prov server at
+  and (from the PROVISION stage onward) mirrored to the prov server at
   C:\MAST\logs\onboarding\<hostname>.log.
 
 .PARAMETER HostName
-  Required. The unit's MAST hostname (mast01..mast20).
+  Required. The unit's MAST hostname (mast01..mast20). Must already match the
+  name bootstrap-winrm.ps1 set on this machine.
 
 .PARAMETER ProvServer
   Required. IP of the provisioning server.
@@ -34,31 +38,24 @@
   Account on the prov server with read access to its repo / staging dir.
   Format ".\\mast" or "DOMAIN\\user". Default ".\\mast".
 
-.PARAMETER ProvSharePath
-  UNC or local path to the MAST_provisioning checkout on the prov server.
-  Default \\<ProvServer>\mast-prov\MAST_provisioning (assumes admin share).
-  Only used if pulling source for local build; otherwise the script
-  triggers check-and-provision.ps1 remotely on the prov server.
-
 .PARAMETER ResumeFrom
-  Stage to resume from (0..5). Default: read checkpoint and continue.
+  Stage to resume from (0..3). Default: read checkpoint and continue.
 
 .PARAMETER Modules
   Optional explicit module list for the provisioning step.
 
-.PARAMETER MastUser, MastPassword
-  Local 'mast' admin account credentials. Defaults: mast / physics
-  (matches bootstrap-winrm.ps1; change for production).
+.PARAMETER MastUser
+  Local 'mast' admin account name to verify in preflight (default 'mast').
 
 .PARAMETER DryRun
   Log every action but do not execute side effects.
 
 .EXAMPLE
-  # Fresh physical unit (networking stays DHCP; hostname identifies the machine):
+  # After bootstrap-winrm.ps1 has already run on the unit:
   .\onboard-mast-unit.ps1 -HostName mast01 -ProvServer 192.168.56.1
 
-  # Resume after a failed Stage 3 (provisioning):
-  .\onboard-mast-unit.ps1 -HostName mast01 -ProvServer 192.168.56.1 -ResumeFrom 3
+  # Resume after a failed PROVISION stage:
+  .\onboard-mast-unit.ps1 -HostName mast01 -ProvServer 192.168.56.1 -ResumeFrom 1
 #>
 
 [CmdletBinding()]
@@ -70,12 +67,10 @@ param(
     [Parameter(Mandatory=$true)]
     [string]$ProvServer,
 
-    [string]   $ProvUser      = '.\mast',
-    [string]   $ProvSharePath = '',
-    [int]      $ResumeFrom    = -1,
+    [string]   $ProvUser    = '.\mast',
+    [int]      $ResumeFrom   = -1,
     [string[]] $Modules,
-    [string]   $MastUser      = 'mast',
-    [string]   $MastPassword  = 'physics',
+    [string]   $MastUser     = 'mast',
     [switch]   $DryRun
 )
 
@@ -85,11 +80,6 @@ $ErrorActionPreference = 'Stop'
 $_mastLogDot = Join-Path $PSScriptRoot 'mast-log.ps1'
 if (-not (Test-Path $_mastLogDot)) { $_mastLogDot = Join-Path (Split-Path -Parent $PSScriptRoot) 'server\lib\mast-log.ps1' }
 if (Test-Path $_mastLogDot) { . $_mastLogDot }
-
-# mast-client-util.ps1: try next to this script then repo client/ folder
-$_clientUtilDot = Join-Path $PSScriptRoot 'mast-client-util.ps1'
-if (-not (Test-Path $_clientUtilDot)) { $_clientUtilDot = Join-Path $PSScriptRoot '..\client\mast-client-util.ps1' }
-if (Test-Path $_clientUtilDot) { . $_clientUtilDot }
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -190,13 +180,28 @@ function Run-Stage {
 }
 
 # ---------------------------------------------------------------------------
-# Stage 0 - PREFLIGHT
+# Stage 0 - PREFLIGHT  (verify admin + that bootstrap-winrm.ps1 already ran)
 # ---------------------------------------------------------------------------
 function Stage-Preflight {
     Log-Event 'CHECK' @{ check='admin_rights' }
     $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]'Administrator')
     if (-not $isAdmin) { throw "Must run as Administrator." }
     Log-Event 'CHECK_OK' @{ check='admin_rights' }
+
+    # This onboarder assumes bootstrap-winrm.ps1 already did first-time prep.
+    # Verify its two load-bearing outputs rather than recreating them.
+    Log-Event 'CHECK' @{ check='bootstrap_mast_account'; user=$MastUser }
+    if (-not (Get-LocalUser -Name $MastUser -ErrorAction SilentlyContinue)) {
+        throw "Local account '$MastUser' not found. Run client\bootstrap-winrm.ps1 first (it creates the mast admin and enables WinRM)."
+    }
+    Log-Event 'CHECK_OK' @{ check='bootstrap_mast_account' }
+
+    Log-Event 'CHECK' @{ check='bootstrap_winrm_http' }
+    $winrmTcp = Test-NetConnection -ComputerName '127.0.0.1' -Port 5985 -WarningAction SilentlyContinue
+    if (-not $winrmTcp.TcpTestSucceeded) {
+        throw "WinRM HTTP (TCP 5985) is not listening. Run client\bootstrap-winrm.ps1 first."
+    }
+    Log-Event 'CHECK_OK' @{ check='bootstrap_winrm_http' }
 
     Log-Event 'CHECK' @{ check='prov_reachable'; ip=$ProvServer }
     $tcp = Test-NetConnection -ComputerName $ProvServer -Port 5985 -WarningAction SilentlyContinue
@@ -207,95 +212,13 @@ function Stage-Preflight {
 }
 
 # ---------------------------------------------------------------------------
-# Stage 1 - BOOTSTRAP  (mast user, WinRM HTTP, firewall)
-# ---------------------------------------------------------------------------
-function Stage-Bootstrap {
-    Log-Event 'ACTION' @{ step='ensure_mast_account' }
-    $secPwd = ConvertTo-SecureString $MastPassword -AsPlainText -Force
-    $existing = Get-LocalUser -Name $MastUser -ErrorAction SilentlyContinue
-    if ($existing) {
-        Set-LocalUser -Name $MastUser -Password $secPwd -PasswordNeverExpires $true
-    } else {
-        New-LocalUser -Name $MastUser -Password $secPwd `
-            -FullName 'MAST Administrator' -PasswordNeverExpires `
-            -UserMayNotChangePassword | Out-Null
-    }
-    $admins = Get-LocalGroupMember -Group 'Administrators' -ErrorAction SilentlyContinue |
-                Where-Object { $_.Name -match "\\$MastUser$" }
-    if (-not $admins) { Add-LocalGroupMember -Group 'Administrators' -Member $MastUser }
-    Log-Event 'ACTION_OK' @{ step='ensure_mast_account' }
-
-    Log-Event 'ACTION' @{ step='enable_winrm_http' }
-    Enable-PSRemoting -Force -SkipNetworkProfileCheck | Out-Null
-    winrm set winrm/config/service/auth '@{Basic="true"}' | Out-Null
-    winrm set winrm/config/service '@{AllowUnencrypted="true"}' | Out-Null
-    Set-Service WinRM -StartupType Automatic
-    Log-Event 'ACTION_OK' @{ step='enable_winrm_http' }
-
-    Log-Event 'ACTION' @{ step='firewall_winrm_http' }
-    $rule = 'MAST - WinRM HTTP'
-    if (-not (Get-NetFirewallRule -DisplayName $rule -ErrorAction SilentlyContinue)) {
-        New-NetFirewallRule -DisplayName $rule -Direction Inbound -Protocol TCP `
-            -LocalPort 5985 -Action Allow -Profile Any | Out-Null
-    }
-    Log-Event 'ACTION_OK' @{ step='firewall_winrm_http' }
-}
-
-# ---------------------------------------------------------------------------
-# Stage 2 - PREPARE  (hostname, WinRM HTTPS, WU suppression, prov session)
-# ---------------------------------------------------------------------------
-function Stage-Prepare {
-    Log-Event 'ACTION' @{ step='set_hostname'; value=$HostName }
-    $current = (Get-CimInstance Win32_ComputerSystem).Name
-    if ($current -ieq $HostName) {
-        Log-Event 'ACTION_OK' @{ step='set_hostname'; reason='already_set' }
-    } else {
-        Rename-Computer -NewName $HostName -Force -ErrorAction Stop
-        Log-Event 'ACTION_OK' @{ step='set_hostname'; pending_reboot='true' }
-        # Continue execution; rename takes effect on reboot.
-    }
-
-    Log-Event 'ACTION' @{ step='winrm_https_listener' }
-    try {
-        $cert = New-SelfSignedCertificate -DnsName @($HostName, $env:COMPUTERNAME) `
-            -CertStoreLocation Cert:\LocalMachine\My -KeyLength 2048 -NotAfter (Get-Date).AddYears(5)
-        Get-ChildItem WSMan:\LocalHost\Listener\ -ErrorAction SilentlyContinue |
-            Where-Object { $_.Keys -match 'Transport=HTTPS' } |
-            ForEach-Object { Remove-Item $_.PSPath -Recurse -Force -ErrorAction SilentlyContinue }
-        New-Item -Path WSMan:\LocalHost\Listener -Transport HTTPS -Address * `
-            -Hostname $HostName -CertificateThumbprint $cert.Thumbprint -ErrorAction Stop | Out-Null
-        $rule = 'MAST - WinRM HTTPS'
-        if (-not (Get-NetFirewallRule -DisplayName $rule -ErrorAction SilentlyContinue)) {
-            New-NetFirewallRule -DisplayName $rule -Direction Inbound -Protocol TCP `
-                -LocalPort 5986 -Action Allow -Profile Any | Out-Null
-        }
-        Log-Event 'ACTION_OK' @{ step='winrm_https_listener'; thumbprint=$cert.Thumbprint }
-    } catch {
-        Log-Event 'ACTION_WARN' @{ step='winrm_https_listener'; error=$_.Exception.Message }
-    }
-
-    Log-Event 'ACTION' @{ step='suppress_windows_update' }
-    Disable-WindowsAutoUpdate
-    Log-Event 'ACTION_OK' @{ step='suppress_windows_update' }
-
-    # Open a session to the prov server so subsequent stages can mirror logs
-    Log-Event 'ACTION' @{ step='open_prov_session' }
-    try {
-        $script:ProvSession = New-PSSession -ComputerName $ProvServer -Authentication Negotiate -ErrorAction Stop
-        Mirror-ToProvServer -Line "[$(Now-Utc)] STAGE_OK  stage=2  unit=$HostName  (mirroring active)"
-        Log-Event 'ACTION_OK' @{ step='open_prov_session' }
-    } catch {
-        Log-Event 'ACTION_WARN' @{ step='open_prov_session'; error=$_.Exception.Message; effect='no_remote_log_mirror' }
-    }
-}
-
-# ---------------------------------------------------------------------------
-# Stage 3 - PROVISION  (trigger check-and-provision.ps1 on the prov server)
+# Stage 1 - PROVISION  (trigger check-and-provision.ps1 on the prov server)
 # ---------------------------------------------------------------------------
 function Stage-Provision {
     if (-not $script:ProvSession) {
-        # Re-establish if Stage 2 didn't manage to
+        # PREFLIGHT does not open the prov-server session; open it here.
         $script:ProvSession = New-PSSession -ComputerName $ProvServer -Authentication Negotiate
+        Mirror-ToProvServer -Line "[$(Now-Utc)] PROVISION start  unit=$HostName  (mirroring active)"
     }
     Log-Event 'ACTION' @{ step='trigger_remote_provision'; prov=$ProvServer }
     $modulesArg = if ($Modules) { $Modules -join ',' } else { '' }
@@ -318,7 +241,7 @@ function Stage-Provision {
 }
 
 # ---------------------------------------------------------------------------
-# Stage 4 - REGISTER  (add this unit to prov server's unit-registry.json)
+# Stage 2 - REGISTER  (add this unit to prov server's unit-registry.json)
 # ---------------------------------------------------------------------------
 function Stage-Register {
     if (-not $script:ProvSession) {
@@ -353,7 +276,7 @@ function Stage-Register {
 }
 
 # ---------------------------------------------------------------------------
-# Stage 5 - HANDOFF  (mark available, ready for autonomous loop)
+# Stage 3 - HANDOFF  (mark available, ready for autonomous loop)
 # ---------------------------------------------------------------------------
 function Stage-Handoff {
     Log-Event 'ACTION' @{ step='write_availability_true' }
@@ -381,11 +304,9 @@ function Stage-Handoff {
 # ---------------------------------------------------------------------------
 $stages = @(
     @{ Index=0; Name='PREFLIGHT'; Action={ Stage-Preflight } }
-    @{ Index=1; Name='BOOTSTRAP'; Action={ Stage-Bootstrap } }
-    @{ Index=2; Name='PREPARE';   Action={ Stage-Prepare   } }
-    @{ Index=3; Name='PROVISION'; Action={ Stage-Provision } }
-    @{ Index=4; Name='REGISTER';  Action={ Stage-Register  } }
-    @{ Index=5; Name='HANDOFF';   Action={ Stage-Handoff   } }
+    @{ Index=1; Name='PROVISION'; Action={ Stage-Provision } }
+    @{ Index=2; Name='REGISTER';  Action={ Stage-Register  } }
+    @{ Index=3; Name='HANDOFF';   Action={ Stage-Handoff   } }
 )
 
 if ($ResumeFrom -lt 0) {

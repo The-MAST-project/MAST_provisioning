@@ -14,8 +14,7 @@ Observability (guest):
 
 Examples:
   python tools/run-remote-script-winrm.py --host mast01 --vault vault/creds.json \\
-    --script client/prepare-mast-client.ps1 \\
-    --invoke-args "-HostName mast01 -Provider 192.168.56.1"
+    --script client/run-verify-only.ps1
 
   python tools/run-remote-script-winrm.py ... --write-local-meta meta-last-run.json
 
@@ -27,9 +26,9 @@ Credentials: vault/creds.json unit.user / unit.pass (same as run-prov-test.py).
 Troubleshooting (orchestrator hangs after guest appears finished):
   - The wrapper no longer calls Stop-Transcript after your script (that call could hang forever under
     WinRM even when the child .ps1 finished). Guest scripts that recycle WinRM can still drop the
-    session; prepare-mast-client.ps1 defers HTTPS listener work and emits ##MAST## prepare_safe_complete
-    first (see autonomous-provisioning-requirements.md). Use --no-remote-transcript to skip
-    Start-Transcript entirely if the transcript file causes trouble.
+    session; a well-behaved guest script should emit its ##MAST## completion line before any
+    WinRM-recycling work. Use --no-remote-transcript to skip Start-Transcript entirely if the
+    transcript file causes trouble.
 """
 from __future__ import annotations
 
@@ -401,7 +400,7 @@ def main() -> int:
     ap.add_argument(
         "--script",
         required=True,
-        help="Path to .ps1 under repo (e.g. client/prepare-mast-client.ps1).",
+        help="Path to .ps1 under repo (e.g. client/run-verify-only.ps1).",
     )
     ap.add_argument(
         "--vault",

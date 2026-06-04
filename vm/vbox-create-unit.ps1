@@ -22,9 +22,9 @@
          host-only network if needed), or use a temporary address until DNS/hosts
          maps the unit hostname (mast01) from this host.
        - Run bootstrap-winrm.cmd as Administrator (from ISO/USB; same folder as .ps1). Confirm [OK] in the summary.
-       - Run prepare-mast-client.ps1 -HostName mastNN -Provider 192.168.56.1 (mastNN must match bootstrap)
+         Bootstrap does all first-time prep (mast user, WinRM HTTP/5985, firewall, OpenSSH, Npcap, rename); no separate prepare step.
        - Verify WinRM reachability from this host (the prov server) on
-         port 5985 and 5986 using the unit hostname once it resolves
+         port 5985 using the unit hostname once it resolves
     D. Power off cleanly, then come back here and run:
          vbox-create-unit.ps1 -SnapshotOnly
        to take the 'clean-state' and 'post-prepare' snapshots.
@@ -289,13 +289,7 @@ Next steps (autounattend mode):
   5) Confirm WinRM from the host:
        Test-NetConnection mast05 -Port 5985
 
-  6) Run prepare-mast-client.ps1 remotely from the prov server (same mastNN in -HostName):
-       $cred = Get-Credential   # mast / physics
-       Invoke-Command -ComputerName mast05 -Credential $cred ``
-           -FilePath .\client\prepare-mast-client.ps1 ``
-           -ArgumentList @{{HostName='mast05'; Provider='192.168.56.1'}}
-
-  7) Power the VM off cleanly, then:
+  6) Power the VM off cleanly, then:
        .\vbox-create-unit.ps1 -SnapshotOnly
 '@
 } else {
@@ -314,9 +308,7 @@ Next steps (manual install):
            Right-click bootstrap-winrm.cmd -> Run as administrator
          or from an elevated cmd.exe:
              D:\bootstrap-winrm.cmd -MastHostName mast05
-         Then in admin PowerShell (if prepare is not copied as .cmd):
-             Set-ExecutionPolicy Bypass -Scope Process -Force
-             .\prepare-mast-client.ps1 -HostName mast05 -Provider 192.168.56.1
+         Bootstrap does all first-time prep; there is no separate prepare step.
 
      (Copy scripts onto the VM via shared clipboard or a temporary VBox shared folder.)
 

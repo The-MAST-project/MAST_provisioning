@@ -270,18 +270,6 @@ function Reset-StagingStage {
     }
 }
 
-# Preparations
-${staging} = Join-Path ${stagingTop} "00-preparation"
-Reset-StagingStage -Path ${staging}
-${prepScript} = Join-Path ${clientRoot} 'prepare-mast-client.ps1'
-if (Test-Path ${prepScript}) {
-    Copy-Item -Force ${prepScript} (Join-Path ${staging} 'prepare-mast-client.ps1')
-    Write-Host " Staged prepare-mast-client.ps1"
-} else {
-    Write-Warning " prepare-mast-client.ps1 not found - skipping"
-}
-Write-Host "Populating preparation stage ${staging} ..."
-
 # Actual provisioning
 ${staging} = Join-Path ${stagingTop} "01-provisioning"
 Reset-StagingStage -Path ${staging}

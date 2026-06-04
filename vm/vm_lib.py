@@ -190,14 +190,217 @@ def winrm_session(
     )
 
 
-def _dispose_winrm_session(sess: winrm.Session | None) -> None:
-    """Close pooled HTTP connections for a pywinrm Session (best-effort)."""
+def _dispose_winrm_session(sess: Any | None) -> None:
+    """Close a unit session (best-effort). Handles both a pywinrm Session
+    (close pooled HTTP connections) and an SshSession (close the transport)."""
     if sess is None:
+        return
+    if isinstance(sess, SshSession):
+        sess.close()
         return
     try:
         sess.protocol.transport.close_session()
     except Exception:
         pass
+
+
+# ---------------------------------------------------------------------------
+# SSH fallback transport
+# ---------------------------------------------------------------------------
+# After the end-of-provisioning reboot the unit's link-local NIC can regress to
+# the Public network profile, which makes WinRM refuse unencrypted Basic auth
+# (HTTP 401) even though the box is up and TCP 5985 is open. OpenSSH (installed
+# by bootstrap-winrm.ps1, port 22, password auth) survives that regression, so
+# it is the resilient channel for post-reboot reconnect and verification.
+#
+# SshSession.run_ps mirrors the parts of pywinrm's Response that the orchestrator
+# uses (status_code, std_out, std_err as bytes), so it is a drop-in for
+# ``session.run_ps(...)`` call sites. SSH exec is synchronous (paramiko blocks to
+# completion) so there is no Receive loop to make resilient -- _resilient_run_ps
+# detects an SshSession and calls run_ps directly.
+
+SSH_PORT = 22
+
+
+def _ssh_username(raw_user: str) -> str:
+    """vault user may be '.\\mast' or 'HOST\\mast'; SSH wants the bare local name."""
+    u = (raw_user or "").strip()
+    if u.startswith(".\\"):
+        return u[2:]
+    if "\\" in u:
+        return u.split("\\")[-1]
+    return u
+
+
+class _SshResponse:
+    """Minimal stand-in for winrm.Response (status_code, std_out, std_err bytes)."""
+
+    def __init__(self, status_code: int, std_out: bytes, std_err: bytes) -> None:
+        self.status_code = status_code
+        self.std_out = std_out
+        self.std_err = std_err
+
+
+class SshSession:
+    """pywinrm-Session-compatible wrapper over a paramiko SSH connection.
+
+    Only run_ps() is implemented -- the orchestrator never runs cmd.exe on the
+    unit. Each run_ps() opens a fresh exec channel; the transport is reused
+    across calls. Call close() when done (or hand to _dispose_winrm_session).
+    """
+
+    def __init__(
+        self,
+        host: str,
+        cred: dict[str, str],
+        port: int = SSH_PORT,
+        connect_timeout_s: int = 30,
+    ) -> None:
+        try:
+            import paramiko  # lazy: keep vm_lib import-pure and paramiko optional
+        except ImportError as e:
+            raise RuntimeError(
+                "paramiko is required for the SSH fallback (pip install paramiko)."
+            ) from e
+        self.host = host
+        self._user = _ssh_username(cred["user"])
+        client = paramiko.SSHClient()
+        # The unit's host key is not pre-pinned in this lab pipeline; accept it.
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        client.connect(
+            hostname=host,
+            port=port,
+            username=self._user,
+            password=cred["pass"],
+            timeout=connect_timeout_s,
+            banner_timeout=connect_timeout_s,
+            auth_timeout=connect_timeout_s,
+            allow_agent=False,
+            look_for_keys=False,
+        )
+        self._client = client
+
+    def run_ps(self, script: str) -> _SshResponse:
+        # Mirror pywinrm: hand powershell the script as a UTF-16LE base64
+        # -EncodedCommand so quoting/newlines survive the SSH command line intact.
+        enc = base64.b64encode(script.encode("utf_16_le")).decode("ascii")
+        cmd = (
+            "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass "
+            f"-EncodedCommand {enc}"
+        )
+        _stdin, stdout, stderr = self._client.exec_command(cmd, timeout=None)
+        out = stdout.read()
+        err = stderr.read()
+        rc = stdout.channel.recv_exit_status()
+        return _SshResponse(rc, out, err)
+
+    def close(self) -> None:
+        try:
+            self._client.close()
+        except Exception:
+            pass
+
+
+def ssh_session(
+    host: str, cred: dict[str, str], port: int = SSH_PORT, connect_timeout_s: int = 30
+) -> SshSession:
+    """Factory mirroring winrm_session(): construct an SSH session to the unit."""
+    return SshSession(host, cred, port=port, connect_timeout_s=connect_timeout_s)
+
+
+def wait_for_ssh(
+    host: str, cred: dict[str, str], timeout: int = WINRM_BOOT_TIMEOUT_S, port: int = SSH_PORT
+) -> SshSession:
+    """Poll until an SSH session authenticates (unit booted + sshd up). Returns it."""
+    _log(f"Waiting for SSH on {host}:{port} (up to {timeout}s)...")
+    deadline = time.monotonic() + timeout
+    last_err = ""
+    while time.monotonic() < deadline:
+        try:
+            s = ssh_session(host, cred, port=port, connect_timeout_s=20)
+            _log(f"SSH on {host} is ready (user={_ssh_username(cred['user'])!r}).")
+            return s
+        except Exception as e:
+            last_err = f"{type(e).__name__}: {e}"
+            time.sleep(5)
+    raise TimeoutError(f"SSH on {host}:{port} not ready after {timeout}s. Last: {last_err}")
+
+
+def _winrm_probe_once(
+    host: str, cred: dict[str, str], users: list[str]
+) -> tuple[winrm.Session | None, str]:
+    """One WinRM reachability probe. Returns (session, state) where state is:
+    'ok' (session usable, returned), 'auth_rejected' (TCP open, Basic refused --
+    the post-reboot Public-profile regression), or 'down' (TCP closed / other)."""
+    try:
+        with socket.create_connection((host, WINRM_PORT), timeout=5):
+            pass
+    except OSError:
+        return (None, "down")
+    rejected = False
+    for usr in users:
+        s: winrm.Session | None = None
+        try:
+            s = winrm.Session(
+                f"http://{host}:{WINRM_PORT}/wsman",
+                auth=(usr, cred["pass"]),
+                transport="basic",
+                read_timeout_sec=30,
+                operation_timeout_sec=20,
+            )
+            r = s.run_cmd("echo", ["ping"])
+            if r.status_code == 0:
+                cred["user"] = usr
+                # Hand back a fresh session with default timeouts for real work.
+                return (winrm_session(host, cred), "ok")
+        except winrm.exceptions.InvalidCredentialsError:
+            rejected = True
+        except Exception:
+            pass
+        finally:
+            _dispose_winrm_session(s)
+    return (None, "auth_rejected" if rejected else "down")
+
+
+def connect_unit(
+    host: str,
+    cred: dict[str, str],
+    winrm_wait_s: int = WINRM_BOOT_TIMEOUT_S,
+    allow_ssh_fallback: bool = True,
+) -> Any:
+    """Return a unit session exposing .run_ps() -- a pywinrm Session when WinRM is
+    usable, else an SshSession. Prefers WinRM, but if WinRM's port is open while
+    Basic auth is rejected (the post-reboot Public-profile 401 regression) and
+    SSH authenticates, it switches to SSH within seconds rather than blocking the
+    full boot timeout. While the unit is still booting (TCP closed) it keeps
+    waiting up to winrm_wait_s. Raises if neither channel comes up."""
+    _log(
+        f"Connecting to unit {host} (WinRM preferred"
+        f"{', SSH fallback' if allow_ssh_fallback else ''})..."
+    )
+    deadline = time.monotonic() + winrm_wait_s
+    users = _candidate_users(host, cred.get("user", "")) or [cred.get("user", "")]
+    while time.monotonic() < deadline:
+        sess, state = _winrm_probe_once(host, cred, users)
+        if state == "ok":
+            _log(f"Connected to {host} over WinRM (user={cred['user']!r}).")
+            return sess
+        if state == "auth_rejected" and allow_ssh_fallback:
+            _log(
+                f"WinRM on {host}: TCP {WINRM_PORT} open but Basic auth rejected "
+                "(likely post-reboot Public-profile regression). Trying SSH fallback..."
+            )
+            try:
+                s = ssh_session(host, cred, connect_timeout_s=20)
+                _log(f"Connected to {host} over SSH (user={_ssh_username(cred['user'])!r}).")
+                return s
+            except Exception as e:
+                _log(f"  SSH not ready yet ({type(e).__name__}: {e}); will keep trying.")
+        time.sleep(5)
+    if allow_ssh_fallback:
+        _log(f"WinRM not usable within {winrm_wait_s}s; final SSH attempt...")
+        return wait_for_ssh(host, cred, timeout=60)
+    raise TimeoutError(f"Unit {host} not reachable over WinRM within {winrm_wait_s}s")
 
 
 def _candidate_users(host: str, raw_user: str) -> list[str]:
@@ -435,7 +638,13 @@ def _resilient_run_ps(
 
     Shell and command IDs are released in finally blocks; the WinRM listener
     will also reap the shell on its idle timer if cleanup itself fails.
+
+    An SshSession is synchronous (paramiko exec blocks to completion) and has no
+    Receive loop to make resilient, so it is run directly via its own run_ps.
     """
+    if isinstance(session, SshSession):
+        return session.run_ps(script)
+
     encoded = base64.b64encode(script.encode("utf_16_le")).decode("ascii")
     command_line = f"powershell -encodedcommand {encoded}"
 
@@ -549,8 +758,8 @@ def wait_for_winrm(host: str, cred: dict[str, str], timeout: int = WINRM_BOOT_TI
                 tail = "; ".join(auth_errors[-4:]) if auth_errors else "no auth attempts"
                 _log(
                     f"WinRM: TCP {WINRM_PORT} open on {host} but Basic auth not accepted yet ({tail}). "
-                    "Confirm vault/creds.json matches the unit mast password and that prepare-mast-client "
-                    "finished (HTTPS step can recycle WinRM briefly)."
+                    "Confirm vault/creds.json matches the unit mast password and that bootstrap-winrm.ps1 "
+                    "finished (a Public network profile can also make WinRM Basic return 401)."
                 )
             else:
                 _log(f"WinRM: TCP {WINRM_PORT} not open on {host} yet (still booting or wrong host?).")

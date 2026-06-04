@@ -2,6 +2,64 @@
 
 ---
 
+## [2026-06-04] One prep entry point: bootstrap-winrm.ps1; delete prepare-mast-client.ps1; strip onboard to post-bootstrap
+
+**Why:** First-time unit prep was implemented three times -- in
+`client/bootstrap-winrm.ps1` (manual interactive), `client/prepare-mast-client.ps1`
+(remote, second-stage), and Stages 0-2 of `client/onboard-mast-unit.ps1` (one-shot
+local). The three copies of the mast-account / WinRM / rename logic had already
+drifted (different `FullName`; `onboard` used the `New-Item WSMan:\` HTTPS path that
+`prepare` deliberately avoids because it hangs on some builds; `onboard` lacked the
+network-Private resilience that `bootstrap` has, so its WinRM HTTP could 401 on a
+Public profile). This is exactly the divergence the CLAUDE.md "Single source of truth"
+rule warns about. Investigation also showed the orchestrator is HTTP-only:
+`vm_lib.py` `winrm_session()` and `tools/run-remote-script-winrm.py` both connect to
+`http://<host>:5985/wsman` with `transport="basic"`. Nothing ever connects to 5986,
+so the WinRM HTTPS listener -- the only prep step `prepare`/`onboard` did that
+`bootstrap` did not -- was vestigial. And nothing automated invokes `prepare` or
+`onboard`; they were human-run / documented entry points only.
+
+**What:**
+
+- **`client/bootstrap-winrm.ps1` is now the single source of truth for first-time
+  prep** (mast admin, WinRM HTTP/5985 + Basic with network-Private persistence,
+  firewall, OpenSSH, Npcap, computer rename, Windows Update suppression).
+- **Deleted `client/prepare-mast-client.ps1`.** Its prep is fully covered by
+  bootstrap; its unique output (the 5986 HTTPS listener + TrustedHosts + slmgr
+  /rearm) was unused by the HTTP-only orchestrator. Removed the `00-preparation`
+  staging block in `build/build-mast.ps1` (it existed only to stage this script;
+  nothing reads that stage). Updated the operational references in `README.md`,
+  `vm/vbox-create-unit.ps1`, `vm/vbox-recreate-unit.ps1`, `vm/build-autounattend-iso.ps1`,
+  `provisioning-system-overview.md`, the `vm_lib.py` WinRM diagnostic, and the
+  `run-remote-script-winrm.py` examples/help.
+- **Stripped `client/onboard-mast-unit.ps1` to a post-bootstrap onboarder.** Removed
+  Stages 0-2 (the bootstrap/prepare duplication); it now assumes `bootstrap-winrm.ps1`
+  has already run. Stage 0 PREFLIGHT verifies bootstrap's outputs (mast account +
+  WinRM HTTP listening) and fails fast otherwise, instead of recreating them. Remaining
+  stages renumbered: 0 PREFLIGHT, 1 PROVISION, 2 REGISTER, 3 HANDOFF. Dropped the now-unused
+  `-MastPassword` and `-ProvSharePath` parameters and the `mast-client-util.ps1` dot-source.
+
+**Implications:**
+
+- The two-step "bootstrap then prepare over WinRM" flow is gone; bootstrap alone
+  leaves a unit ready for provisioning. Operators add the unit to `unit-registry.json`
+  (the autonomous `check-and-provision.ps1` loop picks it up) or run the stripped
+  `onboard-mast-unit.ps1` on the unit.
+- There is no WinRM HTTPS (5986) listener anymore. This is intentional given the
+  HTTP-Basic orchestrator; if a future caller needs HTTPS, add the listener creation
+  to bootstrap (using `winrm.cmd`, not `New-Item WSMan:\`, which can hang).
+- The `post-prepare` VirtualBox snapshot name is retained as a historical identifier
+  (referenced by `vbox-create-unit.ps1`, `run-prov-test.py`, `test-suite.py`); it now
+  means "after bootstrap prep".
+- Stale `staging/*/00-preparation/` folders from prior builds are orphaned but
+  harmless (nothing reads them); they are not regenerated.
+- `onboard-mast-unit.ps1`'s Stages 1-2 still use `New-PSSession ... -Authentication
+  Negotiate` to the prov server -- the older transport model that `check-and-provision.ps1`
+  moved away from. That predates this change and is left as-is; revisit if onboard is
+  promoted to a supported path. The onboard stage-diagram in
+  `autonomous-provisioning-requirements.md` still describes the old 6-stage structure
+  and was not rewritten in this pass.
+
 ## [2026-05-31] Cleanup pass: shared verify helpers, WinRM helper reuse, README/dead-code hygiene
 
 **Why:** A repo-presentability pass surfaced several pieces of drift and

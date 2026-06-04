@@ -10,8 +10,8 @@
   - client\bootstrap-winrm.cmd and bootstrap-winrm.ps1 at the ISO root for the
     operator to run manually after first login (USB/DVD copy is fine). Use the
     .cmd so Windows runs PowerShell instead of Notepad (default .ps1 association).
-    They are not executed from FirstLogonCommands. After bootstrap succeeds, the
-    prov server may run prepare-mast-client.ps1 over WinRM.
+    They are not executed from FirstLogonCommands. Bootstrap performs all first-time
+    prep; after it succeeds the unit is ready for provisioning (no separate prepare step).
   - client\bootstrap-winrm-vmtest.cmd at the ISO root: identical to
     bootstrap-winrm.cmd but passes -VmTestRun, which adds a hosts entry routing
     mast-wis-control -> 192.168.56.1 (the VirtualBox host-only host IP).
@@ -77,12 +77,12 @@
   NetBIOS computer name written during specialize (max 15 chars).
   Default (omit): OEM + 12 hex chars, unique each time you build the ISO - mimics
   a generic factory serial. Pass '*' to let Windows pick a random name at install
-  time (legacy behavior). The operator-chosen mastNN name is applied by bootstrap-winrm.ps1;
-  prepare-mast-client.ps1 aligns HTTPS and steady-state remoting.
+  time (legacy behavior). The operator-chosen mastNN name is applied by bootstrap-winrm.ps1,
+  which also handles all other first-time prep (WinRM, firewall, OpenSSH, Npcap).
 
 .PARAMETER ExtraScripts
   Optional list of extra files to copy into the ISO root (in addition to
-  bootstrap-winrm.cmd and bootstrap-winrm.ps1). Useful for shipping prepare-mast-client.ps1 or
+  bootstrap-winrm.cmd and bootstrap-winrm.ps1). Useful for shipping
   onboard-mast-unit.ps1.
 
 .EXAMPLE

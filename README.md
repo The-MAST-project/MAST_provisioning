@@ -42,11 +42,10 @@ MAST_provisioning/
 |-- build/
 |   `-- build-mast.ps1                # Assembles staging\<host>\01-provisioning\
 |-- client/
-|   |-- bootstrap-winrm.ps1           # First-time unit setup: mast user, WinRM HTTP
-|   |-- prepare-mast-client.ps1       # Second-stage: hostname, WinRM HTTPS, WU policy
+|   |-- bootstrap-winrm.ps1           # First-time unit prep (single source of truth): mast user, WinRM HTTP, firewall, OpenSSH, Npcap, rename, WU policy
 |   |-- execute-mast-provisioning.ps1 # Runs on the unit; iterates through commands.json
 |   |-- run-verify-only.ps1           # Runs on the unit; *-verify steps only (see below)
-|   `-- onboard-mast-unit.ps1         # One-shot Stages 0-5 bootstrap for a new unit
+|   `-- onboard-mast-unit.ps1         # Post-bootstrap onboarder: provision + register + handoff
 |-- server/
 |   |-- lib/mast-log.ps1              # Canonical log path definitions (unit + prov server)
 |   |-- lib/provisioning.psm1         # Shared PS helpers
@@ -256,13 +255,7 @@ VBoxManage startvm mast-unit --type gui
 # 6) Confirm reachability (use the same mastNN as in step 4):
 Test-NetConnection mast05 -Port 5985
 
-# 7) Run prepare-mast-client.ps1 remotely to finish WinRM HTTPS / steady state:
-$cred = Get-Credential   # mast / physics
-Invoke-Command -ComputerName mast05 -Credential $cred `
-    -FilePath .\client\prepare-mast-client.ps1 `
-    -ArgumentList @{HostName='mast05'; Provider='192.168.56.1'}
-
-# 8) Power off, snapshot:
+# 7) Power off, snapshot (bootstrap already did all prep -- there is no separate prepare step):
 .\vm\vbox-create-unit.ps1 -SnapshotOnly
 ```
 
@@ -284,23 +277,23 @@ VBoxManage startvm mast-unit --type gui
 # Inside the VM after first login:
 #   1) Ensure the host-only adapter has an address (DHCP on the VirtualBox
 #      host-only network, or set a temporary address) and that mastNN resolves
-#      from the host after you run bootstrap + prepare.
+#      from the host after you run bootstrap.
 #   2) Run bootstrap: right-click client\bootstrap-winrm.cmd (or the copy on D:\ etc.)
 #      and choose Run as administrator. For arguments (for example -MastHostName mast05),
 #      use an elevated Command Prompt instead:
 #         D:\bootstrap-winrm.cmd -MastHostName mast05
-#      Then open an elevated PowerShell for prepare:
-#         Set-ExecutionPolicy Bypass -Scope Process -Force
-#         .\prepare-mast-client.ps1 -HostName mast05 -Provider 192.168.56.1
+#      Bootstrap does all first-time prep (mast user, WinRM, firewall, OpenSSH,
+#      Npcap, rename, WU policy); there is no separate prepare step.
 #   3) Power off cleanly.
 
 # Take the snapshots:
 .\vm\vbox-create-unit.ps1 -SnapshotOnly
 ```
 
-Either path produces two snapshots: `clean-state` (post-Windows install, before or
-after manual bootstrap depending when you snapshot) and `post-prepare` (after
-`bootstrap-winrm.cmd` (Run as administrator) + `prepare-mast-client` ran).
+Either path produces two snapshots: `clean-state` (post-Windows install, before
+manual bootstrap) and `post-prepare` (after `bootstrap-winrm.cmd` (Run as
+administrator) ran -- bootstrap does all first-time prep; the snapshot name is
+historical).
 
 ### Run a test cycle
 
