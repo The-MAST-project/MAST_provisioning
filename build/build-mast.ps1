@@ -74,6 +74,24 @@ if (-not (Test-Path -Path $Top -PathType Container)) {
     Write-Host "Created missing folder: $Top"
 }
 
+# --- Disk-space validation (provisioning machine) ---
+# A full staging payload is ~16-17 GB (dominated by the astrometry index image).
+# Fail fast if the staging drive is low rather than writing a truncated payload
+# that then breaks the unit-side pull (robocopy rc>=8) deep into a run.
+${OutDrive} = Split-Path -Qualifier ${OutRoot}
+${minFreeGb} = 20
+${freeBytes} = $null
+try { ${freeBytes} = (Get-PSDrive -Name (${OutDrive}.TrimEnd(':')) -ErrorAction Stop).Free } catch { }
+if ($null -eq ${freeBytes}) {
+    Write-Warning ("[disk] could not resolve staging drive {0}; skipping free-space check." -f ${OutDrive})
+} else {
+    ${freeGb} = [math]::Round(${freeBytes} / 1GB, 1)
+    Write-Host ("[disk] staging drive {0} free={1} GB (min {2} GB)" -f ${OutDrive}, ${freeGb}, ${minFreeGb})
+    if (${freeBytes} -lt ([int64]${minFreeGb} * 1GB)) {
+        throw ("Insufficient free space on staging drive {0}: {1} GB free, need >= {2} GB. Free up space (old staging\ payloads, temp files) and re-run." -f ${OutDrive}, ${freeGb}, ${minFreeGb})
+    }
+}
+
 ${serverRoot} = Join-Path ${Top} 'server'
 ${clientRoot} = Join-Path ${Top} 'client'
 ${vault} = Join-Path ${Top} 'vault'
