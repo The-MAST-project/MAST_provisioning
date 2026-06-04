@@ -2,6 +2,61 @@
 
 ---
 
+## [2026-06-04] Idempotency hardening: skip-if-present installers, WinRM file-dispatch, staging disk hygiene, unit-test tier
+
+**Why:** An end-to-end idempotency exercise (full provision, then re-provision the
+same unit) surfaced failure modes beyond the earlier "binary presence is the
+success criterion" decision:
+- Some installers *hang* on re-run rather than returning non-zero: GUI/driver
+  installers (PHD2, PlaneWave PWI4/PWShutter, ZWO ASI driver, VS Code) block on
+  an "application is running / already installed" modal that silent flags do not
+  suppress, in a desktop-less WinRM Session 0. PHD2 hung 35 min (its 300s guard
+  only tracked the Inno launcher, not the relaunched elevated child); PlaneWave
+  had no timeout at all; ZWO's driver hit its 900s timeout and failed the run.
+- Repeated `--no-reset` runs accumulated ~16.5 GB staging payloads per run on the
+  unit; the existing cleanup kept the newest 3 and ran *after* the pull, so it
+  never freed space for the pull that then failed (robocopy rc=9, disk full).
+- The unit-side pull script, once it carried cleanup + disk-check logic, exceeded
+  the ~8 KB WinRM `-EncodedCommand` command-line limit when dispatched inline, and
+  failed remotely with "The command line is too long" -- diagnosable only from
+  unit logs.
+
+**What:**
+- **Installer providers skip when already present.** phd2, planewave (PWI4 +
+  PWShutter), zwo (gated on `ASIStudio.exe`, installed last), and vscode now probe
+  for the target binary first and skip the installer entirely on a re-run, instead
+  of re-launching it. First-install paths additionally `taskkill /T` the whole
+  process tree on timeout (the parent handle misses Inno's relaunched child).
+- **Staging hygiene + disk validation (both sides).** `mast-pull-staging.ps1`
+  removes stale `run-*` dirs *before* pulling and fails fast with
+  `DISK_INSUFFICIENT` if the payload + 2 GB margin will not fit; `build-mast.ps1`
+  refuses to build under 20 GB free on the staging drive. The pull script's
+  decisions are factored into pure functions (`Get-RobocopyOutcome`,
+  `Test-StagingFits`).
+- **WinRM dispatch.** Scripts too large to inline are dispatched by FILE (uploaded
+  base64-chunked, then run as a scriptblock built from the file text -- which also
+  sidesteps the unit's Restricted ExecutionPolicy that blocks `.ps1` file loads).
+  `vm_lib.assert_inline_dispatchable()` now rejects oversized inline payloads
+  locally with an actionable message instead of letting them fail remotely.
+- **Two-tier tests.** Pure decision/encoding logic is covered by fast, mock-free
+  unit tests (`vm/tests/*.py` via import-pure `vm_lib` + importlib for run-prov-test;
+  `server/tests/*.Tests.ps1` via Pester dot-sourcing guarded scripts). The VM e2e
+  (`run-prov-test.py` / `test-suite.py`) is reserved for genuinely environmental
+  behavior (ExecutionPolicy, SMB, post-reboot network) that must not be faked.
+
+**Implications:**
+- Re-running a fully-provisioned unit is clean (validated in-place: all 28 modules
+  re-provisioned, 0 failures). Skip-if-present means a genuine version *upgrade*
+  is not re-run by these providers; that is acceptable given pinned versions and
+  the build-manifest drift check, and must be revisited if in-place upgrades are
+  needed.
+- `mast-pull-staging.ps1` keeps its decision logic inline (it runs *before* the
+  payload exists on the unit, so it cannot dot-source a shared lib); the extracted
+  functions live in the script itself and are dot-source-testable via an
+  `if (-not $SrcUNC) { return }` guard.
+- The provider skip-if-present logic is still duplicated across four providers;
+  extracting it to one shared, tested helper is a follow-up.
+
 ## [2026-06-04] Installer providers: binary presence is the authoritative success criterion
 
 **Why:** Re-provisioning a unit (the autonomous loop's normal mode) re-runs installer
