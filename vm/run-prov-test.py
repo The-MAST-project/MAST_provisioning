@@ -62,6 +62,7 @@ Dependencies:
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import re
@@ -108,6 +109,7 @@ from vm_lib import (
     WINRM_CALL_TIMEOUT_S,
     WINRM_PORT,
     _dispose_winrm_session,
+    _minify_ps,
     _ps_escape,
     check_rc,
     connect_unit,
@@ -195,12 +197,26 @@ def _discover_all_modules() -> list[str]:
     return [ln.strip() for ln in proc.stdout.splitlines() if ln.strip()]
 
 
-ALL_MODULES = _discover_all_modules()
-if not ALL_MODULES:
-    sys.exit(
-        f"ERROR: no providers discovered under {REPO_ROOT / 'server' / 'providers'}. "
-        "Check the repo layout."
-    )
+_ALL_MODULES_CACHE: list[str] | None = None
+
+
+def all_modules() -> list[str]:
+    """Provider modules in execution order (cached).
+
+    Computed lazily on first use rather than at import, so importing this script
+    (e.g. from a unit test exercising resolve_phases) does NOT spawn PowerShell
+    for discovery -- only an actual run touches it.
+    """
+    global _ALL_MODULES_CACHE
+    if _ALL_MODULES_CACHE is None:
+        mods = _discover_all_modules()
+        if not mods:
+            sys.exit(
+                f"ERROR: no providers discovered under {REPO_ROOT / 'server' / 'providers'}. "
+                "Check the repo layout."
+            )
+        _ALL_MODULES_CACHE = mods
+    return _ALL_MODULES_CACHE
 
 VALID_PHASES = frozenset(("build", "transfer", "execute", "verify-run", "verify", "reset"))
 DEFAULT_PHASES = frozenset(("build", "transfer", "execute", "verify", "reset"))
@@ -267,30 +283,8 @@ def timed(label: str) -> Generator[None, None, None]:
         log(f"=== {label} done in {_format_elapsed(elapsed)} ===")
 
 
-# ---------------------------------------------------------------------------
-# WinRM payload minifier
-# ---------------------------------------------------------------------------
-# pywinrm base64-encodes scripts for -EncodedCommand; the WinRM service caps
-# arguments at ~8192 chars. Strip everything that doesn't change behavior so
-# we stay under that limit: block comments (<#...#>), whole-line # comments,
-# and blank lines. Mid-line trailing # comments are NOT stripped (PS treats
-# some of those as syntactic in rare cases; not worth the surprise).
-def _minify_ps(raw: str) -> str:
-    s = re.sub(r'<#.*?#>', '', raw, flags=re.DOTALL)
-    out: list[str] = []
-    for ln in s.splitlines():
-        stripped = ln.strip()
-        if not stripped:
-            continue
-        if stripped.startswith('#'):
-            continue
-        # PS doesn't care about leading whitespace; dedent every line so
-        # heavily-nested function bodies don't blow the encoded-command
-        # size budget. (Whitespace-sensitive constructs like here-strings
-        # are uncommon in our client scripts; if a future script breaks,
-        # mark it for FilePath-based dispatch instead of minifying.)
-        out.append(stripped)
-    return '\n'.join(out)
+# _minify_ps moved to vm_lib (shared, import-pure WinRM payload helper, paired
+# with assert_inline_dispatchable / winrm_encoded_cmd_len); imported above.
 
 
 # ---------------------------------------------------------------------------
@@ -434,7 +428,7 @@ def phase_build(hostname: str, modules: list[str], proxy_mode: str) -> None:
             "-AllowMissingNetFx3Sxs",
             "-ProxyMode", proxy_mode,
         ]
-        if sorted(modules) != sorted(ALL_MODULES):
+        if sorted(modules) != sorted(all_modules()):
             cmd += ["-Modules", ",".join(modules)]
 
         log(">>> " + " ".join(cmd))
@@ -471,13 +465,46 @@ def phase_transfer(
         )
 
         pull_script = REPO_ROOT / "client" / "mast-pull-staging.ps1"
-        # See _minify_ps for why we strip aggressively. check-and-provision.ps1
-        # uses Invoke-Command -FilePath which sends the full file without this
-        # constraint; this path is only for direct WinRM session.run_ps.
-        script_text = _minify_ps(pull_script.read_text(encoding="ascii"))
+        # Dispatch the pull script by FILE, not inline. Once it carries the
+        # cleanup + disk-check logic it exceeds the ~8 KB WinRM EncodedCommand
+        # cmdline limit that inline (minified) dispatch is bounded by. Upload it
+        # in small base64 chunks (each run_ps stays well under the limit), then
+        # invoke it by path. (check-and-provision.ps1 already uses -FilePath.)
+        script_text = pull_script.read_text(encoding="ascii")
+        b64 = base64.b64encode(script_text.encode("utf-8")).decode("ascii")
+        remote_ps = "C:\\mast-staging\\mast-pull-staging.ps1"
+        remote_b64 = "C:\\mast-staging\\mast-pull-staging.b64"
 
+        # Stage dir + truncate the b64 sink (one small call).
+        run_ps(
+            unit,
+            "$d='C:\\mast-staging'; if(-not(Test-Path $d)){New-Item -ItemType Directory -Force -Path $d|Out-Null}; "
+            f"Set-Content -LiteralPath '{remote_b64}' -Value '' -NoNewline -Encoding ascii",
+            label="xfer-prep", timeout_s=60, echo=False,
+        )
+        # Append the base64 in chunks; base64 is quote/newline-free so each
+        # single-quoted value is safe, and each call stays small.
+        for i in range(0, len(b64), 1500):
+            run_ps(
+                unit,
+                f"Add-Content -LiteralPath '{remote_b64}' -Value '{b64[i:i + 1500]}' -NoNewline -Encoding ascii",
+                label="xfer-chunk", timeout_s=60, echo=False,
+            )
+        # Decode the b64 back to the .ps1 on the unit.
+        run_ps(
+            unit,
+            f"[System.IO.File]::WriteAllBytes('{remote_ps}', [Convert]::FromBase64String((Get-Content -LiteralPath '{remote_b64}' -Raw)))",
+            label="xfer-decode", timeout_s=60, echo=False,
+        )
+
+        # Run the uploaded script as a SCRIPTBLOCK built from its text, not as a
+        # .ps1 file: invoking the file directly trips the unit's Restricted
+        # ExecutionPolicy ("running scripts is disabled"), whereas a scriptblock
+        # does not. This also keeps the invocation command tiny (the body lives
+        # on the unit's disk, not on the command line).
         ps = (
-            f"$r=&{{\n{script_text}\n}}"
+            f"$sb = [scriptblock]::Create((Get-Content -LiteralPath '{remote_ps}' -Raw))\n"
+            f"$r = & $sb"
             f" -ProvServer '{PROV_SERVER}'"
             f" -UnitHostname '{hostname}'"
             f" -SmbUser '{smb_user}'"
@@ -492,7 +519,7 @@ def phase_transfer(
             f"Write-Host 'UNIT_STAGE={unit_stage}'\n"
         )
 
-        log(f"[transfer] mast-pull-staging.ps1 -ProvServer '{PROV_SERVER}' -UnitStage '{unit_stage}'")
+        log(f"[transfer] mast-pull-staging.ps1 (file-dispatch) -ProvServer '{PROV_SERVER}' -UnitStage '{unit_stage}'")
         r = run_ps(unit, ps, label="transfer", timeout_s=60 * 60, echo=False)
         if r.status_code != 0:
             raise RuntimeError(f"Transfer failed (exit code: {r.status_code})")
@@ -528,7 +555,7 @@ def phase_execute(
                 f"-SmbUser '{smb_user}' "
                 f"-SmbPass '{smb_pass_ps}'"
             )
-            if modules and sorted(modules) != sorted(ALL_MODULES):
+            if modules and sorted(modules) != sorted(all_modules()):
                 execute_cmd += f" -Modules '{','.join(modules)}'"
             r = run_ps(unit, execute_cmd, label="execute", timeout_s=WINRM_TIMEOUT_S, step_timer=step_timer)
         finally:
@@ -569,7 +596,7 @@ def phase_run_verify_only(
                 f"& '{staging_path}\\run-verify-only.ps1' "
                 f"-StagingPath '{staging_path}'"
             )
-            if modules and sorted(modules) != sorted(ALL_MODULES):
+            if modules and sorted(modules) != sorted(all_modules()):
                 verify_cmd += f" -Modules '{','.join(modules)}'"
             r = run_ps(unit, verify_cmd, label="verify-only", timeout_s=VERIFY_ONLY_TIMEOUT_S, step_timer=step_timer)
         finally:
@@ -1035,7 +1062,7 @@ def main() -> None:
         vm_lib.WINRM_CALL_TIMEOUT_S = args.winrm_call_timeout_s
         WINRM_TIMEOUT_S = max(WINRM_TIMEOUT_S, args.winrm_call_timeout_s)
 
-    modules = args.modules.split(",") if args.modules else ALL_MODULES
+    modules = args.modules.split(",") if args.modules else all_modules()
 
     # Banner -- print the chosen proxy mode prominently before any work so it
     # is obvious in scrollback when triaging "why did setup.exe / pip / git

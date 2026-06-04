@@ -50,6 +50,11 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 VAULT_CREDS = REPO_ROOT / "vault" / "creds.json"
 
 WINRM_PORT = 5985
+# Inline dispatch sends `powershell.exe -EncodedCommand <b64>`; cmd.exe caps the
+# command line at ~8191 chars. Reject scripts whose base64 (UTF-16) exceeds this
+# BEFORE sending, so the failure is immediate and local instead of a remote
+# "The command line is too long". Larger scripts must be file-dispatched.
+WINRM_ENCODED_CMD_MAX = 8000
 WINRM_CALL_TIMEOUT_S = 60 * 60
 WINRM_BOOT_TIMEOUT_S = 15 * 60
 HEARTBEAT_INTERVAL_S = 30
@@ -677,6 +682,53 @@ def _resilient_run_ps(
     return winrm.Response((stdout, stderr, return_code))
 
 
+def winrm_encoded_cmd_len(script: str) -> int:
+    """Length of the base64 -EncodedCommand argument PowerShell receives for
+    `script` over WinRM (encoded UTF-16LE, then base64).
+
+    Pure function -- unit-testable without a live session, which is the point:
+    the inline-dispatch size limit is logic we want covered by fast unit tests,
+    not only discovered by an e2e run failing remotely.
+    """
+    return len(base64.b64encode(script.encode("utf-16-le")))
+
+
+def assert_inline_dispatchable(script: str, label: str = "") -> None:
+    """Raise ValueError if `script` is too large for inline WinRM EncodedCommand
+    dispatch (cmd.exe caps the command line at ~8191 chars).
+
+    Lets callers fail fast and LOCALLY instead of sending an oversized command
+    that the WinRM service rejects remotely with 'The command line is too long'
+    (which forces a remote-log dig to diagnose). Large scripts must be
+    file-dispatched (upload + invoke by path), e.g. run-prov-test.phase_transfer.
+    """
+    n = winrm_encoded_cmd_len(script)
+    if n > WINRM_ENCODED_CMD_MAX:
+        tag = f"[{label}] " if label else ""
+        raise ValueError(
+            f"{tag}script too large for inline WinRM dispatch: {n} encoded chars "
+            f"> {WINRM_ENCODED_CMD_MAX} ({len(script)} source chars). Dispatch it "
+            f"by file (upload + invoke by path) instead."
+        )
+
+
+def _minify_ps(raw: str) -> str:
+    """Strip block comments (<#...#>), whole-line # comments, blank lines, and
+    leading whitespace from a PowerShell script, shrinking an inline-dispatched
+    payload toward the EncodedCommand limit without changing behavior. Mid-line
+    trailing # comments are NOT stripped (some are syntactic). Pure -- unit-
+    testable, and paired with assert_inline_dispatchable() above.
+    """
+    s = re.sub(r"<#.*?#>", "", raw, flags=re.DOTALL)
+    out: list[str] = []
+    for ln in s.splitlines():
+        stripped = ln.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        out.append(stripped)
+    return "\n".join(out)
+
+
 def run_ps(
     session: winrm.Session,
     script: str,
@@ -694,6 +746,10 @@ def run_ps(
     is still enforced by _run_with_heartbeat via timeout_s.
     """
     tag = f"[{label}] " if label else ""
+    # Fail fast & locally on oversized inline dispatch (SSH is exempt -- no
+    # cmd.exe command-line limit on the exec channel).
+    if not isinstance(session, SshSession):
+        assert_inline_dispatchable(script, label)
     if echo:
         _log(f"{tag}>>> {script[:120].rstrip()}")
     r = _run_with_heartbeat(
