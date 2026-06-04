@@ -288,34 +288,45 @@ Two levels:
 
 ---
 
-### Unit Onboarding: One-Shot Bootstrap Script **[PARTIAL]**
+### Unit Onboarding: bootstrap (unit) + server-side paperwork **[PARTIAL]**
 
-`client/onboard-mast-unit.ps1` handles everything from a bare Windows IoT install through
-to the point where provisioning can be triggered. An operator runs it once on the physical
-machine (or it is injected via answer file for VMs). When that pipeline is complete, the
-unit should be:
+A unit comes online in two moves, with a clean split of responsibility.
 
-- Named, networked, and WinRM-reachable
-- Fully provisioned (all MAST software installed and smoke-tested)
-- Registered with the provisioning server's unit registry
-- Ready to be picked up by the autonomous `check-and-provision` loop once Phase 1 is complete
+1. **Unit side -- `client/bootstrap-winrm.ps1` does EVERYTHING** needed to make a
+   bare Windows IoT machine ready to be autonomously provisioned. An operator runs
+   it once, elevated, on the physical machine (from the autounattend ISO or USB; VMs
+   get it the same way after first login). When it prints `[OK]` the unit is:
+   - Named (renamed to mastNN) and on the network (DHCP)
+   - WinRM-reachable over HTTP/5985 + Basic, firewall open, and the network profile
+     pinned Private so Basic does not regress to a 401 after reboot
+   - Reachable over OpenSSH (port 22, mast/physics) as a fallback path
+   - Carrying the local `mast` admin account + `LocalAccountTokenFilterPolicy`
+   - Npcap installed; Windows Update auto-installs suppressed
 
-The script has not been validated end-to-end against a physical unit. Stage 5 (HANDOFF)
-installs the scheduled task and writes `availability.json`, but the autonomous loop it
-hands off to is not yet operational.
+   Nothing else runs on the unit -- there is no second unit-side prep step.
 
-**Script stages:**
+2. **Server side -- paperwork only.** Add the unit to `server/unit-registry.json` on
+   the provisioning server (hostname, IP, module list). That single registry entry is
+   the entire post-bootstrap action. The autonomous `check-and-provision.ps1` loop
+   reads the registry and, on its next cycle, builds -> transfers (SMB pull) ->
+   executes -> smoke-tests the unit. The prov server drives provisioning; the unit
+   never provisions itself.
+
+**Optional -- `client/onboard-mast-unit.ps1`.** Run on the unit *after* bootstrap, this
+skips the wait for the loop's next cycle: it triggers the first provisioning run on the
+prov server, writes the registry entry, and marks `availability.json {available: true}`.
+It assumes bootstrap already ran (Stage 0 PREFLIGHT fails fast otherwise) and is not
+required for the canonical flow above.
+
+**Optional onboarder stages:**
 
 ```
-onboard-mast-unit.ps1
+onboard-mast-unit.ps1  (optional, post-bootstrap)
   |
-  +-- Stage 0  PREFLIGHT       Verify: admin rights, network reachability, vault creds accessible
-  +-- Stage 1  BOOTSTRAP       Enable WinRM (HTTP), set hostname, create mast account
-  +-- Stage 2  PREPARE         Harden WinRM (HTTPS), suppress Windows Update
-  +-- Stage 3  PROVISION       Run full MAST provisioning (build -> transfer -> execute -> smoke)
-  +-- Stage 4  REGISTER        Add unit to unit-registry.json on prov server
-  +-- Stage 5  HANDOFF         Install and enable check-and-provision scheduled task;
-                               write availability.json {available: true}
+  +-- Stage 0  PREFLIGHT   Verify admin + that bootstrap ran (mast account, WinRM HTTP) + prov reachable
+  +-- Stage 1  PROVISION   Trigger check-and-provision.ps1 on the prov server for this unit
+  +-- Stage 2  REGISTER    Add unit to unit-registry.json on the prov server
+  +-- Stage 3  HANDOFF     Write availability.json {available: true}
 ```
 
 Each stage logs `STAGE_START` / `STAGE_OK` / `STAGE_FAIL` brackets. A checkpoint file at
@@ -333,30 +344,34 @@ Each stage logs `STAGE_START` / `STAGE_OK` / `STAGE_FAIL` brackets. A checkpoint
     -DryRun                         # log actions without executing them
 ```
 
-**Dev/test VM path:** Stages 1-2 handled by the answer file (WinRM enabled, hostname set
-before OS handoff). Orchestrator runs `onboard-mast-unit.ps1 -ResumeFrom 3` via WinRM
-after first boot.
+**Deployment paths:**
 
-**Physical unit path:**
-1. Copy `client/onboard-mast-unit.ps1` to a USB drive with `vault/utm-creds.json`.
-2. On the unit: open an admin PowerShell and run:
-   ```powershell
-   Set-ExecutionPolicy Bypass -Scope Process -Force
-   .\onboard-mast-unit.ps1 -HostName mast01 -ProvServer 192.168.64.10
-   ```
-3. Monitor remotely via:
+- **Physical unit:** boot the autounattend ISO (or copy `bootstrap-winrm.cmd` +
+  `bootstrap-winrm.ps1` + `npcap-*.exe` to USB), run `bootstrap-winrm.cmd` elevated
+  with `-MastHostName mastNN`, and confirm `[OK]`. Then add the unit to
+  `server/unit-registry.json` on the prov server. That is the whole flow.
+- **Dev/test VM:** the answer file installs Windows; after first login run
+  `bootstrap-winrm.cmd` the same way, then register the unit server-side.
+- **Pushing the first cycle (optional):** instead of waiting for the loop, run
+  `onboard-mast-unit.ps1 -HostName mast01 -ProvServer 192.168.64.10` on the unit and
+  tail the mirrored log from the prov server:
    ```powershell
    Invoke-Command -ComputerName 192.168.64.10 -Credential $provCred -ScriptBlock {
        Get-Content 'C:\MAST\logs\onboarding\mast01.log' -Wait
    }
    ```
 
+**Status:** `bootstrap-winrm.ps1` is the validated, supported unit-prep path.
+`onboard-mast-unit.ps1` is not yet validated end-to-end against a physical unit, and
+the autonomous loop it can hand off to is not fully operational; treat it as optional
+until Phase 1 lands.
+
 ---
 
 ### Unit Availability During Maintenance **[DONE]**
 
-Stage 5 of `onboard-mast-unit.ps1` writes `availability.json` with `available: true` on
-handoff. `check-and-provision.ps1` and related automation write status changes during
+Stage 3 (HANDOFF) of the optional `onboard-mast-unit.ps1` writes `availability.json` with
+`available: true`. `check-and-provision.ps1` and related automation write status changes during
 maintenance and provisioning runs.
 
 **Mechanism:** `C:\MAST\status\availability.json`
@@ -433,12 +448,13 @@ lines for long phases. Prefer reading `$env:MAST_RUN_ID` when appending logs.
 **Caveat:** if a child script calls `exit` in the same WinRM runspace, the wrapper's
 `finally` may not run; prefer `throw` or non-terminating flow for clean summaries.
 
-**Hang after remote script "Done":** `Enable-PSRemoting` / rebuilding the HTTPS listener
+**Hang after remote script "Done":** `Enable-PSRemoting` / rebuilding a WinRM listener
 can recycle the WinRM service and drop the same WinRM session the orchestrator is using.
-`prepare-mast-client.ps1` avoids calling `Enable-PSRemoting` mid-session when
-`MAST_RUN_ID` is set and listeners already exist, and defers HTTPS listener creation to
-the last step. Immediately before that step it prints `##MAST## kind=prepare_safe_complete`
-as a clear boundary.
+A remote-run guest script should avoid calling `Enable-PSRemoting` mid-session when
+`MAST_RUN_ID` is set and listeners already exist, and should print a `##MAST##` completion
+boundary before any WinRM-recycling work. (First-time WinRM setup now happens interactively
+on the unit via `bootstrap-winrm.ps1`, so the autonomous remote-run path no longer recycles
+WinRM.)
 
 **Hang with guest transcript complete but no `remote_run_end`:** `run-remote-script-winrm.py`
 no longer calls `Stop-Transcript` in `finally`; `Start-Transcript` output is finalized
@@ -1149,7 +1165,8 @@ no science data can be collected regardless.
 #### Disable automatic updates during initial provisioning **[DONE]**
 
 Before running `execute-mast-provisioning.ps1`, Windows Update is prevented from
-installing updates and rebooting mid-run. This is implemented in `prepare-mast-client.ps1`:
+installing updates and rebooting mid-run. This is implemented via `Disable-WindowsAutoUpdate`
+in `client/mast-client-util.ps1`, called by `bootstrap-winrm.ps1` during first-time prep:
 
 ```powershell
 # Disable automatic update installation during provisioning.
