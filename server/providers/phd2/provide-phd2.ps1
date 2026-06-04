@@ -26,34 +26,52 @@ try {
         throw "PHD2 installer not found at ${installerPath}"
     }
 
-    Write-Phd2Log ("Running PHD2 installer: {0} /VERYSILENT" -f ${installerPath})
-    ${p} = Start-Process -FilePath ${installerPath} -ArgumentList '/VERYSILENT' -PassThru -WindowStyle Hidden
-    Write-Phd2Log ("Installer PID: {0}; waiting up to 300s..." -f ${p}.Id)
-    ${finished} = ${p}.WaitForExit(300000)
-    try { ${p}.Refresh() } catch {}
-    if (-not ${finished}) {
-        try { ${p}.Kill() } catch {}
-        throw "PHD2 installer timed out after 300s (process killed)."
-    }
-    Write-Phd2Log ("PHD2 installer exited. ExitCode={0}" -f ${p}.ExitCode)
-
-    Start-Sleep -Seconds 3
-    # A non-zero installer exit is not fatal on its own: re-running this stage
-    # when PHD2 is already installed can return a non-zero Inno Setup code even
-    # though the app is present. phd2.exe presence is the authoritative success
-    # criterion (idempotent re-run); only fail when it is actually absent.
+    # Detect an existing install first. phd2.exe presence is the authoritative
+    # success criterion for this provider.
     ${phd2Exe} = Get-ChildItem -Path 'C:\Program Files', 'C:\Program Files (x86)' `
         -Recurse -Filter 'phd2.exe' -ErrorAction SilentlyContinue |
         Select-Object -First 1 -ExpandProperty FullName
-    if ($null -ne ${p}.ExitCode -and ${p}.ExitCode -ne 0) {
-        if (${phd2Exe}) {
-            Write-Phd2Log ("[WARN] installer exit {0} but phd2.exe present; treating as already-installed (idempotent re-run)." -f ${p}.ExitCode)
-        } else {
-            throw ("PHD2 installer failed with exit code {0} and phd2.exe is absent" -f ${p}.ExitCode)
+
+    if (${phd2Exe}) {
+        # Idempotent re-run: do NOT re-launch the Inno Setup installer over an
+        # existing install. On a re-run it blocks on an "application is running /
+        # already installed" modal that /VERYSILENT does not suppress -- PHD2 is
+        # kept running by the PHD2 NSSM service registered below, and in Session 0
+        # there is no desktop to dismiss the dialog, so the installer hangs
+        # indefinitely. Skip straight to (idempotent) service registration.
+        Write-Phd2Log ("PHD2 already installed at {0}; skipping installer (idempotent re-run)." -f ${phd2Exe})
+    } else {
+        Write-Phd2Log ("Running PHD2 installer: {0} /VERYSILENT /SUPPRESSMSGBOXES /NORESTART" -f ${installerPath})
+        ${p} = Start-Process -FilePath ${installerPath} `
+            -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' `
+            -PassThru -WindowStyle Hidden
+        Write-Phd2Log ("Installer PID: {0}; waiting up to 300s..." -f ${p}.Id)
+        ${finished} = ${p}.WaitForExit(300000)
+        try { ${p}.Refresh() } catch {}
+        if (-not ${finished}) {
+            # Inno relaunches an elevated child that the parent handle alone does
+            # not cover; kill the whole tree so a wedged installer cannot hang the run.
+            try { & taskkill.exe /T /F /PID $(${p}.Id) 2>$null | Out-Null } catch {}
+            try { ${p}.Kill() } catch {}
+            throw "PHD2 installer timed out after 300s (process tree killed)."
         }
-    }
-    if (-not ${phd2Exe}) {
-        throw "phd2.exe not found after installation"
+        Write-Phd2Log ("PHD2 installer exited. ExitCode={0}" -f ${p}.ExitCode)
+
+        Start-Sleep -Seconds 3
+        ${phd2Exe} = Get-ChildItem -Path 'C:\Program Files', 'C:\Program Files (x86)' `
+            -Recurse -Filter 'phd2.exe' -ErrorAction SilentlyContinue |
+            Select-Object -First 1 -ExpandProperty FullName
+        # A non-zero installer exit is not fatal if phd2.exe is present.
+        if ($null -ne ${p}.ExitCode -and ${p}.ExitCode -ne 0) {
+            if (${phd2Exe}) {
+                Write-Phd2Log ("[WARN] installer exit {0} but phd2.exe present; treating as installed." -f ${p}.ExitCode)
+            } else {
+                throw ("PHD2 installer failed with exit code {0} and phd2.exe is absent" -f ${p}.ExitCode)
+            }
+        }
+        if (-not ${phd2Exe}) {
+            throw "phd2.exe not found after installation"
+        }
     }
     Write-Phd2Log ("Found phd2.exe at: {0}" -f ${phd2Exe})
 

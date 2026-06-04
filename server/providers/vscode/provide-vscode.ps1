@@ -31,49 +31,58 @@ try {
     }
 
     Write-VscodeLog ("Installer: {0}" -f ${installerPath})
-    Write-VscodeLog "Using Inno silent flags + Inno log (see Microsoft VS Code Windows setup docs)."
-
-    ${argList} = @(
-        '/VERYSILENT',
-        '/SUPPRESSMSGBOXES',
-        '/NORESTART',
-        '/MERGETASKS=!runcode',
-        ('/LOG={0}' -f ${innoLog})
-    )
-    Write-VscodeLog ("Args: {0}" -f (${argList} -join ' '))
-
-    ${timeoutMs} = 30 * 60 * 1000
-    ${p} = Start-Process -FilePath ${installerPath} -ArgumentList ${argList} -PassThru -NoNewWindow
-    if (-not ${p}) {
-        throw "Start-Process did not return a process object for VS Code setup."
-    }
-    ${finished} = ${p}.WaitForExit(${timeoutMs})
-    if (-not ${finished}) {
-        try { ${p}.Kill() } catch {}
-        throw ("VS Code installer timed out after 30 minutes (killed). See Inno log: {0}" -f ${innoLog})
-    }
-    try { ${p}.Refresh() } catch {}
-    Write-VscodeLog ("VS Code setup exit code: {0}" -f ${p}.ExitCode)
-
-    Start-Sleep -Seconds 5
-
-    # UserSetup installs under the running account's LOCALAPPDATA by default.
-    # A non-zero installer exit is not fatal on its own: re-running this stage
-    # when VS Code is already installed can return a non-zero Inno code even
-    # though the app is present. Code.exe presence is the authoritative success
-    # criterion (idempotent re-run); only fail when it is actually absent.
+    # Idempotent re-run guard: skip the Inno UserSetup installer if VS Code is
+    # already present. Code.exe presence is the authoritative success criterion;
+    # re-running an Inno installer over an existing install can stall under WinRM
+    # Session 0. (Same pattern as phd2/planewave/zwo.)
     ${vscodeExe} = Get-ChildItem -Path 'C:\Program Files', "$env:LOCALAPPDATA\Programs" `
         -Recurse -Filter 'Code.exe' -ErrorAction SilentlyContinue |
         Select-Object -First 1 -ExpandProperty FullName
-    if ($null -ne ${p}.ExitCode -and ${p}.ExitCode -ne 0) {
-        if (${vscodeExe}) {
-            Write-VscodeLog ("[WARN] setup exit {0} but Code.exe present; treating as already-installed (idempotent re-run). See Inno log: {1}" -f ${p}.ExitCode, ${innoLog})
-        } else {
-            throw ("VS Code setup failed with exit code {0} and Code.exe is absent. See Inno log: {1}" -f ${p}.ExitCode, ${innoLog})
+
+    if (${vscodeExe}) {
+        Write-VscodeLog ("VS Code already installed at {0}; skipping installer (idempotent re-run)." -f ${vscodeExe})
+    } else {
+        Write-VscodeLog "Using Inno silent flags + Inno log (see Microsoft VS Code Windows setup docs)."
+        ${argList} = @(
+            '/VERYSILENT',
+            '/SUPPRESSMSGBOXES',
+            '/NORESTART',
+            '/MERGETASKS=!runcode',
+            ('/LOG={0}' -f ${innoLog})
+        )
+        Write-VscodeLog ("Args: {0}" -f (${argList} -join ' '))
+
+        ${timeoutMs} = 30 * 60 * 1000
+        ${p} = Start-Process -FilePath ${installerPath} -ArgumentList ${argList} -PassThru -NoNewWindow
+        if (-not ${p}) {
+            throw "Start-Process did not return a process object for VS Code setup."
         }
-    }
-    if (-not ${vscodeExe}) {
-        throw "Code.exe not found after installation (checked Program Files and LOCALAPPDATA\Programs)."
+        ${finished} = ${p}.WaitForExit(${timeoutMs})
+        if (-not ${finished}) {
+            try { & taskkill.exe /T /F /PID $(${p}.Id) 2>$null | Out-Null } catch {}
+            try { ${p}.Kill() } catch {}
+            throw ("VS Code installer timed out after 30 minutes (process tree killed). See Inno log: {0}" -f ${innoLog})
+        }
+        try { ${p}.Refresh() } catch {}
+        Write-VscodeLog ("VS Code setup exit code: {0}" -f ${p}.ExitCode)
+
+        Start-Sleep -Seconds 5
+
+        # UserSetup installs under the running account's LOCALAPPDATA by default.
+        ${vscodeExe} = Get-ChildItem -Path 'C:\Program Files', "$env:LOCALAPPDATA\Programs" `
+            -Recurse -Filter 'Code.exe' -ErrorAction SilentlyContinue |
+            Select-Object -First 1 -ExpandProperty FullName
+        # A non-zero installer exit is not fatal if Code.exe is present.
+        if ($null -ne ${p}.ExitCode -and ${p}.ExitCode -ne 0) {
+            if (${vscodeExe}) {
+                Write-VscodeLog ("[WARN] setup exit {0} but Code.exe present; treating as installed. See Inno log: {1}" -f ${p}.ExitCode, ${innoLog})
+            } else {
+                throw ("VS Code setup failed with exit code {0} and Code.exe is absent. See Inno log: {1}" -f ${p}.ExitCode, ${innoLog})
+            }
+        }
+        if (-not ${vscodeExe}) {
+            throw "Code.exe not found after installation (checked Program Files and LOCALAPPDATA\Programs)."
+        }
     }
     Write-VscodeLog ("Found Code.exe at: {0}" -f ${vscodeExe})
 

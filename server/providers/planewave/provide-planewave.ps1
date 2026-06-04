@@ -31,35 +31,44 @@ try {
         throw "PWI4 installer not found at ${pwi4InstallerPath}"
     }
 
-    Write-MastPwLog "Launching PWI4 setup (silent Inno + dedicated Inno log)."
-    ${argList} = @(
-        '/VERYSILENT',
-        '/SUPPRESSMSGBOXES',
-        '/NORESTART',
-        '/SP-',
-        ('/LOG="{0}"' -f ${innoLog})
-    )
-    ${p} = Start-Process -FilePath ${pwi4InstallerPath} -ArgumentList ${argList} -PassThru -Wait -NoNewWindow
-    try { ${p}.Refresh() } catch {}
-    Write-MastPwLog ("Setup_PWI_4.1.6_Final.exe exit code: {0}" -f ${p}.ExitCode)
-    Start-Sleep -Seconds 5
-
-    # Locate pwi4.exe - search default Program Files trees (vendor path may vary).
-    # A non-zero installer exit is not fatal on its own: a re-run where PWI4 is
-    # already installed can return a non-zero Inno code. pwi4.exe presence is the
-    # authoritative success criterion (idempotent re-run); only fail if absent.
+    # Idempotent re-run guard: skip the Inno installer if PWI4 is already present.
+    # Re-running it over an existing install (PWI4 is kept running by the NSSM
+    # service registered below) blocks on an "application is running / already
+    # installed" modal the silent flags do not suppress; in Session 0 there is no
+    # desktop to dismiss it, and Start-Process -Wait has no timeout, so the run
+    # would hang forever. pwi4.exe presence is the authoritative success criterion.
     ${pwi4ExePath} = Get-ChildItem -Path 'C:\Program Files', 'C:\Program Files (x86)' `
         -Recurse -Filter 'pwi4.exe' -ErrorAction SilentlyContinue |
         Select-Object -First 1 -ExpandProperty FullName
-    if ($null -ne ${p}.ExitCode -and ${p}.ExitCode -ne 0) {
-        if (${pwi4ExePath}) {
-            Write-MastPwLog ("[WARN] PWI4 installer exit {0} but pwi4.exe present; treating as already-installed (idempotent re-run). See Inno log: {1}" -f ${p}.ExitCode, ${innoLog})
-        } else {
-            throw ("PWI4 installer exited with code {0} and pwi4.exe is absent. See Inno log: {1}" -f ${p}.ExitCode, ${innoLog})
+    if (${pwi4ExePath}) {
+        Write-MastPwLog ("PWI4 already installed at {0}; skipping installer (idempotent re-run)." -f ${pwi4ExePath})
+    } else {
+        Write-MastPwLog "Launching PWI4 setup (silent Inno + dedicated Inno log)."
+        ${argList} = @(
+            '/VERYSILENT',
+            '/SUPPRESSMSGBOXES',
+            '/NORESTART',
+            '/SP-',
+            ('/LOG="{0}"' -f ${innoLog})
+        )
+        ${p} = Start-Process -FilePath ${pwi4InstallerPath} -ArgumentList ${argList} -PassThru -Wait -NoNewWindow
+        try { ${p}.Refresh() } catch {}
+        Write-MastPwLog ("Setup_PWI_4.1.6_Final.exe exit code: {0}" -f ${p}.ExitCode)
+        Start-Sleep -Seconds 5
+        ${pwi4ExePath} = Get-ChildItem -Path 'C:\Program Files', 'C:\Program Files (x86)' `
+            -Recurse -Filter 'pwi4.exe' -ErrorAction SilentlyContinue |
+            Select-Object -First 1 -ExpandProperty FullName
+        # A non-zero installer exit is not fatal if pwi4.exe is present.
+        if ($null -ne ${p}.ExitCode -and ${p}.ExitCode -ne 0) {
+            if (${pwi4ExePath}) {
+                Write-MastPwLog ("[WARN] PWI4 installer exit {0} but pwi4.exe present; treating as installed. See Inno log: {1}" -f ${p}.ExitCode, ${innoLog})
+            } else {
+                throw ("PWI4 installer exited with code {0} and pwi4.exe is absent. See Inno log: {1}" -f ${p}.ExitCode, ${innoLog})
+            }
         }
-    }
-    if (-not ${pwi4ExePath}) {
-        throw "pwi4.exe not found after installation"
+        if (-not ${pwi4ExePath}) {
+            throw "pwi4.exe not found after installation"
+        }
     }
     Write-MastPwLog ("Found pwi4.exe at: {0}" -f ${pwi4ExePath})
 
@@ -88,29 +97,33 @@ try {
         Write-MastPwLog "NSSM not found; skipping PWI4 service registration."
     }
 
-    # Install PWShutter
+    # Install PWShutter (idempotent re-run guard, same rationale as PWI4 above).
     ${pwShutterInstallerPath} = Join-Path ${AssetsRoot} "Setup_PWShutter_1.15.0.exe"
     if (-not (Test-Path ${pwShutterInstallerPath})) {
         throw "PWShutter installer not found at ${pwShutterInstallerPath}"
     }
-    Write-MastPwLog "Launching PWShutter setup (silent install)."
-    ${argListShutter} = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-')
-    ${pShutter} = Start-Process -FilePath ${pwShutterInstallerPath} -ArgumentList ${argListShutter} -PassThru -Wait -NoNewWindow
-    try { ${pShutter}.Refresh() } catch {}
-    Write-MastPwLog ("Setup_PWShutter_1.15.0.exe exit code: {0}" -f ${pShutter}.ExitCode)
-    Start-Sleep -Seconds 3
-
-    # Locate PWShutter.exe and register it as an NSSM service (same pattern as PWI4).
-    # SERVICE_INTERACTIVE_PROCESS lets the GUI run in session 0 on headless units.
-    # As with PWI4, a non-zero installer exit is tolerated when the binary is
-    # present (idempotent re-run); only fail on a non-zero exit if PWShutter.exe
-    # is actually absent.
     ${pwShutterExePath} = Get-ChildItem -Path 'C:\Program Files', 'C:\Program Files (x86)' `
         -Recurse -Filter 'PWShutter.exe' -ErrorAction SilentlyContinue |
         Select-Object -First 1 -ExpandProperty FullName
-    if ($null -ne ${pShutter}.ExitCode -and ${pShutter}.ExitCode -ne 0 -and -not ${pwShutterExePath}) {
-        throw ("PWShutter installer exited with code {0} and PWShutter.exe is absent" -f ${pShutter}.ExitCode)
+    if (${pwShutterExePath}) {
+        Write-MastPwLog ("PWShutter already installed at {0}; skipping installer (idempotent re-run)." -f ${pwShutterExePath})
+    } else {
+        Write-MastPwLog "Launching PWShutter setup (silent install)."
+        ${argListShutter} = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-')
+        ${pShutter} = Start-Process -FilePath ${pwShutterInstallerPath} -ArgumentList ${argListShutter} -PassThru -Wait -NoNewWindow
+        try { ${pShutter}.Refresh() } catch {}
+        Write-MastPwLog ("Setup_PWShutter_1.15.0.exe exit code: {0}" -f ${pShutter}.ExitCode)
+        Start-Sleep -Seconds 3
+        ${pwShutterExePath} = Get-ChildItem -Path 'C:\Program Files', 'C:\Program Files (x86)' `
+            -Recurse -Filter 'PWShutter.exe' -ErrorAction SilentlyContinue |
+            Select-Object -First 1 -ExpandProperty FullName
+        if ($null -ne ${pShutter}.ExitCode -and ${pShutter}.ExitCode -ne 0 -and -not ${pwShutterExePath}) {
+            throw ("PWShutter installer exited with code {0} and PWShutter.exe is absent" -f ${pShutter}.ExitCode)
+        }
     }
+
+    # Register PWShutter.exe as an NSSM service (same pattern as PWI4).
+    # SERVICE_INTERACTIVE_PROCESS lets the GUI run in session 0 on headless units.
     if (-not ${pwShutterExePath}) {
         Write-Warning "PWShutter.exe not found after installation; skipping service registration."
     } elseif (Test-Path -LiteralPath ${nssmExe}) {
