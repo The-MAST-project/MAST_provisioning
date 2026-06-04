@@ -36,14 +36,22 @@ try {
         throw "PHD2 installer timed out after 300s (process killed)."
     }
     Write-Phd2Log ("PHD2 installer exited. ExitCode={0}" -f ${p}.ExitCode)
-    if ($null -ne ${p}.ExitCode -and ${p}.ExitCode -ne 0) {
-        throw ("PHD2 installer failed with exit code {0}" -f ${p}.ExitCode)
-    }
 
     Start-Sleep -Seconds 3
+    # A non-zero installer exit is not fatal on its own: re-running this stage
+    # when PHD2 is already installed can return a non-zero Inno Setup code even
+    # though the app is present. phd2.exe presence is the authoritative success
+    # criterion (idempotent re-run); only fail when it is actually absent.
     ${phd2Exe} = Get-ChildItem -Path 'C:\Program Files', 'C:\Program Files (x86)' `
         -Recurse -Filter 'phd2.exe' -ErrorAction SilentlyContinue |
         Select-Object -First 1 -ExpandProperty FullName
+    if ($null -ne ${p}.ExitCode -and ${p}.ExitCode -ne 0) {
+        if (${phd2Exe}) {
+            Write-Phd2Log ("[WARN] installer exit {0} but phd2.exe present; treating as already-installed (idempotent re-run)." -f ${p}.ExitCode)
+        } else {
+            throw ("PHD2 installer failed with exit code {0} and phd2.exe is absent" -f ${p}.ExitCode)
+        }
+    }
     if (-not ${phd2Exe}) {
         throw "phd2.exe not found after installation"
     }

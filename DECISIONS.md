@@ -2,6 +2,40 @@
 
 ---
 
+## [2026-06-04] Installer providers: binary presence is the authoritative success criterion
+
+**Why:** Re-provisioning a unit (the autonomous loop's normal mode) re-runs installer
+stages that already succeeded. Several installers return a non-zero exit on a re-run
+even though the application is correctly installed: the Chrome Enterprise MSI returns
+1603/1638 ("an equal/newer version is already installed", no downgrade), and the Inno
+Setup / NSIS installers (PHD2, VS Code, PlaneWave PWI4 + PWShutter, Wireshark) return
+non-zero re-run codes. The providers treated any non-zero exit as fatal and threw, so a
+second `check-and-provision.ps1` cycle failed a unit that was actually fine. This broke
+the idempotency the autonomous loop depends on.
+
+**What:**
+
+- Across the `chrome`, `phd2`, `vscode`, `planewave`, and `wireshark` providers, the
+  installer exit code is now **advisory** and the presence of the target binary
+  (`chrome.exe`, `phd2.exe`, `Code.exe`, `pwi4.exe` + `PWShutter.exe`, `Wireshark.exe`)
+  is the **authoritative success criterion**. A non-zero exit with the binary present is
+  logged as an idempotent re-run and tolerated; a non-zero exit with the binary absent
+  still throws, so a genuine first-install failure still fails. (Chrome keeps its
+  existing special-case: 0 and 3010 are success; a `$null` exit stays inconclusive and
+  falls through to the presence check.)
+- `vm/run-prov-test.py`: the `--pull-repos` / `--rebuild-repos` path and the
+  non-build-phase connect now route through `connect_unit()` (prefers WinRM, falls back
+  to SSH) instead of `wait_for_winrm` + `winrm_session`, so a post-reboot Public-profile
+  WinRM-Basic 401 regression no longer blocks the run.
+
+**Implications:**
+
+- Providers no longer catch "the installer ran but silently did the wrong thing" from
+  the exit code alone; binary presence is the contract. A provider that must assert more
+  than presence (e.g. a minimum version) has to add that check explicitly.
+- Re-running any of these provider stages is now safe and is the expected steady-state
+  behavior under `check-and-provision.ps1`.
+
 ## [2026-06-04] One prep entry point: bootstrap-winrm.ps1; delete prepare-mast-client.ps1; strip onboard to post-bootstrap
 
 **Why:** First-time unit prep was implemented three times -- in

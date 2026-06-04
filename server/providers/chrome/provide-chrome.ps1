@@ -46,13 +46,23 @@ try {
     ${exit} = ${p}.ExitCode
     Write-ChromeLog ("msiexec exited. ExitCode={0}" -f ${exit})
     # 0 = success; 3010 = success, reboot required. A $null ExitCode is treated as
-    # inconclusive and falls through to the chrome.exe presence check below.
+    # inconclusive. Any OTHER non-zero exit is NOT fatal on its own: re-running
+    # this stage when an equal-or-newer Chrome is already installed makes the
+    # Enterprise MSI return 1603/1638 ("another version is already installed" /
+    # no downgrade). Presence of chrome.exe is the authoritative success
+    # criterion, so a non-success exit falls through to that check and only fails
+    # when the binary is actually absent -- this keeps the stage idempotent on
+    # re-run while still allowing a genuinely newer staged MSI to upgrade.
+    ${chromeExe} = "C:\Program Files\Google\Chrome\Application\chrome.exe"
     if ($null -ne ${exit} -and ${exit} -ne 0 -and ${exit} -ne 3010) {
-        throw ("msiexec failed installing Chrome (exit {0}). See {1}" -f ${exit}, ${msiLog})
+        if (Test-Path ${chromeExe}) {
+            Write-ChromeLog ("msiexec returned {0} but chrome.exe is already present; treating as already-installed (idempotent re-run). See {1}" -f ${exit}, ${msiLog})
+        } else {
+            throw ("msiexec failed installing Chrome (exit {0}) and chrome.exe is absent. See {1}" -f ${exit}, ${msiLog})
+        }
     }
 
     # Presence of chrome.exe is the authoritative success criterion.
-    ${chromeExe} = "C:\Program Files\Google\Chrome\Application\chrome.exe"
     if (-not (Test-Path ${chromeExe})) {
         throw ("Chrome executable not found after installation (msiexec exit: {0})" -f ${exit})
     }

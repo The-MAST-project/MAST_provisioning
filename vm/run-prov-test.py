@@ -110,6 +110,7 @@ from vm_lib import (
     _dispose_winrm_session,
     _ps_escape,
     check_rc,
+    connect_unit,
     load_creds,
     reset_to_clean_snapshot,
     run_ps,
@@ -1079,9 +1080,10 @@ def main() -> None:
         # --- one-shot special modes: --pull-repos and --rebuild-repos ---
         if args.pull_repos or args.rebuild_repos:
             try:
-                with timed("WAIT FOR WINRM"):
-                    wait_for_winrm(args.host_unit, creds["unit"], timeout=args.winrm_wait_seconds)
-                unit_session = winrm_session(args.host_unit, creds["unit"])
+                with timed("CONNECT UNIT"):
+                    unit_session = connect_unit(
+                        args.host_unit, creds["unit"], winrm_wait_s=args.winrm_wait_seconds
+                    )
                 run_id = "run-" + datetime.now().strftime("%Y%m%d-%H%M%S")
                 log_dir = setup_log_dir(1)
 
@@ -1144,12 +1146,15 @@ def main() -> None:
                         phase_build(args.hostname, modules, args.proxy_mode)
                         built = True
 
-                    # WINRM (needed for any non-build phase)
+                    # CONNECT (needed for any non-build phase). Prefers WinRM,
+                    # falls back to SSH if WinRM Basic is rejected (post-reboot
+                    # Public-profile 401 regression).
                     non_build = phases - {"build"}
                     if non_build and unit_session is None:
-                        with timed("WAIT FOR WINRM"):
-                            wait_for_winrm(args.host_unit, creds["unit"], timeout=args.winrm_wait_seconds)
-                        unit_session = winrm_session(args.host_unit, creds["unit"])
+                        with timed("CONNECT UNIT"):
+                            unit_session = connect_unit(
+                                args.host_unit, creds["unit"], winrm_wait_s=args.winrm_wait_seconds
+                            )
 
                     if not non_build:
                         log("No non-build phases selected; stopping after build.")

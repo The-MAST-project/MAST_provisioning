@@ -54,16 +54,24 @@ try {
     }
     try { ${p}.Refresh() } catch {}
     Write-VscodeLog ("VS Code setup exit code: {0}" -f ${p}.ExitCode)
-    if ($null -ne ${p}.ExitCode -and ${p}.ExitCode -ne 0) {
-        throw ("VS Code setup failed with exit code {0}. See Inno log: {1}" -f ${p}.ExitCode, ${innoLog})
-    }
 
     Start-Sleep -Seconds 5
 
     # UserSetup installs under the running account's LOCALAPPDATA by default.
+    # A non-zero installer exit is not fatal on its own: re-running this stage
+    # when VS Code is already installed can return a non-zero Inno code even
+    # though the app is present. Code.exe presence is the authoritative success
+    # criterion (idempotent re-run); only fail when it is actually absent.
     ${vscodeExe} = Get-ChildItem -Path 'C:\Program Files', "$env:LOCALAPPDATA\Programs" `
         -Recurse -Filter 'Code.exe' -ErrorAction SilentlyContinue |
         Select-Object -First 1 -ExpandProperty FullName
+    if ($null -ne ${p}.ExitCode -and ${p}.ExitCode -ne 0) {
+        if (${vscodeExe}) {
+            Write-VscodeLog ("[WARN] setup exit {0} but Code.exe present; treating as already-installed (idempotent re-run). See Inno log: {1}" -f ${p}.ExitCode, ${innoLog})
+        } else {
+            throw ("VS Code setup failed with exit code {0} and Code.exe is absent. See Inno log: {1}" -f ${p}.ExitCode, ${innoLog})
+        }
+    }
     if (-not ${vscodeExe}) {
         throw "Code.exe not found after installation (checked Program Files and LOCALAPPDATA\Programs)."
     }

@@ -47,11 +47,20 @@ try {
         Add-Content -LiteralPath ${logFile} -Encoding UTF8 -Value '--- installer stderr ---'
         Get-Content -LiteralPath ${stderrLog} -ErrorAction SilentlyContinue | Add-Content -LiteralPath ${logFile} -Encoding UTF8
     }
-    if ($null -ne ${p}.ExitCode -and ${p}.ExitCode -ne 0) {
-        throw ("Wireshark installer exited with code {0}" -f ${p}.ExitCode)
-    }
-
+    # A non-zero installer exit is not fatal on its own: re-running this stage
+    # when Wireshark is already installed can return a non-zero NSIS code even
+    # though the app is present. Wireshark.exe presence is the authoritative
+    # success criterion, so fall through to it and only fail when the binary is
+    # actually absent (idempotent re-run; a true first-install failure still
+    # fails because the exe will not be there).
     ${wiresharkExe} = Join-Path ${InstallRoot} "Wireshark.exe"
+    if ($null -ne ${p}.ExitCode -and ${p}.ExitCode -ne 0) {
+        if (Test-Path ${wiresharkExe}) {
+            Write-WiresharkLog ("[WARN] installer exit {0} but Wireshark.exe present; treating as already-installed (idempotent re-run)." -f ${p}.ExitCode)
+        } else {
+            throw ("Wireshark installer exited with code {0} and Wireshark.exe is absent" -f ${p}.ExitCode)
+        }
+    }
     if (-not (Test-Path ${wiresharkExe})) {
         throw ("Wireshark executable not found after installation at {0}" -f ${wiresharkExe})
     }
