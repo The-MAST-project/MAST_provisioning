@@ -2,6 +2,48 @@
 
 ---
 
+## [2026-06-07] Disable the Windows Firewall on units; telemetry/privacy hardening in bootstrap
+
+**Why:** MAST units sit on an isolated VLAN behind a perimeter firewall and need
+open intra-fleet traffic (DCOM/RPC for ASCOM, Prometheus scraping of
+windows-exporter, the control stack reaching each unit). Maintaining per-service
+host-firewall allow rules for every one of those flows is brittle and easy to
+get wrong; the host firewall adds no real protection on a network that is already
+isolated at the edge. Separately, the IoT Enterprise image ships with Microsoft
+diagnostic upload (DiagTrack), consumer/cloud content, Cortana/web search, and
+activity-feed telemetry enabled, none of which an unattended observatory unit
+should be running or phoning home.
+
+**What:** Adopted a standalone hardening script (`Disable-MastTelemetry`) into
+`client/bootstrap-winrm.ps1` rather than as a provider, since it is one-time
+machine config best applied under bootstrap's full interactive admin token:
+- **Windows Firewall turned OFF** on the Domain, Private, and Public profiles
+  (`Set-NetFirewallProfile -Enabled False`, with a `netsh advfirewall set
+  allprofiles state off` fallback). The pre-existing inbound rules for WinRM
+  (TCP 5985) and SSH (TCP 22) are kept deliberately: harmless while the firewall
+  is off, and they keep both services reachable immediately if the firewall is
+  ever re-enabled.
+- **Telemetry/privacy policy keys** (machine-wide HKLM): `AllowTelemetry=0`
+  ("Security" tier, honored only on Enterprise/Education/IoT SKUs -- which this
+  fleet is), WER off, advertising ID off, activity feed off, Cortana / web /
+  cloud search off, app background+location force-deny, Delivery Optimization
+  HTTP-only. The `DiagTrack` and `dmwappushservice` services are stopped and
+  disabled. The previously standalone `DisableWindowsConsumerFeatures` write in
+  the notification-suppression block was folded into this single table (DRY).
+
+**Implications:**
+- The host firewall is no longer a defense layer for units; isolation now relies
+  entirely on the perimeter firewall and VLAN segmentation. If a unit is ever
+  placed on a less-trusted network, this decision must be revisited.
+- The source script's Windows Update reboot-control keys (active hours,
+  `NoAutoRebootWithLoggedOnUsers`) were **not** adopted: bootstrap already fully
+  disables `wuauserv` via `Disable-WindowsAutoUpdate`, so those keys would be
+  inert. WU stays disabled during the provisioning lifecycle as before.
+- `AllowTelemetry=0` as "Security" is SKU-dependent; on a non-Enterprise/IoT SKU
+  it silently degrades to "Basic". Applies machine-wide and is idempotent.
+
+---
+
 ## [2026-06-04] Idempotency hardening: skip-if-present installers, WinRM file-dispatch, staging disk hygiene, unit-test tier
 
 **Why:** An end-to-end idempotency exercise (full provision, then re-provision the

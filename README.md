@@ -42,7 +42,7 @@ MAST_provisioning/
 |-- build/
 |   `-- build-mast.ps1                # Assembles staging\<host>\01-provisioning\
 |-- client/
-|   |-- bootstrap-winrm.ps1           # First-time unit prep (single source of truth): mast user, WinRM HTTP, firewall, OpenSSH, Npcap, rename, WU policy
+|   |-- bootstrap-winrm.ps1           # First-time unit prep (single source of truth): mast user, WinRM HTTP, OpenSSH, Npcap, rename, WU policy, telemetry/privacy hardening, Windows Firewall OFF (units sit behind a perimeter firewall; WinRM/SSH rules kept for re-enable)
 |   |-- execute-mast-provisioning.ps1 # Runs on the unit; iterates through commands.json
 |   |-- run-verify-only.ps1           # Runs on the unit; *-verify steps only (see below)
 |   `-- onboard-mast-unit.ps1         # Post-bootstrap onboarder: provision + register + handoff
@@ -282,8 +282,9 @@ VBoxManage startvm mast-unit --type gui
 #      and choose Run as administrator. For arguments (for example -MastHostName mast05),
 #      use an elevated Command Prompt instead:
 #         D:\bootstrap-winrm.cmd -MastHostName mast05
-#      Bootstrap does all first-time prep (mast user, WinRM, firewall, OpenSSH,
-#      Npcap, rename, WU policy); there is no separate prepare step.
+#      Bootstrap does all first-time prep (mast user, WinRM, OpenSSH, Npcap,
+#      rename, WU policy, telemetry/privacy hardening, Windows Firewall OFF);
+#      there is no separate prepare step.
 #   3) Power off cleanly.
 
 # Take the snapshots:

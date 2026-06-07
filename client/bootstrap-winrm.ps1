@@ -16,6 +16,12 @@
          has no working silent mode; operator clicks through once). The npcap installer
          (npcap-*.exe) must sit next to this script or under .\assets.
       6. Renames the computer to -MastHostName (reboot required before the new name is live).
+      7. Hardens telemetry/privacy: diagnostic data = Security (lowest), disables the
+         DiagTrack + dmwappushservice diagnostic-upload services, advertising ID,
+         activity feed, Cortana / web search, app background+location, etc.
+      8. Disables the Windows Firewall on all profiles. MAST units sit on an isolated
+         VLAN behind a perimeter firewall and need open intra-fleet traffic
+         (COM/RPC, Prometheus scraping, the control stack).
 
     This script performs ALL first-time prep; there is no separate prepare step. After it
     completes successfully, the operator verifies the summary and reboots if prompted. The unit
@@ -314,10 +320,10 @@ try {
     Write-BootstrapMsg '' 'Cyan'
     Write-BootstrapMsg '--- Suppressing Windows popup notifications ---' 'Cyan'
 
-    # Machine-wide: disable consumer cloud content / "Get even more out of Windows" nags
-    $ccPath = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\CloudContent'
-    New-Item -Path $ccPath -Force -ErrorAction SilentlyContinue | Out-Null
-    Set-ItemProperty -Path $ccPath -Name 'DisableWindowsConsumerFeatures' -Value 1 -Type DWord -Force
+    # Machine-wide consumer cloud content ("Get even more out of Windows" nags) is
+    # disabled in the telemetry/privacy hardening table below (DisableWindowsConsumerFeatures),
+    # so it is not duplicated here. This section keeps the per-user (HKCU) toast /
+    # content-delivery suppressions and the backup-reminder task disable.
 
     # Machine-wide: disable Windows Backup scheduled tasks that trigger backup reminder popups
     foreach ($taskName in @('Automatic Backup', 'ConfigNotification')) {
@@ -389,6 +395,75 @@ try {
     }
 
     Write-BootstrapMsg '  Windows popup/notification suppressions applied.' 'Green'
+
+    # --- Hardening: telemetry / privacy ---
+    #
+    # Machine-wide HKLM policy keys plus the two diagnostic-upload services.
+    # Adapted from the standalone Disable-MastTelemetry hardening script.
+    # AllowTelemetry=0 ("Security" tier) is only honored on Enterprise/Education/IoT
+    # SKUs -- which this fleet is (Win10 IoT Enterprise LTSC 2021). Idempotent.
+    #
+    # NOTE: the source script also carried Windows Update reboot-control keys
+    # (active hours, NoAutoRebootWithLoggedOnUsers). Those are intentionally NOT
+    # applied here: bootstrap fully disables wuauserv via Disable-WindowsAutoUpdate
+    # (see the Windows Update section above), so active-hours keys would be inert.
+    Write-BootstrapMsg '' 'Cyan'
+    Write-BootstrapMsg '--- Hardening: telemetry / privacy ---' 'Cyan'
+
+    $dataCollection = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection'
+    $cloudContent   = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\CloudContent'
+    $sys            = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\System'
+    $search         = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Search'
+    $appPrivacy     = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy'
+
+    $hardeningReg = @(
+        @{ Path = $dataCollection; Name = 'AllowTelemetry';                Value = 0; Desc = 'Diagnostic data = Security (lowest)' }
+        @{ Path = $dataCollection; Name = 'DoNotShowFeedbackNotifications'; Value = 1; Desc = 'No feedback prompts' }
+        @{ Path = $dataCollection; Name = 'AllowDeviceNameInTelemetry';     Value = 0; Desc = 'No device name in telemetry' }
+        @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Error Reporting'; Name = 'Disabled'; Value = 1; Desc = 'Windows Error Reporting off' }
+        @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\AdvertisingInfo'; Name = 'DisabledByGroupPolicy'; Value = 1; Desc = 'Advertising ID off' }
+        @{ Path = $sys;            Name = 'EnableActivityFeed';            Value = 0; Desc = 'Activity feed off' }
+        @{ Path = $sys;            Name = 'PublishUserActivities';         Value = 0; Desc = 'No activity publishing' }
+        @{ Path = $sys;            Name = 'UploadUserActivities';          Value = 0; Desc = 'No activity upload' }
+        @{ Path = $cloudContent;   Name = 'DisableWindowsConsumerFeatures'; Value = 1; Desc = 'No consumer features' }
+        @{ Path = $cloudContent;   Name = 'DisableSoftLanding';            Value = 1; Desc = 'No tips / soft landing' }
+        @{ Path = $cloudContent;   Name = 'DisableConsumerAccountStateContent'; Value = 1; Desc = 'No account suggestions' }
+        @{ Path = $search;         Name = 'AllowCortana';                  Value = 0; Desc = 'Cortana off' }
+        @{ Path = $search;         Name = 'DisableWebSearch';              Value = 1; Desc = 'No web in Start search' }
+        @{ Path = $search;         Name = 'ConnectedSearchUseWeb';         Value = 0; Desc = 'No connected web search' }
+        @{ Path = $search;         Name = 'AllowCloudSearch';              Value = 0; Desc = 'No cloud search' }
+        @{ Path = $appPrivacy;     Name = 'LetAppsRunInBackground';        Value = 2; Desc = 'Background apps = Force Deny' }
+        @{ Path = $appPrivacy;     Name = 'LetAppsAccessLocation';         Value = 2; Desc = 'App location = Force Deny' }
+        @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DeliveryOptimization'; Name = 'DODownloadMode'; Value = 0; Desc = 'Delivery Optimization = HTTP only' }
+    )
+
+    $hardeningOk = 0
+    foreach ($r in $hardeningReg) {
+        try {
+            if (-not (Test-Path $r.Path)) { New-Item -Path $r.Path -Force | Out-Null }
+            Set-ItemProperty -Path $r.Path -Name $r.Name -Value $r.Value -Type DWord -Force -ErrorAction Stop
+            $hardeningOk++
+        } catch {
+            Write-BootstrapMsg ("  WARN: could not set {0}\{1}: {2}" -f $r.Path, $r.Name, $_.Exception.Message) 'Yellow'
+        }
+    }
+    Write-BootstrapMsg ("  Applied {0}/{1} telemetry/privacy policy keys." -f $hardeningOk, $hardeningReg.Count) 'Green'
+
+    # Diagnostic-upload services: stop + disable so AllowTelemetry=0 is not undermined.
+    foreach ($svc in @('DiagTrack', 'dmwappushservice')) {
+        $s = Get-Service -Name $svc -ErrorAction SilentlyContinue
+        if ($null -eq $s) {
+            Write-BootstrapMsg ("  Service '{0}' not present; skipping." -f $svc) 'DarkGray'
+            continue
+        }
+        try {
+            if ($s.Status -ne 'Stopped') { Stop-Service -Name $svc -Force -ErrorAction SilentlyContinue }
+            Set-Service -Name $svc -StartupType Disabled -ErrorAction Stop
+            Write-BootstrapMsg ("  Service '{0}' stopped + disabled." -f $svc) 'Green'
+        } catch {
+            Write-BootstrapMsg ("  WARN: could not disable service '{0}': {1}" -f $svc, $_.Exception.Message) 'Yellow'
+        }
+    }
 
     # --- WinRM ---
     Write-BootstrapMsg '' 'Cyan'
@@ -564,6 +639,30 @@ try {
         }
     } else {
         Write-BootstrapMsg ("  sshd_config not found at {0} (capability may have failed earlier)." -f $sshdCfg) 'Yellow'
+    }
+
+    # --- Windows Firewall: disable (perimeter-protected fleet) ---
+    #
+    # MAST units sit on an isolated VLAN behind a perimeter firewall and need open
+    # intra-fleet traffic (COM/RPC, Prometheus scraping, the control stack), so the
+    # host Windows Firewall is turned off on all three profiles. The explicit
+    # 5985 (WinRM) and 22 (SSH) inbound rules added above are kept deliberately:
+    # they are harmless while the firewall is off and keep both services reachable
+    # immediately if the firewall is ever re-enabled. See DECISIONS.md.
+    Write-BootstrapMsg '' 'Cyan'
+    Write-BootstrapMsg '--- Windows Firewall: disable (perimeter-protected) ---' 'Cyan'
+    try {
+        Set-NetFirewallProfile -Profile Domain, Private, Public -Enabled False -ErrorAction Stop
+        Write-BootstrapMsg '  Windows Firewall disabled on Domain, Private, Public profiles.' 'Green'
+    } catch {
+        Write-BootstrapMsg ("  WARN: could not disable Windows Firewall via Set-NetFirewallProfile: {0}" -f $_.Exception.Message) 'Yellow'
+        $fwCmd = 'netsh advfirewall set allprofiles state off'
+        $null = cmd.exe /c $fwCmd 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            Write-BootstrapMsg '  Windows Firewall disabled via netsh advfirewall (fallback).' 'Green'
+        } else {
+            Write-BootstrapMsg ("  WARN: netsh advfirewall fallback also failed (exit {0}); firewall may still be on." -f $LASTEXITCODE) 'Yellow'
+        }
     }
 
     # --- Npcap packet-capture driver ---
