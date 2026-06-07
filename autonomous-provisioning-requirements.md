@@ -116,6 +116,86 @@ provisioning server** drives unit updates on cadence.
 
 ---
 
+### Running the provisioning server on Linux (OS portability)
+
+> **Status: assessment, not committed work.** Everything above assumes the single
+> provisioning server is **Windows** (see **Single provisioning server** and the
+> Architecture Overview). This subsection records what would have to change to run the
+> **control plane** on a **Linux** host instead. It is scoped to the prov server only --
+> the MAST units stay Windows IoT, and nothing about the unit-side scripts
+> (`client/*.ps1`), the WinRM contract, or the SMB-pull transfer *protocol* changes.
+
+**Why capture this now:** the Windows dependency is concentrated in a handful of
+server-side setup scripts, not in the core loop. Writing the coupling down keeps a future
+port cheap and stops new Windows-only assumptions from leaking into
+`check-and-provision.ps1` unnoticed.
+
+#### Already portable (no work)
+
+- **WinRM client to units.** Both transports work from Linux: the Python orchestrators
+  (`tools/run-remote-script-winrm.py`, `vm/vm_lib.py`) use `pywinrm`, and
+  `check-and-provision.ps1`'s `New-PSSession` / `Invoke-Command` over HTTP 5985 + Basic
+  runs under PowerShell 7+ (`pwsh`) on Linux. No WSMan or Windows-only client API is
+  required. (This is the one place the repo's "target Windows PowerShell 5.1" rule in
+  `CLAUDE.md` is relaxed -- the *driver* would run under `pwsh`, while the unit-side
+  scripts it invokes remain 5.1.)
+- **Hash compare / drift detection**, module resolution (`server/lib/mast-modules.psm1`),
+  and DNS resolution (`[System.Net.Dns]::GetHostAddresses`) are `pwsh`-portable as-is.
+
+#### Hard blockers (require replacement, not a port)
+
+| # | Area | Windows-coupled today | Linux replacement |
+|---|------|-----------------------|-------------------|
+| L1 | **SMB share hosting** (`mast-staging`) | `server/setup-smb-share.ps1` uses `New-SmbShare` / `Get-SmbShare` / `Set-SmbShare -EncryptData`, NTFS ACLs (`Get-Acl` / `Set-Acl` / `SecurityIdentifier`), and `New-LocalUser` / `Set-LocalUser` for the transfer account; `server/lib/preflight-smb.ps1` uses `Get-SmbServerConfiguration` / `Get-SmbServerNetworkInterface` / `Get-Service LanmanServer`. | **Samba**: `smb.conf` share, `smbpasswd` / `pdbedit` for the `mast-transfer` account, share-level `valid users` / `read only`, SMB3 encryption settings. The unit pulls the same UNC path; only the server end changes. See **Transfer: Prov Server -> Unit**. |
+| L2 | **Scheduling / process supervision** | `server/install-scheduled-task.ps1` (`Register-ScheduledTask`, `-Execute powershell.exe`, `-RepetitionInterval`, `-UserId SYSTEM`, battery/wake settings). | A **long-lived supervised service** is preferred over both Task Scheduler and cron -- see **Driver as a long-lived service (preferred over Task Scheduler / cron)** under Components. On Linux that is a **systemd** service unit running the driver as a daemon; the "scheduled task fired but driver never wrote `last-run.json`" detection (**Driver self-monitoring**) re-expresses as a systemd `WatchdogSec=` / `OnFailure=` + journal check. |
+| L3 | **Build tooling** | `build/build-mast.ps1` shells to `robocopy`, `cmd /c mklink /J` and `mklink /H` (the hardlink dedup path in **Staging area lifecycle and shared-payload deduplication**), `Split-Path -Qualifier` + `Get-PSDrive` for free space, and a `WindowsPrincipal` admin check. | `rsync` / `cp`, `ln -s` / `ln`, `df` / `stat`, `id -u`. |
+
+#### Medium blockers (logic + doc changes)
+
+- **Timezone IDs -- silent correctness bug.** `check-and-provision.ps1` calls
+  `[System.TimeZoneInfo]::FindSystemTimeZoneById($tz)` on each unit's `timezone`, and
+  `docs/provisioning-server-setup.md` tells operators to use **Windows** TZ names
+  (`tzutil /l`, e.g. `"Israel Standard Time"`). Those IDs do not exist on Linux .NET, so
+  the lookup fails and falls back to server-local time -- **quietly defeating the
+  already-shipped maintenance-window enforcement**. Fix: store **IANA** IDs
+  (`Asia/Jerusalem`) in `unit-registry.json` and update the setup doc, or add a
+  Windows->IANA mapping layer. (The example registry in **Components** already shows
+  `America/Los_Angeles`, which is IANA -- so the registry format is *already* inconsistent
+  with the setup doc, independent of any port.)
+- **Credential model.** `ConvertTo-SecureString -AsPlainText` + `PSCredential` work under
+  `pwsh` but there is no DPAPI on Linux, and the **Open Questions** entry on git/LFS
+  credentials lists Windows Credential Manager as an option. Pick a Linux secret story
+  (`chmod 600` on `vault/`, `pass`, systemd credentials, or a deploy key) and resolve that
+  open question for the Linux case.
+- **Path / identity assumptions.** Hardcoded `C:\MAST\...`, `$env:SystemDrive`,
+  `$env:USERNAME -eq 'SYSTEM'`, and UNC `\\server\share` strings appear across the server
+  scripts and `server/lib/mast-log.ps1` log roots. Parameterize a root (e.g. `/var/mast`),
+  translate the UNC pull path to the Samba export, and change the SYSTEM identity check to
+  the Linux service account / `root`.
+
+#### Phase 2/3 items that assume Windows on the server
+
+Not needed for the core loop, but each is specified server-side elsewhere in this document
+and bakes in Windows:
+
+- **Windows Event Log integration** (`RUN_END` -> Event ID 1000/1001/1002) -- becomes
+  journald/syslog, or is dropped in favor of the derived Prometheus metric.
+- **`Send-MailMessage` alerting** (`-AlertEmail`) -- works under `pwsh` but is deprecated;
+  pick an SMTP method.
+- **Prov-server observability** (**Observability agents** -> Prov-server side) names
+  `windows-exporter-monitoring` for the server itself -- on Linux that is `node_exporter`.
+
+#### Suggested order if the port is ever taken on
+
+1. Samba share + transfer account (L1) -- the loop cannot deliver payloads without it.
+2. Long-lived service wrapper (L2; systemd on Linux, see Components).
+3. `build-mast.ps1` tool swaps (L3) -- needed before any build runs.
+4. Timezone IDs -- small fix, but a silent bug that defeats a shipped feature.
+5. Path / credential parameterization -- cross-cutting; do alongside the above.
+6. Defer the Phase 3 observability pieces (Event Log / exporter) with the rest of Phase 3.
+
+---
+
 ### Components
 
 #### 1. Unit Registry (`unit-registry.json`) **[DONE]**
@@ -241,6 +321,83 @@ The task has **not** yet been installed on the provisioning server; that is a on
 operator step (elevated `.\server\install-scheduled-task.ps1`, documented in
 `docs/provisioning-server-setup.md` Step 7). Phase 1 driver self-monitoring (heartbeat
 + `last-run.json`) can land before or after this activation -- it is not gating.
+
+**Preferred direction:** a periodic-fire scheduler (Task Scheduler or cron) is the
+*current* mechanism, but the better long-term shape is a **long-lived supervised
+service** that owns the loop internally rather than a fresh process spun up every N
+minutes. See **6. Driver as a long-lived service** below.
+
+#### 6. Driver as a long-lived service (preferred over Task Scheduler / cron)
+
+**Requirement (target):** run the autonomous loop as a **single long-lived, supervised
+service process** -- a first-class daemon that starts at boot, owns the provisioning
+cadence itself, and is restarted by a service supervisor if it dies. This is preferred
+over Task Scheduler (Windows) and cron (Linux), both of which fire a **new** process per
+cycle and treat the driver as a stateless one-shot.
+
+**Why a service beats a periodic-fire scheduler:**
+
+- **State survives across cycles.** A resident process keeps the heartbeat, in-flight
+  unit, and last-run bookkeeping in memory; with a per-fire scheduler every cycle
+  reconstructs that from disk. This is the natural home for the **Driver self-monitoring**
+  heartbeat -- a watchdog ping per cycle, not a file other tooling has to age-check.
+- **Real liveness, not "is the task still listed."** A service supervisor distinguishes
+  *running*, *crashed*, and *hung* and acts on each. A scheduled task that is "still
+  running" tells you nothing about a wedged cycle (this is exactly the **Open Questions**
+  concern: a hung -- not crashed -- driver is currently invisible). A watchdog timer on
+  the service kills and restarts a cycle that stops pinging.
+- **Single, self-limiting concurrency.** The service runs cycles **sequentially** in one
+  process (queue depth 1), so it can never overlap itself the way two scheduler fires can
+  if a cycle runs long. That removes a whole class of "two drivers touching the same unit"
+  races at the source rather than guarding against them with a lock.
+- **Owned lifecycle for sessions and resources.** Ties directly to **Long-lived hosts and
+  no resource leaks** (Phase 2): the service disposes WinRM / PSSession handles at the end
+  of every cycle and self-recycles on a cap (see below) so slow leaks cannot accumulate.
+- **Clean restart and boot recovery.** Auto-start at boot means a prov-server reboot
+  resumes the loop with no operator action; restart-on-failure with backoff means a
+  transient crash self-heals.
+- **Cadence decoupled from OS scheduler quirks.** The interval is a service parameter, not
+  a Task Scheduler trigger or crontab line, so changing it (or pausing the loop for
+  maintenance) is a config edit, not a re-registration.
+
+**Driver refactor (single source of truth):** add a daemon entry mode to the driver while
+keeping the per-cycle body identical to the one-shot path -- the loop simply calls the
+same cycle function repeatedly:
+
+```
+check-and-provision.ps1 -Loop -LoopIntervalSeconds 1800   # service mode: cycle, sleep, repeat, forever
+check-and-provision.ps1 -Once                              # manual / dry-run: exactly one cycle, then exit (today's behavior)
+```
+
+`-Once` (the existing behavior) stays the supported path for manual runs, dry-runs, and
+CI. The service wrapper invokes `-Loop`. Do **not** fork the cycle logic between the two
+modes; `-Loop` is `while ($true) { Invoke-Cycle; Start-Sleep ... }` around the same code
+`-Once` runs.
+
+**Supervisor by platform:**
+
+| Platform | Supervisor | Key settings |
+|----------|-----------|--------------|
+| **Windows** | **NSSM-managed service** (same pattern the units already use for `MAST_unit` / `PWI4` / `PWShutter`) or a native Windows service wrapper. | Auto-start; `AppRestartDelay` backoff; stdout/stderr to rotating logs; runs under the non-elevated service account from **Provisioning server privilege model**. |
+| **Linux** | **systemd service unit** (`Type=notify` so the driver can `sd_notify` readiness + watchdog pings). | `Restart=on-failure`, `RestartSec=`, `WatchdogSec=` (cycle pings `WATCHDOG=1`), `RuntimeMaxSec=` as a periodic self-recycle backstop, journald capture, `User=` service account. |
+
+**Self-monitoring / watchdog integration:** each cycle emits the **Driver self-monitoring**
+heartbeat *and* pings the supervisor watchdog. A cycle that hangs past the watchdog
+interval is killed and the service restarted, converting today's silent-hang failure mode
+into an automatic recovery plus a logged restart. `last-run.json` is still written at
+every cycle exit so external consumers and Phase 3 alerting keep their freshness check.
+
+**Resource-leak backstop:** even with per-cycle session disposal, a long-lived process
+should **self-recycle** on a bound (e.g. `RuntimeMaxSec=` on Linux, or an internal "exit
+after N cycles / M hours so the supervisor restarts me" on Windows). A fresh process
+periodically is cheap insurance against slow handle/memory growth in a host expected to
+run for weeks.
+
+**Migration note:** `server/install-scheduled-task.ps1` and the Task Scheduler path remain
+valid and are the lower-effort option today; the service is the recommended end state.
+Because both just invoke the same driver, moving from scheduler to service is a wrapper
+swap, not a driver rewrite -- which is also why this lands cleanly alongside the Linux port
+(L2 in **Running the provisioning server on Linux**), where systemd is the supervisor.
 
 ---
 
