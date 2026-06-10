@@ -2,6 +2,56 @@
 
 ---
 
+## [2026-06-10] Bootstrap trims vendor services by default and enforces DHCP addressing
+
+**Why:** Two follow-ons to the 2026-06-07 firewall/telemetry hardening, both
+applied during the same one-time bootstrap pass:
+- The IoT Enterprise image and OEM hardware ship a pile of services with no role
+  on a headless control box -- Print Spooler (a recurring CVE surface,
+  PrintNightmare), Windows Search indexing (constant disk I/O), Intel ME / LMS /
+  DAL, and ASUS / Intel GCC / Realtek vendor helpers. They cost I/O and attack
+  surface for zero benefit on an unattended observatory unit.
+- The fleet identifies a unit **only** by hostname and requires DHCP for IPv4
+  (autonomous-provisioning-requirements.md "Identity and addressing"); discovery
+  is by name (DNS / hosts), never a pinned address. Nothing in provisioning
+  actually *enforced* DHCP, so a unit hand-set to a static IP during imaging or
+  bench testing would silently violate that assumption and become undiscoverable.
+
+**What:** Extended `client/bootstrap-winrm.ps1`:
+- **Service trim, applied by default.** A `$TrimList` (Spooler, WSearch, LMS,
+  AsusCertService, IGCCService, RtkAudioUniversalService, jhi_service,
+  WMIRegistrationService) is stopped + disabled on every run. Service short-names
+  vary by driver version, so each entry carries a display-name pattern fallback
+  (`Resolve-MastTrimService`); anything that matches neither is reported "not
+  present" and skipped. Operators can exempt specific services with `-SkipTrim`
+  (e.g. `-SkipTrim Spooler,WSearch`). `DiagTrack`/`dmwappushservice` are NOT in
+  this list -- they remain in the telemetry section and are never exempted. An
+  apps-to-uninstall-by-hand reminder (AnyDesk, VNC, Macrium, etc.) prints at the
+  end of every run. (This started as an opt-in `-TrimServices` switch ported from
+  a standalone hardening script, then was made the default; the switch was
+  removed.)
+- **DHCP safeguard.** A new `Set-MastAdaptersToDhcp` runs just before the WinRM /
+  network-profile work. It walks physical adapters that are `Up`, and for any whose
+  IPv4 interface is on a static config switches it back to DHCP for both address
+  and DNS (`netsh interface ip set address|set dns ... source=dhcp`, with a
+  `Set-NetIPInterface -Dhcp Enabled` + `Set-DnsClientServerAddress
+  -ResetServerAddresses` fallback), then `ipconfig /renew`. Adapters already on
+  DHCP are left untouched.
+
+**Implications:**
+- The service trim is now a behavior change for **all** bootstraps, not opt-in:
+  any unit that ever needs printing or Start-menu search must be bootstrapped with
+  an explicit `-SkipTrim Spooler` / `-SkipTrim WSearch`. The trim is idempotent and
+  re-running bootstrap re-asserts it.
+- `netsh ... source=dhcp` is preferred over `Set-NetIPInterface -Dhcp Enabled`
+  alone because the latter can leave a stale static IP/gateway bound. The DHCP
+  switch only fires on adapters currently static, so a healthy DHCP unit sees no
+  lease churn and no link blip on re-run. The corollary: bootstrap must be run
+  locally/interactively (as documented) -- if it were ever run over a static-IP
+  remote link, switching that adapter to DHCP would drop the session mid-run.
+
+---
+
 ## [2026-06-07] Disable the Windows Firewall on units; telemetry/privacy hardening in bootstrap
 
 **Why:** MAST units sit on an isolated VLAN behind a perimeter firewall and need

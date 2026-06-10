@@ -11,17 +11,25 @@
       1. Leaves the OEM factory local account (default 'user') intact; creates a separate 'mast' account.
       2. Ensures 'mast' is a local administrator with the provisioning password.
       3. Suppresses Windows Update automatic installs.
-      4. Enables WinRM over HTTP (5985) with Basic auth and opens firewall port 5985.
-      5. Installs the Npcap packet-capture driver via its interactive GUI (the free edition
+      4. Ensures IPv4 uses DHCP. The fleet identifies units by hostname and requires
+         DHCP addressing; if an adapter was hand-set to a static IP it is switched
+         back to DHCP (IP + DNS). Adapters already on DHCP are left untouched.
+      5. Enables WinRM over HTTP (5985) with Basic auth and opens firewall port 5985.
+      6. Installs the Npcap packet-capture driver via its interactive GUI (the free edition
          has no working silent mode; operator clicks through once). The npcap installer
          (npcap-*.exe) must sit next to this script or under .\assets.
-      6. Renames the computer to -MastHostName (reboot required before the new name is live).
-      7. Hardens telemetry/privacy: diagnostic data = Security (lowest), disables the
+      7. Renames the computer to -MastHostName (reboot required before the new name is live).
+      8. Hardens telemetry/privacy: diagnostic data = Security (lowest), disables the
          DiagTrack + dmwappushservice diagnostic-upload services, advertising ID,
          activity feed, Cortana / web search, app background+location, etc.
-      8. Disables the Windows Firewall on all profiles. MAST units sit on an isolated
+      9. Disables the Windows Firewall on all profiles. MAST units sit on an isolated
          VLAN behind a perimeter firewall and need open intra-fleet traffic
          (COM/RPC, Prometheus scraping, the control stack).
+     10. Stops + disables non-essential / vendor services that have no role on a
+         headless control box (Print Spooler, Windows Search, Intel LMS, ASUS /
+         Intel GCC / Realtek helpers). Applied by default; each is skippable via
+         -SkipTrim. Remote-desktop and backup APPS are left to uninstall by hand -
+         listed at the end of a run.
 
     This script performs ALL first-time prep; there is no separate prepare step. After it
     completes successfully, the operator verifies the summary and reboots if prompted. The unit
@@ -63,6 +71,14 @@
     Adds a hosts file entry mapping mast-wis-control -> 192.168.56.1 (the VirtualBox host-only
     host IP) so the MongoDB client inside the VM connects to the host machine's MongoDB instance.
     The entry is marked with # MAST-VM-TEST-ONLY for easy identification and removal.
+
+.PARAMETER SkipTrim
+    Service short-names to leave alone when the non-essential / vendor service trim
+    runs (Print Spooler, Windows Search, Intel LMS, ASUS / Intel GCC / Realtek
+    helpers), e.g. -SkipTrim WSearch,Spooler. The trim is applied by default;
+    -SkipTrim is the only way to exempt specific services. Service names vary by
+    driver version, so each entry carries a display-name fallback; anything not
+    found is just reported "not present". Idempotent; safe to re-run.
 #>
 
 param(
@@ -74,7 +90,8 @@ param(
     [switch]$NonInteractive,
     [switch]$RebootAfterBootstrap,
     [switch]$SkipComputerRename,
-    [switch]$VmTestRun
+    [switch]$VmTestRun,
+    [string[]]$SkipTrim = @()
 )
 
 Set-StrictMode -Version Latest
@@ -87,6 +104,33 @@ $script:BootstrapLogDir = Join-Path $env:SystemDrive 'MAST\logs'
 $script:BootstrapLog = Join-Path $script:BootstrapLogDir 'bootstrap-winrm.log'
 $script:RebootRecommended = $false
 $script:AllowUnencryptedOk = $false
+
+# --- Service trim list (applied by default; exempt with -SkipTrim) ------------
+# Non-essential / vendor services with no role on a headless control box. Service
+# names vary by driver version, so each row carries a display-name fallback (Match);
+# anything not found is reported "not present". The DiagTrack + dmwappushservice
+# diagnostic-upload services are NOT here -- they are disabled separately in the
+# telemetry section and are never exempted by -SkipTrim.
+$script:TrimList = @(
+    @{ Name = 'Spooler';                  Match = '*Print Spooler*';            Desc = 'Print Spooler - no printing; PrintNightmare surface' }
+    @{ Name = 'WSearch';                  Match = '*Windows Search*';           Desc = 'Windows Search indexing - I/O overhead' }
+    @{ Name = 'LMS';                      Match = '*Local Management Service*'; Desc = 'Intel Local Management Service (AMT/ME)' }
+    @{ Name = 'AsusCertService';          Match = '*Asus*Cert*';                Desc = 'ASUS Certificate Service (vendor utility)' }
+    @{ Name = 'IGCCService';              Match = '*Graphics Command Center*';  Desc = 'Intel Graphics Command Center service' }
+    @{ Name = 'RtkAudioUniversalService'; Match = '*Realtek*Audio*';            Desc = 'Realtek audio service (no audio use)' }
+    @{ Name = 'jhi_service';              Match = '*DAL*Host Interface*';       Desc = 'Intel DAL Host Interface (ME)' }
+    @{ Name = 'WMIRegistrationService';   Match = '*WMI*Registration*';         Desc = 'Intel ME WMI registration (vendor)' }
+)
+
+# Apps to remove by hand (Settings > Apps) - not services, so not scripted. Printed
+# as a reminder at the end of every run.
+$script:AppsToUninstall = @(
+    'AnyDesk                       - third-party remote desktop (cloud relay); keep NoMachine + SSH instead'
+    'VNC server (RealVNC/TightVNC) - redundant remote desktop (vncserver / vncagent)'
+    'Macrium Reflect               - ONLY if this unit is not using it for imaging/backup'
+    'ASUS Armoury Crate / AI Suite - optional; the AsusCertService is disabled by the service trim'
+    'Intel Graphics Command Center - optional; the IGCC service is disabled by the service trim'
+)
 
 $null = New-Item -ItemType Directory -Path $script:BootstrapLogDir -Force -ErrorAction SilentlyContinue
 
@@ -111,6 +155,78 @@ function Test-MastNetFirewallRuleExists {
         return [bool](Get-NetFirewallRule -DisplayName $DisplayName -ErrorAction SilentlyContinue)
     } catch {
         return $false
+    }
+}
+
+function Resolve-MastTrimService {
+    # Find a trim entry's service by exact short-name, else by display-name pattern.
+    param($Entry)
+    $s = Get-Service -Name $Entry.Name -ErrorAction SilentlyContinue
+    if (-not $s -and $Entry.Match) {
+        $s = Get-Service -ErrorAction SilentlyContinue |
+            Where-Object { $_.DisplayName -like $Entry.Match } | Select-Object -First 1
+    }
+    $s
+}
+
+function Set-MastAdaptersToDhcp {
+    # Safeguard: the MAST fleet identifies units by hostname and REQUIRES DHCP for
+    # IPv4 (autonomous-provisioning-requirements.md "Identity and addressing"). If a
+    # unit was hand-set to a static address, switch its physical adapters back to
+    # DHCP (IP + DNS). Only adapters currently on static IPv4 are touched, so a unit
+    # already on DHCP is left undisturbed (no lease churn, no link blip). Idempotent.
+    $adapters = @()
+    try {
+        $adapters = @(Get-NetAdapter -Physical -ErrorAction Stop | Where-Object { $_.Status -eq 'Up' })
+    } catch {
+        Write-BootstrapMsg ("  WARN: Get-NetAdapter failed: {0}" -f $_.Exception.Message) 'Yellow'
+        return
+    }
+    if (-not $adapters) {
+        Write-BootstrapMsg '  No physical adapters are Up; nothing to check.' 'DarkGray'
+        return
+    }
+    $changed = 0
+    foreach ($a in $adapters) {
+        $iface = $null
+        try {
+            $iface = Get-NetIPInterface -InterfaceIndex $a.ifIndex -AddressFamily IPv4 -ErrorAction Stop
+        } catch {
+            Write-BootstrapMsg ("  WARN: cannot read IPv4 interface for '{0}': {1}" -f $a.Name, $_.Exception.Message) 'Yellow'
+            continue
+        }
+        if ($iface.Dhcp -eq 'Enabled') {
+            Write-BootstrapMsg ("  '{0}' already uses DHCP for IPv4; leaving as-is." -f $a.Name) 'DarkGray'
+            continue
+        }
+        Write-BootstrapMsg ("  '{0}' is on a static IPv4 config; switching to DHCP (IP + DNS)..." -f $a.Name) 'White'
+        # netsh 'source=dhcp' switches address+gateway to DHCP and clears the static
+        # entry in one step; Set-NetIPInterface -Dhcp Enabled alone can leave a stale
+        # static IP behind. netsh takes the adapter alias (may contain spaces).
+        $alias = $a.Name
+        $null = cmd.exe /c ('netsh interface ip set address name="{0}" source=dhcp' -f $alias) 2>&1
+        $ipRc = $LASTEXITCODE
+        $null = cmd.exe /c ('netsh interface ip set dns name="{0}" source=dhcp register=primary' -f $alias) 2>&1
+        $dnsRc = $LASTEXITCODE
+        if ($ipRc -eq 0 -and $dnsRc -eq 0) {
+            Write-BootstrapMsg ("  '{0}' switched to DHCP (IPv4 + DNS)." -f $alias) 'Green'
+            $changed++
+        } else {
+            Write-BootstrapMsg ("  WARN: netsh DHCP switch for '{0}' returned ip={1} dns={2}; trying Set-NetIPInterface fallback." -f $alias, $ipRc, $dnsRc) 'Yellow'
+            try {
+                Set-NetIPInterface -InterfaceIndex $a.ifIndex -AddressFamily IPv4 -Dhcp Enabled -ErrorAction Stop
+                Set-DnsClientServerAddress -InterfaceIndex $a.ifIndex -ResetServerAddresses -ErrorAction Stop
+                Write-BootstrapMsg ("  '{0}' switched to DHCP via Set-NetIPInterface fallback." -f $alias) 'Green'
+                $changed++
+            } catch {
+                Write-BootstrapMsg ("  WARN: could not switch '{0}' to DHCP: {1}" -f $alias, $_.Exception.Message) 'Yellow'
+            }
+        }
+    }
+    if ($changed -gt 0) {
+        # Acquire a fresh lease before WinRM / network-profile work runs.
+        Write-BootstrapMsg ("  Renewing DHCP lease on {0} adapter(s)..." -f $changed) 'DarkGray'
+        try { $null = cmd.exe /c 'ipconfig /renew' 2>&1 } catch { }
     }
 }
 
@@ -465,6 +581,43 @@ try {
         }
     }
 
+    # --- Trim non-essential / vendor services ---
+    #
+    # Stops + disables the services in $script:TrimList (Print Spooler, Windows
+    # Search, Intel LMS, ASUS / Intel GCC / Realtek helpers) that have no role on
+    # a headless control box. Applied by default; exempt specific services with
+    # -SkipTrim. Names vary by driver version, so Resolve-MastTrimService falls
+    # back to a display-name pattern; a service that resolves to neither is
+    # reported "not present" and skipped. Idempotent.
+    Write-BootstrapMsg '' 'Cyan'
+    Write-BootstrapMsg '--- Trimming non-essential / vendor services ---' 'Cyan'
+    $trimmed = 0
+    foreach ($t in $script:TrimList) {
+        if ($SkipTrim -contains $t.Name) {
+            Write-BootstrapMsg ("  Skipping '{0}' (-SkipTrim): {1}" -f $t.Name, $t.Desc) 'DarkGray'
+            continue
+        }
+        $s = Resolve-MastTrimService $t
+        if ($null -eq $s) {
+            Write-BootstrapMsg ("  '{0}' not present; skipping. ({1})" -f $t.Name, $t.Desc) 'DarkGray'
+            continue
+        }
+        try {
+            if ($s.Status -ne 'Stopped') { Stop-Service -Name $s.Name -Force -ErrorAction SilentlyContinue }
+            Set-Service -Name $s.Name -StartupType Disabled -ErrorAction Stop
+            Write-BootstrapMsg ("  '{0}' stopped + disabled. ({1})" -f $s.Name, $t.Desc) 'Green'
+            $trimmed++
+        } catch {
+            Write-BootstrapMsg ("  WARN: could not disable '{0}': {1}" -f $s.Name, $_.Exception.Message) 'Yellow'
+        }
+    }
+    Write-BootstrapMsg ("  Trim complete: {0} service(s) disabled." -f $trimmed) 'Green'
+
+    # --- Network: ensure DHCP for IPv4 (fleet requires DHCP addressing) ---
+    Write-BootstrapMsg '' 'Cyan'
+    Write-BootstrapMsg '--- Network: ensure DHCP for IPv4 ---' 'Cyan'
+    Set-MastAdaptersToDhcp
+
     # --- WinRM ---
     Write-BootstrapMsg '' 'Cyan'
     Write-BootstrapMsg '--- Enabling WinRM (HTTP, Basic) ---' 'Cyan'
@@ -775,6 +928,18 @@ try {
         Write-BootstrapMsg '  [WARN] AllowUnencrypted is still not true; pywinrm may fail until network is Private and you re-run or reboot.' 'Yellow'
     }
 
+    Write-BootstrapMsg '  Trim-service state:' 'White'
+    foreach ($t in $script:TrimList) {
+        $s = Resolve-MastTrimService $t
+        if ($null -eq $s) {
+            Write-BootstrapMsg ("    {0,-26} (not present)" -f $t.Name) 'DarkGray'
+            continue
+        }
+        $start = (Get-CimInstance Win32_Service -Filter ("Name='{0}'" -f $s.Name) -ErrorAction SilentlyContinue).StartMode
+        $skip = if ($SkipTrim -contains $t.Name) { ' [skip]' } else { '' }
+        Write-BootstrapMsg ("    {0,-26} State={1,-9} StartMode={2}{3}" -f $s.Name, $s.Status, $start, $skip) 'White'
+    }
+
     Write-BootstrapBanner '' 'White'
     Write-BootstrapBanner '[OK] MAST bootstrap finished successfully.' 'Green'
     Write-BootstrapBanner '======================================================================' 'Green'
@@ -786,6 +951,12 @@ try {
         Write-BootstrapMsg '  Re-run this script after reboot is safe (idempotent).' 'Yellow'
     }
     Show-BootstrapNextSteps -HostNm $MastHostName
+
+    Write-BootstrapMsg '' 'Yellow'
+    Write-BootstrapMsg 'Apps to uninstall by hand (not services - Settings > Apps):' 'Yellow'
+    foreach ($app in $script:AppsToUninstall) {
+        Write-BootstrapMsg ("  - {0}" -f $app) 'White'
+    }
 
     if ($RebootAfterBootstrap) {
         Write-BootstrapMsg '' 'Yellow'
