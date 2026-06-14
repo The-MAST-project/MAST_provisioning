@@ -3,7 +3,10 @@
 param(
     [string]${AssetsRoot}  = ${PSScriptRoot},
     [string]${ArchiveName} = 'cygwin64-clean.tgz',
-    [string]${InstallRoot} = 'C:\cygwin64'
+    [string]${InstallRoot} = 'C:\cygwin64',
+    # Reinstall even if a healthy Cygwin is already present (re-extract + mirror +
+    # re-run postinstall). Without it, an existing healthy install is left as-is.
+    [switch]${Force}
 )
 
 # --- Import shared helpers from provisioning.psm1 (PS 5.1 safe) ---
@@ -22,6 +25,29 @@ try {
 }
 catch {
     throw "Failed to import provisioning.psm1: $($_.Exception.Message)"
+}
+
+# --- Idempotent skip: leave an already-healthy Cygwin in place ---------------
+# A full provision re-extracts the tgz, robocopy /MIR's the whole tree into
+# ${InstallRoot}, and re-runs every /etc/postinstall/*.sh -- minutes of work,
+# and re-running postinstall has caused hangs/drains before. If Cygwin is
+# already installed and bash actually runs, there is nothing to do; we only
+# re-assert PATH and refresh the verify log + smoke marker. Use -Force to
+# deliberately reinstall.
+${bashExeExisting} = Join-Path ${InstallRoot} 'bin\bash.exe'
+if (-not ${Force} -and (Test-Path ${bashExeExisting})) {
+    ${uname} = & ${bashExeExisting} -lc 'uname -a' 2>$null
+    if (${LASTEXITCODE} -eq 0 -and ${uname}) {
+        Write-Host ("Cygwin already installed and healthy at {0} ({1}); skipping extract/mirror/postinstall. Use -Force to reinstall." -f ${InstallRoot}, ${uname})
+        Add-ToSystemPath -Dir (Join-Path ${InstallRoot} 'bin')
+        ${verifyLogSkip} = Join-Path (Get-MastVerifyDir) 'cygwin-verify.log'
+        Confirm-Dir (Split-Path ${verifyLogSkip} -Parent)
+        ("{0}" -f ${uname}) | Out-File -FilePath ${verifyLogSkip} -Encoding UTF8
+        '(skipped reinstall: existing healthy Cygwin)' | Out-File -FilePath ${verifyLogSkip} -Append -Encoding UTF8
+        Set-Content -Path (Join-Path (Get-MastSmokeDir) 'cygwin-smoke.txt') -Value 'cygwin_ok' -Encoding ASCII
+        exit 0
+    }
+    Write-Host ("Cygwin present at {0} but 'uname' failed (exit={1}); reinstalling." -f ${InstallRoot}, ${LASTEXITCODE})
 }
 
 ${log} = Start-ProvisionLog -Component 'provide-cygwin'
