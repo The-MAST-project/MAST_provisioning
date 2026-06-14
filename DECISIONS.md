@@ -2,6 +2,116 @@
 
 ---
 
+## [2026-06-14] Autofocus solve validation provider (`mast-autofocus-validation`)
+
+**Why:** The `planewave` provider verifies that `ps3cli --server` *boots* and its
+mock catalog is present, but never confirms the server can actually solve an
+autofocus v-curve. That capability (and its survival across future provisioning /
+ps3cli upgrades) was untested. We already had real FITS focus sweeps with known
+solutions to replay.
+
+**What:** Added a new provider `server/providers/mast-autofocus-validation/`
+(order 3000, after `planewave` and `mast-validation`). Mirroring `mast-validation`,
+the validation runner (`validate_autofocus_solve.py`) lives in the provider and
+imports MAST_unit's `src` via `--unit-src`, driving the production focus-analysis
+path -- `focus_analysis.analyze_focus_files`, lifted out of
+`Autofocuser.do_start_autofocus` -- against bundled FITS focus sweeps. The FITS
+ship as the provider's `assets/autofocus-fits.zip` (a git-lfs asset, covered by the
+existing `assets/*.zip` LFS rule), NOT inside the MAST_unit repo: MAST_unit carries
+only production code. The provide script locates the `MAST_unit*` clone + its venv,
+extracts the zip to `C:\MAST\autofocus-fits` (hard-failing if the zip is an
+unresolved lfs pointer), then invokes the runner with the venv python (reusing the
+running ps3cli `--server` if port 8998 is up, else `--start-server`), and writes a
+smoke marker the `verify` step checks. ps3cli discovery (exe + catalog) is shared:
+both `app.py` and the runner call MAST_unit's `PlaneWave.ps3cli_locate`.
+
+**Implications:** The FITS are a provisioning payload (staged + extracted on the
+unit), so no unit-side git-lfs is required -- only the provisioning server's
+checkout must `git lfs pull` to get the real zip; the provide script's
+pointer-size gate makes a misconfigured lfs a hard, legible failure. Build flattens
+`assets/*` to the staging root, so the FITS are bundled as one zip (preserving the
+series subdirs) rather than loose files. Unlike `mast-validation` (astrometry), no
+`--allow-missing-avx` escape is needed: ps3cli focus analysis runs on the AVX-less
+dev VM CPU. Validated end-to-end on the dev VM (mast-wis-01) via the provide script:
+3/3 series passed, best-focus positions reproduced the recorded production results
+to < 0.2 focuser ticks; verify exit 0.
+
+## [2026-06-11] Mock PlateSolve3 catalog + Machine env overrides so ps3cli --server boots
+
+**Why:** MAST_unit uses `ps3cli --server` (the 2024-09-10 build) only for autofocus
+analysis (`begin_analyze_focus` on port 8998), not for plate solving. But the server
+validates a PlateSolve3 star catalog at startup and exits (code 2, "Catalog files not
+found") if it is absent. The real UCAC4/Orca catalog is many GB and is not needed for
+focus analysis, so shipping it is wasteful. Two distinct things blocked startup: (1) no
+catalog was provisioned at all; (2) the `mast-unit` service runs as **LocalSystem** (NSSM
+`install` with no `ObjectName`), so the app's `Path.home()`-based discovery in
+`_locate_ps3cli_dir()` / `_locate_ps3cli_catalog()` resolves to the system profile rather
+than `C:\Users\mast`, and finds neither `ps3cli.exe` (extracted under `~mast\Documents`)
+nor any catalog -- the unit log showed "ps3cli.exe not found in any known location".
+
+**What:** `provide-planewave.ps1` now creates a minimal *mock* catalog at
+`C:\Users\mast\Documents\Kepler` containing exactly the files `ps3cli --server` reads at
+boot, determined empirically against `ps3cli-2024-09-10` (filenames recovered by
+extracting UTF-16LE strings from `ps3cli.exe`):
+
+- `UC4\Index.UC4` (existence checked; content irrelevant)
+- `Orca\Orca0025.orc`, `Orca\StarOrca0025.orc`, `Orca\DistOrca0025.orc` (must be
+  non-empty -- the validator reads them)
+
+Each file holds a short ASCII banner marking it as a mock. The 180 `Z###.UC4` zone files
+are *not* read at boot (only during a real solve) and are intentionally omitted. The
+provider also sets `PS3CLI_DIR` and `PS3CLI_CATALOG` at **Machine** scope -- app.py checks
+these first, so they make both ps3cli.exe and the catalog discoverable regardless of the
+service account. `verify-planewave.ps1` asserts the four catalog files (with non-empty
+checks on the `.orc` files) and both env vars are present. The files are generated
+programmatically (no new binary asset in `ps3cli.zip`).
+
+**Implications:** This satisfies *bootup only*; whether a mock catalog actually lets
+ps3cli perform autofocus analysis is still to be verified (focus analysis is expected not
+to touch the star catalog). If the `ps3cli.zip` asset is ever updated to a different
+build, the hardcoded filenames must be re-derived. The catalog-aware `app.py`
+(`_locate_ps3cli_catalog` + `--root-path`) is the newer `MAST_unit.2024-12-12` code; a
+unit still running the older deployed `app.py` (which launched `ps3cli.exe --server
+--port=8998` with no `--root-path`) must be updated for this path to take effect.
+
+---
+
+## [2026-06-10] PlaneWave ps3cli is the special --server build; clean extract before re-extract
+
+**Why:** The `planewave` provider shipped an older on-demand `ps3cli.exe` (~10 KB,
+2019). Our deployment needs the specially built 2024-09-10 `ps3cli.exe` (~4 MB) that
+supports `--server` mode -- it loads its catalogs once and stays resident, so repeated
+plate-solves are fast instead of paying full startup on every call. Separately, the
+provider extracted the zip into `C:\Users\mast\Documents\PlaneWave\ps3cli` without
+clearing it first. Because the special build unpacks into a dated folder
+(`ps3cli-2024-09-10\`) whose name differs from the old `ps3cli\`, `Expand-Archive
+-Force` left both builds side by side, and a naive "first match" verify (or consumer)
+could pick the stale 10 KB exe -- which is exactly the failure observed on the dev VM.
+
+**What:**
+- Replaced `server/providers/planewave/assets/ps3cli.zip` with the 2024-09-10
+  `--server` build.
+- `provide-planewave.ps1` now removes the destination directory before extracting, so
+  only the current build is present after a run.
+- `verify-planewave.ps1` searches recursively and selects the **largest** `ps3cli.exe`,
+  failing if none is >= 1 MB (i.e. only the older on-demand build is present). This is
+  kept in sync with `_locate_ps3cli_dir()` in MAST_unit `src/app.py`, which selects the
+  largest exe the same way.
+
+**Implications:**
+- The build folder name is dated and will change with future ps3cli builds; nothing
+  hardcodes `2024-09-10`. Both the provider (clean extract) and the consumers
+  (largest-exe selection) are build-name-agnostic.
+- If a future ps3cli build is ever smaller than 1 MB the verify size heuristic must be
+  revisited.
+- The asset is git-LFS tracked (`server/providers/*/assets/*.zip`); updating it goes
+  through LFS.
+- Validated end-to-end against the dev VM (`mast-wis-01`): provide + verify pass and
+  only the 4 MB build remains on the unit after a re-run. The runtime `--server` launch
+  itself is exercised by MAST_unit; see the matching 2026-06-10 entry there.
+
+---
+
 ## [2026-06-10] Bootstrap trims vendor services by default and enforces DHCP addressing
 
 **Why:** Two follow-ons to the 2026-06-07 firewall/telemetry hardening, both

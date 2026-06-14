@@ -1,0 +1,13 @@
+{
+  "name": "mast-autofocus-validation",
+  "version": "1.0",
+  "description": "End-to-end validation: drive MAST_unit's production ps3cli focus-analysis code path (focus_analysis.analyze_focus_files) against bundled FITS focus sweeps using the unit's venv, confirming ps3cli --server can fit a v-curve and return an autofocus solution. The FITS ship as this provider's autofocus-fits.zip asset (git-lfs) and the runner imports MAST_unit via --unit-src. HARD FAILS if the unit clone, venv, or FITS bundle are missing, or if any series does not match its expected outcome.",
+  "order": 3000,
+  "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-mast-autofocus-validation.ps1\"",
+  "commandfiles": [
+    "provide-mast-autofocus-validation.ps1",
+    "validate_autofocus_solve.py",
+    "assets/autofocus-fits.zip"
+  ],
+  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -Command \"${log}=Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\verify\\mast-autofocus-validation-verify.log'; ${smoke}=Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\smoke\\mast-autofocus-validation-smoke.txt'; if (-not (Test-Path $smoke)) { 'smoke marker missing' | Out-File -FilePath ${log} -Encoding UTF8; exit 1 }; ${body}=Get-Content $smoke -Raw; if ($body -match 'mast-autofocus-validation_ok') { Set-Content -Path ${log} -Value $body } else { ('unexpected smoke body: ' + $body) | Out-File -FilePath ${log} -Encoding UTF8; exit 1 }\"   "
+}
