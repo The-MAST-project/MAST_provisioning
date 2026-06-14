@@ -25,3 +25,7 @@ vm/autounattend-mast.iso
 # Stray *.tgz.bak-orig backups left during provider asset updates do not belong
 # in the repo. Keep them out so they cannot be committed by mistake.
 *.bak-orig
+
+# shared/ is the mast-shared SMB share backing dir (created by setup-smb-share.ps1).
+# It holds runtime artifacts staged for units (bootstrap files, etc.), not repo content.
+shared/
