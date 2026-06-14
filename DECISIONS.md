@@ -2,6 +2,44 @@
 
 ---
 
+## [2026-06-14] Provisioning server as NTP source + early one-time unit clock sync
+
+**Why:** MAST units frequently cannot reach public NTP -- UDP 123 is blocked, or
+the unit sits on an isolated / link-local network with no internet route.
+Observed on mast02: `w32tm /resync` reported "success" but `Source` stayed
+`Local CMOS Clock` and the clock was ~5 minutes slow (stripchart to time.windows.com
+returned 0x800705B4 / timeout). A wrong clock breaks the unit's HTTPS `git clone`
+during provisioning (TLS cert validation) and a ~5-minute skew also destabilizes
+long-running WinRM/WS-Management sessions -- a full run died mid-`python` module
+with `InvalidSelectors` after the long cygwin step, never reaching the `mast` /
+validation providers.
+
+**What:** Three layers, defense-in-depth:
+1. **Provisioning server is an NTP server** -- `server/setup-ntp-server.ps1`
+   (elevated, once; documented as Step 4b in provisioning-server-setup.md). It
+   enables the W32Time NtpServer provider, sets `AnnounceFlags=5` so a non-domain
+   box serves as a reliable source, and opens inbound UDP 123. The server has
+   correct time and is always reachable by the units it provisions.
+2. **Early `timesync` provider** (`server/providers/timesync`, order 50 -- runs
+   before any HTTPS/TLS step). It discovers the prov server from the live SMB
+   connection (mast-staging/mast-shared / the Z: mapping), does a **one-time**
+   clock correction from it, falling back to public NTP, then **leaves w32time
+   configured for normal public NTP** for ongoing operation. It does NOT leave the
+   unit permanently pointed at the prov server (which is not a long-lived time
+   source for the unit). It does not trust `w32tm /resync`'s exit code -- it reads
+   `w32tm /query /status` and confirms `Source`/`Last Successful Sync Time`.
+3. **Bootstrap best-effort sync** -- `bootstrap-winrm.ps1` still attempts a public
+   NTP sync at bootstrap time, now documented and treated as a REDUNDANT backstop
+   (it commonly cannot reach public NTP; it warns and continues). The authoritative
+   fix is layer 2.
+
+**Implications:** The prov server must run `setup-ntp-server.ps1` for the unit-side
+one-time sync to have a reachable source; if it has not, the `timesync` provider
+falls back to public NTP and, failing that, warns loudly but does not abort (it is
+best-effort, since the bootstrap layer and a manual fix are backstops and blocking
+all provisioning on time sync is worse). Units end up using normal public NTP, so
+there is no permanent dependency on the provisioning server's clock.
+
 ## [2026-06-14] Autofocus solve validation provider (`mast-autofocus-validation`)
 
 **Why:** The `planewave` provider verifies that `ps3cli --server` *boots* and its

@@ -206,6 +206,40 @@ Expected: two shares, access for `mast-transfer` only (no Everyone).
 
 ---
 
+## Step 4b - NTP server setup (elevated, once)
+
+Make this provisioning server an authoritative NTP server. MAST units frequently
+cannot reach public NTP (UDP 123 blocked, or the unit is on an isolated /
+link-local network with no internet route). A wrong clock then breaks the unit's
+HTTPS `git clone` during provisioning (TLS cert validation) and a large skew also
+destabilizes long-running WinRM sessions. The server has correct time and is
+always reachable by the units it provisions, so it serves time to them.
+
+```powershell
+# Elevated PowerShell, from the repo root:
+.\server\setup-ntp-server.ps1
+```
+
+The script enables the W32Time NTP server, sets `AnnounceFlags=5` (so a non-domain
+standalone box will serve as a reliable source), restarts `w32time`, and opens
+inbound UDP 123. Idempotent.
+
+The unit side is automatic: the early **`timesync`** provider (order 50) discovers
+this server from the active SMB connection, does a **one-time** clock correction
+from it (falling back to public NTP), then leaves the unit configured for normal
+public NTP for ongoing operation -- it is **not** left permanently pointed at the
+provisioning server. (`client\bootstrap-winrm.ps1` also makes a best-effort public
+NTP sync at bootstrap time as a redundant backstop.)
+
+Verify:
+
+```powershell
+w32tm /query /configuration | Select-String 'NtpServer','Enabled','AnnounceFlags'
+Get-NetFirewallRule -DisplayName 'MAST - NTP Server*'
+```
+
+---
+
 ## Step 5 - Firewall rules
 
 Units connect inbound to this server on TCP 445 (SMB). If Windows Firewall is

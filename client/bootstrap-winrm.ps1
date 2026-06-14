@@ -352,6 +352,55 @@ function Show-BootstrapNextSteps([string]$HostNm) {
     Write-BootstrapMsg '  Dev VM on VirtualBox host-only: run tools\sync-dev-unit-hosts.ps1 (elevated) on the host.' 'Green'
 }
 
+function Sync-MastSystemTime {
+    # REDUNDANT best-effort clock fix. The AUTHORITATIVE one-time correction
+    # happens later, during provisioning, via the 'timesync' provider
+    # (server/providers/timesync), which syncs from the provisioning server's NTP
+    # server -- reachable even when the unit cannot reach public NTP. This step is
+    # a backstop run at bootstrap time (before provisioning exists): a freshly
+    # imaged / long-powered-off unit often has a wrong clock, and a skewed clock
+    # breaks TLS, so we try public NTP here too. It frequently CANNOT sync (UDP
+    # 123 blocked / no route) -- that is expected; it warns and continues, and the
+    # provisioning timesync provider does the real fix. Never aborts bootstrap.
+    [CmdletBinding()]
+    param([string[]]$NtpServers = @('time.windows.com', 'pool.ntp.org', 'time.google.com'))
+
+    $peerList = ($NtpServers -join ' ')
+    try {
+        Set-Service -Name w32time -StartupType Automatic -ErrorAction Stop
+        # w32time will not start while the only time source is the (default) local
+        # CMOS clock on a non-domain box; configuring a manual NTP peer list fixes that.
+        Start-Service -Name w32time -ErrorAction SilentlyContinue
+        & w32tm.exe /config /manualpeerlist:"$peerList" /syncfromflags:manual /reliable:no /update | Out-Null
+        Restart-Service -Name w32time -ErrorAction SilentlyContinue
+        & w32tm.exe /resync /force | Out-Null
+
+        # IMPORTANT: 'w32tm /resync' returns success even when NO NTP reply ever
+        # arrives -- it silently keeps the Local CMOS Clock. So do not trust the
+        # exit code; query the service and confirm it actually locked onto an NTP
+        # source. (Observed on mast02: UDP 123 blocked -> Source stayed 'Local
+        # CMOS Clock', clock 5 min slow, yet /resync "succeeded".)
+        $status   = & w32tm.exe /query /status 2>$null
+        $srcLine  = ($status | Select-String -Pattern 'Source:\s*(.+)$')
+        $lastLine = ($status | Select-String -Pattern 'Last Successful Sync Time:\s*(.+)$')
+        $source   = if ($srcLine)  { $srcLine.Matches[0].Groups[1].Value.Trim() }  else { '' }
+        $lastSync = if ($lastLine) { $lastLine.Matches[0].Groups[1].Value.Trim() } else { '' }
+        $synced = $source -and ($source -notmatch 'Local CMOS Clock') -and ($source -notmatch 'Free-running') `
+                  -and $lastSync -and ($lastSync -notmatch 'unspecified')
+        if ($synced) {
+            Write-BootstrapMsg ("  Time synced. Source={0}; clock now {1}." -f $source, (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')) 'Green'
+        } else {
+            Write-BootstrapMsg '  [WARN] NTP did NOT actually sync -- the time service is still on the local clock.' 'Yellow'
+            Write-BootstrapMsg ("         Source='{0}' LastSuccessfulSync='{1}'. UDP 123 is likely blocked or there is no route to the NTP servers." -f $source, $lastSync) 'Yellow'
+            Write-BootstrapMsg '         A wrong clock breaks TLS validation, so the provisioning git clone (HTTPS) will fail.' 'Yellow'
+            Write-BootstrapMsg '         FIX one of: open outbound UDP 123; point w32time at a reachable NTP source' 'Yellow'
+            Write-BootstrapMsg '         (e.g. the prov server: w32tm /config /manualpeerlist:"<provIP>" /syncfromflags:manual /update; w32tm /resync); or set the clock manually.' 'Yellow'
+        }
+    } catch {
+        Write-BootstrapMsg ("  [WARN] time sync failed ({0}); continuing. Fix the clock manually if TLS/git later fails." -f $_.Exception.Message) 'Yellow'
+    }
+}
+
 $exitCode = 0
 try {
     Write-BootstrapBanner '======================================================================' 'Cyan'
@@ -374,6 +423,11 @@ try {
         throw "Invalid MastHostName '$MastHostName'. Use 1-15 characters: letters, digits, hyphen."
     }
     Write-BootstrapMsg ("Using MastHostName (computer rename target): {0}" -f $MastHostName) 'White'
+
+    # --- Sync system time with public NTP (before anything TLS-sensitive) ---
+    Write-BootstrapMsg '' 'Cyan'
+    Write-BootstrapMsg '--- Sync system time (NTP) ---' 'Cyan'
+    Sync-MastSystemTime
 
     # --- OEM factory account: leave intact, create fresh 'mast' instead ---
     #

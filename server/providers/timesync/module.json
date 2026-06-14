@@ -1,0 +1,11 @@
+{
+  "name": "timesync",
+  "version": "1.0",
+  "description": "Early, ONE-TIME clock correction during provisioning. Units often cannot reach public NTP (UDP 123 blocked / no internet route); a wrong clock breaks the 'mast' git clone's TLS validation and destabilizes WinRM. Syncs once from the provisioning server's NTP server (server/setup-ntp-server.ps1), falling back to public NTP, then leaves w32time configured for NORMAL public NTP for ongoing operation (NOT permanently pointed at the prov server). Runs first (order 50), before any HTTPS/TLS step. Best-effort: logs loudly, does not abort.",
+  "order": 50,
+  "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-timesync.ps1\"",
+  "commandfiles": [
+    "provide-timesync.ps1"
+  ],
+  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -Command \"${log}=Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\verify\\timesync-verify.log'; ${smoke}=Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\smoke\\timesync-smoke.txt'; if (-not (Test-Path $smoke)) { 'timesync smoke marker missing' | Out-File -FilePath ${log} -Encoding UTF8 -Append; exit 1 }; ${body}=(Get-Content $smoke -Raw).Trim(); if ($body -match '^timesync_ok') { exit 0 } elseif ($body -match '^timesync_warn') { ('time sync best-effort WARN (clock not corrected; HTTPS may fail): ' + $body) | Out-File -FilePath ${log} -Encoding UTF8 -Append; exit 0 } else { ('unexpected timesync smoke body: ' + $body) | Out-File -FilePath ${log} -Encoding UTF8 -Append; exit 1 } \""
+}
