@@ -1,6 +1,9 @@
 param(
     [string]${AssetsRoot}  = ".",
-    [string]${InstallRoot} = "C:\Program Files\Stage"
+    [string]${InstallRoot} = "C:\Program Files\Stage",
+    # Reinstall even if XILab is already present (otherwise it is left as-is; the
+    # NSIS installer + its ~240s wait and the driver staging are skipped).
+    [switch]${Force}
 )
 
 ${ErrorActionPreference} = "Stop"
@@ -31,6 +34,14 @@ function Write-StageLog {
 
 Set-Content -LiteralPath ${logFile} -Encoding UTF8 -Value `
     ("[{0}] provide-stage.ps1 started." -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))
+
+# Idempotent skip: XILab.exe present (the same paths checked below + by verify)
+# means Stage is installed. Skip the NSIS installer + driver staging (pnputil is
+# idempotent anyway). Use -Force to reinstall.
+if (-not ${Force} -and ((Test-Path 'C:\Program Files\XILab\XILab.exe') -or (Test-Path 'C:\Program Files (x86)\XILab\XILab.exe'))) {
+    Write-StageLog "XILab already installed; skipping installer + driver staging. Use -Force to reinstall."
+    exit 0
+}
 
 try {
     ${installerPath} = Join-Path ${AssetsRoot} "xilab-1.20.12-win32_win64.exe"

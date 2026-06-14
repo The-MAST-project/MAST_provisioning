@@ -3,7 +3,9 @@
 param(
     [string]${AssetsRoot} = ${PSScriptRoot},
     [string]${ZipPath},                                   # Optional explicit path to nssm-2.24.zip
-    [string]${InstallDir} = 'C:\Program Files\nssm'       # Final install location (added to PATH)
+    [string]${InstallDir} = 'C:\Program Files\nssm',      # Final install location (added to PATH)
+    # Re-extract/copy even if nssm.exe is already present (otherwise left as-is).
+    [switch]${Force}
 )
 
 # --- Import shared helpers ---
@@ -23,6 +25,15 @@ try {
 }
 catch {
     throw "Failed to import provisioning.psm1: $($_.Exception.Message)"
+}
+
+# Idempotent skip: nssm.exe already present means it is installed. Re-assert PATH
+# and skip the unzip/copy. Use -Force to reinstall.
+${nssmExeGuard} = Join-Path ${InstallDir} 'nssm.exe'
+if (-not ${Force} -and (Test-Path ${nssmExeGuard})) {
+    Add-ToSystemPath -Dir ${InstallDir}
+    Write-Host "NSSM already installed at ${InstallDir}; skipping. Use -Force to reinstall."
+    exit 0
 }
 
 try {

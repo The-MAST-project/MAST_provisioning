@@ -21,7 +21,10 @@ param(
     # pre-write setup.rc with net-method=Direct so setup.exe skips IE5
     # entirely.
     [ValidateSet('use','direct')]
-    [string]${ProxyMode}   = 'use'
+    [string]${ProxyMode}   = 'use',
+    # Re-run setup-x86_64.exe + pip even if the astrometry runtime DLLs are
+    # already present (otherwise an already-satisfied unit is left as-is).
+    [switch]${Force}
 )
 
 # Top-level Cygwin packages whose runtime DLLs *and* runtime PATH tools
@@ -66,6 +69,17 @@ catch {
 ${_netDot} = Join-Path ${PSScriptRoot} 'mast-net.ps1'
 if (-not (Test-Path ${_netDot})) { ${_netDot} = Join-Path ${PSScriptRoot} '..\..\lib\mast-net.ps1' }
 . ${_netDot}
+
+# Idempotent skip: if every astrometry runtime DLL is already present in the
+# cygwin bin dir (the exact set verify checks), the network setup-x86_64.exe
+# package install + pip wheel have nothing to do. Use -Force to re-run.
+${_reqDlls} = @('cygcfitsio-10.dll','cygwcs-4.dll','cygnetpbm-10.dll','cygcairo-2.dll','cygpng16-16.dll','cygjpeg-8.dll','cygcurl-4.dll','libpython3.9.dll')
+${_binDir}  = Join-Path ${CygwinRoot} 'bin'
+${_missing} = @(${_reqDlls} | Where-Object { -not (Test-Path (Join-Path ${_binDir} $_)) })
+if (-not ${Force} -and ${_missing}.Count -eq 0) {
+    Write-Host "astrometry runtime DLLs already present in ${_binDir}; skipping setup-x86_64.exe + pip. Use -Force to re-run."
+    exit 0
+}
 
 ${log} = Start-ProvisionLog -Component 'provide-astrometry-dependencies'
 try {

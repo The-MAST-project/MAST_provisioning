@@ -26,7 +26,10 @@ param(
   [string]${AssetsRoot} = ${PSScriptRoot},
   [string]${InstallRoot} = 'C:\Program Files\MongoDB',
   [switch]${NoCompass},
-  [switch]${Help}
+  [switch]${Help},
+  # Reinstall even if the client tools are already present (otherwise the
+  # ~720s Compass install + the zip re-extracts are skipped).
+  [switch]${Force}
 )
 
 ${mastLogDot} = Join-Path ${PSScriptRoot} 'mast-log.ps1'
@@ -60,6 +63,18 @@ ${null} = New-Item -ItemType Directory -Path ${LogRoot} -Force -ErrorAction Sile
 ${LogFile} = Join-Path ${LogRoot} ("provide-mongodb_{0:yyyyMMdd_HHmmss}.log" -f (Get-Date))
 Start-Transcript -Path ${LogFile} -Append | Out-Null
 Write-Verbose "Log: ${LogFile}"
+
+# Idempotent skip: if mongosh is already installed (and Compass too, unless
+# -NoCompass), skip the zip re-extracts + the long Compass installer. This is a
+# stronger check than verify (which only re-detects mongosh), so a skip is safe.
+# Use -Force to reinstall.
+${mongoshFound} = Get-ChildItem -Path (Join-Path ${InstallRoot} 'mongosh') -Recurse -Filter 'mongosh.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+${compassOk}    = ${NoCompass} -or (Test-Path (Join-Path ${env:LOCALAPPDATA} 'MongoDBCompass\MongoDBCompass.exe'))
+if (-not ${Force} -and ${mongoshFound} -and ${compassOk}) {
+    Write-Host ("MongoDB client already installed (mongosh{0}); skipping. Use -Force to reinstall." -f $(if (-not ${NoCompass}) { ' + Compass' } else { '' }))
+    Stop-Transcript | Out-Null
+    exit 0
+}
 
 # --- Helpers ---
 function Confirm-Dir([string]${Path}) {

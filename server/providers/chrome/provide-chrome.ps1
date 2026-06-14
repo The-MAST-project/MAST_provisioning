@@ -1,6 +1,8 @@
 param(
     [string]${AssetsRoot} = ".",
-    [string]${InstallerName} = "GoogleChromeStandaloneEnterprise64.msi"
+    [string]${InstallerName} = "GoogleChromeStandaloneEnterprise64.msi",
+    # Reinstall even if Chrome is already present (otherwise an existing install is left as-is).
+    [switch]${Force}
 )
 
 ${ErrorActionPreference} = "Stop"
@@ -19,6 +21,13 @@ function Write-ChromeLog {
 }
 
 Set-Content -LiteralPath ${logFile} -Encoding UTF8 -Value ("[{0}] provide-chrome.ps1 started." -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))
+
+# Idempotent skip: chrome.exe is the authoritative presence check (same one used
+# below + by verify). If it is already there, skip the msiexec install. -Force reinstalls.
+if (-not ${Force} -and (Test-Path "C:\Program Files\Google\Chrome\Application\chrome.exe")) {
+    Write-ChromeLog "Chrome already installed; skipping msiexec. Use -Force to reinstall."
+    exit 0
+}
 
 try {
     ${installerPath} = Join-Path ${AssetsRoot} ${InstallerName}

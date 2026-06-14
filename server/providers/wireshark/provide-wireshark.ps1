@@ -1,6 +1,8 @@
 param(
     [string]${AssetsRoot} = ".",
-    [string]${InstallRoot} = "C:\Program Files\Wireshark"
+    [string]${InstallRoot} = "C:\Program Files\Wireshark",
+    # Reinstall even if Wireshark is already present (otherwise an existing install is left as-is).
+    [switch]${Force}
 )
 
 ${ErrorActionPreference} = "Stop"
@@ -19,6 +21,13 @@ function Write-WiresharkLog {
 }
 
 Set-Content -LiteralPath ${logFile} -Encoding UTF8 -Value ("[{0}] provide-wireshark.ps1 started." -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))
+
+# Idempotent skip: Wireshark.exe is the authoritative presence check (same one
+# used below + by verify). If present, skip the NSIS installer. -Force reinstalls.
+if (-not ${Force} -and (Test-Path (Join-Path ${InstallRoot} "Wireshark.exe"))) {
+    Write-WiresharkLog "Wireshark already installed; skipping installer. Use -Force to reinstall."
+    exit 0
+}
 
 try {
     ${installerPath} = Join-Path ${AssetsRoot} "Wireshark-4.6.0-x64.exe"

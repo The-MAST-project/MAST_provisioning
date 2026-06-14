@@ -3,7 +3,10 @@
 param(
     [string]${AssetsRoot} = ${PSScriptRoot},
     [string]${Installer}  = "python-3.12.2-amd64.exe",
-    [string]${InstallDir} = "C:\Python312"
+    [string]${InstallDir} = "C:\Python312",
+    # Reinstall even if Python + virtualenv are already present (otherwise the
+    # existing install is left as-is; installer + pip/virtualenv chain is skipped).
+    [switch]${Force}
 )
 
 # --- Import shared helpers ---
@@ -22,6 +25,19 @@ try {
 }
 catch {
     throw "Failed to import provisioning.psm1: $($_.Exception.Message)"
+}
+
+# Idempotent skip: if Python is installed AND virtualenv works (the full state
+# this provider produces, and what verify checks), skip the installer + the
+# pip/virtualenv chain. Only re-assert PATH. Use -Force to reinstall.
+${pythonExeGuard} = Join-Path ${InstallDir} 'python.exe'
+if (-not ${Force} -and (Test-Path ${pythonExeGuard})) {
+    & ${pythonExeGuard} -m virtualenv --version *>$null
+    if (${LASTEXITCODE} -eq 0) {
+        Add-ToSystemPath -Dir ${InstallDir}
+        Write-Host "Python + virtualenv already installed at ${InstallDir}; skipping installer. Use -Force to reinstall."
+        exit 0
+    }
 }
 
 ${log} = Start-ProvisionLog -Component 'provide-python'

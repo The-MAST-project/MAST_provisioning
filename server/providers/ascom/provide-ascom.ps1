@@ -37,7 +37,10 @@ param(
   [string]$AssetsRoot = $PSScriptRoot,
   [string]$FoDSource,
   [switch]$NoNet,
-  [switch]$Help
+  [switch]$Help,
+  # Reinstall even if ASCOM Platform is already present. Without it, an existing
+  # install is left as-is (the installer + NGEN is the longest step in the run).
+  [switch]$Force
 )
 
 try {
@@ -86,6 +89,16 @@ $LogFile = Join-Path $LogRoot ("provide-ascom_{0:yyyyMMdd_HHmmss}.log" -f (Get-D
 Start-Transcript -Path $LogFile -Append | Out-Null
 
 Write-Verbose "Log file: $LogFile"
+
+# --- Idempotent skip: ASCOM Platform install (installer + NGEN) is the longest
+# single step in the run (15-17 min). If the Platform is already installed, skip
+# the whole module. Detection matches verify-ascom (the HKLM ASCOM hive), so a
+# skipped run still passes the independent verify step. Use -Force to reinstall.
+if (-not $Force -and ((Test-Path 'HKLM:\SOFTWARE\ASCOM') -or (Test-Path 'HKLM:\SOFTWARE\WOW6432Node\ASCOM'))) {
+    Write-Host "ASCOM Platform already installed (HKLM\SOFTWARE\ASCOM present); skipping installer + NetFx3. Use -Force to reinstall."
+    Stop-Transcript | Out-Null
+    exit 0
+}
 
 # --- Per-step timing ---
 # ASCOM is the longest single step in the run (15-17 min observed). Two heavy

@@ -1,6 +1,8 @@
 param(
     [string]${AssetsRoot} = ".",
-    [string]${InstallRoot} = "C:\Program Files\Sysinternals"
+    [string]${InstallRoot} = "C:\Program Files\Sysinternals",
+    # Re-extract even if Sysinternals is already present (otherwise it is left as-is).
+    [switch]${Force}
 )
 
 ${ErrorActionPreference} = "Stop"
@@ -19,6 +21,13 @@ function Write-SysLog {
 }
 
 Set-Content -LiteralPath ${logFile} -Encoding UTF8 -Value ("[{0}] provide-sysinternals.ps1 started." -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))
+
+# Idempotent skip: PsExec64.exe present means the suite is already extracted.
+# Skip the re-extract (PATH was set on first install). Use -Force to re-extract.
+if (-not ${Force} -and (Test-Path (Join-Path ${InstallRoot} "PsExec64.exe"))) {
+    Write-SysLog "Sysinternals already installed; skipping extract. Use -Force to re-extract."
+    exit 0
+}
 
 try {
     ${zipPath} = Join-Path ${AssetsRoot} "SysinternalsSuite.zip"
