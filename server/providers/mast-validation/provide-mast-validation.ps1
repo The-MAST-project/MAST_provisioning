@@ -95,12 +95,22 @@ Write-VLog ("Invoking: {0} {1}" -f ${venvPython}, (${argList} -join ' '))
 # marker. Direct & invocation makes $LASTEXITCODE reliable, and merging
 # stderr via 2>&1 keeps everything in one stream.
 ${rc} = $null
+# This script runs with ErrorActionPreference='Stop', but in PS 5.1 a native
+# command's stderr merged via 2>&1 becomes a NativeCommandError record -- under
+# 'Stop' the FIRST stderr line throws and the rest of the traceback is lost (we
+# only ever saw "Traceback (most recent call last):" with no cause). Relax to
+# 'Continue' for just the invocation so the whole traceback lands in
+# ${stdoutLog}; $LASTEXITCODE remains the authoritative outcome.
+${prevEAP} = ${ErrorActionPreference}
+${ErrorActionPreference} = 'Continue'
 try {
     & ${venvPython} @argList 2>&1 | Tee-Object -FilePath ${stdoutLog} -Append | Out-Host
     ${rc} = $LASTEXITCODE
 } catch {
     Write-VLog ("FAIL: invoker threw: {0}" -f $_.Exception.Message)
     exit 1
+} finally {
+    ${ErrorActionPreference} = ${prevEAP}
 }
 
 Write-VLog ("validator exit={0}" -f ${rc})
