@@ -154,6 +154,14 @@ try {
     }
 
     ${ps3cliDestPath} = "C:\Users\mast\Documents\PlaneWave\ps3cli"
+    # Clear any prior extraction first: the build folder name is dated
+    # (e.g. ps3cli-2024-09-10), so Expand-Archive -Force does NOT overwrite an
+    # older build's folder -- it would linger beside the new one and the older
+    # on-demand ps3cli.exe could be picked up instead of the special --server build.
+    if (Test-Path -LiteralPath ${ps3cliDestPath}) {
+        Write-MastPwLog ("Removing prior PS3 CLI extraction at {0}" -f ${ps3cliDestPath})
+        Remove-Item -LiteralPath ${ps3cliDestPath} -Recurse -Force -ErrorAction SilentlyContinue
+    }
     New-Item -ItemType Directory -Path ${ps3cliDestPath} -Force | Out-Null
 
     Write-MastPwLog ("Extracting PS3 CLI tools to {0}" -f ${ps3cliDestPath})
@@ -164,6 +172,40 @@ try {
     if (-not (Test-Path ${ps3cliDestPath})) {
         throw "PS3 CLI directory not created after extraction at ${ps3cliDestPath}"
     }
+
+    # --- Mock PlateSolve3 star catalog (UC4/Orca) so 'ps3cli --server' will boot ---
+    # ps3cli is used by MAST_unit ONLY for autofocus analysis (begin_analyze_focus on
+    # port 8998), NOT for plate solving. But 'ps3cli --server' validates a star catalog
+    # at startup and exits (code 2, "Catalog files not found") if it is absent. The real
+    # UCAC4/Orca catalog is many GB and we do not need it for focus analysis, so we mock
+    # just the minimum file set the startup validation checks for. Determined empirically
+    # against ps3cli-2024-09-10: it requires UC4\Index.UC4 to exist and the three
+    # Orca\*.orc files to exist AND be non-empty; the 180 Z###.UC4 zone files are only
+    # read during an actual solve, so they are intentionally omitted.
+    #
+    # These exact filenames are hardcoded in this ps3cli build; if the ps3cli.zip asset
+    # is ever updated, re-derive them (extract UTF-16LE strings from ps3cli.exe).
+    ${ps3CatalogPath} = "C:\Users\mast\Documents\Kepler"
+    ${ps3Uc4Dir}      = Join-Path ${ps3CatalogPath} 'UC4'
+    ${ps3OrcaDir}     = Join-Path ${ps3CatalogPath} 'Orca'
+    Write-MastPwLog ("Creating mock PlateSolve3 catalog at {0}" -f ${ps3CatalogPath})
+    New-Item -ItemType Directory -Path ${ps3Uc4Dir}  -Force | Out-Null
+    New-Item -ItemType Directory -Path ${ps3OrcaDir} -Force | Out-Null
+    ${ps3MockBanner} = "MAST MOCK PlateSolve3 catalog file - placeholder to satisfy ps3cli --server bootup validation. NOT real catalog data. ps3cli is used only for autofocus analysis, not plate solving."
+    ${ps3MockBytes}  = [System.Text.Encoding]::ASCII.GetBytes(${ps3MockBanner})
+    [System.IO.File]::WriteAllBytes((Join-Path ${ps3Uc4Dir} 'Index.UC4'), ${ps3MockBytes})
+    foreach (${orcaName} in @('Orca0025.orc', 'StarOrca0025.orc', 'DistOrca0025.orc')) {
+        [System.IO.File]::WriteAllBytes((Join-Path ${ps3OrcaDir} ${orcaName}), ${ps3MockBytes})
+    }
+
+    # The mast-unit service runs as LocalSystem (NSSM install with no ObjectName), so the
+    # app's Path.home()-based discovery resolves to the system profile, NOT C:\Users\mast,
+    # and would find neither ps3cli.exe nor the catalog. app.py checks PS3CLI_DIR and
+    # PS3CLI_CATALOG first, so set them at Machine scope (account-independent; the service
+    # picks them up on its next start / the provisioning reboot).
+    [Environment]::SetEnvironmentVariable('PS3CLI_DIR', ${ps3cliDestPath}, 'Machine')
+    [Environment]::SetEnvironmentVariable('PS3CLI_CATALOG', ${ps3CatalogPath}, 'Machine')
+    Write-MastPwLog ("Set Machine env PS3CLI_DIR={0} PS3CLI_CATALOG={1}" -f ${ps3cliDestPath}, ${ps3CatalogPath})
 
     Write-MastPwLog "PlaneWave installation completed successfully"
     exit 0
