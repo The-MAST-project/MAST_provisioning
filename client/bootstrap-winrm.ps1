@@ -22,10 +22,14 @@
       8. Hardens telemetry/privacy: diagnostic data = Security (lowest), disables the
          DiagTrack + dmwappushservice diagnostic-upload services, advertising ID,
          activity feed, Cortana / web search, app background+location, etc.
-      9. Disables the Windows Firewall on all profiles. MAST units sit on an isolated
+      9. Sets the regional format to English (United States) (locale en-US): the
+         system locale, home location, and the per-user 'Control Panel\International'
+         values (date/time/number/currency formatting) for the mast account, the
+         Default-user profile template, the .DEFAULT hive, and the current user.
+     10. Disables the Windows Firewall on all profiles. MAST units sit on an isolated
          VLAN behind a perimeter firewall and need open intra-fleet traffic
          (COM/RPC, Prometheus scraping, the control stack).
-     10. Stops + disables non-essential / vendor services that have no role on a
+     11. Stops + disables non-essential / vendor services that have no role on a
          headless control box (Print Spooler, Windows Search, Intel LMS, ASUS /
          Intel GCC / Realtek helpers). Applied by default; each is skippable via
          -SkipTrim. Remote-desktop and backup APPS are left to uninstall by hand -
@@ -401,6 +405,67 @@ function Sync-MastSystemTime {
     }
 }
 
+# en-US 'Control Panel\International' value set. These are the exact registry
+# values Windows writes when you pick "English (United States)" as the Region >
+# Regional format. Strings (REG_SZ) only -- there are no DWORDs under this key.
+$script:IntlEnUsValues = @{
+    'LocaleName'       = 'en-US'
+    'Locale'           = '00000409'
+    's1159'            = 'AM'
+    's2359'            = 'PM'
+    'sCountry'         = 'United States'
+    'sCurrency'        = '$'
+    'sDate'            = '/'
+    'sDecimal'         = '.'
+    'sGrouping'        = '3;0'
+    'sLanguage'        = 'ENU'
+    'sList'            = ','
+    'sLongDate'        = 'dddd, MMMM d, yyyy'
+    'sMonDecimalSep'   = '.'
+    'sMonGrouping'     = '3;0'
+    'sMonThousandSep'  = ','
+    'sNativeDigits'    = '0123456789'
+    'sNegativeSign'    = '-'
+    'sPositiveSign'    = ''
+    'sShortDate'       = 'M/d/yyyy'
+    'sShortTime'       = 'h:mm tt'
+    'sThousand'        = ','
+    'sTime'            = ':'
+    'sTimeFormat'      = 'h:mm:ss tt'
+    'sYearMonth'       = 'MMMM yyyy'
+    'iCalendarType'    = '1'
+    'iCountry'         = '1'
+    'iCurrDigits'      = '2'
+    'iCurrency'        = '0'
+    'iDate'            = '0'
+    'iDigits'          = '2'
+    'iFirstDayOfWeek'  = '6'
+    'iFirstWeekOfYear' = '0'
+    'iLZero'           = '1'
+    'iMeasure'         = '1'
+    'iNegCurr'         = '0'
+    'iNegNumber'       = '1'
+    'iPaperSize'       = '1'
+    'iTime'            = '0'
+    'iTimePrefix'      = '0'
+    'iTLZero'          = '0'
+}
+
+function Set-MastIntlValues {
+    # Write the en-US 'Control Panel\International' values under a single
+    # registry root. $RootPath is a PowerShell registry path WITHOUT the
+    # trailing 'Control Panel\International' subkey, e.g. 'HKCU:',
+    # 'Registry::HKEY_USERS\.DEFAULT', or 'Registry::HKU\<loaded-hive-key>'.
+    param([string]$RootPath, [hashtable]$Values)
+    $intlPath = Join-Path $RootPath 'Control Panel\International'
+    if (-not (Test-Path $intlPath)) {
+        New-Item -Path $intlPath -Force -ErrorAction SilentlyContinue | Out-Null
+    }
+    foreach ($name in $Values.Keys) {
+        Set-ItemProperty -Path $intlPath -Name $name -Value $Values[$name] -Type String -Force -ErrorAction Stop
+    }
+}
+
 $exitCode = 0
 try {
     Write-BootstrapBanner '======================================================================' 'Cyan'
@@ -565,6 +630,99 @@ try {
     }
 
     Write-BootstrapMsg '  Windows popup/notification suppressions applied.' 'Green'
+
+    # --- Regional format: English (United States) ---
+    #
+    # Pin the Windows regional format (Settings > Time & language > Region >
+    # Regional format) to English (United States) / locale en-US, instead of
+    # whatever the OEM image shipped. This controls how dates, times, numbers,
+    # and currency are formatted; a non-US short-date or decimal separator has
+    # bitten log/CSV parsing in this fleet before, so we pin it.
+    #
+    # Applied at three levels:
+    #   * Set-WinSystemLocale en-US  - system (non-Unicode) locale + new-user
+    #                                  default. Needs a reboot to fully apply.
+    #   * Set-WinHomeLocation 244    - home location = United States.
+    #   * 'Control Panel\International' values written to every user scope:
+    #       - the current user (HKCU) running bootstrap
+    #       - the .DEFAULT hive (logon screen / SYSTEM)
+    #       - the Default-user profile template (seeds NEW profiles, incl. mast
+    #         at first login -- a freshly created account has no hive yet)
+    #       - the mast account hive, if its profile already exists
+    # Idempotent; safe to re-run.
+    Write-BootstrapMsg '' 'Cyan'
+    Write-BootstrapMsg '--- Regional format: English (United States) ---' 'Cyan'
+
+    try {
+        Set-WinSystemLocale -SystemLocale en-US -ErrorAction Stop
+        Write-BootstrapMsg '  System locale set to en-US (reboot required to fully apply).' 'Green'
+        $script:RebootRecommended = $true
+    } catch {
+        Write-BootstrapMsg ("  WARN: Set-WinSystemLocale en-US failed: {0}" -f $_.Exception.Message) 'Yellow'
+    }
+    try {
+        Set-WinHomeLocation -GeoId 244 -ErrorAction Stop   # 244 = United States
+        Write-BootstrapMsg '  Home location set to United States (GeoId 244).' 'Green'
+    } catch {
+        Write-BootstrapMsg ("  WARN: Set-WinHomeLocation 244 failed: {0}" -f $_.Exception.Message) 'Yellow'
+    }
+
+    # Per-user International values. Directly write the always-mounted roots,
+    # then load/apply/unload the on-disk hives (Default-user template + mast).
+    $intlScopes = 0
+    foreach ($root in @('HKCU:', 'Registry::HKEY_USERS\.DEFAULT')) {
+        try {
+            Set-MastIntlValues -RootPath $root -Values $script:IntlEnUsValues
+            $intlScopes++
+        } catch {
+            Write-BootstrapMsg ("  WARN: International values on {0}: {1}" -f $root, $_.Exception.Message) 'Yellow'
+        }
+    }
+
+    $intlHiveTargets = @()
+    $defaultDat = Join-Path $env:SystemDrive 'Users\Default\NTUSER.DAT'
+    if (Test-Path -LiteralPath $defaultDat) {
+        $intlHiveTargets += @{ Label = 'Default-user template'; Dat = $defaultDat; Key = 'MAST_INTL_DEFAULT' }
+    } else {
+        Write-BootstrapMsg ("  WARN: Default-user hive not found at {0}; new profiles will not inherit en-US." -f $defaultDat) 'Yellow'
+    }
+    try {
+        $mastSidVal = (Get-LocalUser -Name $MastUser -ErrorAction Stop).SID.Value
+        $mastPl = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\$mastSidVal"
+        if (Test-Path $mastPl) {
+            $mastProf = (Get-ItemProperty -Path $mastPl).ProfileImagePath
+            $mastDat = Join-Path $mastProf 'NTUSER.DAT'
+            if (Test-Path -LiteralPath $mastDat) {
+                $intlHiveTargets += @{ Label = "mast user ($MastUser)"; Dat = $mastDat; Key = 'MAST_INTL_MAST' }
+            }
+        }
+    } catch { }
+    if (-not ($intlHiveTargets | Where-Object { $_.Key -eq 'MAST_INTL_MAST' })) {
+        Write-BootstrapMsg "  mast profile not created yet; it will inherit en-US from the Default-user template at first login." 'DarkGray'
+    }
+
+    foreach ($h in $intlHiveTargets) {
+        $loaded = $false
+        try {
+            & reg.exe load ("HKU\{0}" -f $h.Key) $h.Dat 2>&1 | Out-Null
+            if ($LASTEXITCODE -eq 0) { $loaded = $true }
+        } catch { }
+        if (-not $loaded) {
+            Write-BootstrapMsg ("  WARN: could not load {0} hive ({1}); skipping." -f $h.Label, $h.Dat) 'Yellow'
+            continue
+        }
+        try {
+            Set-MastIntlValues -RootPath ("Registry::HKU\{0}" -f $h.Key) -Values $script:IntlEnUsValues
+            $intlScopes++
+        } catch {
+            Write-BootstrapMsg ("  WARN: International values on {0}: {1}" -f $h.Label, $_.Exception.Message) 'Yellow'
+        } finally {
+            # Drop our references before unloading or reg.exe reports the hive busy.
+            [System.GC]::Collect()
+            try { & reg.exe unload ("HKU\{0}" -f $h.Key) 2>&1 | Out-Null } catch { }
+        }
+    }
+    Write-BootstrapMsg ("  en-US regional format applied to {0} user scope(s)." -f $intlScopes) 'Green'
 
     # --- Hardening: telemetry / privacy ---
     #
