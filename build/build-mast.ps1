@@ -75,9 +75,9 @@ if (-not (Test-Path -Path $Top -PathType Container)) {
 }
 
 # --- Disk-space validation (provisioning machine) ---
-# A full staging payload is ~16-17 GB (dominated by the astrometry index image).
-# Fail fast if the staging drive is low rather than writing a truncated payload
-# that then breaks the unit-side pull (robocopy rc>=8) deep into a run.
+# A full staging payload is ~10-11 GB (dominated by the astrometry index seed
+# files). Fail fast if the staging drive is low rather than writing a truncated
+# payload that then breaks the unit-side pull (robocopy rc>=8) deep into a run.
 ${OutDrive} = Split-Path -Qualifier ${OutRoot}
 ${minFreeGb} = 20
 ${freeBytes} = $null
@@ -444,22 +444,26 @@ if (${Modules} -contains 'ascom') {
     }
 }
 
-# Astrometry index image + smoke FITS. Sourced from C:\MAST\ on the build host
-# ("use these paths for now") -- both are far too large to keep in the repo. The
-# index image is mounted as D: by the imdisk provider (which copies it to the
-# persistent C:\MAST\Shared path on the unit); the smoke FITS is the solve input
-# placed by the astrometry provider. These are required for a VALID run: without
-# them the astrometry + mast-validation stages FAIL (the skip paths were removed),
-# so we warn loudly at build time but do not hard-block the build itself.
-${astroIndexImageSrc} = 'C:\MAST\MAST-15GB-indexes-5202+5203.img'
-${fullFrameFitsSrc}   = 'C:\MAST\full-frame.fits'
+# Astrometry index seed + smoke FITS. Sourced from C:\MAST\ on the build host
+# ("use these paths for now") -- both are far too large to keep in the repo. We
+# now stage the index FITS files themselves (the "seed"), NOT a pre-baked image:
+# the imdisk provider builds a sparse 32 GB NTFS image on the unit and seeds it
+# with these files (see server/providers/imdisk/provide-imdisk.ps1). The seed
+# directory is populated once on the build host from the legacy 15 GB image via
+# build/extract-index-seed.ps1. The smoke FITS is the solve input placed by the
+# astrometry provider. These are required for a VALID run: without them the
+# astrometry + mast-validation stages FAIL (the skip paths were removed), so we
+# warn loudly at build time but do not hard-block the build itself.
+${astroIndexSeedSrc} = 'C:\MAST\mast-indexes'
+${fullFrameFitsSrc}  = 'C:\MAST\full-frame.fits'
 if (${Modules} -contains 'imdisk') {
-    if (Test-Path -LiteralPath ${astroIndexImageSrc}) {
-        ${imgLeaf} = Split-Path -Leaf ${astroIndexImageSrc}
-        New-LinkOrCopy -Target ${astroIndexImageSrc} -LinkPath (Join-Path ${staging} ${imgLeaf})
-        Write-Host (" Staged astrometry index image: {0} ({1:N1} GB)" -f ${imgLeaf}, ((Get-Item ${astroIndexImageSrc}).Length / 1GB))
+    if (Test-Path -LiteralPath ${astroIndexSeedSrc}) {
+        ${seedFiles} = @(Get-ChildItem -LiteralPath ${astroIndexSeedSrc} -File -Recurse -ErrorAction SilentlyContinue)
+        ${seedGb}    = ((${seedFiles} | Measure-Object Length -Sum).Sum / 1GB)
+        New-LinkOrCopy -Target ${astroIndexSeedSrc} -LinkPath (Join-Path ${staging} 'mast-indexes')
+        Write-Host (" Staged astrometry index seed: mast-indexes\ ({0} files, {1:N1} GB); the unit builds the sparse 32 GB image." -f ${seedFiles}.Count, ${seedGb})
     } else {
-        Write-Warning ("Astrometry index image missing at {0}; imdisk will have nothing to mount and astrometry/mast-validation will FAIL on the unit." -f ${astroIndexImageSrc})
+        Write-Warning ("Astrometry index seed missing at {0}; run build/extract-index-seed.ps1 once to populate it from the legacy 15 GB image. imdisk will have nothing to seed and astrometry/mast-validation will FAIL on the unit." -f ${astroIndexSeedSrc})
     }
 }
 if ((${Modules} -contains 'astrometry') -or (${Modules} -contains 'mast-validation')) {

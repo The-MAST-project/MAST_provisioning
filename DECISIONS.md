@@ -2,6 +2,58 @@
 
 ---
 
+## [2026-06-18] Astrometry index drive is a sparse 32 GB image built on the unit from an index-file seed
+
+**Why:** The `imdisk` provider shipped a pre-baked, fully-allocated ~15 GB filesystem
+image (`MAST-15GB-indexes-5202+5203.img`) and mounted it as `D:` with no `-s`. Two
+problems: (1) the payload carried a whole baked filesystem (~16 GB on disk) when the
+useful content is only the ~9.85 GB of index FITS files, and (2) `D:` is not just index
+storage -- it is the unit's working drive (temp files, acquisition images, intermediate
+solve products, etc.), and a fixed ~15 GB image left almost no free space on it once the
+indexes were in. The 32 GB size gives that runtime working room; sparseness keeps the
+backing file small (~10 GB) despite the larger logical volume. The mast02 reference unit
+had already been moved by hand to a sparse 32 GB
+image (`MAST-32GB-indexes-5202+5203.img`, 32 GB logical / ~10 GB allocated) mounted via
+`imdisk -a -m D: -s 32G -f <image>`; the repo needed to converge on that layout.
+
+**What:**
+- **Seed = index files, not an image.** `build-mast.ps1` now stages the index FITS
+  directory (`C:\MAST\mast-indexes` -> `<payload>\mast-indexes`) instead of the baked
+  `.img`. `build/extract-index-seed.ps1` (new, host, one-time, elevated) populates that
+  directory once by mounting the legacy 15 GB image read-only and robocopying its
+  `mast-indexes` folder out.
+- **Image built on the unit.** `provide-imdisk.ps1` builds the sparse image the first
+  time it runs (idempotent: skips if the image already exists, e.g. mast02 or a re-run):
+  create the backing file, `fsutil sparse setflag` it, extend to 32 GB (so the zero
+  range is unallocated), `imdisk -a -m <scratch> -s 32G`, quick NTFS format, robocopy the
+  staged seed into `<scratch>\mast-indexes`, detach. ImDisk itself does NOT create sparse
+  files, so the explicit sparse-flag step is required.
+- **Mount form.** Both the immediate mount and the boot task (`MAST-ImDisk-Persistent`,
+  AtStartup, SYSTEM) now use `imdisk -a -m D: -s 32G -f "<image>"`, matching mast02.
+- The scratch build mount is probed for readiness AFTER the quick format, not before
+  (a freshly attached RAW image has no filesystem, so its root is not testable yet).
+
+**Implications:**
+- Payload drops from ~16 GB to ~10 GB (index files only); steady-state on-disk
+  allocation of the built image is ~10 GB of 32 GB logical (the ~9.85 GB of indexes plus
+  FS overhead), leaving ~22 GB of free space on `D:` for the unit's runtime working data
+  (temp files, acquisition images, intermediate solve products). The backing file grows
+  sparsely as that space is used, up to the 32 GB logical cap.
+- `build/extract-index-seed.ps1` must be run once on each build host to populate
+  `C:\MAST\mast-indexes` before the first build; build-mast warns (does not hard-fail) if
+  the seed is missing, same posture as the old image-missing warning.
+- Validated end-to-end on the dev VM (mast-wis-01): the build flow (sparse file -> imdisk
+  -s -> quick format -> robocopy -> detach -> remount) produces a sparse image with data
+  intact, and the boot-task mount survives a reboot with byte-identical data (SHA256),
+  sparseness, and logical size. The on-disk allocation only settles to its true value
+  after the host NTFS flushes the backing file (a reboot forces this), which also explains
+  mast02's ~10 GB allocation.
+- On real units `D:` may already be occupied (see the prior real-unit note); the build
+  still produces the image and the boot task handles `D:` later, but the immediate mount
+  is skipped when `D:` is in use.
+
+---
+
 ## [2026-06-14] Provisioning server as NTP source + early one-time unit clock sync
 
 **Why:** MAST units frequently cannot reach public NTP -- UDP 123 is blocked, or

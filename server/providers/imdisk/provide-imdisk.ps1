@@ -1,17 +1,33 @@
 param(
     [string]${AssetsRoot}  = ".",
-    # Match mastw: D: is a persistent file-backed mount, not a ramdisk. The
-    # image file itself is supplied out-of-band per compare-mastw/GAPS.md
-    # action items; we register the scheduled task either way so the mount
-    # works on the next reboot after the image lands.
-    # Filename tracks the upstream-shipped image (see The-MAST-project/MAST_provisioning
-    # commit "added TBD for pre-populated image file"). If the canonical image
-    # changes, update this default and any out-of-band staging instructions together.
-    [string]${ImagePath}   = 'C:\MAST\Shared\MAST-15GB-indexes-5202+5203.img',
-    [string]${TaskName}    = 'MAST-ImDisk-Persistent'
+    # D: is a persistent file-backed ImDisk mount. The backing image is a
+    # SPARSE NTFS image: 32 GB of logical space, but only the actually-written
+    # index files (~10 GB) are allocated on the host disk. The image is BUILT
+    # on the unit from the staged index seed (see -IndexSeedDir) the first time
+    # this provider runs; on subsequent runs (and on real units where it was
+    # pre-built) the existing image is reused as-is. This matches the mast02
+    # reference unit: C:\MAST\Shared\MAST-32GB-indexes-5202+5203.img mounted as
+    # D: via `imdisk -a -m D: -s 32G -f <image>`.
+    [string]${ImagePath}    = 'C:\MAST\Shared\MAST-32GB-indexes-5202+5203.img',
+    # Logical size of the sparse virtual disk. Passed verbatim to imdisk -s and
+    # used to size the sparse backing file. Keep the 'G' suffix form imdisk
+    # accepts (e.g. '32G').
+    [string]${DiskSize}     = '32G',
+    [long]  ${DiskSizeBytes} = 34359738368,   # 32 * 1024^3, must match ${DiskSize}
+    # Directory under the staged payload holding the index FITS files (the
+    # "seed"). build-mast.ps1 stages C:\MAST\mast-indexes -> <payload>\mast-indexes.
+    [string]${IndexSeedDir} = '',
+    # Subdirectory created inside the image that astrometry.cfg points at
+    # (add_path /cygdrive/d/mast-indexes).
+    [string]${IndexSubdir}  = 'mast-indexes',
+    [string]${TaskName}     = 'MAST-ImDisk-Persistent'
 )
 
 ${ErrorActionPreference} = "Stop"
+if ([string]::IsNullOrWhiteSpace(${IndexSeedDir})) {
+    ${IndexSeedDir} = Join-Path ${AssetsRoot} 'mast-indexes'
+}
+
 ${mastLogDot} = Join-Path ${PSScriptRoot} 'mast-log.ps1'
 if (-not (Test-Path ${mastLogDot})) { ${mastLogDot} = Join-Path ${PSScriptRoot} '..\..\lib\mast-log.ps1' }
 . ${mastLogDot}
@@ -27,6 +43,142 @@ function Write-ImDiskLog {
 }
 
 Set-Content -LiteralPath ${logFile} -Encoding UTF8 -Value ("[{0}] provide-imdisk.ps1 started." -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))
+
+# ---------------------------------------------------------------------------
+# Sparse-image build helpers.
+#
+# ImDisk does NOT create sparse backing files (a freshly-created -s 32G image
+# is fully allocated at 32 GB on disk). We therefore create the backing file
+# ourselves as a sparse file BEFORE mounting it, then let ImDisk mount the
+# existing 32 GB file. A QUICK NTFS format + robocopy of the ~10 GB of index
+# files only writes the populated regions, so the file stays sparse (~10 GB
+# allocated of 32 GB logical) -- exactly the mast02 reference layout.
+# ---------------------------------------------------------------------------
+function Get-FreeDriveLetter {
+    # Walk Z: down to E: (C:/D: are spoken for) and return the first letter
+    # that has no drive root, for a temporary build/seed mount.
+    foreach (${ch} in [char[]]([char]'Z'..[char]'E')) {
+        if (-not (Test-Path -LiteralPath ("{0}:\" -f ${ch}))) { return ([string]${ch}) }
+    }
+    throw "No free drive letter available for the scratch build mount."
+}
+
+function New-SparseBackingFile {
+    param([Parameter(Mandatory)][string]${Path},
+          [Parameter(Mandatory)][long]${Bytes})
+    ${dir} = Split-Path -Parent ${Path}
+    if (-not (Test-Path -LiteralPath ${dir})) {
+        New-Item -ItemType Directory -Path ${dir} -Force | Out-Null
+    }
+    if (Test-Path -LiteralPath ${Path}) { Remove-Item -LiteralPath ${Path} -Force }
+    # Create the (empty) file, mark it sparse, THEN extend to the full logical
+    # size. With the sparse attribute set first, the extension is a zero range
+    # and consumes no allocation.
+    ${fs} = [System.IO.File]::Create(${Path}); ${fs}.Close()
+    & fsutil sparse setflag "${Path}" | Out-Null
+    if (${LASTEXITCODE} -ne 0) { throw ("fsutil sparse setflag failed ({0}) on {1}" -f ${LASTEXITCODE}, ${Path}) }
+    ${fs} = [System.IO.File]::Open(${Path}, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite)
+    try { ${fs}.SetLength(${Bytes}) } finally { ${fs}.Close() }
+}
+
+function Wait-ForDriveRoot {
+    param([Parameter(Mandatory)][string]${Root}, [int]${TimeoutMs} = 5000, [switch]${Gone})
+    ${tries} = 0
+    ${maxTries} = [int](${TimeoutMs} / 200)
+    while (${tries} -lt ${maxTries}) {
+        ${present} = Test-Path -LiteralPath ${Root}
+        if ((${Gone} -and -not ${present}) -or (-not ${Gone} -and ${present})) { return $true }
+        Start-Sleep -Milliseconds 200
+        ${tries}++
+    }
+    return $false
+}
+
+function Build-SparseIndexImage {
+    param([Parameter(Mandatory)][string]${ImagePath},
+          [Parameter(Mandatory)][string]${SeedDir},
+          [Parameter(Mandatory)][long]${SizeBytes},
+          [Parameter(Mandatory)][string]${SizeArg},
+          [Parameter(Mandatory)][string]${ImdiskExe},
+          [Parameter(Mandatory)][string]${IndexSubdir})
+
+    if (-not (Test-Path -LiteralPath ${SeedDir})) {
+        throw ("Index seed directory not found at {0}. build-mast must stage C:\MAST\mast-indexes into the payload." -f ${SeedDir})
+    }
+    ${seedFiles} = @(Get-ChildItem -LiteralPath ${SeedDir} -File -Recurse -ErrorAction SilentlyContinue)
+    if (${seedFiles}.Count -eq 0) {
+        throw ("Index seed directory {0} is empty; nothing to seed the image with." -f ${SeedDir})
+    }
+    ${seedGb} = ((${seedFiles} | Measure-Object Length -Sum).Sum / 1GB)
+    Write-ImDiskLog ("Building sparse index image {0} ({1} logical) from seed {2} ({3} files, {4:N2} GB)..." -f ${ImagePath}, ${SizeArg}, ${SeedDir}, ${seedFiles}.Count, ${seedGb})
+
+    New-SparseBackingFile -Path ${ImagePath} -Bytes ${SizeBytes}
+    Write-ImDiskLog ("Created sparse backing file ({0:N0} bytes logical, sparse)." -f ${SizeBytes})
+
+    ${scratch} = Get-FreeDriveLetter
+    ${scratchVol} = "{0}:" -f ${scratch}
+    ${scratchRoot} = "{0}:\" -f ${scratch}
+    Write-ImDiskLog ("Mounting scratch {0} to format + seed the image..." -f ${scratchVol})
+    ${mountArgs} = @('-a', '-m', ${scratchVol}, '-s', ${SizeArg}, '-f', ${ImagePath})
+    ${mp} = Start-Process -FilePath ${ImdiskExe} -ArgumentList ${mountArgs} -PassThru -Wait -WindowStyle Hidden
+    try { ${mp}.Refresh() } catch {}
+    if ($null -eq ${mp}.ExitCode -or ${mp}.ExitCode -ne 0) {
+        throw ("imdisk -a -m {0} -s {1} (scratch build mount) failed (exit {2})." -f ${scratchVol}, ${SizeArg}, ${mp}.ExitCode)
+    }
+    # NOTE: do NOT probe ${scratchRoot} here. imdisk attach via Start-Process
+    # -Wait is synchronous (the drive letter is assigned on return), but the
+    # image is still RAW/unformatted at this point, so Test-Path on the root
+    # returns $false until the format below lays down a filesystem. Probing the
+    # root now would falsely fail. We verify the root AFTER formatting instead.
+
+    try {
+        # QUICK NTFS format. /Y suppresses the proceed prompt; /V sets the label
+        # so format does not stop to ask for one. Quick format only writes FS
+        # metadata, so the sparse backing file stays small.
+        Write-ImDiskLog ("Quick-formatting {0} as NTFS (label {1})..." -f ${scratchVol}, ${IndexSubdir})
+        ${fmtArgs} = @(${scratchVol}, '/FS:NTFS', '/Q', '/Y', ('/V:{0}' -f ${IndexSubdir}))
+        ${fp} = Start-Process -FilePath 'format.com' -ArgumentList ${fmtArgs} -PassThru -Wait -WindowStyle Hidden
+        try { ${fp}.Refresh() } catch {}
+        if ($null -eq ${fp}.ExitCode -or ${fp}.ExitCode -ne 0) {
+            throw ("format {0} /FS:NTFS /Q failed (exit {1})." -f ${scratchVol}, ${fp}.ExitCode)
+        }
+        if (-not (Wait-ForDriveRoot -Root ${scratchRoot})) {
+            throw ("Scratch volume {0} did not surface after format." -f ${scratchVol})
+        }
+
+        ${dest} = Join-Path ${scratchRoot} ${IndexSubdir}
+        Write-ImDiskLog ("Seeding index files: {0} -> {1}" -f ${SeedDir}, ${dest})
+        ${rcOut} = & robocopy "${SeedDir}" "${dest}" '/E' '/COPY:DAT' '/R:1' '/W:1' '/NFL' '/NDL' '/NJH' '/NP' 2>&1
+        ${rc} = ${LASTEXITCODE}
+        foreach (${line} in ${rcOut}) {
+            Add-Content -LiteralPath ${logFile} -Encoding UTF8 -Value ("[robocopy] {0}" -f ${line})
+        }
+        # robocopy: 0-7 are success/info, >=8 indicates at least one failure.
+        if (${rc} -ge 8) {
+            throw ("robocopy of index seed failed (exit {0})." -f ${rc})
+        }
+        ${copied} = @(Get-ChildItem -LiteralPath ${dest} -File -Recurse -ErrorAction SilentlyContinue)
+        Write-ImDiskLog ("Index seed copied: {0} files in {1} (robocopy rc={2})." -f ${copied}.Count, ${dest}, ${rc})
+        if (${copied}.Count -eq 0) {
+            throw ("No index files present in {0} after robocopy." -f ${dest})
+        }
+    }
+    finally {
+        # Detach the scratch mount so the backing file is flushed and the final
+        # boot/immediate mount can claim it at D:.
+        Write-ImDiskLog ("Detaching scratch {0}..." -f ${scratchVol})
+        & ${ImdiskExe} -D -m ${scratchVol} 2>&1 | ForEach-Object {
+            Add-Content -LiteralPath ${logFile} -Encoding UTF8 -Value ("[imdisk] {0}" -f $_)
+        }
+        Wait-ForDriveRoot -Root ${scratchRoot} -Gone | Out-Null
+    }
+
+    if (Test-Path -LiteralPath ${ImagePath}) {
+        Write-ImDiskLog ("Sparse index image built: {0} ({1:N2} GB logical)." -f ${ImagePath}, ((Get-Item ${ImagePath}).Length / 1GB))
+    } else {
+        throw ("Image build reported success but {0} is missing." -f ${ImagePath})
+    }
+}
 
 try {
     ${zipPath} = Join-Path ${AssetsRoot} "ImDiskTk-x64.zip"
@@ -105,23 +257,22 @@ try {
         Write-ImDiskLog ("Created image directory: {0}" -f ${imageDir})
     }
 
-    # The index image is staged into this run's payload by build-mast (sourced
-    # from the build host's C:\MAST\<name>.img). Copy it into the persistent
-    # ImagePath so both the immediate mount below and the boot-time task can use
-    # it. One-time ~15GB copy; skipped if the image is already in place.
-    ${stagedImage} = Join-Path ${AssetsRoot} (Split-Path -Leaf ${ImagePath})
+    # Build the sparse 32 GB index image from the staged seed, unless it is
+    # already present at the persistent path (idempotent re-runs, or a unit
+    # where the image was pre-built / built on a previous provision). The seed
+    # is just the index FITS files (staged by build-mast as <payload>\mast-indexes);
+    # the unit owns turning those into the sparse D: image.
     if (Test-Path -LiteralPath ${ImagePath}) {
-        Write-ImDiskLog ("Image file present at persistent path: {0}" -f ${ImagePath})
-    } elseif (Test-Path -LiteralPath ${stagedImage}) {
-        Write-ImDiskLog ("Copying staged index image -> persistent path: {0} -> {1} ({2:N1} GB)..." -f ${stagedImage}, ${ImagePath}, ((Get-Item ${stagedImage}).Length / 1GB))
-        Copy-Item -LiteralPath ${stagedImage} -Destination ${ImagePath} -Force
-        Write-ImDiskLog "Index image copied to persistent path."
+        Write-ImDiskLog ("Index image already present at {0} ({1:N2} GB logical); reusing as-is." -f ${ImagePath}, ((Get-Item ${ImagePath}).Length / 1GB))
+    } elseif (Test-Path -LiteralPath ${IndexSeedDir}) {
+        Build-SparseIndexImage -ImagePath ${ImagePath} -SeedDir ${IndexSeedDir} `
+            -SizeBytes ${DiskSizeBytes} -SizeArg ${DiskSize} -ImdiskExe ${imdiskExe} -IndexSubdir ${IndexSubdir}
     } else {
-        Write-ImDiskLog ("[WARN] No index image staged at {0} and none at {1}. D:\mast-indexes will be empty; astrometry + mast-validation will FAIL." -f ${stagedImage}, ${ImagePath})
+        Write-ImDiskLog ("[WARN] No image at {0} and no index seed at {1}. D:\{2} will be empty; astrometry + mast-validation will FAIL." -f ${ImagePath}, ${IndexSeedDir}, ${IndexSubdir})
     }
 
     Write-ImDiskLog "Creating boot-time file-backed mount scheduled task..."
-    ${argLine} = ('-a -m D: -f "{0}"' -f ${ImagePath})
+    ${argLine} = ('-a -m D: -s {0} -f "{1}"' -f ${DiskSize}, ${ImagePath})
     ${taskAction} = New-ScheduledTaskAction -Execute ${imdiskExe} -Argument ${argLine}
     ${taskTrigger} = New-ScheduledTaskTrigger -AtStartup
     ${taskPrincipal} = New-ScheduledTaskPrincipal -UserID "NT AUTHORITY\SYSTEM" -LogonType ServiceAccount -RunLevel Highest
@@ -137,7 +288,7 @@ try {
 
     Unregister-ScheduledTask -TaskName ${TaskName} -ErrorAction SilentlyContinue -Confirm:$false
     Register-ScheduledTask -TaskName ${TaskName} `
-        -Description ("Mount D: from {0} on system startup (ImDisk file-backed)" -f ${ImagePath}) `
+        -Description ("Mount D: from {0} on system startup (ImDisk file-backed, sparse {1})" -f ${ImagePath}, ${DiskSize}) `
         -Action ${taskAction} `
         -Trigger ${taskTrigger} `
         -Principal ${taskPrincipal} `
@@ -155,8 +306,8 @@ try {
     } elseif (Test-Path -LiteralPath 'D:\') {
         Write-ImDiskLog "[INFO] D: already in use; skipping immediate mount. Existing mount left intact."
     } else {
-        Write-ImDiskLog ("Mounting D: from {0} via ImDisk (immediate) ..." -f ${ImagePath})
-        ${mountArgs} = @('-a', '-m', 'D:', '-f', ${ImagePath})
+        Write-ImDiskLog ("Mounting D: from {0} via ImDisk (immediate, -s {1}) ..." -f ${ImagePath}, ${DiskSize})
+        ${mountArgs} = @('-a', '-m', 'D:', '-s', ${DiskSize}, '-f', ${ImagePath})
         ${mp} = Start-Process -FilePath ${imdiskExe} -ArgumentList ${mountArgs} `
             -PassThru -Wait -WindowStyle Hidden
         try { ${mp}.Refresh() } catch {}
@@ -169,12 +320,7 @@ try {
         }
         # Confirm the mount actually surfaced as a drive. ImDisk can return 0 even
         # if the mount silently misbehaved, so probe the drive root explicitly.
-        ${tries} = 0
-        while ((-not (Test-Path -LiteralPath 'D:\')) -and (${tries} -lt 10)) {
-            Start-Sleep -Milliseconds 200
-            ${tries}++
-        }
-        if (-not (Test-Path -LiteralPath 'D:\')) {
+        if (-not (Wait-ForDriveRoot -Root 'D:\' -TimeoutMs 2000)) {
             throw "imdisk reported success but D:\ is not visible after 2s. Check imdisk service state."
         }
         Write-ImDiskLog "D: mounted successfully (immediate)."
