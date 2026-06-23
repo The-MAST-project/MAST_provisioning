@@ -171,6 +171,59 @@ Always make changes in the canonical source locations:
 - Client scripts: `client/`
 - Shared lib: `server/lib/`
 
+## Remotes: `upstream` is the integration repo, `origin` is the fork
+
+`upstream` = `github.com/The-MAST-project/MAST_provisioning` (integration); `origin` =
+`github.com/elibrody-weizmann/MAST_provisioning` (the working fork). "Fetch latest from
+MAST_provisioning" means `git fetch upstream`, not `origin`. The working line is
+`eli/vm-provisioning`, treated as the de facto main until the next milestone -- base new
+work on it, and when comparing to `upstream/main` use the merge-base so the diff shows only
+the real new contribution (a direct `HEAD..upstream/main` looks huge because of files we
+added, not files upstream removed).
+
+## Proxy mode is explicit (`--proxy-mode`)
+
+A run's network mode is chosen by the operator, never auto-probed:
+`python vm/run-prov-test.py --proxy-mode {weizmann,direct}` (default `weizmann`). The flag
+flows through `build-mast.ps1 -ProxyMode` into `commands.json`. Running from off-campus (or
+any unit that cannot reach `bcproxy.weizmann.ac.il:8080`) you MUST pass `--proxy-mode
+direct`; otherwise every proxy surface is set to bcproxy and downstream installs fail.
+On-campus, omit it (or pass `weizmann`). "dev vs prod" is a different axis from
+on-/off-campus -- pick by the unit's network reachability only.
+
+## WinINet installers behind bcproxy need the cert-revocation toggle
+
+Behind bcproxy, Windows CryptoAPI revocation retrieval (cryptnet) fails (`0x80070057` ->
+`CRYPT_E_REVOCATION_OFFLINE`), so WinINet installers that enforce server-cert revocation
+(cygwin `setup-x86_64.exe`, the Chrome online stub) hard-fail TLS with WinINet error 12057.
+git is unaffected (it does revocation best-effort). For any new WinINet-based online
+installer behind the proxy, wrap it with `server/lib/mast-net.ps1`'s `Disable-` /
+`Restore-WinINetCertRevocationCheck` (toggles HKCU `Internet Settings\CertificateRevocation`)
+and restore afterward. Do not try to make cryptnet fetch revocation through bcproxy
+(unsolved), and do not remove the internet dependency (git needs it).
+
+## File encoding: BOM and cygwin line endings
+
+- **PowerShell-authored JSON carries a UTF-8 BOM.** `build-mast.ps1` writes `commands.json`
+  and `build-manifest.json` via `Out-File -Encoding UTF8`, which prepends a BOM
+  (`EF BB BF`). Python readers MUST go through `vm_lib.load_json_file` / `parse_json_text`
+  (BOM-tolerant), never `json.loads(path.read_text(encoding="utf-8"))`.
+- **Files consumed by cygwin binaries need LF-only endings.** A config/list/script read by
+  a cygwin program (e.g. `astrometry.cfg`) must be written with
+  `[System.IO.File]::WriteAllText($path, $body, $enc)` using explicit `\n`, not
+  `Set-Content` / `Out-File` (which emit CRLF on Windows). A trailing `\r` makes cygwin
+  `opendir` / `open` fail silently (ENOENT on a path that visibly exists).
+
+## Npcap is installed interactively; its provider is verify-only
+
+The free Npcap installer's silent `/S` and feature flags are OEM-only -- the free build
+ignores them and blocks on the NSIS options page, which can never be dismissed under a
+Session-0 WinRM task. So Npcap is installed interactively by `client/bootstrap-winrm.ps1`
+(full admin token), and the `npcap` provider only verifies the service/driver and
+(re)registers the watchdog. Do NOT reintroduce installer-running logic into
+`provide-npcap.ps1` or chase silent-flag / token / driver-trust fixes. To bump the version,
+drop a new `npcap-*.exe` into `client/assets/`.
+
 ## Do not write to git unless explicitly asked
 
 Do **not** run `git commit`, `git push`, `git rm`, `git reset`, `git rebase`, `git lfs migrate`, `git filter-repo`, `git tag`, or any other history- or remote-mutating git operation **unless the user has specifically asked for it in the current request**. Read-only operations (`git log`, `git status`, `git diff`, `git show`, `git rev-parse`, `git ls-files`, `git lfs ls-files`, `git lfs migrate info`, `git fetch` of a read-only remote, etc.) are fine.
