@@ -1,13 +1,27 @@
 param(
     [string]${AssetsRoot}  = ".",
-    # D: is a persistent file-backed ImDisk mount. The backing image is a
-    # SPARSE NTFS image: 32 GB of logical space, but only the actually-written
-    # index files (~10 GB) are allocated on the host disk. The image is BUILT
-    # on the unit from the staged index seed (see -IndexSeedDir) the first time
-    # this provider runs; on subsequent runs (and on real units where it was
-    # pre-built) the existing image is reused as-is. This matches the mast02
-    # reference unit: C:\MAST\Shared\MAST-32GB-indexes-5202+5203.img mounted as
-    # D: via `imdisk -a -m D: -s 32G -f <image>`.
+    # D: is a VOLATILE, RAM-backed ImDisk mount (`imdisk -t vm`). The backing
+    # image is a SPARSE NTFS image: 32 GB of logical space, but only the
+    # actually-written index files (~10 GB) are allocated on the host disk. The
+    # image is BUILT on the unit from the staged index seed (see -IndexSeedDir)
+    # the first time this provider runs (the build mounts the image FILE-backed
+    # to write the seed into it); on subsequent runs the existing image is
+    # reused as-is.
+    #
+    # At RUNTIME the image is mounted with `-t vm`, so its contents are loaded
+    # into RAM at attach time: the index seed is present every boot (fast
+    # solving, served from RAM), while runtime writes -- temp files, acquisition
+    # scratch, intermediate results -- live only in the volatile RAM overlay and
+    # are WIPED on reboot. The 32 GB logical size gives runtime working room in
+    # that overlay; it also means the mount commits ~32 GB of RAM (units have
+    # ~64 GB), so size the image to the RAM budget. The backing .img file is
+    # only ever read at mount, never written, so it stays sparse and pristine.
+    #
+    # NOTE: an earlier revision (2026-06-18) dropped the `-t vm` flag when it
+    # switched to the self-built sparse image, which silently made D: file-backed
+    # and PERSISTENT -- runtime scratch then accumulated inside the index image
+    # across reboots. See the 2026-06-23 DECISIONS entry. Do not remove `-t vm`
+    # from the runtime mounts.
     [string]${ImagePath}    = 'C:\MAST\Shared\MAST-32GB-indexes-5202+5203.img',
     # Logical size of the sparse virtual disk. Passed verbatim to imdisk -s and
     # used to size the sparse backing file. Keep the 'G' suffix form imdisk
@@ -119,6 +133,9 @@ function Build-SparseIndexImage {
     ${scratchVol} = "{0}:" -f ${scratch}
     ${scratchRoot} = "{0}:\" -f ${scratch}
     Write-ImDiskLog ("Mounting scratch {0} to format + seed the image..." -f ${scratchVol})
+    # FILE-backed on purpose (NO -t vm): the format + robocopy below must persist
+    # into the backing .img so the seeded indexes survive. Only the RUNTIME D:
+    # mounts (immediate + boot task) use -t vm. Do not add -t vm here.
     ${mountArgs} = @('-a', '-m', ${scratchVol}, '-s', ${SizeArg}, '-f', ${ImagePath})
     ${mp} = Start-Process -FilePath ${ImdiskExe} -ArgumentList ${mountArgs} -PassThru -Wait -WindowStyle Hidden
     try { ${mp}.Refresh() } catch {}
@@ -271,8 +288,10 @@ try {
         Write-ImDiskLog ("[WARN] No image at {0} and no index seed at {1}. D:\{2} will be empty; astrometry + mast-validation will FAIL." -f ${ImagePath}, ${IndexSeedDir}, ${IndexSubdir})
     }
 
-    Write-ImDiskLog "Creating boot-time file-backed mount scheduled task..."
-    ${argLine} = ('-a -m D: -s {0} -f "{1}"' -f ${DiskSize}, ${ImagePath})
+    Write-ImDiskLog "Creating boot-time RAM-backed (-t vm) volatile mount scheduled task..."
+    # -t vm: load the image into RAM at attach; runtime writes are volatile.
+    # Size is taken from the image file, so no -s here (unlike the build mount).
+    ${argLine} = ('-a -m D: -t vm -f "{0}"' -f ${ImagePath})
     ${taskAction} = New-ScheduledTaskAction -Execute ${imdiskExe} -Argument ${argLine}
     ${taskTrigger} = New-ScheduledTaskTrigger -AtStartup
     ${taskPrincipal} = New-ScheduledTaskPrincipal -UserID "NT AUTHORITY\SYSTEM" -LogonType ServiceAccount -RunLevel Highest
@@ -288,7 +307,7 @@ try {
 
     Unregister-ScheduledTask -TaskName ${TaskName} -ErrorAction SilentlyContinue -Confirm:$false
     Register-ScheduledTask -TaskName ${TaskName} `
-        -Description ("Mount D: from {0} on system startup (ImDisk file-backed, sparse {1})" -f ${ImagePath}, ${DiskSize}) `
+        -Description ("Mount D: from {0} on system startup (ImDisk -t vm: RAM-backed, VOLATILE - index seed loads into RAM, runtime scratch wiped on reboot)" -f ${ImagePath}) `
         -Action ${taskAction} `
         -Trigger ${taskTrigger} `
         -Principal ${taskPrincipal} `
@@ -306,8 +325,8 @@ try {
     } elseif (Test-Path -LiteralPath 'D:\') {
         Write-ImDiskLog "[INFO] D: already in use; skipping immediate mount. Existing mount left intact."
     } else {
-        Write-ImDiskLog ("Mounting D: from {0} via ImDisk (immediate, -s {1}) ..." -f ${ImagePath}, ${DiskSize})
-        ${mountArgs} = @('-a', '-m', 'D:', '-s', ${DiskSize}, '-f', ${ImagePath})
+        Write-ImDiskLog ("Mounting D: from {0} via ImDisk (immediate, -t vm RAM-backed) ..." -f ${ImagePath})
+        ${mountArgs} = @('-a', '-m', 'D:', '-t', 'vm', '-f', ${ImagePath})
         ${mp} = Start-Process -FilePath ${imdiskExe} -ArgumentList ${mountArgs} `
             -PassThru -Wait -WindowStyle Hidden
         try { ${mp}.Refresh() } catch {}

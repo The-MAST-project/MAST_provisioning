@@ -45,6 +45,56 @@ and smoke-marker handling treat it as part of the proxy module.
 - Operators no longer perform a manual post-`direct`-run proxy step. A unit is
   proxy-ready on first boot however it was provisioned.
 
+## [2026-06-23] D: index/scratch drive is RAM-backed (`imdisk -t vm`) and volatile again
+
+**Why:** The astrometry index drive `D:` is dual-purpose: it holds the read-only
+index seed (`D:\mast-indexes`) AND it is the unit's working scratch drive (temp files,
+acquisition images, intermediate plate-solve/autofocus results). The design intent has
+always been that scratch is **volatile** -- wiped on reboot, so there is nothing to clean
+up and scratch never accumulates. The 2026-06-18 change ("sparse 32 GB image built on the
+unit") switched the mount form to `imdisk -a -m D: -s 32G -f <image>` and **inadvertently
+dropped the `-t vm` flag**. Without `-t vm`, ImDisk defaults to a FILE-backed mount, which
+is persistent: every runtime write goes into the backing `.img` and survives reboots. The
+06-18 validation only checked that the *index* data survived a reboot byte-identical (which
+is correct and desirable for indexes), so the regression -- scratch also persisting and
+growing the index image indefinitely -- went unnoticed. Found on mast02: a stray
+`D:\MAST\tmp\mastrometry\full-frame.fits` dated 2026-05-24 had survived multiple reboots,
+and `imdisk -l` reported `Queued unbuffered I/O Image File` (file-backed) instead of
+`Virtual Memory`. mast00 still had the older, correct `-t vm` mount.
+
+**What:**
+- **Runtime mounts use `-t vm` (RAM-backed, volatile).** Both the immediate in-session
+  mount and the boot-time scheduled task now use `imdisk -a -m D: -t vm -f "<image>"`
+  (no `-s`; size derives from the image). At attach the image is loaded into RAM: the
+  index seed is present every boot and served from RAM (fast solving), while runtime
+  writes live only in the volatile RAM overlay and are wiped on reboot. The backing
+  `.img` is only ever read at mount, never written, so it stays sparse and pristine.
+- **The build-time scratch mount stays FILE-backed.** `Build-SparseIndexImage` still
+  mounts the new image with `-s <size> -f` (no `-t vm`) so the quick-format + robocopy of
+  the seed persist into the backing file. Only the runtime D: mounts changed. A guard
+  comment marks this so it is not "fixed" to `-t vm`.
+- **RAM budget.** A `-t vm` mount commits RAM equal to the image's *logical* size, not the
+  sparse on-disk size. The 32 GB logical image commits ~32 GB RAM (units have ~64 GB),
+  leaving ~20 GB free with D: mounted. Size the image to the RAM budget; mast00 uses a
+  15 GB image for a lighter footprint.
+- **mast02 remediated live** (2026-06-23, by hand over SSH): rebuilt a clean index-only
+  sparse 32 GB image from `D:\mast-indexes` (96 files, 9.85 GB), swapped it in under the
+  canonical name (old persistent image kept as `MAST-32GB-...img.persistent.bak`), remounted
+  D: with `-t vm` (now reports `Virtual Memory`), and updated the `MAST-ImDisk-Persistent`
+  boot task to the `-t vm` form.
+
+**Implications:**
+- Scratch on D: no longer accumulates across reboots; the "nothing to clean up on boot"
+  assumption holds again. This removes the strongest argument for an active `D:\MAST`
+  cleanup sweep, though one may still be wanted for within-session hygiene.
+- The boot task name `MAST-ImDisk-Persistent` stays: "persistent" refers to persisting the
+  D: *mount* across boots (the task re-establishes it every startup), not to persisting the
+  disk contents -- the contents are volatile by design. No rename needed.
+- Full volatility can only be confirmed by a reboot (a marker file written to `D:\MAST`
+  should be gone afterward). mast02 was not rebooted as part of this change.
+- No existing units need remediation; this provider change is so future units get the
+  correct `-t vm` mount.
+
 ## [2026-06-18] Astrometry index drive is a sparse 32 GB image built on the unit from an index-file seed
 
 **Why:** The `imdisk` provider shipped a pre-baked, fully-allocated ~15 GB filesystem
