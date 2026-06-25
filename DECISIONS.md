@@ -2,6 +2,49 @@
 
 ---
 
+## [2026-06-25] Provisioning always ends on the Weizmann proxy, regardless of `-ProxyMode`
+
+**Why:** `-ProxyMode {weizmann,direct}` exists because the proxy state needed
+*during* a run is purely a function of where the unit physically sits while being
+provisioned: a unit on a bench that cannot reach `bcproxy.weizmann.ac.il:8080` must
+install with the proxy cleared (`direct`), or every WinINet/WinHTTP-based installer
+fails. But that provisioning-time network is not where the unit *lives*. Every
+deployed MAST unit ultimately runs on the Weizmann network and needs the bcproxy
+HTTP proxy to reach the outside world. A `direct`-provisioned unit shipped as-is
+would have no proxy configured and could not get out. The operator should not have
+to remember a manual "set the proxy" step after a `direct` run.
+
+**What:** `build-mast.ps1`'s `Generate-Commands` now appends an end-of-run
+networking finalization step (and its verify) whenever the `proxy` module is built:
+
+- **order 9000** re-invokes the existing proxy provider with a hard
+  `-ForceMode use`, re-asserting the Weizmann bcproxy on all three surfaces
+  (machine env `http(s)_proxy`, HKCU WinINet, machine WinHTTP).
+- **order 9001** re-runs `verify-proxy.ps1`, which reads the rewritten
+  `proxy-smoke.txt` (now `mode=use`) and confirms the shipped state.
+
+The build-time `-ProxyMode` still drives the *initial* proxy step (order 100): a
+`direct` build clears the proxy for the duration of the install, a `weizmann` build
+sets it. The finalize step is unconditional. In a `weizmann` build it is an
+idempotent re-assert (the provider skips already-set values); in a `direct` build it
+flips env/WinINet/WinHTTP from direct to bcproxy as the last functional action.
+The step reuses the proxy provider rather than duplicating its logic (DRY), and is
+tagged `module = proxy` / `proxy-verify` so the unit-side `--modules proxy` filter
+and smoke-marker handling treat it as part of the proxy module.
+
+**Implications:**
+- Ordering is deliberate: 9000 sits after every installer and before reboot
+  detection (9999). Because the proxy breaks CryptoAPI cert-revocation retrieval
+  behind bcproxy (the reason `direct` mode exists), nothing network-dependent may
+  run after this step -- and nothing does.
+- The final `proxy-smoke.txt` always reports `mode=use`, overwriting the earlier
+  order-101 marker. Any consumer that reads the proxy mode marker (e.g.
+  astrometry-dependencies' setup.rc selector) runs far earlier (order 400) and is
+  unaffected; the marker's post-9000 value reflects the *shipped* state, not the
+  install-time state.
+- Operators no longer perform a manual post-`direct`-run proxy step. A unit is
+  proxy-ready on first boot however it was provisioned.
+
 ## [2026-06-18] Astrometry index drive is a sparse 32 GB image built on the unit from an index-file seed
 
 **Why:** The `imdisk` provider shipped a pre-baked, fully-allocated ~15 GB filesystem

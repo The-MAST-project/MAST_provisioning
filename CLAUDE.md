@@ -191,6 +191,13 @@ direct`; otherwise every proxy surface is set to bcproxy and downstream installs
 On-campus, omit it (or pass `weizmann`). "dev vs prod" is a different axis from
 on-/off-campus -- pick by the unit's network reachability only.
 
+`-ProxyMode` governs only the network state *during* the run. Regardless of it,
+`build-mast.ps1` appends an end-of-run finalize step (order 9000, with verify at
+9001) that re-asserts the Weizmann bcproxy on all surfaces, so a unit always ships
+proxy-ready -- a `direct` build flips to the proxy at the end, a `weizmann` build
+re-asserts it idempotently. Nothing network-dependent runs after order 9000. See
+DECISIONS.md 2026-06-25.
+
 ## WinINet installers behind bcproxy need the cert-revocation toggle
 
 Behind bcproxy, Windows CryptoAPI revocation retrieval (cryptnet) fails (`0x80070057` ->

@@ -262,6 +262,30 @@ function Generate-Commands([string[]]${Mods}) {
       ${cmds} += [pscustomobject]@{ order = [int](${mf}.order + 1); desc = "[verify] " + [string]${mf}.name; cmd = ${verifyCmd}; module="${m}-verify" }
     }
   }
+
+  # --- End-of-provisioning networking finalization ---------------------
+  # A deployed unit always lives on the Weizmann network and needs the
+  # bcproxy HTTP proxy, no matter how it was provisioned. We honour the
+  # build-time -ProxyMode for the DURATION of the run (a 'direct' run on a
+  # bench that genuinely cannot reach bcproxy must install without it), but
+  # as the last functional step -- after every installer, before the
+  # reboot-detection provider (order 9999) -- we re-assert the Weizmann
+  # proxy on every surface so the unit ships proxy-ready. In 'weizmann'
+  # builds this is an idempotent re-assert; in 'direct' builds it flips
+  # the machine env / WinINet / WinHTTP proxy from direct to bcproxy.
+  # Nothing network-dependent runs after this step, so flipping a 'direct'
+  # bench unit onto the proxy here cannot break a later installer. Reuses
+  # the proxy provider (DRY) with a hard -ForceMode use, and re-runs its
+  # verify so the shipped proxy state is confirmed, not assumed.
+  if (${Mods} -contains 'proxy') {
+    ${proxyMf} = Read-ModuleManifest -ModuleName 'proxy'
+    ${finalizeCmd} = [string]${proxyMf}.command + ' -ForceMode use'
+    ${cmds} += [pscustomobject]@{ order = 9000; desc = 'Finalize networking: re-assert the Weizmann bcproxy HTTP proxy on every surface (machine env, WinINet, WinHTTP) so the unit ships proxy-ready regardless of the provisioning-time -ProxyMode. Idempotent in weizmann mode; flips direct->proxy in direct mode.'; cmd = ${finalizeCmd}; module = 'proxy' }
+    if (${proxyMf}.verify) {
+      ${cmds} += [pscustomobject]@{ order = 9001; desc = '[verify] proxy (post-finalize)'; cmd = [string]${proxyMf}.verify; module = 'proxy-verify' }
+    }
+  }
+
   return (${cmds} | Sort-Object order, desc)
 }
 
