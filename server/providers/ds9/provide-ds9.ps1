@@ -90,6 +90,27 @@ try {
         Write-Ds9Log ("[WARN] Could not create Start Menu shortcut: {0}" -f $_.Exception.Message)
     }
 
+    # Associate FITS files with DS9 (not ASI Studio etc.). Machine-wide via
+    # HKLM\Software\Classes so it applies to every account that has no per-user
+    # UserChoice -- the freshly provisioned-unit case. This provider runs after
+    # zwo/ASI Studio (order 2600 > 1800), so DS9 takes the association last.
+    ${ds9ProgId}   = 'SAOImageDS9.fits'
+    ${classesRoot} = 'HKLM:\Software\Classes'
+    ${ds9ProgKey}  = Join-Path ${classesRoot} ${ds9ProgId}
+    ${ds9CmdKey}   = Join-Path ${ds9ProgKey} 'shell\open\command'
+    ${ds9IconKey}  = Join-Path ${ds9ProgKey} 'DefaultIcon'
+    New-Item -Path ${ds9CmdKey} -Force | Out-Null
+    New-Item -Path ${ds9IconKey} -Force | Out-Null
+    Set-ItemProperty -Path ${ds9ProgKey} -Name '(default)' -Value 'FITS Image (DS9)'
+    Set-ItemProperty -Path ${ds9IconKey} -Name '(default)' -Value ("{0},0" -f ${ds9Exe})
+    Set-ItemProperty -Path ${ds9CmdKey} -Name '(default)' -Value ('"{0}" "%1"' -f ${ds9Exe})
+    foreach (${ds9Ext} in '.fits', '.fit', '.fts') {
+        ${ds9ExtKey} = Join-Path ${classesRoot} ${ds9Ext}
+        New-Item -Path ${ds9ExtKey} -Force | Out-Null
+        Set-ItemProperty -Path ${ds9ExtKey} -Name '(default)' -Value ${ds9ProgId}
+    }
+    Write-Ds9Log ("Associated .fits/.fit/.fts with DS9 via {0}" -f ${ds9ProgId})
+
     Write-Ds9Log "DS9 installation completed successfully."
     exit 0
 }

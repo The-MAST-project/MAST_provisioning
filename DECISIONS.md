@@ -2,6 +2,28 @@
 
 ---
 
+## [2026-06-28] ds9 provider: associate FITS files with DS9 (machine-wide)
+
+**Why:** On units the ZWO/ASI Studio install grabbed the `.fits` association, so
+double-clicking a FITS frame opened it in ASI software instead of DS9. The `ds9`
+provider installed DS9 but never claimed the association.
+
+**What:** `provide-ds9.ps1` now registers a machine-wide association after the extract +
+Start-Menu shortcut: a `SAOImageDS9.fits` ProgID (DefaultIcon + `shell\open\command` =
+`ds9.exe "%1"`) under `HKLM\Software\Classes`, with `.fits`/`.fit`/`.fts` pointed at it.
+`verify-ds9.ps1` now also asserts `.fits` -> that ProgID and that its open command invokes
+`ds9.exe`.
+
+**Implications:**
+- Machine-wide (HKLM), not per-user, so it applies to any account without an explicit
+  per-user UserChoice -- the freshly provisioned-unit case. `ds9` (order 2600) runs after
+  `zwo`/ASI Studio (1800), so DS9 wins the association.
+- A user who later manually re-picks a different default (Win10/11 HKCU UserChoice) overrides
+  this -- expected OS behavior, not a provisioning bug.
+- Verified green on the dev VM (no special hardware needed).
+
+---
+
 ## [2026-06-28] intel-nic-driver provider: stage latest I225-V driver via pnputil (no /install)
 
 **Why:** The Intel I225-V (Foxville) NIC has documented link-stability issues addressed by
