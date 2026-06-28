@@ -1,0 +1,16 @@
+{
+  "name": "intel-nic-driver",
+  "version": "i225v-1.1.4.45",
+  "description": "Stage the Intel I225-V (Foxville, e2f) Ethernet driver 1.1.4.45 (WHQL, from Intel Wired driver pack 31.2, NDIS 6.8 Win10/11 x64) into the driver store via pnputil /add-driver, so freshly provisioned units enumerate on the latest driver for I225-V link stability. In-place upgrade of an already-bound NIC needs pnputil /install (resets the NIC) and is intentionally not done here to avoid dropping the provisioning link.",
+  "order": 2250,
+  "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-intel-nic-driver.ps1\" -AssetsRoot \".\"",
+  "commandfiles": [
+    "provide-intel-nic-driver.ps1",
+    "verify-intel-nic-driver.ps1",
+    "assets/x64/e2f.inf",
+    "assets/x64/e2f.sys",
+    "assets/x64/e2f.cat",
+    "assets/x64/e2fmsg.dll"
+  ],
+  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\verify-intel-nic-driver.ps1\""
+}

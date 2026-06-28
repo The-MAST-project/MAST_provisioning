@@ -2,6 +2,32 @@
 
 ---
 
+## [2026-06-28] intel-nic-driver provider: stage latest I225-V driver via pnputil (no /install)
+
+**Why:** The Intel I225-V (Foxville) NIC has documented link-stability issues addressed by
+newer drivers. Deployed units run 1.1.4.42 (2023); provisioning shipped no Intel driver, so
+units kept whatever inbox/OEM version they had.
+
+**What:** New `intel-nic-driver` provider (order 2250) bundles the I225-V driver **1.1.4.45**
+(2025-03-02, `e2f.inf/.sys/.cat` + `e2fmsg.dll`) from Intel Wired driver pack 31.2
+(PRO2500 / Winx64 / NDIS68 -- Win10/11 client x64) and stages it with `pnputil /add-driver`.
+The catalog is WHQL-signed (Microsoft Windows Hardware Compatibility Publisher), so -- unlike
+the ZWO driver -- no TrustedPublisher pre-trust is needed.
+
+**Implications:**
+- `/add-driver` only (no `/install`): a freshly provisioned unit enumerates the I225-V and
+  Windows picks the newest matching store driver, so new units come up on 1.1.4.45 with no
+  mid-run NIC reset. Force-updating an already-bound NIC (`/install`) resets it and would drop
+  the provisioning link -- so upgrading already-deployed units (mast00/02 on 1.1.4.42) is a
+  separate attended step.
+- Verified on the VM only at the *staging* level (`e2f.inf` lands in the driver store, even on
+  Win11). Functional binding -- the live NIC actually running 1.1.4.45 -- is **pending
+  real-unit-hardware verification** (the VM has no I225).
+- Only the x64 NDIS68 variant is bundled (units are x64 Win10/11 client); the WS2022 variant
+  in the pack is not shipped.
+
+---
+
 ## [2026-06-28] power-management provider: disable system sleep + NIC power-saving/WoL
 
 **Why:** A unit that sleeps, hibernates, or whose NIC powers down drops off the network
