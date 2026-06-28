@@ -9,8 +9,13 @@
     "provide-zwo.ps1",
     "assets/ASIStudio_V1.16.2_x64_Setup.exe",
     "assets/ZWO_ASCOM_Setup_V6.5.32.exe",
-    "assets/ZWO_ASI_Cameras_driver_Setup_V3.25.exe"
+    "assets/ZWO_ASI_Cameras_driver_Setup_V3.25.exe",
+    "assets/zwo-driver-publisher.cer",
+    "assets/driver/x64/ASICAMUSB3.inf",
+    "assets/driver/x64/ASICAMUSB3.sys",
+    "assets/driver/x64/asicamusb3.cat",
+    "assets/driver/x64/WdfCoInstaller01009.dll"
   ],
-  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -Command \"$log = Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\verify\\zwo-verify.log'; $smoke = Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\smoke\\zwo-smoke.txt'; $a1 = 'C:\\Program Files\\ASIStudio\\ASIStudio.exe'; $a2 = 'C:\\Program Files (x86)\\ASIStudio\\ASIStudio.exe'; if ((Test-Path -LiteralPath $a1) -or (Test-Path -LiteralPath $a2)) { Set-Content -Path $log -Value 'ZWO ASI Studio installed'; Set-Content -Path $smoke -Value 'zwo_ok' } else { 'ASIStudio.exe not found under Program Files' | Out-File -FilePath $log -Encoding UTF8; exit 1 }\""
+  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -Command \"$log = Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\verify\\zwo-verify.log'; $smoke = Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\smoke\\zwo-smoke.txt'; $a1 = 'C:\\Program Files\\ASIStudio\\ASIStudio.exe'; $a2 = 'C:\\Program Files (x86)\\ASIStudio\\ASIStudio.exe'; $studio = ((Test-Path -LiteralPath $a1) -or (Test-Path -LiteralPath $a2)); $drv = ((& pnputil.exe /enum-drivers 2>&1) | Select-String 'asicamusb3.inf' -Quiet); if ($studio -and $drv) { Set-Content -Path $log -Value 'ZWO ASI Studio + ASICAMUSB3 camera driver installed'; Set-Content -Path $smoke -Value 'zwo_ok' } else { $msg = @(); if (-not $studio) { $msg += 'ASIStudio.exe not found under Program Files' }; if (-not $drv) { $msg += 'asicamusb3.inf not present in driver store (pnputil /enum-drivers)' }; ($msg -join '; ') | Out-File -FilePath $log -Encoding UTF8; exit 1 }\""
 }
 

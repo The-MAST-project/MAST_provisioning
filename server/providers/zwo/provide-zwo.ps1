@@ -51,6 +51,56 @@ function Invoke-ZwoInstaller {
 try {
     Write-ZwoLog "Starting ZWO camera driver and software installation."
 
+    # --- ZWO ASI camera USB driver (ASICAMUSB3) ---
+    # The vendor camera-driver setup installs this kernel-mode driver, but under
+    # WinRM Session 0 the un-dismissable "trust this publisher?" dialog makes the
+    # silent /S install exit 0 without the driver ever binding -- the run reports
+    # success but no ASI camera is recognized. Mirror the stage/usbpcap/npcap
+    # providers: pre-trust ZWO's catalog publisher cert in
+    # LocalMachine\TrustedPublisher, then stage the driver via PnPUtil (the
+    # reliable unattended path). This runs unconditionally -- outside the
+    # ASIStudio idempotent guard below -- so a re-run that already has ASI Studio
+    # still guarantees the camera driver is present. Both steps are idempotent.
+    ${zwoCertPath} = Join-Path ${AssetsRoot} "zwo-driver-publisher.cer"
+    if (-not (Test-Path ${zwoCertPath})) {
+        throw "ZWO driver publisher cert not found at ${zwoCertPath}"
+    }
+    Write-ZwoLog "Importing ZWO driver publisher cert to LocalMachine\TrustedPublisher..."
+    ${zwoCert} = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2
+    ${zwoCert}.Import(${zwoCertPath})
+    ${zwoStore} = New-Object System.Security.Cryptography.X509Certificates.X509Store(
+        [System.Security.Cryptography.X509Certificates.StoreName]::TrustedPublisher,
+        [System.Security.Cryptography.X509Certificates.StoreLocation]::LocalMachine
+    )
+    ${zwoStore}.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+    try { ${zwoStore}.Add(${zwoCert}) } finally { ${zwoStore}.Close() }
+    Write-ZwoLog ("Trusted ZWO publisher: {0} (thumbprint {1})" -f ${zwoCert}.Subject, ${zwoCert}.Thumbprint)
+
+    # Stage the camera driver in the driver store via PnPUtil. /add-driver only
+    # (no /install): no camera is attached during provisioning, so we just want
+    # the package in the store -- Windows auto-binds it (no prompt, publisher now
+    # trusted) when an ASI camera is later plugged in. The .inf, .sys, .cat and
+    # WdfCoInstaller01009.dll are flattened into AssetsRoot by build-mast.ps1.
+    ${zwoInfPath} = Join-Path ${AssetsRoot} "ASICAMUSB3.inf"
+    if (-not (Test-Path ${zwoInfPath})) {
+        throw "ZWO camera driver .inf not found at ${zwoInfPath}"
+    }
+    Write-ZwoLog ("Staging ZWO camera driver via PnPUtil: {0}" -f ${zwoInfPath})
+    ${zwoPnpLog} = Join-Path ${logDir} "zwo-pnputil.log"
+    ${zwoPnp} = Start-Process -FilePath 'pnputil.exe' `
+        -ArgumentList '/add-driver', "`"${zwoInfPath}`"" `
+        -PassThru -WindowStyle Hidden -Wait `
+        -RedirectStandardOutput ${zwoPnpLog}
+    if (Test-Path ${zwoPnpLog}) {
+        Get-Content -LiteralPath ${zwoPnpLog} -ErrorAction SilentlyContinue |
+            ForEach-Object { Write-ZwoLog ("  pnputil: {0}" -f $_) }
+    }
+    Write-ZwoLog ("PnPUtil exited with code: {0}" -f ${zwoPnp}.ExitCode)
+    # 0 = success, 259 (ERROR_NO_MORE_ITEMS) = driver already staged.
+    if ($null -ne ${zwoPnp}.ExitCode -and ${zwoPnp}.ExitCode -ne 0 -and ${zwoPnp}.ExitCode -ne 259) {
+        throw ("PnPUtil failed with exit code {0}" -f ${zwoPnp}.ExitCode)
+    }
+
     # Idempotent re-run guard: ASI Studio is installed LAST, so ASIStudio.exe
     # being present means the whole ZWO suite (camera driver + ASCOM + ASI Studio)
     # already ran. Skip all three installers on a re-run. Re-running the NSIS

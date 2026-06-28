@@ -147,6 +147,47 @@ image (`MAST-32GB-indexes-5202+5203.img`, 32 GB logical / ~10 GB allocated) moun
 
 ---
 
+## [2026-06-16] ZWO ASI camera driver staged via pre-trust + PnPUtil (not the vendor silent installer)
+
+**Why:** The `zwo` provider ran `ZWO_ASI_Cameras_driver_Setup_V3.25.exe /S`, whose only
+driver is the ASI camera USB driver **ASICAMUSB3** (`.inf/.sys/.cat`, signed by SUZHOU ZWO
+CO., LTD.). Under WinRM Session 0 the kernel-driver step hits the un-dismissable "trust
+this publisher?" dialog, so the silent install exits 0 *without the driver ever binding* --
+the run reported SUCCESS but no ASI camera would be recognized. The `verify` step only
+checked for `ASIStudio.exe`, so it never caught the gap. This is the same Session-0
+publisher-trust failure already solved for the `stage` (Standa), `usbpcap`, and `npcap`
+providers.
+
+**What:**
+- **`provide-zwo.ps1`**: before the existing installer block (and outside the ASIStudio
+  idempotent guard, so re-runs still guarantee the driver), import ZWO's catalog publisher
+  cert into `LocalMachine\TrustedPublisher`, then stage the driver with
+  `pnputil /add-driver ASICAMUSB3.inf`. `/add-driver` only (no `/install`): no camera is
+  attached during provisioning, so the package just needs to be in the driver store --
+  Windows auto-binds it (no prompt, publisher now trusted) when an ASI camera is later
+  plugged in. Exit codes 0 and 259 (already staged) are treated as success. Mirrors
+  `provide-stage.ps1`.
+- **`server/providers/zwo/assets/`**: added `zwo-driver-publisher.cer` (the SUZHOU ZWO
+  EV cert that signs `asicamusb3.cat`, thumbprint `6BACCFE2...E632`) and the x64 driver
+  payload under `assets/driver/x64/` (`ASICAMUSB3.inf/.sys`, `asicamusb3.cat`,
+  `WdfCoInstaller01009.dll`), all cracked out of the NSIS installer with 7-Zip. The inf's
+  CoInstaller and CatalogFile entries require those four files co-located; build-mast.ps1
+  flattens `assets/*` to the staging root, so they land together where `pnputil` needs them.
+- **`module.json`**: the four driver files + the `.cer` added to `commandfiles`; `verify`
+  now also requires `asicamusb3.inf` to be present in `pnputil /enum-drivers`, not just
+  `ASIStudio.exe`.
+- The vendor `ZWO_ASI_Cameras_driver_Setup_V3.25.exe /S` call is retained (parity with
+  stage, which also runs its installer for the app payload); pre-trust makes its own driver
+  step a no-op rather than a hang, and PnPUtil is now the authoritative driver path.
+
+**Implications:**
+- The cert must be refreshed if ZWO re-signs the catalog with a new key (check on ZWO
+  version bumps); the signatures are timestamped so a past `NotAfter` does not break install.
+- Only the **x64** driver is staged (MAST units are x64). If an x86 unit ever appears, add
+  `assets/driver/x86/` to `commandfiles` and a second `pnputil` call.
+- This extends the "pre-trust to TrustedPublisher before installing a kernel driver" pattern
+  (DECISIONS 2026-05-13 stage, 2026-05-27 npcap/usbpcap) to a fourth provider.
+
 ## [2026-06-14] Provisioning server as NTP source + early one-time unit clock sync
 
 **Why:** MAST units frequently cannot reach public NTP -- UDP 123 is blocked, or
