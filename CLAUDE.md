@@ -171,6 +171,19 @@ Always make changes in the canonical source locations:
 - Client scripts: `client/`
 - Shared lib: `server/lib/`
 
+## Staged assets must stay readable by the SMB pull account
+
+`build-mast.ps1`'s `New-LinkOrCopy` hardlinks large assets into staging when elevated.
+A hardlink shares the target file's single ACL, and the asset-cache sources have
+inheritance off with no `mast-transfer` ACE - so without a fix the read-only SMB pull
+account is denied on every staged binary and the unit's `robocopy` pull fails them all
+(only the small copied files come through, ~58 KB). `New-LinkOrCopy` therefore runs
+`icacls "<link>" /inheritance:e` after `mklink /H` so the link re-inherits the staging
+dir's `mast-transfer:(RX)`. Do not remove it, and preserve `mast-transfer` read access
+whenever you change how assets land in staging. Symptom to recognize: a pull that
+copies small files but fails every binary is an ACL problem (check
+`icacls <staged-binary>`), not a network/MTU/session issue. See DECISIONS 2026-06-28.
+
 ## Remotes: `upstream` is the integration repo, `origin` is the fork
 
 `upstream` = `github.com/The-MAST-project/MAST_provisioning` (integration); `origin` =

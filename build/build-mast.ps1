@@ -148,7 +148,18 @@ function New-LinkOrCopy {
         try { cmd /c "mklink /J `"$LinkPath`" `"$Target`"" | Out-Null; return } catch {}
     } else {
         # Try hardlink for files (same volume required)
-        try { cmd /c "mklink /H `"$LinkPath`" `"$Target`"" | Out-Null; return } catch {}
+        # A hardlink shares the target's single ACL. The asset-cache files have
+        # inheritance disabled and no mast-transfer ACE, so the read-only SMB pull
+        # account is denied on every linked binary (only copied, inheriting files
+        # come through). Re-enable inheritance on the staged link so it picks up the
+        # staging dir's mast-transfer:(RX) inherited ACE.
+        try {
+            cmd /c "mklink /H `"$LinkPath`" `"$Target`"" | Out-Null
+            if (Test-Path $LinkPath) {
+                cmd /c "icacls `"$LinkPath`" /inheritance:e" | Out-Null
+                return
+            }
+        } catch {}
     }
 
     # Try symlink

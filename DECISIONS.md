@@ -2,6 +2,39 @@
 
 ---
 
+## [2026-06-28] Staged hardlinked assets must re-inherit ACLs (SMB pull account)
+
+**Why:** `build-mast.ps1` flattens provider assets into the staging dir with
+`New-LinkOrCopy`, which hardlinks large binaries (`mklink /H`) when elevated to save
+space and time. A hardlink is a second directory entry to the *same* physical file, so
+it shares that file's single ACL. The asset-cache source files carry an explicit ACL
+with inheritance disabled and no entry for the read-only SMB pull account
+(`mast-transfer`). So every hardlinked binary in staging was access-denied to
+`mast-transfer`, and the unit's `robocopy` SMB pull copied only the small *copied*
+(inheriting) files - about 58 KB - and FAILED every binary (`rc=9`). The deterministic
+~58-KB-then-fail, slow transfer masqueraded as a network/NIC/MTU problem and cost a
+long detour; it was purely ACLs.
+
+**What:** `New-LinkOrCopy` now runs `icacls "<link>" /inheritance:e` immediately after
+a successful `mklink /H`, so each staged hardlink re-enables inheritance and picks up
+the staging dir's inheritable `mast-transfer:(RX)` ACE. Verified on the VM: the SMB
+pull went from failing to **123 MB/s, 0 files failed**, after which the full zwo
+execute ran (pre-trust + `pnputil` staged `asicamusb3.inf` as `oem4.inf`).
+
+**Implications:**
+- Do not remove the `icacls /inheritance:e` call. Because a hardlink shares the
+  target's ACL, this also re-inherits ACEs onto the asset-cache copy - harmless (it
+  only *adds* the staging-inherited `mast-transfer:(RX)`; admin/SYSTEM access is
+  unchanged).
+- Any future change to how assets land in staging (copy vs link vs junction) must
+  preserve read access for `mast-transfer`. The copy path inherits correctly; only
+  links need the explicit re-inherit.
+- Debugging heuristic: a staging pull that copies the small files but fails the
+  binaries is an ACL problem, not the network - check `icacls <staged-binary>` for
+  `mast-transfer:(I)(RX)` before chasing MTU/NIC/session.
+
+---
+
 ## [2026-06-25] Provisioning always ends on the Weizmann proxy, regardless of `-ProxyMode`
 
 **Why:** `-ProxyMode {weizmann,direct}` exists because the proxy state needed
