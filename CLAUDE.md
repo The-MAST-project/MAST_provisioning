@@ -244,6 +244,14 @@ Session-0 WinRM task. So Npcap is installed interactively by `client/bootstrap-w
 `provide-npcap.ps1` or chase silent-flag / token / driver-trust fixes. To bump the version,
 drop a new `npcap-*.exe` into `client/assets/`.
 
+## Unwedge the dev VM's WinRM via SSH
+
+The dev VM's WinRM listener occasionally wedges after repeated sessions -- the harness
+connect then hangs in its WinRM wait loop. SSH is a separate service and stays reachable,
+so restart WinRM over it: `vm_lib.SshSession(host, cred).run_ps('Restart-Service WinRM -Force')`
+(this is what run-prov-test's SSH fallback rides on). Then WinRM connects again. Longer term
+we may move the harness to SSH transport entirely.
+
 ## Do not write to git unless explicitly asked
 
 Do **not** run `git commit`, `git push`, `git rm`, `git reset`, `git rebase`, `git lfs migrate`, `git filter-repo`, `git tag`, or any other history- or remote-mutating git operation **unless the user has specifically asked for it in the current request**. Read-only operations (`git log`, `git status`, `git diff`, `git show`, `git rev-parse`, `git ls-files`, `git lfs ls-files`, `git lfs migrate info`, `git fetch` of a read-only remote, etc.) are fine.

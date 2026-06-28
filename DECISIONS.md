@@ -2,6 +2,33 @@
 
 ---
 
+## [2026-06-28] power-management provider: disable system sleep + NIC power-saving/WoL
+
+**Why:** A unit that sleeps, hibernates, or whose NIC powers down drops off the network
+and stops responding to remote operation. The onboard Intel I225-V also exposes
+power-management / selective-suspend and Wake-on-LAN settings that work against stable
+always-on operation. None of this was handled in provisioning.
+
+**What:** New `power-management` provider (order 2300):
+- `powercfg`: standby-timeout AC/DC = 0 (never), hibernate-timeout AC/DC = 0, `hibernate off`.
+- For each Intel I225/I226 adapter: `Set-NetAdapterPowerManagement`
+  AllowComputerToTurnOffDevice=Disabled, SelectiveSuspend=Disabled, and Wake-on-LAN
+  (WakeOnMagicPacket/WakeOnPattern)=Disabled.
+- `verify-power-management.ps1` confirms hibernate off + standby-timeout-ac=0, plus the
+  NIC settings where an I225/I226 is present.
+
+**Implications:**
+- The NIC step is keyed to the I225/I226 interface description, so it no-ops on the dev VM
+  (emulated NIC). The system-sleep half is verified green on the VM; the NIC-power/WoL half
+  is **pending real-unit-hardware verification**.
+- WoL is disabled deliberately: units are power-cycled via the DLI switch + BIOS S0, never
+  magic packets.
+- Interaction to confirm on hardware: the intel-nic-driver update binds on the post-provision
+  reboot and could reset these NIC settings -- verify they persist (re-apply after the driver
+  swap if not).
+
+---
+
 ## [2026-06-28] Staged hardlinked assets must re-inherit ACLs (SMB pull account)
 
 **Why:** `build-mast.ps1` flattens provider assets into the staging dir with
