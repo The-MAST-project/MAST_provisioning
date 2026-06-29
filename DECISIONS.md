@@ -2,6 +2,39 @@
 
 ---
 
+## [2026-06-29] Interactive bootstrap: operator picks the site, carried via the unit registry (never the hostname)
+
+**Why:** `config-bootstrap` selects a unit's site profile from `build-mast.ps1 -Site`, but nothing
+fed that selection from the operator. Site must come solely from explicit config -- the hostname is
+no longer a site source (even a `mast-<site>-NN` name is ignored), per the external-config epic.
+
+**What:**
+- `bootstrap-winrm.ps1` gains interactive site selection: a `-Site` param + a prompt listing the
+  known sites (default `ns`/Neot Smadar), validated and persisted to `C:\ProgramData\MAST\site.txt`.
+  Like the hostname, it is the operator's explicit choice.
+- `onboard-mast-unit.ps1` reads that file (or `-Site`) and writes a `site` field into the unit's
+  entry when it registers it in the prov server's `unit-registry.json` (Stage REGISTER).
+- `check-and-provision.ps1` passes `-Site $unit.site` to `build-mast.ps1`, which injects it into the
+  config-bootstrap command -> deploys `sites/<site>.toml`. The registry template gains `site`.
+- A registry entry with no `site` logs `SITE_MISSING` and falls to build-mast's default (`wis`) --
+  backward-compatible with existing dev entries, but loud, so a production unit can't silently take
+  the dev profile.
+
+**Implications:**
+- **Site is config, never hostname** -- the only path is operator bootstrap choice -> registry ->
+  build. No hostname parsing anywhere.
+- `$knownSites` in `bootstrap-winrm.ps1` (`ns`, `wis`) must stay in sync with
+  `config-bootstrap/sites/*.toml` -- bootstrap runs on the unit before it can see the prov repo, so
+  the list is duplicated there. Adding a site = add a profile + extend that list.
+- Verified: site validate/normalize/persist round-trip, the registry entry shape (carries `site`),
+  the check-and-provision arg path, and a real `build-mast -Site ns` build (staged `commands.json`
+  ends with `-Site ns`; `ns.toml` staged). The full operator flow (bootstrap -> onboard -> loop) is
+  logic+parse verified -- it can't run end-to-end on the dev VM (destructive first-touch path).
+- Pre-existing mismatch left untouched: `onboard-mast-unit.ps1` still restricts `-HostName` to
+  `mast01..mast20`, while `bootstrap-winrm.ps1` accepts `mast-<site>-NN`.
+
+---
+
 ## [2026-06-29] config-bootstrap provider: lay down C:\WIS\unit.toml + MAST_PROJECT (external-config epic)
 
 **Why:** The external-config-file epic (MAST_common#7, MAST_unit.2024-12-12#22, branch

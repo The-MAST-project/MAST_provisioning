@@ -451,6 +451,15 @@ foreach ($unit in $units) {
                     Top        = $RepoTop
                     HostName   = $hostname
                 }
+                # Site selects the bootstrap config profile (config-bootstrap) and comes
+                # SOLELY from the unit's registry entry -- the operator's bootstrap choice --
+                # never from the hostname. If absent, build-mast's default applies; log it
+                # loudly so a production unit cannot silently take the dev profile.
+                if ($unit.site) {
+                    $args.Site = $unit.site
+                } else {
+                    Log-Event 'SITE_MISSING' @{ unit=$hostname; note='no site in registry entry; build-mast default applies' }
+                }
                 if ($modules) { $args.Modules = $modules }
                 if ($TestMode) {
                     $args.TestMode = $true

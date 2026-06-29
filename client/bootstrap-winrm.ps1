@@ -55,6 +55,13 @@
 .PARAMETER MastHostName
     Windows computer name for this unit (mast01 .. mast20). NetBIOS: 1-15 chars, letters/digits/hyphen.
 
+.PARAMETER Site
+    Site code (e.g. 'ns', 'wis') selecting the unit's configuration profile at provisioning
+    time. The operator's explicit choice -- NEVER derived from the hostname; persisted to
+    C:\ProgramData\MAST\site.txt for onboard-mast-unit.ps1 to record in the prov server's
+    unit-registry.json. Prompted interactively (default 'ns') if omitted; required with
+    -NonInteractive.
+
 .PARAMETER NonInteractive
     Fail if -MastHostName is missing (for automation); no prompts.
 
@@ -99,6 +106,7 @@ param(
     [string]$MastPassword = 'physics',
     [string]$ProvServerIP = '192.168.56.1',
     [string]$MastHostName = '',
+    [string]$Site = '',
     [switch]$NonInteractive,
     [switch]$RebootAfterBootstrap,
     [switch]$SkipComputerRename,
@@ -497,6 +505,32 @@ try {
         throw "Invalid MastHostName '$MastHostName'. Use 1-15 characters: letters, digits, hyphen."
     }
     Write-BootstrapMsg ("Using MastHostName (computer rename target): {0}" -f $MastHostName) 'White'
+
+    # Site selection -- drives the provisioning config profile (config-bootstrap).
+    # Like the hostname, it is the operator's explicit choice, NEVER derived from the
+    # hostname. Persisted to C:\ProgramData\MAST\site.txt so onboard-mast-unit.ps1 can
+    # record it in the prov server's unit-registry.json. Keep $knownSites in sync with
+    # server\providers\config-bootstrap\sites\*.toml on the prov server.
+    $knownSites = @('ns', 'wis')
+    if ([string]::IsNullOrWhiteSpace($Site)) {
+        if ($NonInteractive) {
+            throw "Pass -Site <site> (one of: $($knownSites -join ', ')) when -NonInteractive is set."
+        }
+        Write-BootstrapMsg '' 'White'
+        Write-BootstrapMsg 'SITE (selects the unit configuration profile)' 'Yellow'
+        Write-BootstrapMsg ('  Known sites: {0}. Default: ns (Neot Smadar).' -f ($knownSites -join ', ')) 'Yellow'
+        $Site = Read-Host 'Enter site [ns]'
+        if ([string]::IsNullOrWhiteSpace($Site)) { $Site = 'ns' }
+    }
+    $Site = $Site.Trim().ToLower()
+    if ($knownSites -notcontains $Site) {
+        throw "Invalid site '$Site'. Known sites: $($knownSites -join ', ') (add a profile under server\providers\config-bootstrap\sites\ and this list to add one)."
+    }
+    $siteDir = Join-Path $env:ProgramData 'MAST'
+    New-Item -ItemType Directory -Path $siteDir -Force | Out-Null
+    $siteFile = Join-Path $siteDir 'site.txt'
+    Set-Content -LiteralPath $siteFile -Value $Site -Encoding ASCII
+    Write-BootstrapMsg ('Using site: {0} (persisted to {1})' -f $Site, $siteFile) 'White'
 
     # --- Sync system time with public NTP (before anything TLS-sensitive) ---
     Write-BootstrapMsg '' 'Cyan'

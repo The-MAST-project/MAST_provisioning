@@ -38,6 +38,11 @@
   Account on the prov server with read access to its repo / staging dir.
   Format ".\\mast" or "DOMAIN\\user". Default ".\\mast".
 
+.PARAMETER Site
+  Site code (e.g. 'ns', 'wis') written into this unit's registry entry; selects the
+  provisioning config profile. Defaults to the value bootstrap-winrm.ps1 persisted at
+  C:\ProgramData\MAST\site.txt. Never derived from the hostname.
+
 .PARAMETER ResumeFrom
   Stage to resume from (0..3). Default: read checkpoint and continue.
 
@@ -68,6 +73,7 @@ param(
     [string]$ProvServer,
 
     [string]   $ProvUser    = '.\mast',
+    [string]   $Site        = '',
     [int]      $ResumeFrom   = -1,
     [string[]] $Modules,
     [string]   $MastUser     = 'mast',
@@ -92,6 +98,14 @@ $CheckpointPath = Join-Path $DataRoot 'onboarding-checkpoint.json'
 $StatusDir      = Join-Path $env:SystemDrive 'MAST\status'
 
 New-Item -ItemType Directory -Force -Path $DataRoot, $LogDir, $StatusDir | Out-Null
+
+# Site (selects the provisioning config profile). From the operator's bootstrap choice,
+# persisted at $DataRoot\site.txt; -Site overrides. Never derived from the hostname.
+$SiteFile = Join-Path $DataRoot 'site.txt'
+if (-not $Site -and (Test-Path $SiteFile)) { $Site = (Get-Content $SiteFile -Raw).Trim() }
+if (-not $Site) {
+    throw "No site selected: pass -Site <site>, or run bootstrap-winrm.ps1 first (it persists $SiteFile)."
+}
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -253,7 +267,7 @@ function Stage-Register {
                 Select-Object -First 1).IPAddress
     $registerModules = if ($Modules) { $Modules } else { @() }
     Invoke-Command -Session $script:ProvSession -ScriptBlock {
-        param($hostname, $ip, $modules)
+        param($hostname, $ip, $modules, $site)
         $registryPath = 'C:\mast-prov\MAST_provisioning\server\unit-registry.json'
         if (Test-Path $registryPath) {
             $units = Get-Content $registryPath -Raw | ConvertFrom-Json
@@ -265,13 +279,14 @@ function Stage-Register {
         $entry = [pscustomobject]@{
             hostname = $hostname
             ip       = $ip
+            site     = $site
             modules  = $modules
         }
         $newUnits = @($units) + @($entry)
         $tmp = "$registryPath.tmp"
         ($newUnits | ConvertTo-Json -Depth 4) | Out-File -FilePath $tmp -Encoding UTF8
         Move-Item -Force $tmp $registryPath
-    } -ArgumentList $HostName, $myIp, $registerModules
+    } -ArgumentList $HostName, $myIp, $registerModules, $Site
     Log-Event 'ACTION_OK' @{ step='register_unit'; ip=$myIp }
 }
 

@@ -168,6 +168,9 @@ The `config-bootstrap` provider (order 150) lays this down from `sites/<site>.to
 `MAST_PROJECT` machine-wide. **Site is selected explicitly via `build-mast.ps1 -Site`, never
 derived from the hostname** -- do not reintroduce hostname->site parsing in providers. Per-site
 profiles must match the controller's MongoDB `sites` doc (the app cross-checks them at startup).
+The operator picks the site at bootstrap (`bootstrap-winrm.ps1`, default `ns`); it is persisted and
+`onboard-mast-unit.ps1` writes it into the unit's `unit-registry.json` entry, which
+`check-and-provision.ps1` passes to `build-mast.ps1 -Site`. Site is config-only -- never the hostname.
 
 ## Adding a new client script
 
