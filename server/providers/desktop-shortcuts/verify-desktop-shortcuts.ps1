@@ -1,8 +1,7 @@
 #requires -Version 5.1
 [CmdletBinding()]
 param(
-    [string]${WeatherUrl} = '',
-    [string]${Ds9Exe}     = 'C:\Program Files\SAOImageDS9\ds9.exe'
+    [string]${Ds9Exe} = 'C:\Program Files\SAOImageDS9\ds9.exe'
 )
 
 ${ErrorActionPreference} = 'Stop'
@@ -19,7 +18,7 @@ ${fail} = @()
 ${desktop} = Join-Path ${env:PUBLIC} 'Desktop'
 
 # FastAPI control shortcut (always created).
-${fastApiPath} = Join-Path ${desktop} 'MAST Unit (control).url'
+${fastApiPath} = Join-Path ${desktop} 'MAST Unit (FastAPI).url'
 if (Test-Path -LiteralPath ${fastApiPath}) { W ("FastAPI shortcut present: {0}" -f ${fastApiPath}) }
 else { ${fail} += ("FastAPI shortcut missing ({0})" -f ${fastApiPath}) }
 
@@ -38,14 +37,12 @@ if (Test-Path -LiteralPath ${Ds9Exe}) {
     W 'DS9 exe absent; DS9 shortcut not required.'
 }
 
-# Weather shortcut: required only when a URL is configured.
-${weatherPath} = Join-Path ${desktop} 'Weather.url'
-if (${WeatherUrl} -and (${WeatherUrl}.Trim() -ne '')) {
-    if (Test-Path -LiteralPath ${weatherPath}) { W ("Weather shortcut present: {0}" -f ${weatherPath}) }
-    else { ${fail} += ("Weather shortcut missing though WeatherUrl set ({0})" -f ${weatherPath}) }
-} else {
-    W 'Weather URL not configured; weather shortcut optional.'
-}
+# Weather shortcut: created from the provider default / -WeatherUrl. Presence depends on
+# site config, so this is informational -- logged, never failed -- and matched by glob so
+# verify need not duplicate the URL or the site label.
+${weatherHits} = @(Get-ChildItem -LiteralPath ${desktop} -Filter '*Weather (Meteoblue).url' -File -ErrorAction SilentlyContinue)
+if (${weatherHits}.Count -gt 0) { W ("Weather shortcut present: {0}" -f ${weatherHits}[0].Name) }
+else { W 'No weather shortcut on desktop (URL not configured?).' }
 
 if (${fail}.Count -eq 0) {
     W 'PASS desktop shortcuts present'

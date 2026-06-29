@@ -1,5 +1,12 @@
 param(
-    [string]${WeatherUrl} = '',
+    # Site weather page. Defaults to the Neot Smadar (meteoblue) forecast -- the one
+    # operational MAST site today. Per-site selection will move to the unit config-file
+    # mechanism (open PR: C:/MAST/mast-config-db.json + MongoDB units), not a hostname-
+    # derived site map. Override or clear via -WeatherUrl when that lands. NOTE: the URL
+    # keeps the meteoblue 'semadar' slug; only the WeatherSiteName label uses 'Smadar'.
+    [string]${WeatherUrl} = 'https://www.meteoblue.com/en/weather/today/ne%e2%80%99ot-semadar_israel_8346527',
+    # Site name shown in the weather shortcut label (consistent 'Smadar' spelling).
+    [string]${WeatherSiteName} = 'Neot Smadar',
     [string]${FastApiUrl} = 'http://localhost:8000/',
     [string]${Ds9Exe}     = 'C:\Program Files\SAOImageDS9\ds9.exe',
     [string]${LogsDir}    = 'C:\MAST\logs'
@@ -46,14 +53,16 @@ ${desktop} = Join-Path ${env:PUBLIC} 'Desktop'
 New-Item -ItemType Directory -Path ${desktop} -Force | Out-Null
 
 # 1) Local FastAPI control service.
-${fastApiPath} = Join-Path ${desktop} 'MAST Unit (control).url'
+${fastApiPath} = Join-Path ${desktop} 'MAST Unit (FastAPI).url'
 New-MastUrlShortcut -Path ${fastApiPath} -Url ${FastApiUrl}
 Write-ShortcutLog ("FastAPI shortcut -> {0}" -f ${FastApiUrl})
 
-# 2) Site weather page. The URL is site-specific and supplied via -WeatherUrl;
-# until it is configured we skip it rather than ship a dead shortcut, and clear
-# any stale copy so toggling the URL on/off stays idempotent.
-${weatherPath} = Join-Path ${desktop} 'Weather.url'
+# 2) Site weather page (defaults to Neot Smadar; override via -WeatherUrl). The shortcut
+# name carries the site label + 'Meteoblue'. If the URL is empty we skip it rather than
+# ship a dead shortcut, clearing any stale copy so toggling stays idempotent.
+${weatherLabel} = 'Weather (Meteoblue).url'
+if (${WeatherSiteName}) { ${weatherLabel} = '{0} Weather (Meteoblue).url' -f ${WeatherSiteName} }
+${weatherPath} = Join-Path ${desktop} ${weatherLabel}
 if (${WeatherUrl} -and (${WeatherUrl}.Trim() -ne '')) {
     New-MastUrlShortcut -Path ${weatherPath} -Url ${WeatherUrl}
     Write-ShortcutLog ("Weather shortcut -> {0}" -f ${WeatherUrl})

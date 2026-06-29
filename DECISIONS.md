@@ -10,25 +10,39 @@ folder -- instead of retyping URLs and paths. (The weather page in particular wa
 spot: it failed to open during the 17 Jun evening observations.)
 
 **What:** New `desktop-shortcuts` provider (order 2700, after `ds9` at 2600) that writes to
-the **Public (all-users) desktop** (`%PUBLIC%\Desktop`): a FastAPI `.url`
-(`http://localhost:8000/`), DS9 and MAST-logs `.lnk` shortcuts (via `WScript.Shell`), and a
-weather `.url` whose address comes from `-WeatherUrl`. `.url` files are written directly as
-INI-format Internet Shortcuts. `verify-desktop-shortcuts.ps1` asserts the always-on shortcuts
-exist (DS9 only when `ds9.exe` is present, since an isolated run skips it).
+the **Public (all-users) desktop** (`%PUBLIC%\Desktop`): `MAST Unit (FastAPI).url`
+(`http://localhost:8000/`), `SAOImage DS9.lnk` and `MAST Logs.lnk` (via `WScript.Shell`), and
+`<site> Weather (Meteoblue).url` (default site `Neot Smadar`, address from `-WeatherUrl`).
+`.url` files are written directly as INI-format Internet Shortcuts. `verify-desktop-shortcuts.ps1`
+asserts the always-on shortcuts exist (DS9 only when `ds9.exe` is present, since an isolated
+run skips it) and matches the weather shortcut by glob (informational; presence is site-config
+dependent).
 
 **Implications:**
 - **Public desktop, not per-user**, to match the account-agnostic posture of the DS9 file
   association and to show for the autologin `mast` account without depending on a profile
   existing at provisioning time.
-- **Weather URL is config, not code**, supplied via `-WeatherUrl` in `module.json`. It is
-  currently empty: the provider *skips* the weather shortcut (and removes any stale copy)
-  rather than ship a dead link, logging a WARN. Wire the real site URL into the `command`
-  line to enable it.
+- **Weather URL defaults to the one operational site (Neot Smadar)** as the `-WeatherUrl`
+  param default in the script (a single literal, no hostname-derived site map). The URL keeps
+  meteoblue's `semadar` slug verbatim; only the shortcut *label* uses the `Smadar` spelling
+  (`-WeatherSiteName`, default `Neot Smadar`) for consistency with our other references.
+  Per-site selection will move to the forthcoming unit config-file mechanism (open PR:
+  `C:/MAST/mast-config-db.json` + MongoDB `units` common/per-unit merge), since the hostname
+  site-id scheme is being replaced -- this provider only needs the resolved URL handed to it.
+  If the URL is empty the shortcut is skipped (stale copy removed) rather than shipped dead.
+  The default lives in the script, not `module.json`, to dodge the empty-arg and `%`-in-
+  command-string quoting traps.
+- **Default browser (open links in Chrome) is deferred to the `chrome` provider**, not done
+  here: Chrome is installed by `chrome` (order 2100) and is the right home for a machine-wide
+  default-browser association (the account-agnostic HKLM approach used for the DS9 `.fits`
+  association). Tracked as a follow-up on that module; the `.url` shortcuts open in whatever
+  the unit's default browser is until then.
 - **Empty string args don't survive the `-File` invocation** (`-WeatherUrl ""` -> "Missing an
   argument"); the flag is omitted entirely while empty and the param defaults to `''`.
-- Verified green on the dev VM (FastAPI + logs shortcuts created on the Public desktop; weather
-  and DS9 correctly skipped in the isolated run). DS9 row + weather URL exercise end-to-end on
-  a full ordered cycle / real unit.
+- Verified green on the dev VM: `MAST Unit (FastAPI).url`, `Neot Smadar Weather (Meteoblue).url`
+  (slug intact), and `MAST Logs.lnk` created on the Public desktop; DS9 correctly skipped in the
+  isolated run (no `ds9.exe`). The DS9 shortcut exercises end-to-end on a full ordered cycle /
+  real unit.
 
 ---
 
