@@ -42,7 +42,7 @@ MAST_provisioning/
 |-- build/
 |   `-- build-mast.ps1                # Assembles staging\<host>\01-provisioning\
 |-- client/
-|   |-- bootstrap-winrm.ps1           # First-time unit prep (single source of truth): mast user, WinRM HTTP, OpenSSH, Npcap, rename, WU policy, telemetry/privacy hardening, Windows Firewall OFF (units sit behind a perimeter firewall; WinRM/SSH rules kept for re-enable)
+|   |-- bootstrap-winrm.ps1           # First-time unit prep (single source of truth): mast user, auto-logon, WinRM HTTP, OpenSSH, Npcap, rename, WU policy, telemetry/privacy hardening, Windows Firewall OFF (units sit behind a perimeter firewall; WinRM/SSH rules kept for re-enable)
 |   |-- execute-mast-provisioning.ps1 # Runs on the unit; iterates through commands.json
 |   |-- run-verify-only.ps1           # Runs on the unit; *-verify steps only (see below)
 |   `-- onboard-mast-unit.ps1         # Post-bootstrap onboarder: provision + register + handoff

@@ -1,7 +1,7 @@
 ﻿#Requires -RunAsAdministrator
 <#
 .SYNOPSIS
-    Manual first-time MAST unit bootstrap: mast admin, WinRM HTTP for prov server, optional computer rename.
+    Manual first-time MAST unit bootstrap: mast admin, auto-logon, WinRM HTTP for prov server, optional computer rename.
 
 .DESCRIPTION
     Run ONCE per machine in an elevated PowerShell session after Windows is installed (physical unit
@@ -10,26 +10,29 @@
     The installing operator must supply the unit Windows hostname (e.g. mast05). The script:
       1. Leaves the OEM factory local account (default 'user') intact; creates a separate 'mast' account.
       2. Ensures 'mast' is a local administrator with the provisioning password.
-      3. Suppresses Windows Update automatic installs.
-      4. Ensures IPv4 uses DHCP. The fleet identifies units by hostname and requires
+      3. Configures auto-logon for 'mast' (Winlogon AutoAdminLogon) so a headless unit
+         signs in unattended after every reboot and the interactive control stack comes
+         back up without an operator at the console. Skippable via -SkipAutoLogon.
+      4. Suppresses Windows Update automatic installs.
+      5. Ensures IPv4 uses DHCP. The fleet identifies units by hostname and requires
          DHCP addressing; if an adapter was hand-set to a static IP it is switched
          back to DHCP (IP + DNS). Adapters already on DHCP are left untouched.
-      5. Enables WinRM over HTTP (5985) with Basic auth and opens firewall port 5985.
-      6. Installs the Npcap packet-capture driver via its interactive GUI (the free edition
+      6. Enables WinRM over HTTP (5985) with Basic auth and opens firewall port 5985.
+      7. Installs the Npcap packet-capture driver via its interactive GUI (the free edition
          has no working silent mode; operator clicks through once). The npcap installer
          (npcap-*.exe) must sit next to this script or under .\assets.
-      7. Renames the computer to -MastHostName (reboot required before the new name is live).
-      8. Hardens telemetry/privacy: diagnostic data = Security (lowest), disables the
+      8. Renames the computer to -MastHostName (reboot required before the new name is live).
+      9. Hardens telemetry/privacy: diagnostic data = Security (lowest), disables the
          DiagTrack + dmwappushservice diagnostic-upload services, advertising ID,
          activity feed, Cortana / web search, app background+location, etc.
-      9. Sets the regional format to English (United States) (locale en-US): the
+     10. Sets the regional format to English (United States) (locale en-US): the
          system locale, home location, and the per-user 'Control Panel\International'
          values (date/time/number/currency formatting) for the mast account, the
          Default-user profile template, the .DEFAULT hive, and the current user.
-     10. Disables the Windows Firewall on all profiles. MAST units sit on an isolated
+     11. Disables the Windows Firewall on all profiles. MAST units sit on an isolated
          VLAN behind a perimeter firewall and need open intra-fleet traffic
          (COM/RPC, Prometheus scraping, the control stack).
-     11. Stops + disables non-essential / vendor services that have no role on a
+     12. Stops + disables non-essential / vendor services that have no role on a
          headless control box (Print Spooler, Windows Search, Intel LMS, ASUS /
          Intel GCC / Realtek helpers). Applied by default; each is skippable via
          -SkipTrim. Remote-desktop and backup APPS are left to uninstall by hand -
@@ -60,6 +63,11 @@
 
 .PARAMETER SkipComputerRename
     Do not rename the computer (use only if you will set the name elsewhere).
+
+.PARAMETER SkipAutoLogon
+    Do not configure Winlogon auto-logon for the mast account. By default the unit is set
+    to sign 'mast' in automatically at every boot (headless control box); pass this to leave
+    the machine at the interactive sign-in screen instead.
 
 .PARAMETER FactoryUser
     DEPRECATED no-op. Previously named the OEM account to rename to 'mast'; the rename
@@ -95,6 +103,7 @@ param(
     [switch]$RebootAfterBootstrap,
     [switch]$SkipComputerRename,
     [switch]$VmTestRun,
+    [switch]$SkipAutoLogon,
     [string[]]$SkipTrim = @()
 )
 
@@ -543,6 +552,37 @@ try {
         }
     } else {
         Write-BootstrapMsg "  '$MastUser' already an Administrator." 'DarkGray'
+    }
+
+    # --- Auto-logon: log the mast account in automatically at boot ---
+    # MAST units are headless control boxes: after any reboot the mast account must log
+    # in unattended so the control stack (which lives in the interactive desktop session,
+    # not as a Windows service) comes back up without a console operator. Configured via
+    # the classic Winlogon AutoAdminLogon registry values (HKLM). The password is stored
+    # in plaintext under DefaultPassword -- acceptable here because the mast account uses
+    # the well-known non-secret fleet default and units sit on an isolated VLAN; Sysinternals
+    # Autologon (LSA secret) is the hardening path if that ever changes.
+    if ($SkipAutoLogon) {
+        Write-BootstrapMsg '' 'Cyan'
+        Write-BootstrapMsg '--- Skipping auto-logon (-SkipAutoLogon) ---' 'Yellow'
+    } else {
+        Write-BootstrapMsg '' 'Cyan'
+        Write-BootstrapMsg "--- Configuring auto-logon for '$MastUser' ---" 'Cyan'
+        # DefaultDomainName must match the machine's eventual name. The rename below
+        # changes it, so use the target hostname when a rename is pending.
+        $autoLogonDomain = if (-not $SkipComputerRename -and $MastHostName) { $MastHostName } else { $env:COMPUTERNAME }
+        $winlogonKey = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
+        Set-ItemProperty -Path $winlogonKey -Name 'AutoAdminLogon'    -Value '1'              -Type String
+        Set-ItemProperty -Path $winlogonKey -Name 'DefaultUserName'   -Value $MastUser        -Type String
+        Set-ItemProperty -Path $winlogonKey -Name 'DefaultPassword'   -Value $MastPassword    -Type String
+        Set-ItemProperty -Path $winlogonKey -Name 'DefaultDomainName' -Value $autoLogonDomain -Type String
+        # AutoLogonCount decrements each boot and disables auto-logon at zero; ForceAutoLogon
+        # and a stale AutoLogonSID can fight a clean unattended logon. Clear them so auto-logon
+        # is permanent and tied to the credentials above.
+        foreach ($stale in 'AutoLogonCount', 'AutoLogonSID', 'ForceAutoLogon') {
+            Remove-ItemProperty -Path $winlogonKey -Name $stale -ErrorAction SilentlyContinue
+        }
+        Write-BootstrapMsg "  AutoAdminLogon enabled for '$MastUser' (DefaultDomainName=$autoLogonDomain)." 'Green'
     }
 
     # --- Windows Update policy ---

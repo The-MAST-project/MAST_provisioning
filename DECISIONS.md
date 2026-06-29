@@ -2,6 +2,37 @@
 
 ---
 
+## [2026-06-29] bootstrap: auto-logon the mast account at boot (Winlogon AutoAdminLogon)
+
+**Why:** MAST units are headless control boxes with no console operator. The control
+stack runs in the interactive desktop session (not as a Windows service), so after any
+reboot something has to sign the mast account in before that stack can come up. Until now
+a unit that rebooted sat at the sign-in screen until someone connected and logged in.
+
+**What:** `client\bootstrap-winrm.ps1` now configures classic Winlogon auto-logon
+(`HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon`): `AutoAdminLogon=1`,
+`DefaultUserName=mast`, `DefaultPassword=<fleet default>`, and `DefaultDomainName` set to
+the unit's eventual computer name (the rename target when a rename is pending, else the
+current name). It also clears `AutoLogonCount` / `AutoLogonSID` / `ForceAutoLogon` so the
+logon is permanent rather than expiring after N boots. Added as step 3 of the bootstrap
+(right after the mast admin account is created) and gated by a new `-SkipAutoLogon` switch.
+
+**Implications:**
+- Lives in the manual one-time bootstrap, not a provider: auto-logon must be in place from
+  first boot, before the provisioning loop ever connects, and does not belong in the
+  re-runnable provider payload.
+- The password sits in plaintext under `DefaultPassword`, readable by any local admin. This
+  is acceptable for the current fleet (well-known non-secret default, isolated VLAN). If the
+  account password is ever made a real secret, switch to Sysinternals Autologon, which stores
+  it as an encrypted LSA secret instead.
+- `DefaultDomainName` is pinned to the post-rename hostname so auto-logon keeps working after
+  the rename + reboot; a local-account logon needs the domain to match the machine name.
+- End-to-end behavior (machine actually auto-signs-in after reboot) needs a real reboot to
+  confirm and is pending hardware/manual verification; the registry-write logic was validated
+  in isolation (values written, AutoLogonCount cleared).
+
+---
+
 ## [2026-06-28] ds9 provider: associate FITS files with DS9 (machine-wide)
 
 **Why:** On units the ZWO/ASI Studio install grabbed the `.fits` association, so
