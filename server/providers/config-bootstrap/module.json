@@ -1,0 +1,14 @@
+{
+  "name": "config-bootstrap",
+  "version": "1.0",
+  "description": "Lay down the per-machine MAST bootstrap config C:\\WIS\\unit.toml (machine identity + how to reach the config DB: site/project/controller_host/database/domain/location) and set the machine-wide MAST_PROJECT=unit environment variable. The TOML is the selected site profile (sites/<site>.toml), chosen at build time via build-mast.ps1 -Site; the file is per-site (identical across units at a site). Read by MAST_common load_local_config(); the app cross-checks it against the DB 'sites' doc and fails fast on mismatch. Runs early (order 150) so MAST_PROJECT and the file exist before the mast-unit service is installed.",
+  "order": 150,
+  "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-config-bootstrap.ps1\" -AssetsRoot \".\"",
+  "commandfiles": [
+    "provide-config-bootstrap.ps1",
+    "verify-config-bootstrap.ps1",
+    "sites/wis.toml",
+    "sites/ns.toml"
+  ],
+  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\verify-config-bootstrap.ps1\""
+}

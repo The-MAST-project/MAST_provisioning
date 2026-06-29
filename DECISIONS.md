@@ -2,6 +2,50 @@
 
 ---
 
+## [2026-06-29] config-bootstrap provider: lay down C:\WIS\unit.toml + MAST_PROJECT (external-config epic)
+
+**Why:** The external-config-file epic (MAST_common#7, MAST_unit.2024-12-12#22, branch
+`eli/configuration-file`) makes the apps read a per-machine TOML bootstrap file --
+`C:\WIS\<role>.toml` -- for machine identity and how to reach the config DB, and **fail fast**
+if it is missing/invalid. Nothing in provisioning laid that file down, and `MAST_PROJECT`
+(which selects the role file) was only set transiently inside the `mast-validation` provider,
+so after the epic merges a freshly provisioned unit's `mast-unit` service would not start.
+
+**What:**
+- New `config-bootstrap` provider (order 150, before `mast`/2200) deploys the selected site's
+  profile `sites/<site>.toml` verbatim to `C:\WIS\unit.toml` and sets machine-wide
+  `MAST_PROJECT=unit`.
+- Site is chosen by an explicit **`build-mast.ps1 -Site <site>`** param (default `wis`),
+  injected into the provider command the same way `-ProxyMode`/`-ForceMode` are. **Never
+  derived from the hostname** -- that is precisely the coupling the epic removes. The build
+  fails early, listing the available profiles, if `-Site` names one that doesn't exist.
+- Site profiles are literal per-site TOML files in the repo, matching the DB `sites` doc (read
+  from the live controller DB on 2026-06-29): `wis` (mast-wis-control; location from the
+  MAST_common example, since the DB `wis` doc has no location) and `ns`/Neot Smadar
+  (mast-ns-control; location 30.0533026 / 35.0386461 / 400 from the DB).
+- `provide-mast.ps1` also sets `nssm set mast-unit AppEnvironmentExtra MAST_PROJECT=unit` so an
+  already-installed service picks up the role on re-provision (fresh boxes inherit the machine
+  env at service start).
+
+**Implications:**
+- **`unit.toml` is per-site, not per-unit** -- identical across all units at a site; "which
+  unit am I" still comes from the hostname. One profile per site.
+- **DB content is a separate, out-of-scope dependency.** A unit boots only when BOTH this TOML
+  and the controller's MongoDB `sites` (+ `units` operational) docs exist and agree; the
+  startup cross-check fails otherwise. Seeding/maintaining those DB docs is controller-side
+  (the `units.common` work in `unit-config-open-questions.md`). Known gap: the DB `wis` sites
+  doc has no `location`, so a full `Config()` boot on a wis unit needs it added there.
+- **Built against the open epic branch** since the TOML format is settled -- ready to land when
+  #7/#22 merge.
+- The forthcoming **interactive bootstrap** will let the operator pick the site (+ hostname) at
+  bootstrap; that becomes a new front-end feeding the same `-Site` selection -- the provider and
+  profiles are unchanged.
+- Verified on the dev VM: `C:\WIS\unit.toml` written from the `wis` profile and
+  `MAST_PROJECT=unit` set; verify asserts the required keys + the env var. `load_local_config()`
+  is MongoDB-free; full `Config()` boot still depends on the DB docs above.
+
+---
+
 ## [2026-06-29] desktop-shortcuts provider: operator shortcuts on the Public desktop
 
 **Why:** Operators want one-click access on each unit to the destinations they hit every

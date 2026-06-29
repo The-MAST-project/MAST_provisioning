@@ -160,6 +160,15 @@ sees the flag with nothing after it. Omit the flag entirely when the value is em
 the param a default (`[string]${X} = ''`) instead; add the flag back only with a non-empty
 value. (Hit while wiring the optional `-WeatherUrl` in the `desktop-shortcuts` provider.)
 
+## Unit config: `C:\WIS\<role>.toml` + `MAST_PROJECT` (external-config epic)
+
+The apps read a per-machine TOML bootstrap file at `C:\WIS\<role>.toml` (role = `MAST_PROJECT`,
+e.g. `unit`) for machine identity + how to reach the config DB, and fail fast if it is missing.
+The `config-bootstrap` provider (order 150) lays this down from `sites/<site>.toml` and sets
+`MAST_PROJECT` machine-wide. **Site is selected explicitly via `build-mast.ps1 -Site`, never
+derived from the hostname** -- do not reintroduce hostname->site parsing in providers. Per-site
+profiles must match the controller's MongoDB `sites` doc (the app cross-checks them at startup).
+
 ## Adding a new client script
 
 When adding any new `client/*.ps1` that is needed at provisioning or bootstrap time:

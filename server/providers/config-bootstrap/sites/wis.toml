@@ -1,0 +1,20 @@
+# MAST per-machine bootstrap configuration -- site: wis (Weizmann dev / VM).
+# Deployed verbatim by the config-bootstrap provisioning provider as
+# C:\WIS\unit.toml. Read by MAST_common load_local_config(); the app also
+# cross-checks site/project/controller_host/location against the DB 'sites'
+# document at startup, so these MUST agree with that doc.
+#
+# NOTE: the DB 'sites' doc for wis currently has no [location]; these values
+# come from MAST_common config/local.toml.example. Reconcile controller-side
+# (add location to the wis sites doc) or the full Config() cross-check fails.
+site = "wis"
+project = "mast"
+controller_host = "mast-wis-control"
+database = "mast"
+domain = "weizmann.ac.il"
+# mongo_port = 27017
+
+[location]
+latitude = 31.9
+longitude = 34.8
+elevation = 875

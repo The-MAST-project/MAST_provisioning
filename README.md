@@ -114,6 +114,7 @@ renumbering.
 | Order | Module | Description |
 |------:|--------|-------------|
 |   100 | `proxy` | Soft proxy: set (on-campus) or clear (home) machine/WinHTTP/WinINet proxy settings |
+|   150 | `config-bootstrap` | Lay down `C:\WIS\unit.toml` (machine identity + config-DB connection) and set `MAST_PROJECT=unit`; site chosen by build `-Site` |
 |   200 | `openssh-server` | Drift check for OpenSSH Server (install/config owned by `bootstrap-winrm.ps1`) |
 |   250 | `imdisk` | ImDisk driver; mount D: from the astrometry index image, persist across reboots |
 |   300 | `cygwin` | Cygwin environment from a prebuilt tgz (postinstall, PATH) |

@@ -43,7 +43,13 @@ param(
   # unit's network reachability. `vm/run-prov-test.py --proxy-mode direct`
   # is the canonical way to do so. See DECISIONS.md 2026-05-26.
   [ValidateSet('weizmann','direct')]
-  [string]${ProxyMode} = 'weizmann'
+  [string]${ProxyMode} = 'weizmann',
+
+  # Site whose bootstrap profile (server/providers/config-bootstrap/sites/<Site>.toml)
+  # becomes the unit's C:\WIS\unit.toml via the config-bootstrap provider. Selected
+  # EXPLICITLY here, never derived from the hostname (per the config-file epic). The
+  # config-bootstrap switch case below validates it against the available profiles.
+  [string]${Site} = 'wis'
 )
 
 # Normalize -Modules: subprocess passes comma-joined strings as a single element.
@@ -241,6 +247,17 @@ function Generate-Commands([string[]]${Mods}) {
       }
       'astrometry-dependencies' {
         ${cmd} = ${cmd} + (" -ProxyMode {0}" -f ${astroDepProxyMode})
+      }
+      'config-bootstrap' {
+        # Inject the explicitly-selected -Site so the provider deploys
+        # sites/<Site>.toml as C:\WIS\unit.toml. Fail the build early with a
+        # helpful message if that site has no profile.
+        ${siteProfile} = Join-Path ${providersRoot} ('config-bootstrap\sites\{0}.toml' -f ${Site})
+        if (-not (Test-Path -LiteralPath ${siteProfile})) {
+          ${avail} = (Get-ChildItem (Join-Path ${providersRoot} 'config-bootstrap\sites') -Filter '*.toml' -ErrorAction SilentlyContinue | ForEach-Object { ${_}.BaseName }) -join ', '
+          throw ("-Site '{0}' has no profile at {1}. Available sites: {2}" -f ${Site}, ${siteProfile}, ${avail})
+        }
+        ${cmd} = ${cmd} + (" -Site {0}" -f ${Site})
       }
       'mast-validation' {
         # Dev-VM escape: forward --allow-missing-avx to the python validator
