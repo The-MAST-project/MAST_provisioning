@@ -151,6 +151,15 @@ net use Z: \\server\share /persistent:no <password> /user:<user>
 The canonical reference implementation is `client/mast-pull-staging.ps1`. Any new `net use`
 call must match that argument order.
 
+## Empty-string args are dropped from `module.json` `-File` commands
+
+A `module.json` `command` / `verify` that passes an empty-string argument to a `-File`
+script -- e.g. `-WeatherUrl ""` -- fails on the unit with **"Missing an argument for
+parameter 'X'"**: the empty quotes collapse before PowerShell binds the parameter, so it
+sees the flag with nothing after it. Omit the flag entirely when the value is empty and give
+the param a default (`[string]${X} = ''`) instead; add the flag back only with a non-empty
+value. (Hit while wiring the optional `-WeatherUrl` in the `desktop-shortcuts` provider.)
+
 ## Adding a new client script
 
 When adding any new `client/*.ps1` that is needed at provisioning or bootstrap time:
