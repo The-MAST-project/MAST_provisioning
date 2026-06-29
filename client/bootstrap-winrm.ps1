@@ -384,7 +384,7 @@ function Sync-MastSystemTime {
     # 123 blocked / no route) -- that is expected; it warns and continues, and the
     # provisioning timesync provider does the real fix. Never aborts bootstrap.
     [CmdletBinding()]
-    param([string[]]$NtpServers = @('time.windows.com', 'pool.ntp.org', 'time.google.com'))
+    param([string[]]$NtpServers = @('ntp.weizmann.ac.il', 'ntp2.weizmann.ac.il', 'time.windows.com', 'pool.ntp.org', 'time.google.com'))
 
     $peerList = ($NtpServers -join ' ')
     try {

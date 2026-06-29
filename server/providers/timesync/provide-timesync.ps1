@@ -1,27 +1,35 @@
 #requires -Version 5.1
 [CmdletBinding()]
 param(
+    # Ordered NTP priority tiers. Each tier may hold one or more space-separated
+    # hosts; blank tiers are skipped. RpiNtp is SITE-SPECIFIC (e.g. the Neot Smadar
+    # RPi) and is injected per-site by build-mast.ps1 -Site -- empty for sites with
+    # none. The provisioning server (tier 3) is auto-discovered if not passed.
+    [string]${RpiNtp}        = '',
+    [string]${WeizmannNtp}   = 'ntp.weizmann.ac.il ntp2.weizmann.ac.il',
     [string]${ProvServer}    = '',
-    # Servers the unit uses for NORMAL ongoing operation (the end state this
-    # provider leaves behind). The prov server is only a one-time source.
-    [string]${NormalNtp}     = 'time.windows.com pool.ntp.org time.google.com',
+    [string]${WindowsNtp}    = 'time.windows.com',
     [int]   ${ResyncRetries} = 3
 )
 
-# Early, ONE-TIME time correction during provisioning.
+# Early clock correction + ongoing NTP config during provisioning.
 #
 # MAST units frequently cannot reach public NTP (UDP 123 blocked / no internet
-# route), so a wrong clock would break the 'mast' git clone's TLS validation and
-# destabilize long WinRM sessions. The provisioning server IS reachable and runs
-# an NTP server (server/setup-ntp-server.ps1), so we use it to correct the clock
-# ONCE here -- then we leave w32time configured for normal public NTP for ongoing
-# operation. We do NOT leave the unit permanently pointed at the prov server (it
-# is not a long-lived time source for the unit).
+# route), and a wrong clock breaks the 'mast' git clone's TLS validation and
+# destabilizes long WinRM sessions. We configure an ORDERED time-server priority
+# list and correct the clock once here, before any HTTPS/TLS step.
 #
-# Order of preference for the one-time correction: prov server first (reliable
-# during provisioning), then public NTP as a fallback. Best-effort throughout:
-# a clock that will not sync is logged loudly but does NOT abort the run (the
-# bootstrap public-NTP attempt and a manual fix are redundant backstops).
+# Priority (the one-time correction probes these in STRICT order; first that locks
+# wins):  1. RPi @ site  2. Weizmann internal NTP  3. provisioning server
+# (auto-discovered)  4. time.windows.com.
+#
+# Steady state (the config the unit KEEPS): ALL non-blank tiers go into the w32time
+# manualpeerlist together; w32time then auto-selects the best by stratum/dispersion
+# and fails over -- so the order is advisory for steady state. Unlike the old design,
+# the provisioning server stays PERMANENTLY in the ongoing list (tier 3), not just a
+# one-time source -- it is a reliable low-stratum peer on the same network. See
+# DECISIONS.md 2026-06-29. Best-effort: a clock that will not sync is logged loudly
+# but does NOT abort the run.
 
 ${ErrorActionPreference} = 'Stop'
 
@@ -87,36 +95,41 @@ if (-not ${ProvServer}) {
     if (${z} -and ${z}.DisplayRoot -match '^\\\\([^\\]+)\\') { ${ProvServer} = ${Matches}[1] }
 }
 
-# --- One-time correction: prov server first, then public NTP as fallback ------
+# --- Build the ordered priority tiers (skip blanks) ---------------------------
+${tiers} = @()
+if (${RpiNtp})      { ${tiers} += [pscustomobject]@{ Name = 'rpi';      Peers = ${RpiNtp} } }
+if (${WeizmannNtp}) { ${tiers} += [pscustomobject]@{ Name = 'weizmann'; Peers = ${WeizmannNtp} } }
+if (${ProvServer})  { ${tiers} += [pscustomobject]@{ Name = 'prov';     Peers = ("{0},0x8" -f ${ProvServer}) } }
+if (${WindowsNtp})  { ${tiers} += [pscustomobject]@{ Name = 'windows';  Peers = ${WindowsNtp} } }
+if (-not ${ProvServer}) {
+    Write-TLog '[WARN] could not determine the provisioning server (no mast SMB connection / Z: mapping); skipping tier 3.'
+}
+${tierDesc} = (${tiers} | ForEach-Object { ${_}.Name + '=' + ${_}.Peers }) -join ' | '
+Write-TLog ("Ordered NTP tiers: {0}" -f ${tierDesc})
+
+# --- One-time correction: probe tiers in STRICT priority order ----------------
 ${syncedSource} = ''
 ${syncedVia}    = ''
-if (${ProvServer}) {
-    Write-TLog ("One-time sync from provisioning server {0} ..." -f ${ProvServer})
-    ${syncedSource} = Invoke-W32TimeSync -PeerList ("{0},0x8" -f ${ProvServer})
-    if (${syncedSource}) { ${syncedVia} = ("prov-server:" + ${ProvServer}) }
-} else {
-    Write-TLog '[WARN] could not determine the provisioning server (no mast SMB connection / Z: mapping).'
-}
-if (-not ${syncedSource}) {
-    Write-TLog ("Falling back to public NTP for the one-time sync: {0}" -f ${NormalNtp})
-    ${syncedSource} = Invoke-W32TimeSync -PeerList ${NormalNtp}
-    if (${syncedSource}) { ${syncedVia} = 'public-ntp' }
+foreach (${tier} in ${tiers}) {
+    Write-TLog ("One-time sync attempt: tier '{0}' ({1}) ..." -f ${tier}.Name, ${tier}.Peers)
+    ${syncedSource} = Invoke-W32TimeSync -PeerList ${tier}.Peers
+    if (${syncedSource}) { ${syncedVia} = ${tier}.Name; break }
 }
 
-# --- Leave w32time configured for NORMAL public NTP (not the prov server) -----
-# This is the ongoing config the unit keeps after provisioning. We do not resync
-# again here -- the clock is already corrected above; public NTP may be
-# unreachable from the unit, and that must not undo the correction.
-& w32tm.exe /config /manualpeerlist:"${NormalNtp}" /syncfromflags:manual /reliable:no /update | Out-Null
+# --- Steady state: ALL tiers in the ongoing manualpeerlist (prov PERMANENT) ---
+# w32time auto-selects the best peer and fails over; we do not resync again here
+# (the clock is already corrected above, and an unreachable peer must not undo it).
+${steadyPeers} = (${tiers} | ForEach-Object { ${_}.Peers }) -join ' '
+& w32tm.exe /config /manualpeerlist:"${steadyPeers}" /syncfromflags:manual /reliable:no /update | Out-Null
 Restart-Service -Name w32time -ErrorAction SilentlyContinue
-Write-TLog ("Left w32time configured for normal NTP: {0}" -f ${NormalNtp})
+Write-TLog ("Left w32time with ongoing peer list: {0}" -f ${steadyPeers})
 
 if (${syncedSource}) {
     Write-TLog ("Clock corrected (via {0}, source={1}); now {2}." -f ${syncedVia}, ${syncedSource}, (Get-Date).ToString('yyyy-MM-dd HH:mm:ss'))
     Write-Smoke ("timesync_ok via=" + ${syncedVia})
 } else {
-    Write-TLog '[WARN] could not correct the clock from the prov server or public NTP.'
-    Write-TLog '       Is the prov server running setup-ntp-server.ps1 (UDP 123 open)? Continuing best-effort;'
+    Write-TLog '[WARN] could not correct the clock from any NTP tier (RPi/Weizmann/prov/Windows).'
+    Write-TLog '       Continuing best-effort (is UDP 123 reachable to any tier? is the prov NTP server up?);'
     Write-TLog '       a wrong clock will break the HTTPS git clone -- fix NTP reachability or set the clock manually.'
     Write-Smoke 'timesync_warn reason=not_locked'
 }

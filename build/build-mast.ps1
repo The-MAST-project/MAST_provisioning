@@ -218,6 +218,9 @@ ${allLicFiles} = Get-ChildItem -Path ${licensesVault} -Filter '*.lic' -File -Err
 # the individual providers expect on their own command lines.
 ${proxyForceMode}    = if (${ProxyMode} -eq 'weizmann') { 'use' } else { 'direct' }
 ${astroDepProxyMode} = ${proxyForceMode}   # provide-astrometry-dependencies.ps1 uses identical naming
+# Per-site RPi NTP server (the #1 time peer); injected into the timesync command by -Site.
+# Single source of the per-site RPi value. Sites without one are simply absent (RPi tier skipped).
+${siteRpiNtp} = @{ 'ns' = '10.23.1.222' }
 
 # Banner: print the chosen mode prominently so an operator scanning a build
 # log can tell at a glance which mode this staging directory was built for.
@@ -258,6 +261,13 @@ function Generate-Commands([string[]]${Mods}) {
           throw ("-Site '{0}' has no profile at {1}. Available sites: {2}" -f ${Site}, ${siteProfile}, ${avail})
         }
         ${cmd} = ${cmd} + (" -Site {0}" -f ${Site})
+      }
+      'timesync' {
+        # Inject the per-site RPi NTP (priority-1 peer) when the selected site has one.
+        # Site-specific like config-bootstrap -- never derived from the hostname.
+        if (${siteRpiNtp}.ContainsKey(${Site})) {
+          ${cmd} = ${cmd} + (" -RpiNtp {0}" -f ${siteRpiNtp}[${Site}])
+        }
       }
       'mast-validation' {
         # Dev-VM escape: forward --allow-missing-avx to the python validator

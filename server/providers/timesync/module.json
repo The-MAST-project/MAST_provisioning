@@ -1,7 +1,7 @@
 {
   "name": "timesync",
   "version": "1.0",
-  "description": "Early, ONE-TIME clock correction during provisioning. Units often cannot reach public NTP (UDP 123 blocked / no internet route); a wrong clock breaks the 'mast' git clone's TLS validation and destabilizes WinRM. Syncs once from the provisioning server's NTP server (server/setup-ntp-server.ps1), falling back to public NTP, then leaves w32time configured for NORMAL public NTP for ongoing operation (NOT permanently pointed at the prov server). Runs first (order 50), before any HTTPS/TLS step. Best-effort: logs loudly, does not abort.",
+  "description": "Early clock correction + ongoing NTP config during provisioning. Units often cannot reach public NTP (UDP 123 blocked / no internet route); a wrong clock breaks the 'mast' git clone's TLS validation and destabilizes WinRM. Configures an ORDERED priority list -- 1) site RPi (-RpiNtp, injected per-site by build -Site) 2) Weizmann internal (ntp/ntp2.weizmann.ac.il) 3) provisioning server (auto-discovered) 4) time.windows.com -- and corrects the clock once by probing the tiers in strict order (first lock wins). Steady state leaves ALL tiers in the w32time manualpeerlist (prov server now PERMANENT, not one-time), letting w32time auto-select/fail over. Runs first (order 50), before any HTTPS/TLS step. Best-effort: logs loudly, does not abort.",
   "order": 50,
   "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-timesync.ps1\"",
   "commandfiles": [

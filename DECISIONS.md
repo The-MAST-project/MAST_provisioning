@@ -2,6 +2,40 @@
 
 ---
 
+## [2026-06-29] timesync: ordered NTP priority list; provisioning server now a PERMANENT peer
+
+**Why:** Units need a reliable clock (a wrong one breaks the HTTPS git clone's TLS). The prior
+`timesync` synced once from the prov server then left w32time on public NTP only -- which units
+frequently can't reach, so they could drift with no good ongoing source. We now give units an
+ordered, multi-source time configuration with the on-network peers we actually have.
+
+**What:**
+- `provide-timesync.ps1` replaces the single `NormalNtp` param with four ordered tiers:
+  `RpiNtp` (1) / `WeizmannNtp` (2) / `ProvServer` (3, auto-discovered) / `WindowsNtp` (4).
+  One-time correction probes the non-blank tiers in **strict order** (first lock wins). Steady
+  state puts **all** tiers in the w32time `manualpeerlist` together and lets w32time auto-select
+  by stratum/dispersion (order advisory).
+- **The provisioning server is now a PERMANENT tier-3 peer** in the ongoing list -- reversing the
+  prior 'prov server is a one-time source only' design. It is a reliable low-stratum peer on the
+  same network.
+- Weizmann internal NTP = `ntp.weizmann.ac.il` + `ntp2.weizmann.ac.il` (hostnames, both peers;
+  confirmed answering). The **RPi is site-specific** (`ns` = `10.23.1.222`): the provider default
+  is empty and `build-mast.ps1 -Site` injects `-RpiNtp` from a per-site map -- never from the
+  hostname, consistent with config-bootstrap.
+- `bootstrap-winrm.ps1`'s `Sync-MastSystemTime` early backstop adds the Weizmann peers to its
+  default list (the RPi stays provisioning-side, per-site, to avoid duplicating the value).
+
+**Implications:**
+- The per-site RPi value lives in exactly one place (`build-mast.ps1` `$siteRpiNtp`); add a site =
+  add its RPi there (and a `config-bootstrap` profile).
+- A site with no RPi (e.g. `wis`) simply skips tier 1 -- no unreachable NS peer on a dev unit.
+- Smoke marker format unchanged (`timesync_ok via=<tier>` / `timesync_warn`), so the existing
+  verify is untouched.
+- The NS RPi `10.23.1.222` was unreachable when this landed (host dark); it is configured as a
+  peer regardless -- w32time just ignores an unreachable peer and uses the next tier.
+
+---
+
 ## [2026-06-29] Interactive bootstrap: operator picks the site, carried via the unit registry (never the hostname)
 
 **Why:** `config-bootstrap` selects a unit's site profile from `build-mast.ps1 -Site`, but nothing
