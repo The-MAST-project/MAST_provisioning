@@ -123,6 +123,15 @@ try {
     Copy-Item -LiteralPath ${applySrc} -Destination ${applyDst} -Force
     Log ("Staged phase-2 apply script: {0}" -f ${applyDst})
 
+    # 3b) Deploy the Stage-2 calibration tool to the same persistent path so the
+    #     "MAST Instrument Calibration" desktop shortcut can launch it after cabling.
+    ${calibSrc} = Join-Path ${PSScriptRoot} 'calibrate-instruments.ps1'
+    if (-not (Test-Path -LiteralPath ${calibSrc})) { ${calibSrc} = Join-Path ${AssetsRoot} 'calibrate-instruments.ps1' }
+    if (Test-Path -LiteralPath ${calibSrc}) {
+        Copy-Item -LiteralPath ${calibSrc} -Destination (Join-Path ${ProfilesRoot} 'calibrate-instruments.ps1') -Force
+        Log ("Staged Stage-2 calibration tool: {0}" -f (Join-Path ${ProfilesRoot} 'calibrate-instruments.ps1'))
+    } else { Log '[WARN] calibrate-instruments.ps1 not found for staging.' }
+
     # 4) Register the AtLogon task that applies the profiles into the mast user's
     #    profile on first sign-in (copies cfgs into Documents, imports the PHD2
     #    HKCU profiles). Runs as the mast user, non-elevated, in the logon session.

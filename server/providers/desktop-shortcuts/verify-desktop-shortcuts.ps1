@@ -26,6 +26,10 @@ else { ${fail} += ("FastAPI shortcut missing ({0})" -f ${fastApiPath}) }
 ${logsPath} = Join-Path ${desktop} 'MAST Logs.lnk'
 if (Test-Path -LiteralPath ${logsPath}) { W ("Logs shortcut present: {0}" -f ${logsPath}) }
 else { ${fail} += ("Logs shortcut missing ({0})" -f ${logsPath}) }
+# Calibration tool shortcut (always created).
+${calibPath} = Join-Path ${desktop} 'MAST Instrument Calibration.lnk'
+if (Test-Path -LiteralPath ${calibPath}) { W ("Calibration shortcut present: {0}" -f ${calibPath}) }
+else { ${fail} += ("Calibration shortcut missing ({0})" -f ${calibPath}) }
 
 # DS9 shortcut: required only when DS9 itself is installed (ds9 provider runs
 # first in a full cycle; absent in an isolated desktop-shortcuts run).

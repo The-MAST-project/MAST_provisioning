@@ -144,7 +144,7 @@ renumbering.
 |  2400 | `windows-exporter-monitoring` | Prometheus windows_exporter service (TCP 9182) |
 |  2500 | `diagnostics` | Post-smoke runtime checks (ASCOM, app launch, PHD2 RPC, heartbeat) |
 |  2600 | `ds9` | SAOImage DS9 8.7 imaging / data visualization |
-|  2700 | `desktop-shortcuts` | Operator shortcuts on the Public desktop (FastAPI control, weather page, DS9, MAST logs) |
+|  2700 | `desktop-shortcuts` | Operator shortcuts on the Public desktop (FastAPI control, weather page, DS9, MAST logs, **instrument calibration**) |
 |  2900 | `mast-validation` | End-to-end plate-solve validation through production code paths |
 |  9999 | `reboot` | Detect pending-reboot state; drop a flag for the orchestrator |
 

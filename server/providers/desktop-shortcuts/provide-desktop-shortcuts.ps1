@@ -9,7 +9,8 @@ param(
     [string]${WeatherSiteName} = 'Neot Smadar',
     [string]${FastApiUrl} = 'http://localhost:8000/',
     [string]${Ds9Exe}     = 'C:\Program Files\SAOImageDS9\ds9.exe',
-    [string]${LogsDir}    = 'C:\MAST\logs'
+    [string]${LogsDir}    = 'C:\MAST\logs',
+    [string]${CalibToolPath} = 'C:\ProgramData\MAST\instrument-profiles\calibrate-instruments.ps1'
 )
 
 ${ErrorActionPreference} = 'Stop'
@@ -37,10 +38,11 @@ function New-MastUrlShortcut {
 }
 
 function New-MastLnkShortcut {
-    param([string]${Path}, [string]${Target}, [string]${WorkDir} = '', [string]${Desc} = '')
+    param([string]${Path}, [string]${Target}, [string]${WorkDir} = '', [string]${Desc} = '', [string]${Arguments} = '')
     ${wsh} = New-Object -ComObject WScript.Shell
     ${sc}  = ${wsh}.CreateShortcut(${Path})
     ${sc}.TargetPath = ${Target}
+    if (${Arguments}) { ${sc}.Arguments = ${Arguments} }
     if (${WorkDir}) { ${sc}.WorkingDirectory = ${WorkDir} }
     if (${Desc})    { ${sc}.Description = ${Desc} }
     ${sc}.Save()
@@ -86,5 +88,14 @@ New-Item -ItemType Directory -Path ${LogsDir} -Force | Out-Null
 New-MastLnkShortcut -Path ${logsPath} -Target ${LogsDir} -Desc 'MAST provisioning and session logs'
 Write-ShortcutLog ("Logs folder shortcut -> {0}" -f ${LogsDir})
 
+# 5) Interactive instrument-calibration tool (deployed by the instrument-profiles
+# provider, order 1850 < this one). Lets the operator view/dry-run/apply per-unit
+# PWI4 COM bindings after the hardware is cabled.
+${calibPath} = Join-Path ${desktop} 'MAST Instrument Calibration.lnk'
+${psExe} = Join-Path ${env:WINDIR} 'System32\WindowsPowerShell\v1.0\powershell.exe'
+${calibArgs} = ('-NoExit -ExecutionPolicy Bypass -NoProfile -File "{0}" -Interactive' -f ${CalibToolPath})
+New-MastLnkShortcut -Path ${calibPath} -Target ${psExe} -Arguments ${calibArgs} -WorkDir 'C:\ProgramData\MAST\instrument-profiles' -Desc 'Interactive per-unit PWI4 instrument COM calibration'
+if (Test-Path -LiteralPath ${CalibToolPath}) { Write-ShortcutLog ("Calibration shortcut -> {0}" -f ${CalibToolPath}) }
+else { Write-ShortcutLog ("[WARN] Calibration tool not yet at {0} (instrument-profiles not run?); shortcut created, works once it is." -f ${CalibToolPath}) }
 Write-ShortcutLog 'Desktop shortcuts provisioning complete.'
 exit 0

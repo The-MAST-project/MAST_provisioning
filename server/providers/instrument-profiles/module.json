@@ -8,6 +8,7 @@
     "provide-instrument-profiles.ps1",
     "apply-instrument-profiles.ps1",
     "verify-instrument-profiles.ps1",
+    "calibrate-instruments.ps1",
     "assets/instrument-profiles-assets.zip"
   ],
   "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\verify-instrument-profiles.ps1\""

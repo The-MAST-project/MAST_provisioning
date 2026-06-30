@@ -2,6 +2,25 @@
 
 ---
 
+## [2026-06-30] instrument calibration: interactive menu + desktop shortcut
+
+**Why:** The Stage-2 binder needs to be operator-friendly for the field (new-unit bring-up): view current
+state, preview the diff, dry-run, or force a rewrite -- without memorizing CLI flags -- and be told to
+close PWI4 when a write is blocked.
+
+**What:** Added an `-Interactive` menu to `calibrate-instruments.ps1` (View / Dry run / Apply / Force;
+shows the diff before applying; refuses + instructs to close PWI4 on a real write while PWI4 runs). The
+CLI flags (`-DryRun`/`-Force`/`-EfaCom`) and the menu share the same plan/diff/apply functions. Moved the
+tool from `tools/` into the `instrument-profiles` provider so Stage 1 deploys it to
+`C:\ProgramData\MAST\instrument-profiles\calibrate-instruments.ps1`; the `desktop-shortcuts` provider
+drops a "MAST Instrument Calibration" launcher on the Public desktop (its `.lnk` helper gained an
+`-Arguments` parameter), and its verify now requires that shortcut.
+
+**Implications:** Validated on the dev VM (full cycle PASS incl. `desktop-shortcuts_ok`; tool + shortcut
+confirmed on the unit) and the refactored decision matrix re-validated on mastw via `-DryRun` against a
+throwaway Settings copy (correct/empty/stale/preserved/force). `probe-instrument-detection.ps1` stays in
+`tools/` as a dev-only diagnostic.
+
 ## [2026-06-30] instrument calibration tool: built + hardware-validated
 
 **Why:** Phase-0 probing on real units settled the open questions: PWI4 does NOT auto-detect the EFA
