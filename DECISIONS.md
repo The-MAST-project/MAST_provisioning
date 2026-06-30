@@ -2,6 +2,27 @@
 
 ---
 
+## [2026-06-30] instrument calibration tool: built + hardware-validated
+
+**Why:** Phase-0 probing on real units settled the open questions: PWI4 does NOT auto-detect the EFA
+focuser (a blank `SerialPort` throws "PortName cannot be empty"), so an explicit per-unit COM binding
+is required; the EFA adapter brand varies (FTDI on mast02/mastw, Prolific on mast00) so it cannot be
+keyed on a fixed VID/PID; PWBus binds cleanly by `VID_1CBE/PID_0002`; the mount auto-detects over USB
+and the FCU/Standa stage is auto-discovered by MAST_unit libximc.
+
+**What:** Implemented `tools/calibrate-instruments.ps1` (Stage 2). It enumerates `Win32_PnPEntity`,
+binds the EFA `SerialPort` (the lone generic non-PlaneWave adapter, or `-EfaCom` when ambiguous) and
+the PWBus `SerialPort` (`PID_0002`), and leaves the mount + FCU alone. Preservation rules: write only
+when the current value is empty or stale (absent COM); preserve a present-but-different binding unless
+`-Force`; `-DryRun` writes nothing and is allowed while PWI4 runs; a real run refuses while PWI4 is
+open. Writes a `.calibrated` stamp (with a device fingerprint) under `C:\ProgramData\MAST\instrument-profiles`.
+
+**Implications:** Validated end-to-end on the mastw bench (fresh-bind, idempotent re-run, stale-rebind,
+preserve-without-force, force-rebind -- all correct, restored to COM6) and via `-DryRun` on mast00 +
+mast02 (mast02 already-correct; mast00 surfaced a dead EFA binding COM13->COM7, not yet applied). The
+operator runs this once hardware is cabled; it is the only per-unit instrument step (Stage 1 stays
+template-only).
+
 ## [2026-06-30] instrument profiles split: provisioning templates vs post-hardware calibration
 
 **Why:** A cross-unit comparison (mast00/mast02/mastw) showed device->COM binding is inherently

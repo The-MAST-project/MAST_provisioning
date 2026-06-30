@@ -182,7 +182,8 @@ IPs, equatorial). Because the per-user `mast` profile is not materialized at pro
 artifacts stage to `C:\ProgramData\MAST\instrument-profiles` and apply (cfgs -> Documents, PHD2 ->
 HKCU) via a one-shot `AtLogon` task on first `mast` logon. **No device->COM binding here.**
 
-**Stage 2 -- `tools/calibrate-instruments.ps1` (post-hardware, operator-run, re-runnable, planned):**
+**Stage 2 -- `tools/calibrate-instruments.ps1` (post-hardware, operator-run, re-runnable -- BUILT + hardware-validated on mastw/mast00/mast02 2026-06-30):**
+Run it as `mast` on a connected unit after the instruments are cabled. `-DryRun` reports without writing (safe even while PWI4 is open); a real run refuses if PWI4 is running (it rewrites its `.cfg` on exit). Preservation-safe: it only writes a `SerialPort` when the current value is empty or stale (points at an absent COM); a present-but-different COM is left alone unless `-Force`; `-EfaCom <COMx>` overrides when more than one generic adapter is present. It never touches focuser calibration, the pointing model, or mount-firmware tuning.
 binds per-unit serial COM ports once instruments are connected. Cross-unit facts (mast00/02/w): the
 **Elmo mount needs no COM** (PWI4 auto-detects it over USB everywhere); **PWBus OTA** = stable
 `VID_1CBE/PID_0002` (auto-bindable); the **EFA focuser adapter brand VARIES** (FTDI vs Prolific) and a
