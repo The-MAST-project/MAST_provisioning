@@ -2,6 +2,39 @@
 
 ---
 
+## [2026-06-30] instrument-profiles: synthesize PWI4 `.cfg` + PHD2 `.reg` at provisioning time
+
+**Why:** Standing up a new unit meant hand-rebuilding the PWI4 instrument config and re-importing
+the PHD2 guiding profiles. PWI4's per-machine bits are the site location and the COM ports its
+serial instruments enumerate on (COM numbers follow USB-enumeration order, so they differ per
+machine). The 4 PHD2 profiles were captured from MAST00 as a `.reg`.
+
+**What:** New `instrument-profiles` provider (order 1850, after planewave/phd2/zwo install, after
+config-bootstrap). It:
+- Ships the PWI4 Settings `.cfg` set + the PHD2 `.reg`, captured from MAST02, as one bundled asset zip.
+- Reads the site location (Latitude/Longitude/HeightMeters) from the already-deployed
+  `C:\WIS\unit.toml` `[location]` (single source of truth, written by config-bootstrap) -- so it
+  needs no `-Site` of its own and never touches the hostname.
+- Reverse-locates COM ports from each instrument's stable USB InstanceID (VID/PID) via
+  `Win32_PnPEntity`: EFA focuser = FTDI `VID_0403/PID_6001`, PWBus OTA = PlaneWave `VID_1CBE/PID_0002`.
+  An absent device leaves the template value and logs `pending-hardware` (e.g. the instrument-less
+  dev VM) rather than failing.
+- Ships the mount (Elmo) config verbatim from MAST02 -- per-unit mount-axis COM synthesis is deferred
+  until a correctly-wired unit can supply the InstanceID->axis mapping (MAST02's mount is on IP/USB;
+  its COM1/COM2 are inert motherboard ports).
+
+**Two-phase apply (profile not materialized at provisioning):** provisioning runs over WinRM as admin
+before any autologin, so the `mast` user's Documents dir and HKCU hive do not exist yet (the same
+reason `desktop-shortcuts` writes to the Public desktop). Phase 1 (SYSTEM, provisioning) synthesizes
+the artifacts into `C:\ProgramData\MAST\instrument-profiles` and registers a one-shot `AtLogon`
+scheduled task running as `mast`. Phase 2 (first `mast` logon) copies the cfgs into the PWI4 Settings
+dir and `reg import`s the PHD2 HKCU profiles, then self-unregisters via a sentinel.
+
+**Implications:** COM resolution and the phase-2 apply are only fully exercised on a real unit.
+Verified: the synthesis resolves EFA->COM10 / PWBus->COM7 against MAST02's live device map, and the
+full dev-VM cycle passes with COM SKIPPED (pending-hardware). The provider exposes
+`-ProfilesRoot` / `-UnitToml` / `-SkipTask` so the synthesis can be run non-destructively on hardware.
+
 ## [2026-06-29] timesync: ordered NTP priority list; provisioning server now a PERMANENT peer
 
 **Why:** Units need a reliable clock (a wrong one breaks the HTTPS git clone's TLS). The prior

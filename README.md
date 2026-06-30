@@ -136,6 +136,7 @@ renumbering.
 |  1600 | `stage` | Optical stage / mount control software |
 |  1700 | `planewave` | PlaneWave PWI4 + PS3 CLI tools |
 |  1800 | `zwo` | ZWO camera drivers, ASI Studio, ASCOM driver |
+|  1850 | `instrument-profiles` | Synthesize PWI4 `.cfg` (site location + serial COM ports from USB InstanceID) and PHD2 `.reg` profiles; apply into the `mast` profile on first logon |
 |  1900 | `vscode` | Visual Studio Code |
 |  2000 | `sysinternals` | Sysinternals Suite |
 |  2100 | `chrome` | Google Chrome (offline Enterprise MSI) |
