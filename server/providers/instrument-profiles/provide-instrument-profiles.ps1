@@ -6,12 +6,14 @@
 # apply-instrument-profiles.ps1). Phase 2 is needed because the per-user mast
 # profile (Documents dir + HKCU hive) is not materialized at provisioning time.
 #
-# Per-unit synthesis:
+# Stage 1 (provisioning, pre-hardware) lays down TEMPLATES ONLY:
 #   - PWI4.cfg Latitude/Longitude/HeightMeters <- C:\WIS\unit.toml [location].
-#   - EFA / PWBus SerialPort <- COM port reverse-located from the device USB
-#     InstanceID (VID/PID) via Win32_PnPEntity. Absent device -> template value
-#     left in place and logged as pending-hardware (e.g. the instrument-less VM).
-#   - Mount (Elmo) config shipped verbatim from MAST02 (no per-unit COM yet).
+#   - Fleet-constant cfg values (CountsPerMicron, mount ConnectionMethod=usb,
+#     internal IPs, equatorial) ship verbatim from MAST02 in the bundle.
+# Per-unit device->COM binding (EFA, PWBus) is NOT done here: instruments are
+# not connected at provisioning time. It is a separate post-hardware step --
+# tools/calibrate-instruments.ps1 (Stage 2). The Elmo mount needs no COM at all
+# (PWI4 auto-detects it over USB; ConnectionMethod=usb on every unit).
 [CmdletBinding()]
 param(
     [string]${AssetsRoot} = '.',
@@ -44,13 +46,6 @@ Set-Content -LiteralPath ${logFile} -Encoding UTF8 -Value ("[{0}] provide-instru
 ${Pwi4StageDir} = Join-Path ${ProfilesRoot} 'PWI4\Settings'
 ${TaskName}     = 'MAST-InstrumentProfiles-Apply'
 ${MastUser}     = 'mast'
-
-# Role -> COM-bearing cfg. Each instrument is keyed on its stable USB InstanceID
-# (VID+PID); the live COM number is enumerated and written into <Field>.
-${ComMap} = @(
-    @{ Role = 'EFA focuser'; Vid = 'VID_0403'; Pid = 'PID_6001'; Cfg = 'EFA.Controller_1.cfg';             Field = 'SerialPort' },
-    @{ Role = 'PWBus OTA';   Vid = 'VID_1CBE'; Pid = 'PID_0002'; Cfg = 'PWBus.StandardOTA.Controller.cfg'; Field = 'SerialPort' }
-)
 
 # --- helpers ---------------------------------------------------------------
 function Set-CfgField {
@@ -116,24 +111,10 @@ try {
         Log ("[WARN] {0} absent (config-bootstrap not run?); PWI4 location left at template (MAST02) values." -f ${UnitToml})
     }
 
-    # 3) COM-port reverse-lookup from USB InstanceID.
-    ${comDevices} = Get-CimInstance Win32_PnPEntity -ErrorAction SilentlyContinue |
-        Where-Object { $_.Name -match '\(COM\d+\)' }
-    foreach (${entry} in ${ComMap}) {
-        ${cfgPath} = Join-Path ${Pwi4StageDir} ${entry}.Cfg
-        ${dev} = ${comDevices} | Where-Object {
-            $_.DeviceID -match ${entry}.Vid -and $_.DeviceID -match ${entry}.Pid
-        } | Select-Object -First 1
-        if (${dev} -and ${dev}.Name -match '\((COM\d+)\)') {
-            ${com} = ${matches}[1]
-            Set-CfgField -Path ${cfgPath} -Field ${entry}.Field -Value ${com}
-            Log ("{0}: {1} {2}\{3} -> {4}:{5} = {6}" -f ${entry}.Role, ${entry}.Vid, ${entry}.Pid, ${dev}.DeviceID, ${entry}.Cfg, ${entry}.Field, ${com})
-        } else {
-            Log ("[pending-hardware] {0} ({1}/{2}) not present; {3}:{4} left at template value." -f ${entry}.Role, ${entry}.Vid, ${entry}.Pid, ${entry}.Cfg, ${entry}.Field)
-        }
-    }
+    # (Per-unit device->COM binding for EFA/PWBus is intentionally NOT done here;
+    #  it is the post-hardware tools/calibrate-instruments.ps1 step. See header.)
 
-    # 4) Make the phase-2 apply script available at a persistent path (the AtLogon
+    # 3) Make the phase-2 apply script available at a persistent path (the AtLogon
     #    task runs long after the staging dir is gone).
     ${applySrc} = Join-Path ${PSScriptRoot} 'apply-instrument-profiles.ps1'
     if (-not (Test-Path -LiteralPath ${applySrc})) { ${applySrc} = Join-Path ${AssetsRoot} 'apply-instrument-profiles.ps1' }
@@ -142,7 +123,7 @@ try {
     Copy-Item -LiteralPath ${applySrc} -Destination ${applyDst} -Force
     Log ("Staged phase-2 apply script: {0}" -f ${applyDst})
 
-    # 5) Register the AtLogon task that applies the profiles into the mast user's
+    # 4) Register the AtLogon task that applies the profiles into the mast user's
     #    profile on first sign-in (copies cfgs into Documents, imports the PHD2
     #    HKCU profiles). Runs as the mast user, non-elevated, in the logon session.
     if (-not ${SkipTask}) {
@@ -160,7 +141,7 @@ try {
         Log 'SkipTask set; skipped AtLogon apply-task registration (synthesis-only test mode).'
     }
 
-    # 6) Smoke marker.
+    # 5) Smoke marker.
     Write-MastSmokeOk -Module 'instrument-profiles' | Out-Null
     Log 'instrument-profiles provisioning complete.'
     exit 0

@@ -172,18 +172,24 @@ The operator picks the site at bootstrap (`bootstrap-winrm.ps1`, default `ns`); 
 `onboard-mast-unit.ps1` writes it into the unit's `unit-registry.json` entry, which
 `check-and-provision.ps1` passes to `build-mast.ps1 -Site`. Site is config-only -- never the hostname.
 
-## Instrument profiles: PWI4 `.cfg` + PHD2 `.reg`
+## Instrument profiles: PWI4 `.cfg` + PHD2 `.reg` (two stages)
 
-The `instrument-profiles` provider (order 1850, after planewave/phd2/zwo) synthesizes the PWI4 and
-PHD2 instrument profiles. It reads the site location from the **deployed `C:\WIS\unit.toml`
-`[location]`** (written by config-bootstrap) -- not from `-Site` or the hostname -- and
-reverse-locates serial COM ports from each instrument's USB InstanceID via `Win32_PnPEntity` (EFA
-focuser `VID_0403/PID_6001`, PWBus OTA `VID_1CBE/PID_0002`). A missing device is left at the
-template value and logged `pending-hardware` -- **do not make COM resolution fatal**. Because the
-per-user `mast` profile is not materialized at provisioning time, artifacts are staged to
-`C:\ProgramData\MAST\instrument-profiles` and applied (cfgs -> Documents, PHD2 -> HKCU) by a
-one-shot `AtLogon` task on first `mast` logon. The mount (Elmo) config ships verbatim from MAST02;
-do not add per-unit mount-COM synthesis without a real wired-unit InstanceID->axis mapping.
+**Stage 1 -- `instrument-profiles` provider (order 1850, after planewave/phd2/zwo):** lays down
+TEMPLATES only. It injects the site location into `PWI4.cfg` from the **deployed `C:\WIS\unit.toml`
+`[location]`** (written by config-bootstrap) -- not from `-Site` or the hostname -- and ships the
+fleet-constant values verbatim (focuser `CountsPerMicron`, mount `ConnectionMethod=usb`, internal
+IPs, equatorial). Because the per-user `mast` profile is not materialized at provisioning time,
+artifacts stage to `C:\ProgramData\MAST\instrument-profiles` and apply (cfgs -> Documents, PHD2 ->
+HKCU) via a one-shot `AtLogon` task on first `mast` logon. **No device->COM binding here.**
+
+**Stage 2 -- `tools/calibrate-instruments.ps1` (post-hardware, operator-run, re-runnable, planned):**
+binds per-unit serial COM ports once instruments are connected. Cross-unit facts (mast00/02/w): the
+**Elmo mount needs no COM** (PWI4 auto-detects it over USB everywhere); **PWBus OTA** = stable
+`VID_1CBE/PID_0002` (auto-bindable); the **EFA focuser adapter brand VARIES** (FTDI vs Prolific) and a
+cfg can point at an absent COM, so EFA needs operator confirmation / auto-detect -- never key it on a
+fixed VID/PID; the **FCU/Standa stage** (`VID_1CBE/PID_0007`) is MAST_unit's and is auto-discovered by
+libximc (`stage.py`), so it needs no recording. `tools/probe-instrument-detection.ps1` is the
+read-only probe that dumps this map on a connected unit.
 
 ## Adding a new client script
 

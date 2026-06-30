@@ -2,6 +2,27 @@
 
 ---
 
+## [2026-06-30] instrument profiles split: provisioning templates vs post-hardware calibration
+
+**Why:** A cross-unit comparison (mast00/mast02/mastw) showed device->COM binding is inherently
+post-hardware and per-unit, and narrower than first built: COM numbers vary, the EFA serial-adapter
+brand varies (FTDI vs Prolific) and a cfg can point at an absent COM, while the mount auto-detects
+over USB and the FCU/Standa stage is auto-discovered by MAST_unit's libximc. COM synthesis at
+provisioning time (before instruments are attached) can only ever log "pending-hardware".
+
+**What:** Split into two stages. **Stage 1** (`instrument-profiles` provider) is now TEMPLATES ONLY --
+removed the COM reverse-lookup; it lays down the cfg/reg templates, injects site location from
+`C:\WIS\unit.toml`, ships the fleet constants (CountsPerMicron, mount usb-mode, internal IPs)
+verbatim, and registers the first-logon apply task. **Stage 2** is a separate, operator-run,
+re-runnable, preservation-safe `tools/calibrate-instruments.ps1` (built after a hardware probe) that
+binds PWBus by PID, confirms the EFA, and leaves the mount (auto-detect) and FCU (libximc auto) alone.
+`tools/probe-instrument-detection.ps1` is the read-only probe to answer the open hardware questions.
+
+**Implications:** Stage 1 verify no longer checks COM (re-verified green on the dev VM). Fleet
+constants are identical across mast00/02/w, so they are safe in the shipped templates. Binding
+ground-truth (device -> role) comes from the PlaneWave cfg family + USB MI/PID, not serial numbers
+(placeholder `12345678` on the 1CBE devices).
+
 ## [2026-06-30] instrument-profiles: synthesize PWI4 `.cfg` + PHD2 `.reg` at provisioning time
 
 **Why:** Standing up a new unit meant hand-rebuilding the PWI4 instrument config and re-importing
