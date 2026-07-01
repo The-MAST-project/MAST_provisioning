@@ -27,11 +27,11 @@ ${issues} = New-Object 'System.Collections.Generic.List[string]'
 if (-not ${pwi}) {
     [void]${issues}.Add('PWI4.exe not found under expected PlaneWave paths.')
 }
-${pwi4Svc} = Get-Service -Name 'PWI4' -ErrorAction SilentlyContinue
+${pwi4Svc} = Get-Service -Name 'mast-pwi4' -ErrorAction SilentlyContinue
 if ($null -eq ${pwi4Svc}) {
-    [void]${issues}.Add('PWI4 service not registered')
+    [void]${issues}.Add('mast-pwi4 service not registered')
 } elseif (${pwi4Svc}.Status -ne 'Running') {
-    [void]${issues}.Add(("PWI4 service registered but not running (status={0})" -f ${pwi4Svc}.Status))
+    [void]${issues}.Add(("mast-pwi4 service registered but not running (status={0})" -f ${pwi4Svc}.Status))
 }
 if (-not (Test-Path -LiteralPath ${ps3cliPath})) {
     [void]${issues}.Add("PS3 CLI directory missing: ${ps3cliPath}")

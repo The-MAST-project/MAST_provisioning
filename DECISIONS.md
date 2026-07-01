@@ -2,6 +2,60 @@
 
 ---
 
+## [2026-07-01] Services rework (part 1): `mast-` service naming + manual start
+
+**Why:** The MAST NSSM services carried vendor names (`PWI4`, `PWShutter`, `PHD2`) that were
+hard to spot among all Windows services, and every one registered auto-start -- so a unit
+raised all of its telescope services on every boot. At the current development stage we want
+the opposite default: services should come up **by hand, in a wanted order**, not
+automatically. This is the first, decoupled slice of the "Services rework" backlog item
+(`MAST_provisioning#5`); service-crash handling, an ordered launch / dependency tree, and the
+PlaneWave-logs-directory fix are deliberately left for a later slice.
+
+**What:**
+- **Rename** the services to a `mast-` prefix for findability: `PWI4 -> mast-pwi4`,
+  `PWShutter -> mast-pwshutter`, `PHD2 -> mast-phd2` (`mast-unit` was already conformant).
+  Each provider registers under the new name (born correct); the name references that check
+  services by name moved too (`verify-planewave.ps1`, `diagnostics/verify-diagnostics.ps1`,
+  and `mast-unit`'s `AppDependencies -> mast-pwi4`).
+- **Manual start, applied last.** Services still register auto-start and run *during*
+  provisioning so each provider's verification (and diagnostics / validation) exercises them
+  live. A new **`mast-services-finalize` provider (order 9500)** -- after all validation and
+  the proxy finalize (9000), before reboot detection (9999) -- then sets every present MAST
+  service to `Manual` and stops it. It fails the run (exit 1) if a present service cannot be
+  quiesced (a box that would auto-start on boot is a real deviation); absent services are
+  skipped. The canonical name list is single-sourced in `mast-service-names.ps1`, shared by
+  the provider and its verify script.
+- **mast02 migration.** The only provisioned unit already had services set to manual but under
+  the old names. `tools/rename-mast-services.ps1` (self-contained, idempotent, `-DryRun`-able,
+  shippable via `run-remote-script-winrm.py`) renames the legacy services in place -- capturing
+  their existing NSSM config, reinstalling under the new name, forcing manual -- fixes
+  `mast-unit`'s dependency, and leaves all four Manual + Stopped.
+
+**Implications:**
+- A provisioned unit ships quiescent: after boot, an operator (or a future orchestrator) must
+  start the services explicitly. Anything that assumed the old vendor service names must use
+  the `mast-` names.
+- **Manual start is temporary.** It is a current-development-stage choice; once the services
+  are battle-tested (a future stage, months out at least) we intend to restore automatic
+  start -- expect `mast-services-finalize` to be removed or relaxed then. Both the provider and
+  the migration tool carry this note.
+- Still open under `MAST_provisioning#5`: crash handling (today `MAST_unit` re-raises a crashed
+  service directly), ordered launch / dependency tree, and the PlaneWave-logs-in-wrong-directory
+  fix (`MAST_unit.2024-12-12#21`).
+- **Discovered while migrating mast02:** the providers' `nssm set mast-unit AppDependencies ...`
+  is a silent **no-op** -- the valid nssm 2.24 parameter is `DependOnService`, and `nssm set`
+  echoes its full usage list (not an error) for the unknown `AppDependencies`. So no unit has
+  ever actually had an inter-service dependency. This is left as-is here (the rename kept the
+  line pointing at `mast-pwi4`); wiring a real dependency belongs to the deferred ordered-launch
+  slice, which should switch to `DependOnService`. The migration tool therefore sets no
+  dependency, so mast02 matches a fresh box. It is also **deterministic and install-before-remove**
+  (registers the `mast-*` service from the discovered .exe and provider settings, verifies it,
+  then removes the legacy service) rather than capturing/replaying the old config -- safer, and it
+  avoids an nssm quirk where capturing `nssm get` output requires stripping UTF-16 NULs.
+
+---
+
 ## [2026-07-01] Bundle the real PlateSolve3 catalog (build-host-local), retire the mock
 
 **Why:** The `planewave` provider fabricated a *mock* PlateSolve3 catalog (2026-06-11

@@ -82,7 +82,7 @@ try {
     # this is sufficient to bring up the event server; the GUI is not needed for automation.
     ${nssmExe} = 'C:\Program Files\nssm\nssm.exe'
     if (Test-Path -LiteralPath ${nssmExe}) {
-        ${svcName} = 'PHD2'
+        ${svcName} = 'mast-phd2'
         ${existingSvc} = Get-Service -Name ${svcName} -ErrorAction SilentlyContinue
         if ($null -eq ${existingSvc}) {
             Write-Phd2Log "Registering PHD2 as NSSM service..."

@@ -77,7 +77,7 @@ try {
     # session 0 on headless units (same pattern used for PHD2).
     ${nssmExe} = 'C:\Program Files\nssm\nssm.exe'
     if (Test-Path -LiteralPath ${nssmExe}) {
-        ${pwi4SvcName} = 'PWI4'
+        ${pwi4SvcName} = 'mast-pwi4'
         ${existingPwi4Svc} = Get-Service -Name ${pwi4SvcName} -ErrorAction SilentlyContinue
         if ($null -eq ${existingPwi4Svc}) {
             Write-MastPwLog "Registering PWI4 as NSSM service..."
@@ -127,7 +127,7 @@ try {
     if (-not ${pwShutterExePath}) {
         Write-Warning "PWShutter.exe not found after installation; skipping service registration."
     } elseif (Test-Path -LiteralPath ${nssmExe}) {
-        ${pwShutterSvcName} = 'PWShutter'
+        ${pwShutterSvcName} = 'mast-pwshutter'
         ${existingPwShutterSvc} = Get-Service -Name ${pwShutterSvcName} -ErrorAction SilentlyContinue
         if ($null -eq ${existingPwShutterSvc}) {
             Write-MastPwLog ("Registering PWShutter as NSSM service at {0}" -f ${pwShutterExePath})

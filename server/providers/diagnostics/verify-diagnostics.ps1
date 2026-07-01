@@ -193,9 +193,9 @@ try {
 
 # --- 6. PHD2 JSON-RPC server alive (TCP port 4400) ---
 try {
-    ${phd2Svc} = Get-Service -Name 'PHD2' -ErrorAction SilentlyContinue
+    ${phd2Svc} = Get-Service -Name 'mast-phd2' -ErrorAction SilentlyContinue
     if ($null -ne ${phd2Svc} -and ${phd2Svc}.Status -ne 'Running') {
-        Start-Service -Name 'PHD2' -ErrorAction SilentlyContinue
+        Start-Service -Name 'mast-phd2' -ErrorAction SilentlyContinue
         Start-Sleep -Seconds 5
     }
     ${tcpOk} = $false

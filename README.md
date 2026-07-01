@@ -146,7 +146,16 @@ renumbering.
 |  2600 | `ds9` | SAOImage DS9 8.7 imaging / data visualization |
 |  2700 | `desktop-shortcuts` | Operator shortcuts on the Public desktop (FastAPI control, weather page, DS9, MAST logs, **instrument calibration**) |
 |  2900 | `mast-validation` | End-to-end plate-solve validation through production code paths |
+|  9500 | `mast-services-finalize` | Set the MAST services (`mast-unit`, `mast-pwi4`, `mast-pwshutter`, `mast-phd2`) to **manual** start and stop them, as the last step after verification |
 |  9999 | `reboot` | Detect pending-reboot state; drop a flag for the orchestrator |
+
+The MAST NSSM services are named with a `mast-` prefix for findability (`mast-unit`,
+`mast-pwi4`, `mast-pwshutter`, `mast-phd2`). They register auto-start and run **during**
+provisioning so verification exercises them live; the `mast-services-finalize` provider then
+flips them to **manual** start (and stops them) so a provisioned unit does not auto-start
+telescope services on boot -- an operator raises them by hand in the wanted order. Manual
+start is a deliberate current-development-stage measure and is expected to return to
+automatic once the services are battle-tested (see DECISIONS 2026-07-01).
 
 ---
 

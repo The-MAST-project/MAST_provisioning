@@ -192,6 +192,27 @@ fixed VID/PID; the **FCU/Standa stage** (`VID_1CBE/PID_0007`) is MAST_unit's and
 libximc (`stage.py`), so it needs no recording. `tools/probe-instrument-detection.ps1` is the
 read-only probe that dumps this map on a connected unit.
 
+## MAST services: `mast-` naming + manual start (current dev stage)
+
+The MAST NSSM services are named with a `mast-` prefix for findability: `mast-unit`,
+`mast-pwi4`, `mast-pwshutter`, `mast-phd2`. Each is registered by its own provider
+(`mast`, `planewave`, `phd2`) as **auto-start** and started, so per-provider verification and
+the diagnostics/validation steps run against live services. The **`mast-services-finalize`
+provider (order 9500)** is the last operational step (after all validation and the 9000 proxy
+finalize, before 9999 reboot detection): it sets every present MAST service to **manual** and
+stops them, so a provisioned unit does not auto-raise telescope services on boot. The canonical
+service-name list lives once in `server/providers/mast-services-finalize/mast-service-names.ps1`
+(shared by the provider and its verify). To migrate an already-provisioned unit to the new
+names + manual policy, use `tools/rename-mast-services.ps1` (self-contained, idempotent,
+`-DryRun`-able) via `run-remote-script-winrm.py`.
+
+**Manual start is a deliberate current-development-stage measure**, not the end state: once the
+services are battle-tested (a future stage, months out) we intend to restore automatic start,
+at which point `mast-services-finalize` is expected to be removed or relaxed. If you touch a
+service name, update it in the registering provider, the name references
+(`verify-planewave.ps1`, `diagnostics/verify-diagnostics.ps1`, `mast-unit`'s `AppDependencies`),
+`mast-service-names.ps1`, and `tools/rename-mast-services.ps1`. See DECISIONS.md 2026-07-01.
+
 ## Adding a new client script
 
 When adding any new `client/*.ps1` that is needed at provisioning or bootstrap time:
@@ -285,13 +306,33 @@ Session-0 WinRM task. So Npcap is installed interactively by `client/bootstrap-w
 `provide-npcap.ps1` or chase silent-flag / token / driver-trust fixes. To bump the version,
 drop a new `npcap-*.exe` into `client/assets/`.
 
-## Unwedge the dev VM's WinRM via SSH
+## Unwedge a unit's WinRM via SSH (dev VM and real units)
 
-The dev VM's WinRM listener occasionally wedges after repeated sessions -- the harness
-connect then hangs in its WinRM wait loop. SSH is a separate service and stays reachable,
-so restart WinRM over it: `vm_lib.SshSession(host, cred).run_ps('Restart-Service WinRM -Force')`
-(this is what run-prov-test's SSH fallback rides on). Then WinRM connects again. Longer term
-we may move the harness to SSH transport entirely.
+Both the dev VM and real units (e.g. mast02) hit this: the WinRM listener wedges after
+repeated sessions, or is simply down after a boot -- the harness connect then hangs in its
+WinRM wait loop / `run-remote-script-winrm.py` reports "TCP 5985 not open". SSH is a separate
+service and stays reachable, so restart WinRM over it:
+`vm_lib.SshSession(host, cred).run_ps('Restart-Service WinRM -Force')` (this is what
+run-prov-test's SSH fallback rides on). Then WinRM connects again.
+
+**But a service restart does NOT guarantee reachability across subnets.** Windows' built-in
+"Windows Remote Management (HTTP-In)" firewall rule is scoped to `RemoteAddress = LocalSubnet`
+(the default, notably for the Public profile). So when the caller is on a different subnet than
+the unit (e.g. labcomp on `132.76.x` calling mast02 on `10.23.1.x`), 5985 stays refused even
+though the listener is up and bound locally -- while SSH (port 22, scoped Any) keeps working.
+Confirm with `Test-NetConnection <unit> -Port 5985` vs `-Port 22` from the caller.
+
+**Do NOT "fix" this by widening the WinRM rule to the whole network** (`-RemoteAddress Any`) --
+exposing WinRM fleet-wide is the wrong security posture. The correct direction is to run the
+work over **SSH transport** instead: `vm_lib.SshSession(...).run_ps(...)`, uploading any script
+via the session's SFTP channel (`_client.open_sftp().put(...)`). This is how
+`tools/rename-mast-services.ps1` was run against mast02 when its WinRM was unreachable
+cross-subnet. Longer term the harness is expected to move to SSH transport entirely; prefer SSH
+over opening WinRM.
+
+Gotcha when capturing `nssm get` output over any transport: nssm.exe writes **UTF-16LE** to
+stdout, so a naive PowerShell capture yields interleaved NULs (`C\0:\0\\0P\0...`). Strip them
+with `-replace "`0", ''` before using the value (see `tools/rename-mast-services.ps1`).
 
 ## Do not write to git unless explicitly asked
 

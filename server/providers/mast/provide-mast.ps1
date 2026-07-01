@@ -435,7 +435,7 @@ try {
                     # too so the service env is correct even on a re-provision of an existing box.
                     & ${nssmExe} set ${serviceName} AppEnvironmentExtra 'MAST_PROJECT=unit'
                     & ${nssmExe} set ${serviceName} Start SERVICE_AUTO_START
-                    & ${nssmExe} set ${serviceName} AppDependencies PWI4
+                    & ${nssmExe} set ${serviceName} AppDependencies mast-pwi4
                     & ${nssmExe} set ${serviceName} AppStdout (Join-Path ${svcLogDir} 'stdout.log')
                     & ${nssmExe} set ${serviceName} AppStderr (Join-Path ${svcLogDir} 'stderr.log')
                     & ${nssmExe} set ${serviceName} AppRotateFiles 1
