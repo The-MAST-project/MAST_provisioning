@@ -2,6 +2,54 @@
 
 ---
 
+## [2026-07-01] Bundle the real PlateSolve3 catalog (build-host-local), retire the mock
+
+**Why:** The `planewave` provider fabricated a *mock* PlateSolve3 catalog (2026-06-11
+entry) -- a fake `UC4\Index.UC4` plus three fake `Orca\*.orc` -- purely to get
+`ps3cli --server` past its boot-time catalog validation, on the assumption that ps3cli is
+used only for autofocus analysis and never for real plate solving. Shipping the real
+catalog removes that assumption (it enables real plate solving / pointing-model builds too)
+and eliminates a stand-in that had to track ps3cli's hardcoded filenames. The blocking
+question was size: the real catalog is large, and the repo (git-lfs) is the wrong home for
+multi-GB vendor data.
+
+**What:** The provider now installs the **real** PlaneWave "PlateSolve 3 Catalog" (parts
+1+2). It is a two-file Inno Setup 5.5 payload -- `Setup_PlateSolve3_Catalog.exe` (~324 KB
+stub) plus `Setup_PlateSolve3_Catalog-1.bin` (~1.9 GB data; must sit beside the .exe with
+that exact name). Following the pattern already used for the astrometry index seed, the two
+files are **build-host-local** (`C:\MAST\ps3-catalog`), NOT committed to the repo or
+git-lfs; `build-mast.ps1` stages them into each unit's payload (beside the provider scripts)
+when the `planewave` module is included, warning loudly if they are absent. `.gitattributes`
+is unchanged -- no new `*.bin` LFS rule, because the file is never committed.
+
+`provide-planewave.ps1` runs the installer silently (`/VERYSILENT /SUPPRESSMSGBOXES
+/NORESTART /SP-`) pinned to `/DIR="C:\Users\mast\Documents\Kepler"` (the same location the
+mock used, so `PS3CLI_CATALOG` and the LocalSystem service lookup are unchanged) rather than
+the vendor default `{userdocs}\Kepler`, so the location is deterministic regardless of which
+account runs provisioning. The installer lays down ~3.6 GB: `UC4\{Index.UC4, Z000..Z179.UC4}`
+(181 files), `UC4Mag14\...` (181), and `Orca\{Orca,StarOrca,DistOrca}####.orc` (39).
+
+**Completion is judged by file presence, not exit code:** the Inno `SetupLdr` bootstrapper
+returns *before* the extracted child finishes copying (it returned exit 1 while the install
+completed fine in the background), and `Start-Process -Wait` returns early. The provider
+therefore launches the installer, then polls until the last zone file (`Z179.UC4`) exists,
+the UC4-zone/Orca file counts meet thresholds (>=180 / >=39), and no `*.tmp` remains under
+the catalog dir, with a 20-minute timeout -- the same "presence is authoritative" approach
+used for `pwi4.exe`. `verify-planewave.ps1` asserts the same real file set (index non-empty,
+>=180 zones, >=39 Orca) plus the two Machine env vars. The mock-catalog creation and its
+four-file verify check are removed.
+
+**Implications:** Any build host that runs `build-mast.ps1` with the `planewave` module must
+have the two vendor files at `C:\MAST\ps3-catalog` (download once from planewave.com); a
+missing catalog is a loud build warning and a hard verify failure on the unit, not a silent
+skip. Each unit's payload grows by ~1.9 GB (SMB pull) and the installed catalog consumes
+~3.6 GB on `C:` (separate from the RAM-disk astrometry indexes). This supersedes the
+2026-06-11 mock-catalog decision. Whether `ps3cli --server` boots against the real catalog
+end-to-end is confirmed by the presence checks; a full dev-VM `planewave` provision run is
+the remaining verification.
+
+---
+
 ## [2026-07-01] site list single source of truth + build-time drift guard
 
 **Why:** The set of known sites lived in two places -- the `*.toml` profiles under

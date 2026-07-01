@@ -586,6 +586,27 @@ if ((${Modules} -contains 'astrometry') -or (${Modules} -contains 'mast-validati
     }
 }
 
+# PlaneWave PlateSolve3 catalog (real UCAC4/Orca). Like the astrometry index seed,
+# the vendor files are far too large to keep in the repo, so they are sourced from
+# C:\MAST\ps3-catalog on the build host and staged into the payload beside the
+# planewave provider scripts. The provider (provide-planewave.ps1) runs the Inno
+# installer silently against them. Both files must be staged together and keep
+# their exact names -- the .bin is the installer's data payload and must sit beside
+# the .exe. Without them 'ps3cli --server' cannot boot (no catalog) and the
+# planewave verify FAILS, so warn loudly at build time but do not hard-block.
+${ps3CatalogSrcDir}   = 'C:\MAST\ps3-catalog'
+${ps3CatalogExeSrc}   = Join-Path ${ps3CatalogSrcDir} 'Setup_PlateSolve3_Catalog.exe'
+${ps3CatalogDataSrc}  = Join-Path ${ps3CatalogSrcDir} 'Setup_PlateSolve3_Catalog-1.bin'
+if (${Modules} -contains 'planewave') {
+    if ((Test-Path -LiteralPath ${ps3CatalogExeSrc}) -and (Test-Path -LiteralPath ${ps3CatalogDataSrc})) {
+        New-LinkOrCopy -Target ${ps3CatalogExeSrc}  -LinkPath (Join-Path ${staging} 'Setup_PlateSolve3_Catalog.exe')
+        New-LinkOrCopy -Target ${ps3CatalogDataSrc} -LinkPath (Join-Path ${staging} 'Setup_PlateSolve3_Catalog-1.bin')
+        Write-Host (" Staged PlateSolve3 catalog installer + data ({0:N1} GB)." -f ((Get-Item ${ps3CatalogDataSrc}).Length / 1GB))
+    } else {
+        Write-Warning ("PlateSolve3 catalog vendor files missing under {0} (need Setup_PlateSolve3_Catalog.exe + Setup_PlateSolve3_Catalog-1.bin); download them from planewave.com once. 'ps3cli --server' will have no catalog and the planewave verify will FAIL on the unit." -f ${ps3CatalogSrcDir})
+    }
+}
+
 # emit commands.json
 (${cmds} | Select-Object order,desc,cmd,module | ConvertTo-Json -Depth 6) | Out-File -FilePath (Join-Path ${staging} 'commands.json') -Encoding UTF8
 

@@ -50,22 +50,26 @@ else {
         [void]${issues}.Add(("ps3cli.exe is the older on-demand build ({0} bytes) at {1}; expected the special --server build (>1MB)" -f ${exe}.Length, ${exe}.FullName))
     }
 }
-# Mock PlateSolve3 catalog: 'ps3cli --server' validates these at boot (see provide-planewave.ps1).
-# Must match the file set provisioned there: UC4\Index.UC4 + three non-empty Orca\*.orc.
-${ps3CatalogPath} = 'C:\Users\mast\Documents\Kepler'
-${ps3RequiredFiles} = @(
-    @{ Path = (Join-Path ${ps3CatalogPath} 'UC4\Index.UC4');        MustHaveBytes = $false },
-    @{ Path = (Join-Path ${ps3CatalogPath} 'Orca\Orca0025.orc');     MustHaveBytes = $true  },
-    @{ Path = (Join-Path ${ps3CatalogPath} 'Orca\StarOrca0025.orc'); MustHaveBytes = $true  },
-    @{ Path = (Join-Path ${ps3CatalogPath} 'Orca\DistOrca0025.orc'); MustHaveBytes = $true  }
-)
-foreach (${rf} in ${ps3RequiredFiles}) {
-    ${fi} = Get-Item -LiteralPath ${rf}.Path -ErrorAction SilentlyContinue
-    if ($null -eq ${fi}) {
-        [void]${issues}.Add(("PS3 mock catalog file missing: {0}" -f ${rf}.Path))
-    } elseif (${rf}.MustHaveBytes -and ${fi}.Length -lt 1) {
-        [void]${issues}.Add(("PS3 mock catalog file is empty (ps3cli reads it at boot): {0}" -f ${rf}.Path))
-    }
+# Real PlateSolve3 catalog: 'ps3cli --server' validates it at boot (see provide-planewave.ps1).
+# Must match the file set the vendor installer lays down: UC4\Index.UC4 (non-empty) +
+# 180 Z###.UC4 zone files + 39 Orca\*.orc (Orca / StarOrca / DistOrca).
+${ps3CatalogPath}  = 'C:\Users\mast\Documents\Kepler'
+${ps3MinUc4Zones}  = 180
+${ps3MinOrcaFiles} = 39
+${ps3IndexFile}    = Join-Path ${ps3CatalogPath} 'UC4\Index.UC4'
+${ps3Index}        = Get-Item -LiteralPath ${ps3IndexFile} -ErrorAction SilentlyContinue
+if ($null -eq ${ps3Index}) {
+    [void]${issues}.Add(("PS3 catalog index missing: {0}" -f ${ps3IndexFile}))
+} elseif (${ps3Index}.Length -lt 1) {
+    [void]${issues}.Add(("PS3 catalog index is empty (ps3cli reads it at boot): {0}" -f ${ps3IndexFile}))
+}
+${ps3ZoneCount} = @(Get-ChildItem -LiteralPath (Join-Path ${ps3CatalogPath} 'UC4')  -Filter 'Z*.UC4' -File -ErrorAction SilentlyContinue).Count
+${ps3OrcaCount} = @(Get-ChildItem -LiteralPath (Join-Path ${ps3CatalogPath} 'Orca') -Filter '*.orc'  -File -ErrorAction SilentlyContinue).Count
+if (${ps3ZoneCount} -lt ${ps3MinUc4Zones}) {
+    [void]${issues}.Add(("PS3 catalog UC4 zone files incomplete: {0} found, expected >= {1}" -f ${ps3ZoneCount}, ${ps3MinUc4Zones}))
+}
+if (${ps3OrcaCount} -lt ${ps3MinOrcaFiles}) {
+    [void]${issues}.Add(("PS3 catalog Orca files incomplete: {0} found, expected >= {1}" -f ${ps3OrcaCount}, ${ps3MinOrcaFiles}))
 }
 # The mast-unit service runs as LocalSystem, so these Machine env overrides are what make
 # ps3cli.exe and the catalog discoverable; without them app.py's home-based lookup fails.

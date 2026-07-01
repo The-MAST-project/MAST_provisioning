@@ -68,6 +68,25 @@ If you see pointer stubs, your LFS credentials are not set up. Configure them
 
 ---
 
+## Step 1b - Build-host-local large assets (not in git)
+
+A few payloads are too large to keep in the repo (even via LFS) and instead live
+on the build host under `C:\MAST\`. `build-mast.ps1` stages them into each unit's
+payload when the relevant module is enabled, and warns loudly (does not hard-block
+the build) if they are missing. Populate these once per build host:
+
+| Path | Needed by module | How to obtain |
+|------|------------------|---------------|
+| `C:\MAST\mast-indexes\` | `imdisk` (astrometry index seed) | `build\extract-index-seed.ps1` (once, from the legacy index image) |
+| `C:\MAST\full-frame.fits` | `astrometry`, `mast-validation` (smoke solve input) | copy the reference solve FITS |
+| `C:\MAST\ps3-catalog\Setup_PlateSolve3_Catalog.exe` + `Setup_PlateSolve3_Catalog-1.bin` | `planewave` (real PlateSolve3 catalog, ~1.9 GB) | download both parts from planewave.com (["installer part 1"](https://planewave.com/download/platesolve-3-catalog-installer-part-1-of-2-2/) + ["data part 2"](https://planewave.com/download/platesolve-3-catalog-data-part-2-of-2-2/)); keep the exact filenames so the `.bin` sits beside the `.exe` |
+
+Without the PlateSolve3 catalog the `planewave` provider throws (no catalog to
+install) and `ps3cli --server` cannot boot; without the index seed / smoke FITS the
+astrometry stages fail on the unit.
+
+---
+
 ## Step 2 - Populate vault/
 
 `vault/` is gitignored. You must populate it before any provisioning can run.

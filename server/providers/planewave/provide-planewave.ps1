@@ -173,29 +173,84 @@ try {
         throw "PS3 CLI directory not created after extraction at ${ps3cliDestPath}"
     }
 
-    # --- Mock PlateSolve3 star catalog (UC4/Orca) so 'ps3cli --server' will boot ---
-    # ps3cli is used by MAST_unit ONLY for autofocus analysis (begin_analyze_focus on
-    # port 8998), NOT for plate solving. But 'ps3cli --server' validates a star catalog
-    # at startup and exits (code 2, "Catalog files not found") if it is absent. The real
-    # UCAC4/Orca catalog is many GB and we do not need it for focus analysis, so we mock
-    # just the minimum file set the startup validation checks for. Determined empirically
-    # against ps3cli-2024-09-10: it requires UC4\Index.UC4 to exist and the three
-    # Orca\*.orc files to exist AND be non-empty; the 180 Z###.UC4 zone files are only
-    # read during an actual solve, so they are intentionally omitted.
+    # --- Real PlaneWave PlateSolve3 star catalog (UCAC4/Orca) ------------------
+    # 'ps3cli --server' validates a PlateSolve3 catalog at startup and exits
+    # ("Catalog files not found") if it is absent. We ship the real vendor
+    # catalog (PlaneWave "PlateSolve 3 Catalog", parts 1+2), which supports both
+    # autofocus analysis and real plate solving. It is a two-file Inno Setup
+    # payload that must be staged together (the .bin sits beside the .exe with
+    # this exact name):
+    #   Setup_PlateSolve3_Catalog.exe   (~324 KB installer stub)
+    #   Setup_PlateSolve3_Catalog-1.bin (~1.9 GB catalog data)
+    # These are too large to keep in the repo, so -- like the astrometry index
+    # seed -- they are build-host-local (C:\MAST\ps3-catalog) and build-mast.ps1
+    # stages them into the payload beside this script (see the planewave block in
+    # build-mast.ps1). The installer lays down ~3.6 GB: UC4\{Index.UC4,
+    # Z000..Z179.UC4}, UC4Mag14\..., and Orca\{Orca,StarOrca,DistOrca}####.orc.
     #
-    # These exact filenames are hardcoded in this ps3cli build; if the ps3cli.zip asset
-    # is ever updated, re-derive them (extract UTF-16LE strings from ps3cli.exe).
-    ${ps3CatalogPath} = "C:\Users\mast\Documents\Kepler"
-    ${ps3Uc4Dir}      = Join-Path ${ps3CatalogPath} 'UC4'
-    ${ps3OrcaDir}     = Join-Path ${ps3CatalogPath} 'Orca'
-    Write-MastPwLog ("Creating mock PlateSolve3 catalog at {0}" -f ${ps3CatalogPath})
-    New-Item -ItemType Directory -Path ${ps3Uc4Dir}  -Force | Out-Null
-    New-Item -ItemType Directory -Path ${ps3OrcaDir} -Force | Out-Null
-    ${ps3MockBanner} = "MAST MOCK PlateSolve3 catalog file - placeholder to satisfy ps3cli --server bootup validation. NOT real catalog data. ps3cli is used only for autofocus analysis, not plate solving."
-    ${ps3MockBytes}  = [System.Text.Encoding]::ASCII.GetBytes(${ps3MockBanner})
-    [System.IO.File]::WriteAllBytes((Join-Path ${ps3Uc4Dir} 'Index.UC4'), ${ps3MockBytes})
-    foreach (${orcaName} in @('Orca0025.orc', 'StarOrca0025.orc', 'DistOrca0025.orc')) {
-        [System.IO.File]::WriteAllBytes((Join-Path ${ps3OrcaDir} ${orcaName}), ${ps3MockBytes})
+    # It installs to {userdocs}\Kepler by default; we pin /DIR so the location is
+    # deterministic regardless of which account runs provisioning, and point
+    # PS3CLI_CATALOG there (the mast-unit service runs as LocalSystem, so its
+    # home-based lookup would otherwise miss it).
+    ${ps3CatalogPath}      = "C:\Users\mast\Documents\Kepler"
+    ${ps3CatalogInstaller} = Join-Path ${AssetsRoot} "Setup_PlateSolve3_Catalog.exe"
+    ${ps3CatalogData}      = Join-Path ${AssetsRoot} "Setup_PlateSolve3_Catalog-1.bin"
+    ${ps3IndexFile}        = Join-Path ${ps3CatalogPath} 'UC4\Index.UC4'
+    ${ps3LastZone}         = Join-Path ${ps3CatalogPath} 'UC4\Z179.UC4'
+    ${ps3MinUc4Zones}      = 180   # Z000..Z179
+    ${ps3MinOrcaFiles}     = 39    # 13 each of Orca / StarOrca / DistOrca
+
+    if ((Test-Path -LiteralPath ${ps3IndexFile}) -and (Test-Path -LiteralPath ${ps3LastZone})) {
+        Write-MastPwLog ("PlateSolve3 catalog already present at {0}; skipping installer (idempotent re-run)." -f ${ps3CatalogPath})
+    } else {
+        if (-not (Test-Path -LiteralPath ${ps3CatalogInstaller})) {
+            throw ("PlateSolve3 catalog installer not found at {0}. build-mast.ps1 must stage it from C:\MAST\ps3-catalog on the build host." -f ${ps3CatalogInstaller})
+        }
+        if (-not (Test-Path -LiteralPath ${ps3CatalogData})) {
+            throw ("PlateSolve3 catalog data not found at {0} (Setup_PlateSolve3_Catalog-1.bin must sit beside the installer with this exact name)." -f ${ps3CatalogData})
+        }
+        ${ps3InnoLog} = Join-Path ${logDir} "ps3-catalog-inno.log"
+        Write-MastPwLog ("Installing real PlateSolve3 catalog to {0} (Inno silent; ~3.6 GB, several minutes)." -f ${ps3CatalogPath})
+        ${ps3Args} = @(
+            '/VERYSILENT',
+            '/SUPPRESSMSGBOXES',
+            '/NORESTART',
+            '/SP-',
+            ('/DIR="{0}"' -f ${ps3CatalogPath}),
+            ('/LOG="{0}"' -f ${ps3InnoLog})
+        )
+        # The Inno SetupLdr bootstrapper returns BEFORE the extracted child setup
+        # finishes copying (observed exit code 1 while the install completed
+        # successfully in the background), so its exit code is NOT a reliable
+        # success signal and -Wait returns early. Launch it, then poll until the
+        # catalog is fully materialised: the last zone file exists, the expected
+        # file counts are met, and no *.tmp remains under the catalog dir. File
+        # presence is the authoritative success criterion (same approach as the
+        # pwi4.exe install above).
+        Start-Process -FilePath ${ps3CatalogInstaller} -ArgumentList ${ps3Args} -NoNewWindow | Out-Null
+        ${ps3Deadline} = (Get-Date).AddMinutes(20)
+        ${ps3Complete} = $false
+        while ((Get-Date) -lt ${ps3Deadline}) {
+            Start-Sleep -Seconds 10
+            if (-not (Test-Path -LiteralPath ${ps3LastZone})) { continue }
+            ${ps3Tmp} = @(Get-ChildItem -LiteralPath ${ps3CatalogPath} -Recurse -Filter '*.tmp' -File -ErrorAction SilentlyContinue)
+            if (${ps3Tmp}.Count -ne 0) { continue }
+            ${ps3ZoneNow} = @(Get-ChildItem -LiteralPath (Join-Path ${ps3CatalogPath} 'UC4')  -Filter 'Z*.UC4' -File -ErrorAction SilentlyContinue).Count
+            ${ps3OrcaNow} = @(Get-ChildItem -LiteralPath (Join-Path ${ps3CatalogPath} 'Orca') -Filter '*.orc'  -File -ErrorAction SilentlyContinue).Count
+            if (${ps3ZoneNow} -ge ${ps3MinUc4Zones} -and ${ps3OrcaNow} -ge ${ps3MinOrcaFiles}) { ${ps3Complete} = $true; break }
+        }
+        if (-not ${ps3Complete}) {
+            throw ("PlateSolve3 catalog install did not complete within 20 min (see Inno log: {0})." -f ${ps3InnoLog})
+        }
+        Write-MastPwLog "PlateSolve3 catalog install completed."
+    }
+
+    # Sanity-check the installed catalog before trusting it.
+    ${ps3Uc4Count}  = @(Get-ChildItem -LiteralPath (Join-Path ${ps3CatalogPath} 'UC4')  -Filter 'Z*.UC4' -File -ErrorAction SilentlyContinue).Count
+    ${ps3OrcaCount} = @(Get-ChildItem -LiteralPath (Join-Path ${ps3CatalogPath} 'Orca') -Filter '*.orc'  -File -ErrorAction SilentlyContinue).Count
+    Write-MastPwLog ("PlateSolve3 catalog: {0} UC4 zone files, {1} Orca files at {2}" -f ${ps3Uc4Count}, ${ps3OrcaCount}, ${ps3CatalogPath})
+    if (${ps3Uc4Count} -lt ${ps3MinUc4Zones} -or ${ps3OrcaCount} -lt ${ps3MinOrcaFiles}) {
+        throw ("PlateSolve3 catalog incomplete (UC4 zones={0} expected>={1}, Orca={2} expected>={3})." -f ${ps3Uc4Count}, ${ps3MinUc4Zones}, ${ps3OrcaCount}, ${ps3MinOrcaFiles})
     }
 
     # The mast-unit service runs as LocalSystem (NSSM install with no ObjectName), so the
