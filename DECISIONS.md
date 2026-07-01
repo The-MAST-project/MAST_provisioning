@@ -2,6 +2,50 @@
 
 ---
 
+## [2026-07-01] site list single source of truth + build-time drift guard
+
+**Why:** The set of known sites lived in two places -- the `*.toml` profiles under
+`server/providers/config-bootstrap/sites/` (consumed by `build-mast.ps1 -Site` and the
+`config-bootstrap` provider) and a hardcoded `$knownSites = @('ns','wis')` in
+`client/bootstrap-winrm.ps1`. The bootstrap script runs offline on a bare unit (USB/ISO)
+before the prov server is reachable, so it cannot enumerate the `sites/` directory at
+runtime and genuinely must embed the list for console-time operator validation. Two
+hand-maintained copies drift.
+
+**What:** Made `sites/*.toml` the single source of truth. Added `Get-ConfiguredSites`
+to `server/lib/mast-modules.psm1` (enumerates the profile base names, next to the
+existing `Get-AllProviderModules`), and `build-mast.ps1` now (a) uses it for the `-Site`
+validation error's "available sites" list instead of a second inline `Get-ChildItem`, and
+(b) runs `Assert-BootstrapKnownSitesInSync` as a build preflight that parses the literal
+`$knownSites` assignment out of `bootstrap-winrm.ps1` and FAILS THE BUILD if it diverges
+from `sites/`. The offline copy stays, but can no longer silently drift.
+
+**Implications:** Adding a site is: drop `sites/<code>.toml` AND add `<code>` to
+`$knownSites`; the build fails loudly until they match. The guard parses the assignment
+(rather than dot-sourcing the admin-only, side-effecting bootstrap script). If the
+`$knownSites` literal is ever reformatted beyond a single `@(...)` line of quoted tokens,
+update the regex in `Assert-BootstrapKnownSitesInSync`.
+
+## [2026-07-01] web proxy stays a global default, not site-driven
+
+**Why:** The provisioning backlog (MAST_provisioning#5) called for consuming the selected
+site to drive site-specific defaults, naming the web proxy as the flagship case ("Weizmann
+proxy set unconditionally -> make it site-driven"). On review, Neot Smadar (`ns`) uses the
+**same** Weizmann `bcproxy` as the Weizmann site (`wis`), so the unconditional proxy is
+already correct for both known sites -- not a bug.
+
+**What:** Left the proxy provider and the order-9000 finalize step (see 2026-06-25) as a
+single global default. Did NOT plumb proxy config through `sites/<site>.toml`. The proxy's
+two axes remain as they were: the site-independent Weizmann proxy value, and the operator's
+per-run reachability override `-ProxyMode {weizmann,direct}`.
+
+**Implications:** Wiring an identical value per-site would be churn with no behavior change,
+against the "smallest change / no abstraction beyond need" principle. If a future site needs
+a different proxy (or the `no_proxy` bypass CIDRs, which are Weizmann-network-specific, ever
+differ per site), that is the trigger to move proxy config into the site profile following
+the `timesync`/`config-bootstrap` pattern -- build the shipped state, do not pre-propagate a
+future need.
+
 ## [2026-06-30] instrument calibration: interactive menu + desktop shortcut
 
 **Why:** The Stage-2 binder needs to be operator-friendly for the field (new-unit bring-up): view current

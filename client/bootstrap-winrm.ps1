@@ -509,8 +509,15 @@ try {
     # Site selection -- drives the provisioning config profile (config-bootstrap).
     # Like the hostname, it is the operator's explicit choice, NEVER derived from the
     # hostname. Persisted to C:\ProgramData\MAST\site.txt so onboard-mast-unit.ps1 can
-    # record it in the prov server's unit-registry.json. Keep $knownSites in sync with
-    # server\providers\config-bootstrap\sites\*.toml on the prov server.
+    # record it in the prov server's unit-registry.json.
+    #
+    # SINGLE SOURCE OF TRUTH for the site list is server\providers\config-bootstrap\
+    # sites\*.toml. This script runs offline on a bare unit (USB/ISO) before the prov
+    # server is reachable, so it cannot enumerate that directory and must embed the
+    # list below for early operator validation at the console. build-mast.ps1 runs
+    # Assert-BootstrapKnownSitesInSync on the prov server (where both are visible) and
+    # FAILS THE BUILD if this list drifts from sites\*.toml -- so keep the two in sync
+    # (add a site by dropping sites\<code>.toml AND adding <code> here).
     $knownSites = @('ns', 'wis')
     if ([string]::IsNullOrWhiteSpace($Site)) {
         if ($NonInteractive) {

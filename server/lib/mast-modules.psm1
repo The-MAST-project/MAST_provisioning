@@ -53,4 +53,33 @@ function Get-AllProviderModules {
   return (${entries} | Sort-Object Order | ForEach-Object { $_.Name })
 }
 
-Export-ModuleMember -Function @('Get-AllProviderModules')
+# ---------------------------------------------------------------------------
+# Site discovery (no admin required)
+# ---------------------------------------------------------------------------
+# Scan server/providers/config-bootstrap/sites/*.toml and return the site codes
+# (file base names, lower-cased, sorted). This is the canonical "known sites"
+# set: adding sites/<code>.toml is the only step needed to define a new site.
+# build-mast.ps1 validates -Site against it, and uses it to guard that the
+# offline bootstrap script's embedded $knownSites list has not drifted.
+
+function Get-ConfiguredSites {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)][string]${ProvidersRoot}
+  )
+  ${sitesDir} = Join-Path ${ProvidersRoot} 'config-bootstrap\sites'
+  if (-not (Test-Path ${sitesDir})) {
+    throw "Site profiles directory not found: ${sitesDir}"
+  }
+  ${sites} = @(
+    Get-ChildItem -LiteralPath ${sitesDir} -Filter '*.toml' -File -ErrorAction SilentlyContinue |
+      ForEach-Object { ${_}.BaseName.ToLowerInvariant() } |
+      Sort-Object
+  )
+  if (${sites}.Count -eq 0) {
+    throw "No site profiles (*.toml) found under ${sitesDir}."
+  }
+  return ${sites}
+}
+
+Export-ModuleMember -Function @('Get-AllProviderModules', 'Get-ConfiguredSites')

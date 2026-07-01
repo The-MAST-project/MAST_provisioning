@@ -150,6 +150,42 @@ renumbering.
 
 ---
 
+## Sites and per-site configuration
+
+A **site** is a physical MAST location (`wis` = Weizmann dev/VM, `ns` = Neot Smadar
+production). The operator picks the site explicitly at bootstrap -- it is **never**
+derived from the hostname.
+
+**Single source of truth for the site list:** the `*.toml` profiles under
+`server/providers/config-bootstrap/sites/`. The file base name is the site code, and its
+contents are that site's per-machine bootstrap config (site/project/controller_host/
+domain/`[location]`). To add a site, drop `sites/<code>.toml` **and** add `<code>` to the
+`$knownSites` list in `client/bootstrap-winrm.ps1` (see below).
+
+**How the selection flows:** `bootstrap-winrm.ps1` (offline, on the bare unit) records the
+chosen site to `C:\ProgramData\MAST\site.txt` -> `onboard-mast-unit.ps1` reads it and writes
+it into the unit's `unit-registry.json` entry -> `check-and-provision.ps1` passes it to
+`build-mast.ps1 -Site <code>`, which stages `sites/<code>.toml` for the `config-bootstrap`
+provider to deploy as `C:\WIS\unit.toml`.
+
+**Two site lists, kept in sync automatically:** `bootstrap-winrm.ps1` runs offline before
+the prov server is reachable, so it cannot read `sites/` and embeds a `$knownSites` list for
+console-time validation. `build-mast.ps1` runs `Assert-BootstrapKnownSitesInSync` on every
+build (on the prov server, where both are visible) and **fails the build** if `$knownSites`
+drifts from `sites/*.toml`. The shared enumerator is `Get-ConfiguredSites` in
+`server/lib/mast-modules.psm1`.
+
+**What is site-driven vs global:**
+
+| Value | Source | Site-driven? |
+|-------|--------|--------------|
+| Machine identity + config-DB connection + `[location]` | `sites/<site>.toml` -> `C:\WIS\unit.toml` (`config-bootstrap`) | yes |
+| RPi NTP time peer (tier 1) | `build-mast.ps1 -Site` injects `-RpiNtp` per site | yes |
+| Instrument-profile PWI4 site location | read from deployed `C:\WIS\unit.toml [location]` | yes |
+| Web proxy (Weizmann `bcproxy`) + `no_proxy` bypass | global default in the `proxy` provider | no -- both sites use the same Weizmann proxy; the per-run `weizmann`/`direct` axis is operator-chosen reachability, not site (see DECISIONS 2026-07-01) |
+
+---
+
 ## Production path (physical unit)
 
 This is the only path operators run by hand. Everything else is autonomous.

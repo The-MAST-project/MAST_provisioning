@@ -104,6 +104,12 @@ ${vault} = Join-Path ${Top} 'vault'
 ${serverLib}   = Join-Path ${serverRoot} 'lib\provisioning.psm1'
 ${providersRoot} = Join-Path ${serverRoot} 'providers'
 if (-not (Test-Path ${serverLib})) { throw "Missing provisioning.psm1 at ${serverLib}" }
+
+# Provider/site discovery lib (no admin required). Imported unconditionally so
+# both the site-list guard below and the -Modules default path use one import.
+${modulesLib} = Join-Path ${serverRoot} 'lib\mast-modules.psm1'
+if (-not (Test-Path ${modulesLib})) { throw "Missing mast-modules.psm1 at ${modulesLib}" }
+Import-Module ${modulesLib} -Force -DisableNameChecking
 [string]${LicensesRoot} = (Join-Path ${Top} 'vault\nomachine-licenses')
 ${licensesVault} = (Join-Path ${vault} 'nomachine-licenses')
 
@@ -115,15 +121,58 @@ function Read-ModuleManifest {
     return Get-Content $path -Raw | ConvertFrom-Json
 }
 
+# Guard the single source of truth for the site list. The authoritative set of
+# sites is the *.toml profiles under config-bootstrap/sites/. The offline
+# bootstrap script (client/bootstrap-winrm.ps1) cannot read that directory -- it
+# runs on a bare unit from USB/ISO before the prov server is reachable -- so it
+# embeds a $knownSites list for early operator validation at the console. This
+# guard runs on the prov server (where both are visible) and fails the build if
+# the embedded list has drifted from sites/, so the offline copy can never
+# silently diverge. Parses the literal assignment rather than dot-sourcing the
+# script (which is admin-only and has side effects).
+function Assert-BootstrapKnownSitesInSync {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)][string]${ClientRoot},
+    [Parameter(Mandatory)][string]${ProvidersRoot}
+  )
+  ${bootstrapScript} = Join-Path ${ClientRoot} 'bootstrap-winrm.ps1'
+  if (-not (Test-Path -LiteralPath ${bootstrapScript})) {
+    throw ('Cannot verify site-list sync: bootstrap script not found at {0}' -f ${bootstrapScript})
+  }
+  ${configured} = @(Get-ConfiguredSites -ProvidersRoot ${ProvidersRoot})
+
+  ${text} = Get-Content -LiteralPath ${bootstrapScript} -Raw -Encoding UTF8
+  ${m} = [regex]::Match(${text}, '\$knownSites\s*=\s*@\(([^)]*)\)')
+  if (-not ${m}.Success) {
+    throw ('Cannot find a ''$knownSites = @(...)'' assignment in {0} to verify against sites/.' -f ${bootstrapScript})
+  }
+  ${embedded} = @(
+    [regex]::Matches(${m}.Groups[1].Value, "'([^']*)'") |
+      ForEach-Object { $_.Groups[1].Value.ToLowerInvariant() } |
+      Sort-Object
+  )
+
+  ${missing} = @(${configured} | Where-Object { ${embedded} -notcontains $_ })
+  ${extra}   = @(${embedded}   | Where-Object { ${configured} -notcontains $_ })
+  if (${missing}.Count -gt 0 -or ${extra}.Count -gt 0) {
+    ${msg} = 'bootstrap-winrm.ps1 $knownSites is out of sync with config-bootstrap/sites/.'
+    if (${missing}.Count -gt 0) { ${msg} += (' Missing from $knownSites: {0}.' -f (${missing} -join ', ')) }
+    if (${extra}.Count -gt 0)   { ${msg} += (' In $knownSites but no matching sites/*.toml: {0}.' -f (${extra} -join ', ')) }
+    ${msg} += (' Configured sites: {0}. Update the $knownSites list in {1} to match.' -f (${configured} -join ', '), ${bootstrapScript})
+    throw ${msg}
+  }
+  Write-Host ('[build-mast] Site list in sync: {0} (bootstrap-winrm.ps1 $knownSites matches config-bootstrap/sites/).' -f (${configured} -join ', '))
+}
+
+Assert-BootstrapKnownSitesInSync -ClientRoot ${clientRoot} -ProvidersRoot ${providersRoot}
+
 # If no -Modules were passed (or the normalization above collapsed to empty),
 # default to the providers discovered on disk. Get-AllProviderModules lives in
 # server/lib/mast-modules.psm1 (no admin required) so build-mast can call it
 # even when running non-elevated; check-and-provision.ps1 imports the same
 # module so both use the single source of truth.
 if ($null -eq ${Modules} -or ${Modules}.Count -eq 0) {
-    ${modulesLib} = Join-Path ${serverRoot} 'lib\mast-modules.psm1'
-    if (-not (Test-Path ${modulesLib})) { throw "Missing mast-modules.psm1 at ${modulesLib}" }
-    Import-Module ${modulesLib} -Force -DisableNameChecking
     ${Modules} = Get-AllProviderModules -ProvidersRoot ${providersRoot}
     Write-Host ("Modules defaulted to {0} providers discovered under {1}." -f ${Modules}.Count, ${providersRoot})
 }
@@ -257,7 +306,7 @@ function Generate-Commands([string[]]${Mods}) {
         # helpful message if that site has no profile.
         ${siteProfile} = Join-Path ${providersRoot} ('config-bootstrap\sites\{0}.toml' -f ${Site})
         if (-not (Test-Path -LiteralPath ${siteProfile})) {
-          ${avail} = (Get-ChildItem (Join-Path ${providersRoot} 'config-bootstrap\sites') -Filter '*.toml' -ErrorAction SilentlyContinue | ForEach-Object { ${_}.BaseName }) -join ', '
+          ${avail} = (Get-ConfiguredSites -ProvidersRoot ${providersRoot}) -join ', '
           throw ("-Site '{0}' has no profile at {1}. Available sites: {2}" -f ${Site}, ${siteProfile}, ${avail})
         }
         ${cmd} = ${cmd} + (" -Site {0}" -f ${Site})
