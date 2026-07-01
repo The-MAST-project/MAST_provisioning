@@ -302,3 +302,7 @@ This applies even when an edit you just made feels "finished" and a commit looks
 When asked to commit/push, do exactly the scope requested. Do not fold in unrelated working-tree changes "while you're there", do not amend prior commits the user did not name, and do not push to remotes the user did not name.
 
 **Why:** git history and remote state are the user's review surface. Premature commits force them to undo or amend; premature pushes can broadcast in-progress work, trigger CI, or move shared refs in ways collaborators see. The cost of a wasted commit/push is asymmetric -- doing it later when asked is cheap, undoing it after the fact is expensive.
+
+## Project-wide LLM guidance
+
+Cross-repo LLM guidance for MAST lives in the **`mast-claude-config`** repo (`github.com/The-MAST-project/mast-claude-config`) -- the overarching home for project-wide instructions (shared coding standards, team working-style, global environment facts), deployed into `~/.claude/` by its `setup.sh`. Keep repo-specific guidance in this file; put genuinely cross-repo guidance there. See `mast-claude-config/CLAUDE.md` for what belongs where.
