@@ -2,6 +2,31 @@
 
 ---
 
+## [2026-07-02] Jupyter Notebook: contained venv under C:\MAST\jupyter
+
+**Why:** Backlog item (MAST_provisioning#5, Ofer's request) to install Jupyter Notebook. The
+requirement was to keep it in a well-defined place, add a desktop shortcut, and keep it contained so
+it does not litter the machine/user profile.
+
+**What:** New `jupyter` provider (order 2050). It creates a **dedicated venv** at
+`C:\MAST\jupyter\.venv` (mirroring the mast provider: `python -m virtualenv`, fallback stdlib `venv`)
+and pip-installs `notebook>=7,<8` + `ipykernel` **online via the proxy** -- the same mechanism the
+mast provider already uses for repo requirements (pip honours the proxy; no WinINet involvement). A
+Python kernel is registered with `ipykernel install --sys-prefix` so the kernelspec lives inside the
+venv. A `launch-jupyter.cmd` (deployed to `C:\MAST\jupyter`) sets `JUPYTER_DATA_DIR` /
+`JUPYTER_CONFIG_DIR` / `JUPYTER_RUNTIME_DIR` under `C:\MAST\jupyter` and cwd to `...\notebooks`, so all
+state stays there rather than in `%APPDATA%\jupyter` / `%USERPROFILE%\.jupyter`. The
+`desktop-shortcuts` provider adds a Public-desktop "Jupyter Notebook" shortcut to the launcher.
+`verify-jupyter.ps1` checks the venv, `jupyter-notebook.exe`, the launcher, and the in-venv
+kernelspec. Native calls (pip/python) run via a bounded-wait helper so a stalled pip through the
+proxy cannot hang the run.
+
+**Implications:** Everything Jupyter lives under `C:\MAST\jupyter` (venv + data/config/runtime +
+notebooks) -- uninstall is `Remove-Item C:\MAST\jupyter` + the shortcut. Installs into that venv as
+the `mast` account (provisioning runs as mast). Bump the version by re-running with `-Force` or
+widening the pin. `✱` end-to-end pip-install-through-proxy is verify-on-next-real-provision (not run
+on mast02, which would have meant a heavy download on a production unit).
+
 ## [2026-07-02] VS Code: bundle the Python extensions offline as .vsix
 
 **Why:** Backlog item (MAST_provisioning#5) "add the debugpy extension" -- the `vscode` provider

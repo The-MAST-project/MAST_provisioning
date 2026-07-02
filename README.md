@@ -139,12 +139,13 @@ renumbering.
 |  1850 | `instrument-profiles` | Lay down PWI4 `.cfg` + PHD2 `.reg` **templates** (site location from `C:\WIS\unit.toml`; fleet constants verbatim) and apply into the `mast` profile on first logon. Per-unit device->COM binding is the post-hardware `tools/calibrate-instruments.ps1` step, not this provider. |
 |  1900 | `vscode` | Visual Studio Code + bundled Python extensions (`ms-python.python`, `ms-python.debugpy`) installed offline from staged `.vsix` |
 |  2000 | `sysinternals` | Sysinternals Suite |
+|  2050 | `jupyter` | Jupyter Notebook in a contained venv under `C:\MAST\jupyter` (state kept there; launcher + desktop shortcut) |
 |  2100 | `chrome` | Google Chrome (offline Enterprise MSI) |
 |  2200 | `mast` | Clone MAST repos, create per-repo virtualenvs, install requirements |
 |  2400 | `windows-exporter-monitoring` | Prometheus windows_exporter service (TCP 9182) |
 |  2500 | `diagnostics` | Post-smoke runtime checks (ASCOM, app launch, PHD2 RPC, heartbeat) |
 |  2600 | `ds9` | SAOImage DS9 8.7 imaging / data visualization |
-|  2700 | `desktop-shortcuts` | Operator shortcuts on the Public desktop (FastAPI control, weather page, DS9, MAST logs, **instrument calibration**) |
+|  2700 | `desktop-shortcuts` | Operator shortcuts on the Public desktop (FastAPI control, weather page, DS9, MAST logs, **instrument calibration**, **Jupyter Notebook**) |
 |  2900 | `mast-validation` | End-to-end plate-solve validation through production code paths |
 |  9500 | `mast-services-finalize` | Set the MAST services (`mast-unit`, `mast-pwi4`, `mast-pwshutter`, `mast-phd2`) to **manual** start and stop them, as the last step after verification |
 |  9999 | `reboot` | Detect pending-reboot state; drop a flag for the orchestrator |

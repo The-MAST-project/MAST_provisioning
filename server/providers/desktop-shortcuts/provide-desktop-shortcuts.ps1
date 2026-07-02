@@ -10,7 +10,8 @@ param(
     [string]${FastApiUrl} = 'http://localhost:8000/',
     [string]${Ds9Exe}     = 'C:\Program Files\SAOImageDS9\ds9.exe',
     [string]${LogsDir}    = 'C:\MAST\logs',
-    [string]${CalibToolPath} = 'C:\ProgramData\MAST\instrument-profiles\calibrate-instruments.ps1'
+    [string]${CalibToolPath} = 'C:\ProgramData\MAST\instrument-profiles\calibrate-instruments.ps1',
+    [string]${JupyterLauncher} = 'C:\MAST\jupyter\launch-jupyter.cmd'
 )
 
 ${ErrorActionPreference} = 'Stop'
@@ -97,5 +98,17 @@ ${calibArgs} = ('-NoExit -ExecutionPolicy Bypass -NoProfile -File "{0}" -Interac
 New-MastLnkShortcut -Path ${calibPath} -Target ${psExe} -Arguments ${calibArgs} -WorkDir 'C:\ProgramData\MAST\instrument-profiles' -Desc 'Interactive per-unit PWI4 instrument COM calibration'
 if (Test-Path -LiteralPath ${CalibToolPath}) { Write-ShortcutLog ("Calibration shortcut -> {0}" -f ${CalibToolPath}) }
 else { Write-ShortcutLog ("[WARN] Calibration tool not yet at {0} (instrument-profiles not run?); shortcut created, works once it is." -f ${CalibToolPath}) }
+
+# 6) Jupyter Notebook launcher (deployed by the jupyter provider, order 2050 < this
+# one). The launcher keeps all Jupyter state under C:\MAST\jupyter so it does not
+# litter the profile; the shortcut opens the notebook server + browser.
+${jupyterPath} = Join-Path ${desktop} 'Jupyter Notebook.lnk'
+${jupyterWorkDir} = Split-Path -Parent ${JupyterLauncher}
+${jupyterNotebooks} = Join-Path (Split-Path -Parent ${JupyterLauncher}) 'notebooks'
+if (Test-Path -LiteralPath ${jupyterNotebooks}) { ${jupyterWorkDir} = ${jupyterNotebooks} }
+New-MastLnkShortcut -Path ${jupyterPath} -Target ${JupyterLauncher} -WorkDir ${jupyterWorkDir} -Desc 'Jupyter Notebook (MAST; state kept under C:\MAST\jupyter)'
+if (Test-Path -LiteralPath ${JupyterLauncher}) { Write-ShortcutLog ("Jupyter shortcut -> {0}" -f ${JupyterLauncher}) }
+else { Write-ShortcutLog ("[WARN] Jupyter launcher not yet at {0} (jupyter provider not run?); shortcut created, works once it is." -f ${JupyterLauncher}) }
+
 Write-ShortcutLog 'Desktop shortcuts provisioning complete.'
 exit 0
