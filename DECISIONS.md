@@ -2,6 +2,39 @@
 
 ---
 
+## [2026-07-01] Default browser: REJECTED -- do not automate (Win10/11 UserChoice hash)
+
+**Why:** Backlog item "make Chrome the default browser" (MAST_provisioning#5) assumed we could
+set it machine-wide via `HKLM\Software\Classes` (the DS9 `.fits` pattern), because the autologin
+`mast` profile supposedly had no per-user default yet. Investigation invalidated that premise.
+
+**What:** Confirmed on mast02 (probed as the real `mast` account) that the `mast` profile
+**already has a per-user `UserChoice`** for http/https/.htm/.html (Windows auto-seeds it to IE/Edge
+at first logon). Bootstrap creates the `mast` user + reboots, so by provisioning time `mast` exists
+and is logged in -- there is no blank-slate window. Windows' `UserChoice` is sealed by an
+anti-hijacking **hash** (bound to the user SID, undocumented, only the shell can produce it via the
+Settings UI), so: (1) the `HKLM` fallback is overridden and cannot make Chrome default; (2) SYSTEM-
+context providers cannot write mast's HKCU; (3) any silent set requires **forging** the hash with a
+reverse-engineered tool (SetUserFTA / PS port) that can break on any Windows update. The full
+mechanism, the evidence, and all options (A forge-hash, B delete-UserChoice+fallback, C DISM/GP XML
+at profile-creation, D attended operator prompt) are documented in
+[`docs/default-browser-analysis.md`](docs/default-browser-analysis.md). No provisioning code was
+changed (the speculative HKLM edit was reverted).
+
+**Implications:** On Win10/11 a default browser cannot be set silently once the profile exists,
+without depending on an undocumented forged hash. **Decision (confirmed 2026-07-02): REJECTED** --
+provisioning does not set the default browser; the OS default stands and operators use Chrome via
+shortcuts (and may set it default themselves). Do not reintroduce the `HKLM\Software\Classes`
+approach for the browser. If a Chrome default is ever truly wanted, the only supported path is
+**Option D** -- an attended AtLogon prompt (`chrome.exe --make-default-browser` opens the Settings
+page) plus a "Set Chrome as Default" shortcut -- recorded as an operator step, not automation.
+Reframe corollary (also in the analysis doc): the
+`HKLM\Software\Classes` default pattern is valid only for types with **no** `UserChoice` (e.g. DS9
+`.fits`), not for the browser; the instrument-profiles AtLogon-as-mast task remains correct because
+providers run in SYSTEM context.
+
+---
+
 ## [2026-07-01] Services rework (part 1): `mast-` service naming + manual start
 
 **Why:** The MAST NSSM services carried vendor names (`PWI4`, `PWShutter`, `PHD2`) that were
