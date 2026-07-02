@@ -2,6 +2,35 @@
 
 ---
 
+## [2026-07-02] Fleet drift report (MVP): cross-unit version read
+
+**Why:** MAST01/03/04 are about to join the fleet and drift between units is expected. The full
+version-tracking design in `autonomous-provisioning-requirements.md` (computed manifests, tiered
+L0-L3 self-validation, `/status` endpoints, Prometheus) is large; we wanted an MVP now that answers
+"what version is on each unit and where do they differ?"
+
+**What:** New read-only tool `tools/fleet-drift-report.py`. It gathers each unit's
+`C:\MAST\installed-manifest.json` (already written by `execute-mast-provisioning.ps1`: `payload_hash`,
+`git_sha`, `module_versions`) over **SSH** (reusing `vm/vm_lib.py` `SshSession` + `load_creds`), and
+prints a per-unit summary + a module-version matrix flagging divergences from the baseline
+(majority, or a `--build-manifest` reference). It writes `--json`/`--csv` artifacts and exits 0/2/1
+(in-sync / drift / tool-error). A `--from-json` path re-renders a saved gather with no network (also
+how the comparison logic is tested offline). `vm_lib` (pywinrm/paramiko) is imported lazily so the
+offline paths need no dependencies.
+
+**Why SSH not WinRM:** SSH reaches units from any egress; the units' WinRM listener is
+LocalSubnet-scoped (a cross-subnet host like labcomp can't WinRM to them), and it matches the
+prefer-SSH direction (see the WinRM/SSH entry). A `--winrm` mode can be added for a same-subnet prov
+server later.
+
+**Implications:** Consumes the **static** manifest -- explicitly acceptable as an audit artifact
+today; the growth path (computed/live manifest = L1, tiered self-validation = L2/L3, dashboard) slots
+in behind the same report shape and the requirements doc stays the source of truth for it. The tool
+does not persist a per-unit ledger on the server (report artifacts are point-in-time). **Finding:**
+mast02 currently has **no** `installed-manifest.json` (provisioned via a path that skipped the write),
+so it reports `NO-MANIFEST` -- a real gap the report surfaces; a full re-provision through
+`execute-mast-provisioning.ps1` writes it.
+
 ## [2026-07-02] Keep Windows Updates off via a daily re-assertion task
 
 **Why:** Units should not auto-download/install updates or surprise-reboot mid-observation.

@@ -431,6 +431,15 @@ driver invocation today; it becomes a continuous fleet guarantee once the schedu
 task is activated on the prov server (Components #5 above). No driver-side gaps remain
 for drift detection itself.
 
+**Cross-unit read (MVP) [PARTIAL]:** the driver compares one unit vs the build, per unit,
+during its loop. `tools/fleet-drift-report.py` adds the complementary **fleet-wide** view --
+a read-only, on-demand report that gathers every unit's `installed-manifest.json` over SSH
+and prints a per-unit summary + module-version matrix flagging where units diverge (a missing
+manifest is shown as `NO-MANIFEST`). It trusts the static manifest (acceptable audit artifact
+today) and is the MVP of the **inventory (L1)** level below; the growth path is to back it with
+the **computed** manifest (see **Unit provisioning manifest**) and the tiered
+**Unit self-validation** levels, then surface it via `/status` + Prometheus in Phase 3.
+
 Two levels:
 
 1. **Payload hash** -- fast check; if the unit's `installed-manifest.payload_hash` equals

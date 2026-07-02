@@ -256,6 +256,30 @@ unit whose hash has changed. Results are written to
 
 ---
 
+## Fleet drift report (cross-unit version read)
+
+`tools/fleet-drift-report.py` gives a quick, **read-only** cross-unit answer to "what
+version is on each unit, and where do they differ?" -- useful as units are added and
+drift creeps in. It gathers each unit's `C:\MAST\installed-manifest.json` over **SSH**
+and prints a per-unit summary plus a module-version matrix flagging divergences (a
+missing manifest shows as `NO-MANIFEST`). It changes nothing on the units.
+
+```
+# from the repo root on the prov server (or labcomp)
+python tools/fleet-drift-report.py                       # all hosts in unit-registry.json
+python tools/fleet-drift-report.py --hosts mast02,mast03
+python tools/fleet-drift-report.py --build-manifest staging/mast03/01-provisioning/build-manifest.json
+python tools/fleet-drift-report.py --json report.json --csv report.csv
+python tools/fleet-drift-report.py --from-json report.json   # re-render a saved gather, no SSH
+```
+
+Exit code `0` = all units in sync, `2` = drift/missing/unreachable found, `1` = tool error.
+This is the MVP of the "Version / Drift Detection" feature in
+`autonomous-provisioning-requirements.md`; it trusts the static installed-manifest (the
+computed/live manifest + tiered self-validation are the growth path).
+
+---
+
 ## Dev/test loop (Windows host + VirtualBox VM)
 
 This is the bring-up loop used while debugging modules. The Python orchestrator
