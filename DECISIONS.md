@@ -2,6 +2,30 @@
 
 ---
 
+## [2026-07-02] Bootstrap version stamping + drift-report integration
+
+**Why:** `bootstrap-winrm.ps1` is run **manually** by the operator on a bare unit, and nothing
+recorded which bootstrap a given unit ran. As bootstrap gains capabilities, older units silently
+miss them, with no way to tell which. We want to stamp the bootstrap version and surface, per unit,
+which newer bootstrap elements may need applying.
+
+**What:** Added `$script:BootstrapVersion` to `bootstrap-winrm.ps1`; on a successful run it stamps
+`C:\MAST\bootstrap-manifest.json` (`bootstrap_version`, `bootstrapped_at`, `hostname`). A new
+`client/bootstrap-elements.json` documents the element history -- each capability's `since` version
+and `current_version` (= max `since` = the constant). `tools/fleet-drift-report.py` now also reads
+each unit's `bootstrap-manifest.json`, adds a `boot` column to the summary, and prints a bootstrap
+section: `current` / `OUTDATED (lists elements with since > the unit's version)` / `UNSTAMPED`
+(no manifest -- pre-versioning or bootstrap not re-run). The report warns if the script constant and
+`bootstrap-elements.json current_version` drift, and the exit code is non-zero on bootstrap gaps too.
+
+**Implications:** Version lives in two places (the script constant + the elements JSON) kept in sync
+by hand; the report's drift warning is the guard (a build-time `Assert-*` guard could be added later,
+like the site-list one). Bootstrap does **not** read the elements JSON at run time (it runs on a bare
+machine), so no ISO-staging change was needed -- the JSON is report-side only. Existing units show
+`UNSTAMPED` until re-bootstrapped (mast02 does today). Seeded all current elements at `since: 1`;
+future bootstrap additions bump the version and add a `since: N` element. This is the bootstrap half
+of the inventory/drift MVP; the growth path is the same (computed manifest, self-validation).
+
 ## [2026-07-02] Fleet drift report (MVP): cross-unit version read
 
 **Why:** MAST01/03/04 are about to join the fleet and drift between units is expected. The full

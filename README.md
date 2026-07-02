@@ -262,7 +262,10 @@ unit whose hash has changed. Results are written to
 version is on each unit, and where do they differ?" -- useful as units are added and
 drift creeps in. It gathers each unit's `C:\MAST\installed-manifest.json` over **SSH**
 and prints a per-unit summary plus a module-version matrix flagging divergences (a
-missing manifest shows as `NO-MANIFEST`). It changes nothing on the units.
+missing manifest shows as `NO-MANIFEST`). It also reads each unit's
+`C:\MAST\bootstrap-manifest.json` (stamped by `bootstrap-winrm.ps1`) and flags units on
+an older or unstamped bootstrap, listing the bootstrap elements they may be missing
+(element history in `client/bootstrap-elements.json`). It changes nothing on the units.
 
 ```
 # from the repo root on the prov server (or labcomp)

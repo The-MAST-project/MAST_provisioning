@@ -126,6 +126,13 @@ $script:BootstrapLog = Join-Path $script:BootstrapLogDir 'bootstrap-winrm.log'
 $script:RebootRecommended = $false
 $script:AllowUnencryptedOk = $false
 
+# Bootstrap version: stamped to C:\MAST\bootstrap-manifest.json on success so the fleet
+# drift report (tools/fleet-drift-report.py) can tell which bootstrap each unit ran and
+# flag units missing newer bootstrap elements. BUMP THIS whenever you add a bootstrap
+# capability, and add a matching element (since = this number) to
+# client/bootstrap-elements.json so its current_version stays == this value.
+$script:BootstrapVersion = 1
+
 # --- Service trim list (applied by default; exempt with -SkipTrim) ------------
 # Non-essential / vendor services with no role on a headless control box. Service
 # names vary by driver version, so each row carries a display-name fallback (Match);
@@ -1231,6 +1238,23 @@ try {
         $start = (Get-CimInstance Win32_Service -Filter ("Name='{0}'" -f $s.Name) -ErrorAction SilentlyContinue).StartMode
         $skip = if ($SkipTrim -contains $t.Name) { ' [skip]' } else { '' }
         Write-BootstrapMsg ("    {0,-26} State={1,-9} StartMode={2}{3}" -f $s.Name, $s.Status, $start, $skip) 'White'
+    }
+
+    # Stamp the bootstrap version so the fleet drift report can tell which bootstrap
+    # this unit ran (and therefore which newer bootstrap elements it may be missing).
+    try {
+        $bootStampDir = Join-Path $env:SystemDrive 'MAST'
+        if (-not (Test-Path $bootStampDir)) { New-Item -ItemType Directory -Path $bootStampDir -Force | Out-Null }
+        $bootStamp = [ordered]@{
+            bootstrap_version = $script:BootstrapVersion
+            bootstrapped_at   = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+            hostname          = $MastHostName
+            script            = 'bootstrap-winrm.ps1'
+        }
+        $bootStamp | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $bootStampDir 'bootstrap-manifest.json') -Encoding UTF8
+        Write-BootstrapMsg ("  Stamped bootstrap version {0} to C:\MAST\bootstrap-manifest.json" -f $script:BootstrapVersion) 'White'
+    } catch {
+        Write-BootstrapMsg ("  [WARN] could not write bootstrap-manifest.json: {0}" -f $_.Exception.Message) 'Yellow'
     }
 
     Write-BootstrapBanner '' 'White'
