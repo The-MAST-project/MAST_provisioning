@@ -173,6 +173,32 @@ try {
         throw "PS3 CLI directory not created after extraction at ${ps3cliDestPath}"
     }
 
+    # --- PlaneWave PWTools (portable utility bundle) --------------------------
+    # PWTools is a portable .NET app (PWTools.exe + DLLs) the vendor ships as a
+    # dated zip (top-level PWTools-YYYY-MM-DD/). No installer -- extract beside
+    # ps3cli under the mast operator's PlaneWave folder and the operator runs
+    # PWTools.exe. Clear any prior (dated) extraction first so re-provision does
+    # not leave stale copies alongside the new one.
+    ${pwToolsZip} = Join-Path ${AssetsRoot} 'PWTools-2024-09-17.zip'
+    if (-not (Test-Path -LiteralPath ${pwToolsZip})) {
+        throw "PWTools archive not found at ${pwToolsZip}"
+    }
+    ${pwToolsDest} = "C:\Users\mast\Documents\PlaneWave\PWTools"
+    if (Test-Path -LiteralPath ${pwToolsDest}) {
+        Write-MastPwLog ("Removing prior PWTools extraction at {0}" -f ${pwToolsDest})
+        Remove-Item -LiteralPath ${pwToolsDest} -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    New-Item -ItemType Directory -Path ${pwToolsDest} -Force | Out-Null
+    Write-MastPwLog ("Extracting PWTools to {0}" -f ${pwToolsDest})
+    ${pwToolsOut} = Expand-Archive -Path ${pwToolsZip} -DestinationPath ${pwToolsDest} -Force 2>&1 | Out-String
+    if (${pwToolsOut}) { Add-Content -LiteralPath ${logFile} -Encoding UTF8 -Value ${pwToolsOut} }
+    ${pwToolsExe} = Get-ChildItem -Path ${pwToolsDest} -Recurse -Filter 'PWTools.exe' -File -ErrorAction SilentlyContinue |
+        Select-Object -First 1 -ExpandProperty FullName
+    if (-not ${pwToolsExe}) {
+        throw ("PWTools.exe not found under {0} after extraction" -f ${pwToolsDest})
+    }
+    Write-MastPwLog ("PWTools ready at {0}" -f ${pwToolsExe})
+
     # --- Real PlaneWave PlateSolve3 star catalog (UCAC4/Orca) ------------------
     # 'ps3cli --server' validates a PlateSolve3 catalog at startup and exits
     # ("Catalog files not found") if it is absent. We ship the real vendor

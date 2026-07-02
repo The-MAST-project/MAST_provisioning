@@ -50,6 +50,13 @@ else {
         [void]${issues}.Add(("ps3cli.exe is the older on-demand build ({0} bytes) at {1}; expected the special --server build (>1MB)" -f ${exe}.Length, ${exe}.FullName))
     }
 }
+# PWTools (portable utility bundle) extracted beside ps3cli; find PWTools.exe under it.
+${pwToolsPath} = 'C:\Users\mast\Documents\PlaneWave\PWTools'
+${pwToolsExe}  = Get-ChildItem -LiteralPath ${pwToolsPath} -Recurse -Filter 'PWTools.exe' -File -ErrorAction SilentlyContinue | Select-Object -First 1
+if (-not ${pwToolsExe}) {
+    [void]${issues}.Add("PWTools.exe not found under ${pwToolsPath}")
+}
+
 # Real PlateSolve3 catalog: 'ps3cli --server' validates it at boot (see provide-planewave.ps1).
 # Must match the file set the vendor installer lays down: UC4\Index.UC4 (non-empty) +
 # 180 Z###.UC4 zone files + 39 Orca\*.orc (Orca / StarOrca / DistOrca).

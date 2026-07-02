@@ -1,7 +1,7 @@
 ﻿{
   "name": "planewave",
-  "version": "pwi-4.1.6/shutter-1.15.0/ps3-catalog",
-  "description": "Install PlaneWave Instruments telescope control software (PWI4), PWShutter, PS3 CLI tools, and the real PlateSolve3 star catalog (UCAC4/Orca, ~3.6 GB). The catalog installer is build-host-local (staged from C:\\MAST\\ps3-catalog by build-mast.ps1), not a committed asset. Pinned to mastw/mast00.",
+  "version": "pwi-4.1.6/shutter-1.15.0/ps3-catalog/pwtools-2024-09-17",
+  "description": "Install PlaneWave Instruments telescope control software (PWI4), PWShutter, PS3 CLI tools, the real PlateSolve3 star catalog (UCAC4/Orca, ~3.6 GB), and the PWTools portable utility bundle. The catalog installer is build-host-local (staged from C:\\MAST\\ps3-catalog by build-mast.ps1), not a committed asset; PWTools ships as a committed zip, extracted to the mast operator's Documents\\PlaneWave\\PWTools. Pinned to mastw/mast00.",
   "order": 1700,
   "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-planewave.ps1\" -AssetsRoot \".\"",
   "commandfiles": [
@@ -9,7 +9,8 @@
     "verify-planewave.ps1",
     "assets/Setup_PWI_4.1.6_Final.exe",
     "assets/Setup_PWShutter_1.15.0.exe",
-    "assets/ps3cli.zip"
+    "assets/ps3cli.zip",
+    "assets/PWTools-2024-09-17.zip"
   ],
   "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\verify-planewave.ps1\""
 }

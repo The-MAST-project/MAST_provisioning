@@ -2,6 +2,25 @@
 
 ---
 
+## [2026-07-02] Bundle PlaneWave PWTools into the planewave provider
+
+**Why:** Backlog item (MAST_provisioning#5) to bundle `PWTools.exe` (PlaneWave's portable utility
+bundle) into the standard install. It belongs with the other PlaneWave software.
+
+**What:** Ship `PWTools-2024-09-17.zip` (the latest vendor release, ~3 MB) as a committed LFS asset
+of the `planewave` provider (like `ps3cli.zip`, and unlike the multi-GB PS3 catalog which stays
+build-host-local). PWTools is a portable .NET app (PWTools.exe + DLLs under a dated top-level
+folder) with no installer, so `provide-planewave.ps1` extracts it to
+`C:\Users\mast\Documents\PlaneWave\PWTools` (beside ps3cli), clearing any prior dated extraction
+first so a re-provision does not leave stale copies. `verify-planewave.ps1` now also checks that
+`PWTools.exe` is present. No desktop shortcut (not requested; it is a technician utility).
+
+**Implications:** Bump the version by dropping a newer `PWTools-YYYY-MM-DD.zip` into the provider's
+`assets/` and updating the filename in `provide-planewave.ps1` + `module.json`. The vendor site is
+Cloudflare-gated (scripted download from some egresses returns a 403 challenge), so fetch new
+releases from a normal browser / an un-flagged host. Extraction runs as the `mast` account
+(provisioning context), matching the ps3cli location.
+
 ## [2026-07-02] Jupyter Notebook: contained venv under C:\MAST\jupyter
 
 **Why:** Backlog item (MAST_provisioning#5, Ofer's request) to install Jupyter Notebook. The
