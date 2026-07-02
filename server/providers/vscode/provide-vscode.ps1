@@ -86,6 +86,67 @@ try {
     }
     Write-VscodeLog ("Found Code.exe at: {0}" -f ${vscodeExe})
 
+    # --- Install bundled extensions (offline .vsix) into the running user's profile ---
+    # Provisioning runs as the mast account (WinRM/Invoke-Command with the unit
+    # cred), so both VS Code (UserSetup) and these extensions land in mast's
+    # profile (C:\Users\mast\.vscode\extensions). We install from staged .vsix
+    # files rather than `--install-extension <id>` so there is NO dependency on
+    # the VS Code marketplace being reachable (units are behind bcproxy) -- the
+    # same offline-installer principle used for every other provider. Runs on both
+    # the fresh-install and idempotent-skip paths so a re-provision refreshes them.
+    # Pinned, field-proven, win32-x64 builds; both satisfy VS Code 1.121.0's engine
+    # (debugpy ^1.92.0, python ^1.95.0).
+    ${codeCmd} = Join-Path (Split-Path -Parent ${vscodeExe}) 'bin\code.cmd'
+    if (-not (Test-Path -LiteralPath ${codeCmd})) {
+        throw ("VS Code CLI not found at {0}; cannot install extensions." -f ${codeCmd})
+    }
+    # Bounded wait so a wedged CLI under a Session-0 WinRM context cannot hang the
+    # whole run (same failure mode the installer guards against). -NoNewWindow (not
+    # -WindowStyle Hidden) because stdout/stderr redirection needs CreateProcess.
+    ${extTimeoutMs} = 5 * 60 * 1000
+    function Invoke-CodeCli {
+        param([string[]]${CliArgs}, [string]${OutLog}, [string]${Tag})
+        ${proc} = Start-Process -FilePath ${codeCmd} -ArgumentList ${CliArgs} -PassThru -NoNewWindow `
+            -RedirectStandardOutput ${OutLog} -RedirectStandardError ("{0}.err" -f ${OutLog})
+        if (-not ${proc}) { throw ("Start-Process returned no object for code CLI ({0})" -f ${Tag}) }
+        if (-not ${proc}.WaitForExit(${extTimeoutMs})) {
+            try { & taskkill.exe /T /F /PID $(${proc}.Id) 2>$null | Out-Null } catch {}
+            try { ${proc}.Kill() } catch {}
+            throw ("VS Code CLI timed out ({0}); process tree killed. See {1}" -f ${Tag}, ${OutLog})
+        }
+        try { ${proc}.Refresh() } catch {}
+        return ${proc}.ExitCode
+    }
+
+    # ms-python.python is listed first (debugpy pairs with it); order is not critical.
+    ${vsixNames} = @(
+        'ms-python.python-2026.4.0-win32-x64.vsix',
+        'ms-python.debugpy-2026.6.0-win32-x64.vsix'
+    )
+    foreach (${vsixName} in ${vsixNames}) {
+        ${vsixPath} = Join-Path ${AssetsRoot} ${vsixName}
+        if (-not (Test-Path -LiteralPath ${vsixPath})) {
+            throw ("Bundled VS Code extension not found: {0}" -f ${vsixPath})
+        }
+        ${vsixPath} = (Resolve-Path -LiteralPath ${vsixPath}).Path
+        ${extOut}   = Join-Path ${logDir} ("vscode-ext-{0}.log" -f ${vsixName})
+        Write-VscodeLog ("Installing extension (offline): {0}" -f ${vsixName})
+        ${rc} = Invoke-CodeCli -CliArgs @('--install-extension', ${vsixPath}, '--force') -OutLog ${extOut} -Tag ${vsixName}
+        Write-VscodeLog ("  {0} exit code: {1}" -f ${vsixName}, ${rc})
+    }
+
+    # Confirm both are registered in this user's profile.
+    ${listOut} = Join-Path ${logDir} 'vscode-ext-list.log'
+    ${null} = Invoke-CodeCli -CliArgs @('--list-extensions', '--show-versions') -OutLog ${listOut} -Tag 'list-extensions'
+    ${installedExts} = (Get-Content -LiteralPath ${listOut} -ErrorAction SilentlyContinue) -join "`n"
+    foreach (${want} in 'ms-python.python', 'ms-python.debugpy') {
+        if (${installedExts} -match [regex]::Escape(${want})) {
+            Write-VscodeLog ("Extension present: {0}" -f ${want})
+        } else {
+            throw ("VS Code extension not present after install: {0} (see {1})" -f ${want}, ${listOut})
+        }
+    }
+
     Write-VscodeLog "VS Code installation completed successfully"
     exit 0
 }

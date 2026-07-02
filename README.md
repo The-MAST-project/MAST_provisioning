@@ -137,7 +137,7 @@ renumbering.
 |  1700 | `planewave` | PlaneWave PWI4 + PS3 CLI tools |
 |  1800 | `zwo` | ZWO camera drivers, ASI Studio, ASCOM driver |
 |  1850 | `instrument-profiles` | Lay down PWI4 `.cfg` + PHD2 `.reg` **templates** (site location from `C:\WIS\unit.toml`; fleet constants verbatim) and apply into the `mast` profile on first logon. Per-unit device->COM binding is the post-hardware `tools/calibrate-instruments.ps1` step, not this provider. |
-|  1900 | `vscode` | Visual Studio Code |
+|  1900 | `vscode` | Visual Studio Code + bundled Python extensions (`ms-python.python`, `ms-python.debugpy`) installed offline from staged `.vsix` |
 |  2000 | `sysinternals` | Sysinternals Suite |
 |  2100 | `chrome` | Google Chrome (offline Enterprise MSI) |
 |  2200 | `mast` | Clone MAST repos, create per-repo virtualenvs, install requirements |

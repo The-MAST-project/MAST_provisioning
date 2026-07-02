@@ -2,6 +2,34 @@
 
 ---
 
+## [2026-07-02] VS Code: bundle the Python extensions offline as .vsix
+
+**Why:** Backlog item (MAST_provisioning#5) "add the debugpy extension" -- the `vscode` provider
+installed VS Code but no extensions (its "with extensions" description was aspirational). Operators
+need the Python debugger; we also fold in the Python extension it pairs with. `code
+--install-extension <id>` pulls from the VS Code marketplace, which is the same online-fetch
+dependency the fleet avoids everywhere else (units are behind bcproxy), so an offline install is
+required.
+
+**What:** Ship `ms-python.python` (2026.4.0) and `ms-python.debugpy` (2026.6.0), win32-x64, as
+staged `.vsix` assets and install them with `code --install-extension <vsix> --force` at the end of
+`provide-vscode.ps1` (on both the fresh and idempotent-skip paths, so a re-provision refreshes them).
+Versions are the field-proven ones already running on mast02; both satisfy VS Code 1.121.0's engine
+(`^1.92.0` / `^1.95.0`). Added an LFS rule for `server/providers/*/assets/*.vsix` and a
+`verify-vscode.ps1` that checks Code.exe + both extensions in the user profile. The CLI is invoked
+with a bounded wait + taskkill-on-timeout, because a wedged `code` CLI under a Session-0 WinRM
+context would otherwise hang the run.
+
+**Implications:** Extensions install into the **mast** account's profile -- confirmed OK because
+`execute-mast-provisioning` runs on the unit as the `mast` cred (WinRM/Invoke-Command) in both the
+dev-VM and autonomous paths, so `$env:USERPROFILE` and `.vscode\extensions` are mast's (VS Code
+UserSetup lands in `C:\Users\mast\...` on mast02). This also means the instrument-profiles "SYSTEM
+context" premise is inaccurate for the execute phase; that task still works, but the note is worth
+revisiting. To bump versions later, drop new win32-x64 `.vsix` into the provider's `assets/` and
+update the two filenames in `provide-vscode.ps1` + `module.json` (keep engine <= the pinned VS Code).
+
+---
+
 ## [2026-07-01] Default browser: REJECTED -- do not automate (Win10/11 UserChoice hash)
 
 **Why:** Backlog item "make Chrome the default browser" (MAST_provisioning#5) assumed we could
