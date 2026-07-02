@@ -2,6 +2,23 @@
 
 ---
 
+## [2026-07-02] Jupyter venv: pre-install a basic scientific/astronomy stack
+
+**Why:** Follow-up to the jupyter provider (below). A scientist opening a notebook on a unit should
+not have to pip-install the common packages by hand (slow, and the unit is behind bcproxy).
+
+**What:** The `jupyter` provider's venv pip step now also installs `numpy`, `scipy`, `matplotlib`,
+`pandas`, `astropy`, `astroquery`, `photutils`, and `ipywidgets` alongside `notebook` + `ipykernel`.
+Kept intentionally to a "basic" curated set (core scientific + astronomy + notebook widgets), not a
+kitchen-sink, to bound provisioning download/time; the list is a single `${pyPackages}` array in
+`provide-jupyter.ps1`. Unpinned (latest compatible), matching how `ipykernel` is handled -- pin later
+if reproducibility demands it.
+
+**Implications:** First provision downloads a few hundred MB more into the contained venv (still
+under `C:\MAST\jupyter`, no profile litter). To add/adjust packages, edit the `${pyPackages}` array.
+The install only runs on a fresh venv (or `-Force`); an already-provisioned jupyter box needs
+`-Force` to pick up later additions.
+
 ## [2026-07-02] Bundle PlaneWave PWTools into the planewave provider
 
 **Why:** Backlog item (MAST_provisioning#5) to bundle `PWTools.exe` (PlaneWave's portable utility

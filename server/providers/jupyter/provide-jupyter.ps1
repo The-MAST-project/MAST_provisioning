@@ -79,12 +79,19 @@ try {
         Write-JupyterLog "venv already present; skipping creation."
     }
 
-    # 2) Install Jupyter Notebook + a Python kernel INTO the venv (online pip via the
-    #    proxy, same mechanism the mast provider uses for repo requirements). Skip if
-    #    already installed unless -Force.
+    # 2) Install Jupyter Notebook + a Python kernel + a basic scientific/astronomy
+    #    stack INTO the venv (online pip via the proxy, same mechanism the mast
+    #    provider uses for repo requirements). Pre-installing the common packages
+    #    means a scientist opening a notebook does not have to pip-install them by
+    #    hand. Skip if already installed unless -Force.
+    ${pyPackages} = @(
+        'notebook>=7,<8', 'ipykernel', 'ipywidgets',   # notebook + Python kernel + widgets
+        'numpy', 'scipy', 'matplotlib', 'pandas',      # core scientific stack
+        'astropy', 'astroquery', 'photutils'           # astronomy
+    )
     if (${Force} -or -not (Test-Path -LiteralPath ${jnExe})) {
         Invoke-Native -Exe ${venvPy} -NativeArgs @('-m', 'pip', 'install', '--upgrade', 'pip') -Tag 'pip-upgrade'
-        Invoke-Native -Exe ${venvPy} -NativeArgs @('-m', 'pip', 'install', 'notebook>=7,<8', 'ipykernel') -Tag 'pip-install'
+        Invoke-Native -Exe ${venvPy} -NativeArgs (@('-m', 'pip', 'install') + ${pyPackages}) -Tag 'pip-install'
         if (-not (Test-Path -LiteralPath ${jnExe})) {
             throw "jupyter-notebook.exe not found after pip install; see the pip-install log."
         }
