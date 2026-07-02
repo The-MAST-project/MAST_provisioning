@@ -2,6 +2,30 @@
 
 ---
 
+## [2026-07-02] Keep Windows Updates off via a daily re-assertion task
+
+**Why:** Units should not auto-download/install updates or surprise-reboot mid-observation.
+Bootstrap already disabled Windows Update once (`Disable-WindowsAutoUpdate`: GP `NoAutoUpdate` +
+`wuauserv` disabled), but Windows 10/11 has **no permanent one-shot off** -- `WaaSMedicSvc` (the
+Update Medic Service) exists specifically to detect tampering and re-enable `wuauserv`, and the
+Update Orchestrator re-creates scan tasks. So a one-time disable drifts back within days.
+
+**What:** New `windows-update-lockdown` provider (order 2350). It deploys `enforce-no-updates.ps1`
+to `C:\ProgramData\MAST\windows-update` and registers a **daily (03:00) + at-startup SYSTEM
+scheduled task** (`mast-no-windows-updates`) that re-asserts the state: GP `NoAutoUpdate`/`AUOptions`,
+stop+disable `wuauserv`/`UsoSvc`/`WaaSMedicSvc`/`uhssvc` (Medic is protected and may refuse -- tried
+anyway), and disable the `\Microsoft\Windows\UpdateOrchestrator` + `\WindowsUpdate` scan tasks. It
+also runs the script once at provision time. `verify` checks the task is registered and
+`NoAutoUpdate=1` (durable guarantees); `wuauserv` StartMode is reported but not failed on, since the
+OS can flip it between daily runs.
+
+**Implications:** This is **best-effort, not absolute** -- the Medic service can re-enable updates
+within a day; the daily task corrects the drift (worst-case exposure ~24h, plus the at-startup run).
+It does NOT take registry ownership of `WaaSMedicSvc` to force it off (that hack is fragile and
+Microsoft can re-lock it) -- deliberately out of scope. Security tradeoff acknowledged: these units
+deliberately forgo automatic patching for observing-time stability. To re-enable updates on a unit,
+delete the `mast-no-windows-updates` task and re-enable `wuauserv`.
+
 ## [2026-07-02] Jupyter venv: pre-install a basic scientific/astronomy stack
 
 **Why:** Follow-up to the jupyter provider (below). A scientist opening a notebook on a unit should

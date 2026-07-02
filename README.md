@@ -142,6 +142,7 @@ renumbering.
 |  2050 | `jupyter` | Jupyter Notebook + scientific stack (astropy, numpy, scipy, matplotlib, pandas, astroquery, photutils) in a contained venv under `C:\MAST\jupyter` (state kept there; launcher + desktop shortcut) |
 |  2100 | `chrome` | Google Chrome (offline Enterprise MSI) |
 |  2200 | `mast` | Clone MAST repos, create per-repo virtualenvs, install requirements |
+|  2350 | `windows-update-lockdown` | Keep auto Windows Updates disabled: daily + at-startup SYSTEM task re-asserts the policy/services (Windows self-heals, so it must be re-applied) |
 |  2400 | `windows-exporter-monitoring` | Prometheus windows_exporter service (TCP 9182) |
 |  2500 | `diagnostics` | Post-smoke runtime checks (ASCOM, app launch, PHD2 RPC, heartbeat) |
 |  2600 | `ds9` | SAOImage DS9 8.7 imaging / data visualization |
