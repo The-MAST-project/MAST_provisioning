@@ -2,6 +2,32 @@
 
 ---
 
+## [2026-07-05] Dev-VM cycles mount the index disk file-backed; scratch letters picked device-aware
+
+**Why:** The first full end-to-end VM loop surfaced two latent imdisk defects. (1) The
+scratch-letter scan used Test-Path, which cannot see a medialess device: the retaken
+post-prepare snapshot carries an empty DVD drive at Y:, the scratch mount landed on it, format
+failed, and the finally-block detach threw imdisk's stderr over the real error. (2) The
+production D: mount is `imdisk -t vm` -- RAM-backed, volatile, committing the full 32 GB of
+virtual memory. Units carry 64 GB, but the dev VM has 8 GB (host tops out at 31.5 GB), so the
+attach can never succeed there (exit 3, ENOMEM); every earlier cycle had died before this line
+or never ran imdisk end-to-end, so the gap was invisible until now.
+
+**What:** Scratch letters are now enumerated via System.IO.DriveInfo (sees every assigned
+letter regardless of media), detach failures no longer mask the try-body error, and a foreign
+device parked on D: fails loudly (commit 2bd4405). `provide-imdisk.ps1` gains
+`-MountType vm|file` for both the boot task and the immediate mount; `build-mast.ps1
+-ImdiskMountType` bakes it into commands.json (the -ProxyMode pattern); `vm/run-prov-test.py`
+always builds with `file`. imdisk stderr on the immediate mount is captured into the failure
+message. Production commands.json is byte-identical -- the flag is appended only when not
+'vm' (commit b0d6b4e).
+
+**Implications:** VM cycles get a working D:\mast-indexes so astrometry's smoke solve is
+exercisable (writes persist into the .img -- acceptable for a snapshot-reset VM). The true
+-t vm RAM mount is validated only on real units (mast00/02/w run it in production; MAST01
+confirms at bring-up). Also noted: imdisk's verify only checks imdisk.exe presence, so a
+broken D: mount still reports imdisk_ok -- tightening that is open.
+
 ## [2026-07-05] Bootstrap falls back to HTTP Date-header time when NTP is unreachable
 
 **Why:** Off-campus bootstrap runs (e.g. prepping a unit on guest wifi) cannot sync NTP at all:
