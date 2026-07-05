@@ -401,20 +401,33 @@ function Sync-MastSystemTime {
         Start-Service -Name w32time -ErrorAction SilentlyContinue
         & w32tm.exe /config /manualpeerlist:"$peerList" /syncfromflags:manual /reliable:no /update | Out-Null
         Restart-Service -Name w32time -ErrorAction SilentlyContinue
-        & w32tm.exe /resync /force | Out-Null
 
         # IMPORTANT: 'w32tm /resync' returns success even when NO NTP reply ever
         # arrives -- it silently keeps the Local CMOS Clock. So do not trust the
         # exit code; query the service and confirm it actually locked onto an NTP
         # source. (Observed on mast02: UDP 123 blocked -> Source stayed 'Local
         # CMOS Clock', clock 5 min slow, yet /resync "succeeded".)
-        $status   = & w32tm.exe /query /status 2>$null
-        $srcLine  = ($status | Select-String -Pattern 'Source:\s*(.+)$')
-        $lastLine = ($status | Select-String -Pattern 'Last Successful Sync Time:\s*(.+)$')
-        $source   = if ($srcLine)  { $srcLine.Matches[0].Groups[1].Value.Trim() }  else { '' }
-        $lastSync = if ($lastLine) { $lastLine.Matches[0].Groups[1].Value.Trim() } else { '' }
-        $synced = $source -and ($source -notmatch 'Local CMOS Clock') -and ($source -notmatch 'Free-running') `
-                  -and $lastSync -and ($lastSync -notmatch 'unspecified')
+        # Right after the service restart the first poll has usually not completed
+        # yet, so a single immediate status check reports 'Local CMOS Clock' even
+        # when NTP is reachable -- resync + wait + check, with retries (same
+        # proven pattern as the provisioning timesync provider).
+        $source = ''
+        $lastSync = ''
+        $synced = $false
+        for ($attempt = 1; $attempt -le 3 -and -not $synced; $attempt++) {
+            & w32tm.exe /resync /force | Out-Null
+            Start-Sleep -Seconds 2
+            $status   = & w32tm.exe /query /status 2>$null
+            $srcLine  = ($status | Select-String -Pattern 'Source:\s*(.+)$')
+            $lastLine = ($status | Select-String -Pattern 'Last Successful Sync Time:\s*(.+)$')
+            $source   = if ($srcLine)  { $srcLine.Matches[0].Groups[1].Value.Trim() }  else { '' }
+            $lastSync = if ($lastLine) { $lastLine.Matches[0].Groups[1].Value.Trim() } else { '' }
+            $synced = [bool]($source -and ($source -notmatch 'Local CMOS Clock') -and ($source -notmatch 'Free-running') `
+                      -and $lastSync -and ($lastSync -notmatch 'unspecified'))
+            if (-not $synced) {
+                Write-BootstrapMsg ("  resync attempt {0}/3: not locked yet (Source='{1}')." -f $attempt, $source) 'DarkGray'
+            }
+        }
         if ($synced) {
             Write-BootstrapMsg ("  Time synced. Source={0}; clock now {1}." -f $source, (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')) 'Green'
         } else {
