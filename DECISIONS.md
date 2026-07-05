@@ -2,6 +2,38 @@
 
 ---
 
+## [2026-07-05] Bootstrap forces privacy answers and suppresses the first-logon privacy page
+
+**Why:** With auto-logon, the `mast` account's first console logon happens unattended; Windows
+would park the "Choose privacy settings for your device" OOBE page there, with every toggle
+defaulting to on. Nobody is at the console to click through it, and the fleet answer to every
+toggle is "off" anyway.
+
+**What:** Extended the existing HKLM telemetry/privacy hardening block in `bootstrap-winrm.ps1`
+with `OOBE\DisablePrivacyExperience=1` plus policy-forced answers: location service off
+(`LocationAndSensors\DisableLocation`), inking/typing personalization off (`InputPersonalization`),
+no linguistic data upload (`TextInput`), tailored experiences off (`CloudContent`). Advertising ID
+was already policy-disabled. Commit 85d1b56; bootstrap version bumped to 2.
+
+**Implications:** First logon lands directly on the desktop. Settings shows these toggles greyed
+out ("managed by your organization"); flipping one back means removing the policy key, not the
+Settings UI. Units bootstrapped at version 1 show up in the fleet drift report.
+
+## [2026-07-05] Interactive bootstrap prompts default to the machine's existing values
+
+**Why:** Bootstrap is safe to re-run and increasingly is re-run (applying a newer bootstrap to an
+existing unit). The prompts made re-runs risky: hostname had no default and site always defaulted
+to `ns`, so an operator pressing Enter could rename a machine or flip its site.
+
+**What:** The hostname prompt defaults to the current computer name; the site prompt defaults to
+the persisted `C:\ProgramData\MAST\site.txt` value when present and valid, else `ns`. Plain Enter
+keeps the machine as-is. Commit 411e0ea. (Same batch: the bootstrap NTP backstop now retries
+resync with a 2 s wait instead of checking w32tm status immediately after the service restart,
+which falsely reported "NTP did NOT actually sync" -- commit 71512a2.)
+
+**Implications:** Re-runs are non-destructive by default. On a first run the default is the
+throwaway OEM name, so the operator still types the real mastNN over it.
+
 ## [2026-07-02] Bootstrap version stamping + drift-report integration
 
 **Why:** `bootstrap-winrm.ps1` is run **manually** by the operator on a bare unit, and nothing
