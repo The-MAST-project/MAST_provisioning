@@ -432,11 +432,40 @@ function Sync-MastSystemTime {
         if ($synced) {
             Write-BootstrapMsg ("  Time synced. Source={0}; clock now {1}." -f $source, (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')) 'Green'
         } else {
-            Write-BootstrapMsg '  [WARN] NTP did NOT actually sync -- the time service is still on the local clock.' 'Yellow'
-            Write-BootstrapMsg ("         Source='{0}' LastSuccessfulSync='{1}'. UDP 123 is likely blocked or there is no route to the NTP servers." -f $source, $lastSync) 'Yellow'
-            Write-BootstrapMsg '         A wrong clock breaks TLS validation, so the provisioning git clone (HTTPS) will fail.' 'Yellow'
-            Write-BootstrapMsg '         FIX one of: open outbound UDP 123; point w32time at a reachable NTP source' 'Yellow'
-            Write-BootstrapMsg '         (e.g. the prov server: w32tm /config /manualpeerlist:"<provIP>" /syncfromflags:manual /update; w32tm /resync); or set the clock manually.' 'Yellow'
+            # NTP genuinely unreachable: the Weizmann peers are campus-only and many
+            # guest/home networks block outbound UDP 123 wholesale, so even the
+            # public peers get no reply. Fall back to the Date header of a plain
+            # HTTP probe -- works wherever TCP 80 works, is immune to the
+            # broken-clock TLS trap (no certificate validation), and is accurate
+            # to ~1-2 s, plenty to unbreak TLS validation.
+            $webTime = $null
+            foreach ($probeUrl in @('http://www.google.com', 'http://www.msftconnecttest.com/connecttest.txt')) {
+                try {
+                    $resp = Invoke-WebRequest -Uri $probeUrl -Method Head -UseBasicParsing -TimeoutSec 10
+                    $dateHeader = $resp.Headers['Date']
+                    if ($dateHeader) {
+                        $webTime = [DateTime]::ParseExact($dateHeader, 'R', [System.Globalization.CultureInfo]::InvariantCulture).ToLocalTime()
+                        break
+                    }
+                } catch { }
+            }
+            if ($webTime) {
+                $skewSeconds = [Math]::Abs(($webTime - (Get-Date)).TotalSeconds)
+                if ($skewSeconds -gt 30) {
+                    Set-Date -Date $webTime | Out-Null
+                    Write-BootstrapMsg ("  NTP unreachable; clock set from an HTTP Date header (was {0:N0}s off; now {1})." -f $skewSeconds, (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')) 'Green'
+                    Write-BootstrapMsg '  w32time stays configured; it will refine the clock when NTP becomes reachable (e.g. on the site network).' 'White'
+                } else {
+                    Write-BootstrapMsg ("  NTP unreachable, but the clock is already within {0:N1}s of web time -- fine for TLS; left as-is." -f $skewSeconds) 'Green'
+                }
+            } else {
+                Write-BootstrapMsg '  [WARN] NTP did NOT actually sync -- the time service is still on the local clock.' 'Yellow'
+                Write-BootstrapMsg ("         Source='{0}' LastSuccessfulSync='{1}'. UDP 123 is likely blocked or there is no route to the NTP servers," -f $source, $lastSync) 'Yellow'
+                Write-BootstrapMsg '         and the HTTP Date-header fallback got no response either (no outbound TCP 80?).' 'Yellow'
+                Write-BootstrapMsg '         A wrong clock breaks TLS validation, so the provisioning git clone (HTTPS) will fail.' 'Yellow'
+                Write-BootstrapMsg '         FIX one of: open outbound UDP 123; point w32time at a reachable NTP source' 'Yellow'
+                Write-BootstrapMsg '         (e.g. the prov server: w32tm /config /manualpeerlist:"<provIP>" /syncfromflags:manual /update; w32tm /resync); or set the clock manually.' 'Yellow'
+            }
         }
     } catch {
         Write-BootstrapMsg ("  [WARN] time sync failed ({0}); continuing. Fix the clock manually if TLS/git later fails." -f $_.Exception.Message) 'Yellow'
