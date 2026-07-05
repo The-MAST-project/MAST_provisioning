@@ -50,7 +50,8 @@
         cd <folder containing bootstrap-winrm.ps1>
         .\bootstrap-winrm.ps1 -MastHostName mast05
 
-    If you omit -MastHostName, the script prompts interactively (not valid with -NonInteractive).
+    If you omit -MastHostName, the script prompts interactively, defaulting to the current
+    computer name on plain Enter (not valid with -NonInteractive).
 
 .PARAMETER MastHostName
     Windows computer name for this unit (mast01 .. mast20). NetBIOS: 1-15 chars, letters/digits/hyphen.
@@ -59,8 +60,8 @@
     Site code (e.g. 'ns', 'wis') selecting the unit's configuration profile at provisioning
     time. The operator's explicit choice -- NEVER derived from the hostname; persisted to
     C:\ProgramData\MAST\site.txt for onboard-mast-unit.ps1 to record in the prov server's
-    unit-registry.json. Prompted interactively (default 'ns') if omitted; required with
-    -NonInteractive.
+    unit-registry.json. Prompted interactively if omitted (default: the previously
+    persisted site.txt choice when present, else 'ns'); required with -NonInteractive.
 
 .PARAMETER NonInteractive
     Fail if -MastHostName is missing (for automation); no prompts.
@@ -518,7 +519,11 @@ try {
         Write-BootstrapMsg 'UNIT HOSTNAME (Windows computer name)' 'Yellow'
         Write-BootstrapMsg '  Examples: mast01, mast05. Max 15 characters; letters, digits, hyphen only.' 'Yellow'
         Write-BootstrapMsg '  This name must match what the provisioning server will use in DNS/hosts.' 'Yellow'
-        $MastHostName = Read-Host 'Enter MastHostName'
+        # Default to the current computer name so a re-run keeps the machine as-is on
+        # plain Enter. On a bare unit the current name is the throwaway OEM name from
+        # autounattend -- the operator types the real mastNN over it.
+        $MastHostName = Read-Host ('Enter MastHostName [{0}]' -f $env:COMPUTERNAME)
+        if ([string]::IsNullOrWhiteSpace($MastHostName)) { $MastHostName = $env:COMPUTERNAME }
     }
     $MastHostName = $MastHostName.Trim()
     if ($MastHostName -notmatch '^[A-Za-z0-9-]{1,15}$') {
@@ -543,11 +548,19 @@ try {
         if ($NonInteractive) {
             throw "Pass -Site <site> (one of: $($knownSites -join ', ')) when -NonInteractive is set."
         }
+        # Default to the previously persisted choice (re-run), else ns.
+        $siteDefault = 'ns'
+        $persistedSiteFile = Join-Path (Join-Path $env:ProgramData 'MAST') 'site.txt'
+        if (Test-Path -LiteralPath $persistedSiteFile) {
+            $prevSite = Get-Content -LiteralPath $persistedSiteFile -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($prevSite) { $prevSite = $prevSite.Trim().ToLower() }
+            if ($knownSites -contains $prevSite) { $siteDefault = $prevSite }
+        }
         Write-BootstrapMsg '' 'White'
         Write-BootstrapMsg 'SITE (selects the unit configuration profile)' 'Yellow'
-        Write-BootstrapMsg ('  Known sites: {0}. Default: ns (Neot Smadar).' -f ($knownSites -join ', ')) 'Yellow'
-        $Site = Read-Host 'Enter site [ns]'
-        if ([string]::IsNullOrWhiteSpace($Site)) { $Site = 'ns' }
+        Write-BootstrapMsg ('  Known sites: {0}. Default: {1}.' -f ($knownSites -join ', '), $siteDefault) 'Yellow'
+        $Site = Read-Host ('Enter site [{0}]' -f $siteDefault)
+        if ([string]::IsNullOrWhiteSpace($Site)) { $Site = $siteDefault }
     }
     $Site = $Site.Trim().ToLower()
     if ($knownSites -notcontains $Site) {
