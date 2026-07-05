@@ -2,6 +2,24 @@
 
 ---
 
+## [2026-07-05] Bootstrap falls back to HTTP Date-header time when NTP is unreachable
+
+**Why:** Off-campus bootstrap runs (e.g. prepping a unit on guest wifi) cannot sync NTP at all:
+the Weizmann peers are campus-only and guest networks commonly block outbound UDP 123, so the
+public peers get no reply either. A wrong clock breaks TLS validation, which later fails the
+provisioning git clone. Retrying resync (the same-day fix for the on-campus false negative)
+cannot help when no NTP packet ever arrives.
+
+**What:** When the resync retry loop fails, `Sync-MastSystemTime` probes plain-HTTP endpoints
+(google.com, msftconnecttest.com) and sets the clock from the response `Date` header when the
+skew exceeds 30 s. Plain HTTP is deliberate: no certificate validation, so the probe is immune
+to the very broken-clock problem being fixed. Accuracy is ~1-2 s -- plenty for TLS. w32time
+stays configured so it refines the clock once NTP becomes reachable on the site network.
+Probe validated on labcomp (sub-second skew vs a synced clock). Commit 096330d.
+
+**Implications:** Bootstrap now gets a TLS-workable clock on any network with outbound TCP 80.
+The warning block remains only for the no-NTP-and-no-HTTP case.
+
 ## [2026-07-05] Bootstrap forces privacy answers and suppresses the first-logon privacy page
 
 **Why:** With auto-logon, the `mast` account's first console logon happens unattended; Windows
