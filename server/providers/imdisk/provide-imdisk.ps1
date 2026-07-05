@@ -34,7 +34,15 @@ param(
     # Subdirectory created inside the image that astrometry.cfg points at
     # (add_path /cygdrive/d/mast-indexes).
     [string]${IndexSubdir}  = 'mast-indexes',
-    [string]${TaskName}     = 'MAST-ImDisk-Persistent'
+    [string]${TaskName}     = 'MAST-ImDisk-Persistent',
+    # 'vm' (production): RAM-backed, volatile, commits the full DiskSize of
+    # virtual memory -- units have 64 GB. 'file': plain file-backed mount for
+    # the dev VM (8 GB RAM; a 32 GB -t vm attach can NEVER succeed there --
+    # imdisk exits 3). File-backed persists writes into the .img, so the
+    # pristine-seed guarantee is waived; dev-VM only. Baked in by build-mast
+    # -ImdiskMountType (the VM harness passes 'file').
+    [ValidateSet('vm', 'file')]
+    [string]${MountType}    = 'vm'
 )
 
 ${ErrorActionPreference} = "Stop"
@@ -302,10 +310,10 @@ try {
         Write-ImDiskLog ("[WARN] No image at {0} and no index seed at {1}. D:\{2} will be empty; astrometry + mast-validation will FAIL." -f ${ImagePath}, ${IndexSeedDir}, ${IndexSubdir})
     }
 
-    Write-ImDiskLog "Creating boot-time RAM-backed (-t vm) volatile mount scheduled task..."
+    Write-ImDiskLog ("Creating boot-time (-t {0}) mount scheduled task..." -f ${MountType})
     # -t vm: load the image into RAM at attach; runtime writes are volatile.
     # Size is taken from the image file, so no -s here (unlike the build mount).
-    ${argLine} = ('-a -m D: -t vm -f "{0}"' -f ${ImagePath})
+    ${argLine} = ('-a -m D: -t {0} -f "{1}"' -f ${MountType}, ${ImagePath})
     ${taskAction} = New-ScheduledTaskAction -Execute ${imdiskExe} -Argument ${argLine}
     ${taskTrigger} = New-ScheduledTaskTrigger -AtStartup
     ${taskPrincipal} = New-ScheduledTaskPrincipal -UserID "NT AUTHORITY\SYSTEM" -LogonType ServiceAccount -RunLevel Highest
@@ -347,17 +355,25 @@ try {
         if (${dDisk}) { ${dDesc} = ('DriveType={0} label=''{1}''' -f ${dDisk}.DriveType, ${dDisk}.VolumeName) }
         throw ("D: is taken by another device ({0}); the MAST index RAM disk requires D:. Reassign that device's letter and re-run." -f ${dDesc})
     } else {
-        Write-ImDiskLog ("Mounting D: from {0} via ImDisk (immediate, -t vm RAM-backed) ..." -f ${ImagePath})
-        ${mountArgs} = @('-a', '-m', 'D:', '-t', 'vm', '-f', ${ImagePath})
+        Write-ImDiskLog ("Mounting D: from {0} via ImDisk (immediate, -t {1}) ..." -f ${ImagePath}, ${MountType})
+        ${mountArgs} = @('-a', '-m', 'D:', '-t', ${MountType}, '-f', ${ImagePath})
+        # Capture stderr: Start-Process discards it, which left "exited 3"
+        # (ENOMEM on the dev VM) undiagnosable from the logs.
+        ${mountErrFile} = Join-Path ${env:TEMP} 'imdisk-mount-stderr.txt'
         ${mp} = Start-Process -FilePath ${imdiskExe} -ArgumentList ${mountArgs} `
-            -PassThru -Wait -WindowStyle Hidden
+            -PassThru -Wait -WindowStyle Hidden -RedirectStandardError ${mountErrFile}
         try { ${mp}.Refresh() } catch {}
         ${mountExit} = ${mp}.ExitCode
+        ${mountErr} = ''
+        if (Test-Path -LiteralPath ${mountErrFile}) {
+            ${mountErr} = ((Get-Content -LiteralPath ${mountErrFile} -Raw -ErrorAction SilentlyContinue) -replace '\s+', ' ').Trim()
+            Remove-Item -LiteralPath ${mountErrFile} -Force -ErrorAction SilentlyContinue
+        }
         if ($null -eq ${mountExit}) {
             throw "imdisk -a -m D: did not report an exit code (treating as failure)."
         }
         if (${mountExit} -ne 0) {
-            throw ("imdisk -a -m D: exited {0}. Boot-time task is still registered, but the immediate mount failed." -f ${mountExit})
+            throw ("imdisk -a -m D: exited {0} ({1}). Boot-time task is still registered, but the immediate mount failed." -f ${mountExit}, ${mountErr})
         }
         # Confirm the mount actually surfaced as a drive. ImDisk can return 0 even
         # if the mount silently misbehaved, so probe the drive root explicitly.

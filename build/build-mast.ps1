@@ -45,6 +45,15 @@ param(
   [ValidateSet('weizmann','direct')]
   [string]${ProxyMode} = 'weizmann',
 
+  # Mount type baked into the imdisk module command. 'vm' (production default):
+  # RAM-backed volatile D:, commits the full 32 GB of virtual memory -- fine on
+  # 64 GB units, IMPOSSIBLE on the 8 GB dev VM (imdisk exits 3, ENOMEM).
+  # 'file': plain file-backed mount so dev-VM cycles still get D:\mast-indexes
+  # (writes persist into the .img -- acceptable for a throwaway snapshot-reset
+  # VM). vm/run-prov-test.py always builds with 'file'.
+  [ValidateSet('vm','file')]
+  [string]${ImdiskMountType} = 'vm',
+
   # Site whose bootstrap profile (server/providers/config-bootstrap/sites/<Site>.toml)
   # becomes the unit's C:\WIS\unit.toml via the config-bootstrap provider. Selected
   # EXPLICITLY here, never derived from the hostname (per the config-file epic). The
@@ -299,6 +308,11 @@ function Generate-Commands([string[]]${Mods}) {
       }
       'astrometry-dependencies' {
         ${cmd} = ${cmd} + (" -ProxyMode {0}" -f ${astroDepProxyMode})
+      }
+      'imdisk' {
+        if (${ImdiskMountType} -ne 'vm') {
+          ${cmd} = ${cmd} + (" -MountType {0}" -f ${ImdiskMountType})
+        }
       }
       'config-bootstrap' {
         # Inject the explicitly-selected -Site so the provider deploys

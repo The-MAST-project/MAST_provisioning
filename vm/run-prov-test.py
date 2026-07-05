@@ -427,6 +427,10 @@ def phase_build(hostname: str, modules: list[str], proxy_mode: str) -> None:
             "-AllowMissingGithubToken",
             "-AllowMissingNetFx3Sxs",
             "-ProxyMode", proxy_mode,
+            # The dev VM has 8 GB RAM; the production 32 GB -t vm mount cannot
+            # attach there (imdisk exit 3, ENOMEM). File-backed keeps D: and
+            # the astrometry smoke solve exercisable in VM cycles.
+            "-ImdiskMountType", "file",
         ]
         if sorted(modules) != sorted(all_modules()):
             cmd += ["-Modules", ",".join(modules)]
