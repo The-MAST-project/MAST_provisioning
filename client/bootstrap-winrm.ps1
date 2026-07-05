@@ -132,7 +132,7 @@ $script:AllowUnencryptedOk = $false
 # flag units missing newer bootstrap elements. BUMP THIS whenever you add a bootstrap
 # capability, and add a matching element (since = this number) to
 # client/bootstrap-elements.json so its current_version stays == this value.
-$script:BootstrapVersion = 2
+$script:BootstrapVersion = 3
 
 # --- Service trim list (applied by default; exempt with -SkipTrim) ------------
 # Non-essential / vendor services with no role on a headless control box. Service
@@ -600,6 +600,30 @@ try {
     $siteFile = Join-Path $siteDir 'site.txt'
     Set-Content -LiteralPath $siteFile -Value $Site -Encoding ASCII
     Write-BootstrapMsg ('Using site: {0} (persisted to {1})' -f $Site, $siteFile) 'White'
+
+    # --- Time zone: Israel Standard Time with automatic DST ---
+    # The autounattend answer file already sets the zone, but machines have
+    # shown up on the right zone with automatic DST adjustment DISABLED
+    # (DynamicDaylightTimeDisabled=1), leaving the local clock an hour off all
+    # summer. Assert both here: tzutil /s without the _dstoff suffix sets the
+    # zone AND re-enables dynamic DST in one idempotent call.
+    Write-BootstrapMsg '' 'Cyan'
+    Write-BootstrapMsg '--- Time zone (Israel Standard Time, auto-DST) ---' 'Cyan'
+    try {
+        ${tzKey} = 'HKLM:\SYSTEM\CurrentControlSet\Control\TimeZoneInformation'
+        ${tzBefore} = (Get-TimeZone).Id
+        ${dstWasOff} = ((Get-ItemProperty -Path ${tzKey} -Name DynamicDaylightTimeDisabled -ErrorAction SilentlyContinue).DynamicDaylightTimeDisabled -eq 1)
+        if (${tzBefore} -ne 'Israel Standard Time' -or ${dstWasOff}) {
+            & tzutil.exe /s 'Israel Standard Time'
+            if (${LASTEXITCODE} -ne 0) { throw ("tzutil /s exited {0}" -f ${LASTEXITCODE}) }
+            Write-BootstrapMsg ("  Time zone set to Israel Standard Time (was '{0}'; auto-DST was {1}); local time now {2}." -f `
+                ${tzBefore}, $(if (${dstWasOff}) { 'OFF' } else { 'on' }), (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')) 'Green'
+        } else {
+            Write-BootstrapMsg '  Time zone already Israel Standard Time with auto-DST on.' 'Green'
+        }
+    } catch {
+        Write-BootstrapMsg ("  [WARN] time zone setup failed: {0}" -f $_.Exception.Message) 'Yellow'
+    }
 
     # --- Sync system time with public NTP (before anything TLS-sensitive) ---
     Write-BootstrapMsg '' 'Cyan'
