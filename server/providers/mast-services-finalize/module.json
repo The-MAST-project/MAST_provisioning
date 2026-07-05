@@ -6,7 +6,8 @@
   "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-mast-services-finalize.ps1\"",
   "commandfiles": [
     "provide-mast-services-finalize.ps1",
-    "verify-mast-services-finalize.ps1"
+    "verify-mast-services-finalize.ps1",
+    "mast-service-names.ps1"
   ],
   "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\verify-mast-services-finalize.ps1\""
 }
