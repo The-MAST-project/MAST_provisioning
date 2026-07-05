@@ -41,8 +41,14 @@ function Invoke-Native {
         try { ${proc}.Kill() } catch {}
         throw ("{0} timed out; process tree killed. See {1}" -f ${Tag}, ${out})
     }
+    # With stdout/stderr redirected, WaitForExit(ms) can return before the
+    # async I/O completes and ExitCode is momentarily unavailable ($null) even
+    # for a successful process (bit us: venv-create succeeded, "exit=" empty).
+    # The documented .NET remedy is a follow-up parameterless WaitForExit().
+    try { ${proc}.WaitForExit() } catch {}
     try { ${proc}.Refresh() } catch {}
     Write-JupyterLog ("{0} exit={1} (log {2})" -f ${Tag}, ${proc}.ExitCode, ${out})
+    if ($null -eq ${proc}.ExitCode) { throw ("{0} reported no exit code; see {1}" -f ${Tag}, ${out}) }
     if (${proc}.ExitCode -ne 0) { throw ("{0} failed (exit {1}); see {2}" -f ${Tag}, ${proc}.ExitCode, ${out}) }
 }
 
