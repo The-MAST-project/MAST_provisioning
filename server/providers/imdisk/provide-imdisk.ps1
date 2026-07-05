@@ -69,10 +69,16 @@ Set-Content -LiteralPath ${logFile} -Encoding UTF8 -Value ("[{0}] provide-imdisk
 # allocated of 32 GB logical) -- exactly the mast02 reference layout.
 # ---------------------------------------------------------------------------
 function Get-FreeDriveLetter {
-    # Walk Z: down to E: (C:/D: are spoken for) and return the first letter
-    # that has no drive root, for a temporary build/seed mount.
+    # Walk Z: down to E: (C:/D: are spoken for) and return the first letter no
+    # device owns, for a temporary build/seed mount. Test-Path is NOT enough
+    # here: a medialess device (empty DVD drive, card reader) has no drive root
+    # to Test-Path, yet its letter is taken -- imdisk then attaches the unit but
+    # the letter keeps resolving to that device, format fails, and the detach
+    # errors "Not an ImDisk device" (seen with a VirtualBox DVD drive at Y:).
+    # DriveInfo enumerates every assigned letter regardless of media presence.
+    ${used} = @([System.IO.DriveInfo]::GetDrives() | ForEach-Object { $_.Name.Substring(0, 1).ToUpperInvariant() })
     foreach (${ch} in [char[]]([char]'Z'..[char]'E')) {
-        if (-not (Test-Path -LiteralPath ("{0}:\" -f ${ch}))) { return ([string]${ch}) }
+        if (${used} -notcontains ([string]${ch})) { return ([string]${ch}) }
     }
     throw "No free drive letter available for the scratch build mount."
 }
@@ -182,10 +188,18 @@ function Build-SparseIndexImage {
     }
     finally {
         # Detach the scratch mount so the backing file is flushed and the final
-        # boot/immediate mount can claim it at D:.
+        # boot/immediate mount can claim it at D:. Guarded: imdisk writes errors
+        # to stderr, which EAP=Stop turns into a fresh throw inside this finally
+        # block -- that must never mask the real error from the try body above
+        # (it hid the original format failure in the Y:-was-a-DVD incident).
         Write-ImDiskLog ("Detaching scratch {0}..." -f ${scratchVol})
-        & ${ImdiskExe} -D -m ${scratchVol} 2>&1 | ForEach-Object {
-            Add-Content -LiteralPath ${logFile} -Encoding UTF8 -Value ("[imdisk] {0}" -f $_)
+        try {
+            ${detachOut} = & ${ImdiskExe} -D -m ${scratchVol} 2>&1
+            foreach (${line} in @(${detachOut})) {
+                Add-Content -LiteralPath ${logFile} -Encoding UTF8 -Value ("[imdisk] {0}" -f ${line})
+            }
+        } catch {
+            Write-ImDiskLog ("[WARN] scratch detach of {0} failed: {1}" -f ${scratchVol}, $_.Exception.Message)
         }
         Wait-ForDriveRoot -Root ${scratchRoot} -Gone | Out-Null
     }
@@ -320,10 +334,18 @@ try {
     # files on D:\mast-indexes) do not have to wait for a reboot. The
     # scheduled task above still re-establishes the mount on every boot,
     # so the immediate mount and the persistent mount stay consistent.
+    ${dDisk} = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='D:'" -ErrorAction SilentlyContinue
     if (-not (Test-Path -LiteralPath ${ImagePath})) {
         Write-ImDiskLog ("[INFO] Skipping immediate mount: image not present at {0}. Boot task will pick it up later." -f ${ImagePath})
-    } elseif (Test-Path -LiteralPath 'D:\') {
-        Write-ImDiskLog "[INFO] D: already in use; skipping immediate mount. Existing mount left intact."
+    } elseif (${dDisk} -and ${dDisk}.DriveType -eq 3 -and ${dDisk}.VolumeName -eq ${IndexSubdir}) {
+        Write-ImDiskLog "[INFO] D: already carries the index volume; skipping immediate mount. Existing mount left intact."
+    } elseif (${dDisk} -or (Test-Path -LiteralPath 'D:\')) {
+        # A foreign device parked on D: (DVD drive, card reader, ...) breaks the
+        # fleet-standard index mount -- and the boot task would fail the same
+        # way. Fail loudly instead of mounting elsewhere or skipping silently.
+        ${dDesc} = 'unknown device'
+        if (${dDisk}) { ${dDesc} = ('DriveType={0} label=''{1}''' -f ${dDisk}.DriveType, ${dDisk}.VolumeName) }
+        throw ("D: is taken by another device ({0}); the MAST index RAM disk requires D:. Reassign that device's letter and re-run." -f ${dDesc})
     } else {
         Write-ImDiskLog ("Mounting D: from {0} via ImDisk (immediate, -t vm RAM-backed) ..." -f ${ImagePath})
         ${mountArgs} = @('-a', '-m', 'D:', '-t', 'vm', '-f', ${ImagePath})
