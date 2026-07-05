@@ -844,6 +844,7 @@ try {
     $sys            = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\System'
     $search         = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Search'
     $appPrivacy     = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\AppPrivacy'
+    $inputPersonal  = 'HKLM:\SOFTWARE\Policies\Microsoft\InputPersonalization'
 
     $hardeningReg = @(
         @{ Path = $dataCollection; Name = 'AllowTelemetry';                Value = 0; Desc = 'Diagnostic data = Security (lowest)' }
@@ -864,6 +865,16 @@ try {
         @{ Path = $appPrivacy;     Name = 'LetAppsRunInBackground';        Value = 2; Desc = 'Background apps = Force Deny' }
         @{ Path = $appPrivacy;     Name = 'LetAppsAccessLocation';         Value = 2; Desc = 'App location = Force Deny' }
         @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DeliveryOptimization'; Name = 'DODownloadMode'; Value = 0; Desc = 'Delivery Optimization = HTTP only' }
+        # Suppresses the "Choose privacy settings for your device" page at first
+        # console logon (matters here: autologon means nobody is at the console to
+        # click through it). The per-toggle policies below force the same answers.
+        @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\OOBE'; Name = 'DisablePrivacyExperience'; Value = 1; Desc = 'No first-logon privacy settings page' }
+        @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\LocationAndSensors'; Name = 'DisableLocation'; Value = 1; Desc = 'Location service off' }
+        @{ Path = $inputPersonal;  Name = 'AllowInputPersonalization';      Value = 0; Desc = 'Inking/typing personalization off' }
+        @{ Path = $inputPersonal;  Name = 'RestrictImplicitInkCollection';  Value = 1; Desc = 'No implicit ink collection' }
+        @{ Path = $inputPersonal;  Name = 'RestrictImplicitTextCollection'; Value = 1; Desc = 'No implicit text collection' }
+        @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\TextInput'; Name = 'AllowLinguisticDataCollection'; Value = 0; Desc = 'No typing linguistic data upload' }
+        @{ Path = $cloudContent;   Name = 'DisableTailoredExperiencesWithDiagnosticData'; Value = 1; Desc = 'Tailored experiences off' }
     )
 
     $hardeningOk = 0
