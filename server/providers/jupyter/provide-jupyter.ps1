@@ -33,23 +33,41 @@ function Invoke-Native {
         [int]${TimeoutMs} = (30 * 60 * 1000)
     )
     ${out} = Join-Path ${logDir} ("jupyter-{0}.log" -f ${Tag})
-    ${proc} = Start-Process -FilePath ${Exe} -ArgumentList ${NativeArgs} -PassThru -NoNewWindow `
-        -RedirectStandardOutput ${out} -RedirectStandardError ("{0}.err" -f ${out})
-    if (-not ${proc}) { throw ("Start-Process returned no object for {0}" -f ${Tag}) }
-    if (-not ${proc}.WaitForExit(${TimeoutMs})) {
+    # System.Diagnostics.Process directly, NOT Start-Process: in Windows
+    # PowerShell 5.1 under the WinRM host, the cmdlet's -PassThru object loses
+    # the exit code of short-lived redirected processes ("exit=" was empty for
+    # SUCCESSFUL venv-create/pip runs, failing the provider). A manually
+    # started Process reports ExitCode reliably after WaitForExit. Async
+    # ReadToEnd on both pipes avoids the classic redirected-pipe deadlock.
+    ${psi} = New-Object System.Diagnostics.ProcessStartInfo
+    ${psi}.FileName = ${Exe}
+    ${psi}.Arguments = ((${NativeArgs} | ForEach-Object {
+        if ($_ -match '[\s"]') { '"' + ($_ -replace '"', '\"') + '"' } else { $_ }
+    }) -join ' ')
+    ${psi}.UseShellExecute = $false
+    ${psi}.RedirectStandardOutput = $true
+    ${psi}.RedirectStandardError = $true
+    ${psi}.CreateNoWindow = $true
+    ${proc} = [System.Diagnostics.Process]::Start(${psi})
+    if (-not ${proc}) { throw ("Process start returned no object for {0}" -f ${Tag}) }
+    ${stdoutTask} = ${proc}.StandardOutput.ReadToEndAsync()
+    ${stderrTask} = ${proc}.StandardError.ReadToEndAsync()
+    ${timedOut} = -not ${proc}.WaitForExit(${TimeoutMs})
+    if (${timedOut}) {
         try { & taskkill.exe /T /F /PID $(${proc}.Id) 2>$null | Out-Null } catch {}
         try { ${proc}.Kill() } catch {}
+    } else {
+        ${proc}.WaitForExit()   # drain the async readers before touching ExitCode
+    }
+    try { Set-Content -LiteralPath ${out} -Encoding UTF8 -Value ${stdoutTask}.Result } catch {}
+    try { Set-Content -LiteralPath ("{0}.err" -f ${out}) -Encoding UTF8 -Value ${stderrTask}.Result } catch {}
+    if (${timedOut}) {
         throw ("{0} timed out; process tree killed. See {1}" -f ${Tag}, ${out})
     }
-    # With stdout/stderr redirected, WaitForExit(ms) can return before the
-    # async I/O completes and ExitCode is momentarily unavailable ($null) even
-    # for a successful process (bit us: venv-create succeeded, "exit=" empty).
-    # The documented .NET remedy is a follow-up parameterless WaitForExit().
-    try { ${proc}.WaitForExit() } catch {}
-    try { ${proc}.Refresh() } catch {}
-    Write-JupyterLog ("{0} exit={1} (log {2})" -f ${Tag}, ${proc}.ExitCode, ${out})
-    if ($null -eq ${proc}.ExitCode) { throw ("{0} reported no exit code; see {1}" -f ${Tag}, ${out}) }
-    if (${proc}.ExitCode -ne 0) { throw ("{0} failed (exit {1}); see {2}" -f ${Tag}, ${proc}.ExitCode, ${out}) }
+    ${code} = ${proc}.ExitCode
+    Write-JupyterLog ("{0} exit={1} (log {2})" -f ${Tag}, ${code}, ${out})
+    if ($null -eq ${code}) { throw ("{0} reported no exit code; see {1}" -f ${Tag}, ${out}) }
+    if (${code} -ne 0) { throw ("{0} failed (exit {1}); see {2}" -f ${Tag}, ${code}, ${out}) }
 }
 
 Set-Content -LiteralPath ${logFile} -Encoding UTF8 -Value ("[{0}] provide-jupyter.ps1 started." -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))
