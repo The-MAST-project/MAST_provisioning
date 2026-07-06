@@ -298,6 +298,10 @@ if (-not $creds.unit) {
 }
 
 $unitUser = $creds.unit.user
+# Basic auth wants the BARE local username: creds.json stores ".\mast" and
+# WinRM Basic rejects the machine-relative form with "Access is denied"
+# (vm_lib.py strips it the same way for pywinrm).
+if ($unitUser -like '.\*') { $unitUser = $unitUser.Substring(2) }
 $unitPass = $creds.unit.pass
 $securePw = ConvertTo-SecureString $unitPass -AsPlainText -Force
 $unitCred = New-Object System.Management.Automation.PSCredential($unitUser, $securePw)
@@ -474,7 +478,12 @@ foreach ($unit in $units) {
                     $args.AllowMissingNoMachineLicense = $true
                     $args.AllowMissingGithubToken = $true
                 }
-                & $buildScript @args *>&1 | Out-File -FilePath $buildLog -Encoding UTF8
+                # Child scope with StrictMode off: the build runs in-process (to
+                # avoid Start-Process quoting edge cases), but build-mast.ps1 is
+                # not StrictMode-clean and this script sets Set-StrictMode, which
+                # leaks into in-process callees (PropertyNotFoundStrict on
+                # optional module.json keys). Scoped off, not globally.
+                & { Set-StrictMode -Off; & $buildScript @args } *>&1 | Out-File -FilePath $buildLog -Encoding UTF8
             } catch {
                 $_ | Out-String | Out-File -FilePath "$buildLog.err" -Encoding UTF8
                 Log-Event 'BUILD_FAIL' @{ unit=$hostname; exit_code=1; log=$buildLog }
