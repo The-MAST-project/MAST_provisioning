@@ -123,13 +123,20 @@ function Test-MastSmbHostReady {
         $hostName = $env:COMPUTERNAME
         foreach ($sn in $ShareNames) {
             $unc = "\\$hostName\$sn"
-            # Drop any stale loopback mapping first.
-            & net use $unc /delete /yes 2>&1 | Out-Null
+            # Drop any stale loopback mapping first. cmd-level redirect: when no
+            # mapping exists, net.exe writes "connection could not be found" to
+            # stderr, which a caller running EAP=Stop turns into a TERMINATING
+            # error (killed check-and-provision before its first unit).
+            & cmd.exe /c "net use $unc /delete /yes >nul 2>&1"
             $job = Start-Job -ScriptBlock {
                 param($u, $p, $user)
-                & net use $u $p /user:$user /persistent:no 2>&1
+                # Capture output explicitly: an unassigned native call leaks its
+                # lines into the job stream, making Receive-Job return an ARRAY
+                # (net-use lines + the hashtable) -- $r.rc then dies under
+                # Set-StrictMode. ($input was always empty here; wrong variable.)
+                $out = & net use $u $p /user:$user /persistent:no 2>&1
                 $rc = $LASTEXITCODE
-                @{ output = ($input | Out-String); rc = $rc }
+                @{ output = ($out | Out-String); rc = $rc }
             } -ArgumentList $unc, $TransferPass, $TransferUser
             $finished = Wait-Job $job -Timeout 15
             if (-not $finished) {
@@ -150,7 +157,7 @@ function Test-MastSmbHostReady {
                 }
             }
             Remove-Job $job -Force -ErrorAction SilentlyContinue
-            & net use $unc /delete /yes 2>&1 | Out-Null
+            & cmd.exe /c "net use $unc /delete /yes >nul 2>&1"
         }
     } elseif (-not $TransferUser -or -not $TransferPass) {
         [void]$warnings.Add("Transfer-account loopback check skipped (no creds supplied).")
