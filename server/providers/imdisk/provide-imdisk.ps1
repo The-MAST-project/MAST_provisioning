@@ -366,7 +366,10 @@ try {
         ${mountExit} = ${mp}.ExitCode
         ${mountErr} = ''
         if (Test-Path -LiteralPath ${mountErrFile}) {
-            ${mountErr} = ((Get-Content -LiteralPath ${mountErrFile} -Raw -ErrorAction SilentlyContinue) -replace '\s+', ' ').Trim()
+            # Out-String: Get-Content can return an array here (bit us on
+            # mast01 -- .Trim() on Object[] threw AFTER a successful mount,
+            # failing the provider for cosmetics).
+            ${mountErr} = ((@(Get-Content -LiteralPath ${mountErrFile} -ErrorAction SilentlyContinue) | Out-String) -replace '\s+', ' ').Trim()
             Remove-Item -LiteralPath ${mountErrFile} -Force -ErrorAction SilentlyContinue
         }
         if ($null -eq ${mountExit}) {
