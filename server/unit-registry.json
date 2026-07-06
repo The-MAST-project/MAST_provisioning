@@ -1,59 +1,51 @@
-﻿[
-{
-    "value":  [
-                  {
-                      "hostname":  "mast01",
-                      "ip":  "169.254.162.113",
-                      "site":  "ns",
-                      "maintenance_window":  {
-                                                 "start_hour":  0,
-                                                 "end_hour":  24
-                                             },
-                      "timezone":  "Asia/Jerusalem",
-                      "mac":  "10-7C-61-5B-06-2D"
-                  },
-                  {
-                      "hostname":  "mast00",
-                      "site":  "ns",
-                      "maintenance_window":  {
-                                                 "start_hour":  0,
-                                                 "end_hour":  24
-                                             },
-                      "timezone":  "Asia/Jerusalem",
-                      "mac":  "10-7C-61-5B-06-2D"
-                  },
-                  {
-                      "hostname":  "mast02",
-                      "site":  "ns",
-                      "maintenance_window":  {
-                                                 "start_hour":  0,
-                                                 "end_hour":  24
-                                             },
-                      "timezone":  "Asia/Jerusalem",
-                      "mac":  "10-7C-61-5B-06-2D"
-                  },
-                  {
-                      "hostname":  "mastw",
-                      "site":  "wis",
-                      "maintenance_window":  {
-                                                 "start_hour":  0,
-                                                 "end_hour":  24
-                                             },
-                      "timezone":  "Asia/Jerusalem",
-                      "mac":  "10-7C-61-5B-06-2D"
-                  },
-                  {
-                      "hostname":  "mast03",
-                      "ip":  "169.254.39.193",
-                      "site":  "ns",
-                      "maintenance_window":  {
-                                                 "start_hour":  0,
-                                                 "end_hour":  24
-                                             },
-                      "timezone":  "Asia/Jerusalem",
-                      "mac":  "10-7C-61-5B-06-2D"
-                  }
-              ],
-    "Count":  5
-}
+[
+  {
+    "hostname": "mast01",
+    "ip": "169.254.162.113",
+    "site": "ns",
+    "maintenance_window": {
+      "start_hour": 0,
+      "end_hour": 24
+    },
+    "timezone": "Asia/Jerusalem",
+    "mac": "10-7C-61-5B-06-25"
+  },
+  {
+    "hostname": "mast00",
+    "site": "ns",
+    "maintenance_window": {
+      "start_hour": 0,
+      "end_hour": 24
+    },
+    "timezone": "Asia/Jerusalem"
+  },
+  {
+    "hostname": "mast02",
+    "site": "ns",
+    "maintenance_window": {
+      "start_hour": 0,
+      "end_hour": 24
+    },
+    "timezone": "Asia/Jerusalem"
+  },
+  {
+    "hostname": "mastw",
+    "site": "wis",
+    "maintenance_window": {
+      "start_hour": 0,
+      "end_hour": 24
+    },
+    "timezone": "Asia/Jerusalem"
+  },
+  {
+    "hostname": "mast03",
+    "ip": "169.254.39.193",
+    "site": "ns",
+    "maintenance_window": {
+      "start_hour": 0,
+      "end_hour": 24
+    },
+    "timezone": "Asia/Jerusalem",
+    "mac": "10-7C-61-5B-06-2D"
+  }
 ]
