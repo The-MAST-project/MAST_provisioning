@@ -483,7 +483,13 @@ foreach ($unit in $units) {
                         $regUnits = @(Get-Content $UnitRegistry -Raw | ConvertFrom-Json)
                         $me = $regUnits | Where-Object { $_.hostname -ieq $inv.hostname } | Select-Object -First 1
                         $currentMac = $null
-                        if ($me) { $currentMac = $me.PSObject.Properties['mac'].Value }
+                        if ($me) {
+                            # StrictMode: the indexer returns $null for an absent
+                            # property and .Value on $null throws -- guard it
+                            # (first-ever collection of a unit has no mac yet).
+                            $macProp = $me.PSObject.Properties['mac']
+                            if ($null -ne $macProp) { $currentMac = $macProp.Value }
+                        }
                         if ($me -and $currentMac -ne $primaryMac) {
                             $me | Add-Member -NotePropertyName mac -NotePropertyValue $primaryMac -Force
                             $tmpReg = "$UnitRegistry.tmp"
