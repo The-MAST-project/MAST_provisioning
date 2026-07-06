@@ -132,7 +132,7 @@ $script:AllowUnencryptedOk = $false
 # flag units missing newer bootstrap elements. BUMP THIS whenever you add a bootstrap
 # capability, and add a matching element (since = this number) to
 # client/bootstrap-elements.json so its current_version stays == this value.
-$script:BootstrapVersion = 6
+$script:BootstrapVersion = 7
 
 # --- Service trim list (applied by default; exempt with -SkipTrim) ------------
 # Non-essential / vendor services with no role on a headless control box. Service
@@ -1119,22 +1119,31 @@ try {
     } catch { }
 
     # Re-run idempotency: Enable-PSRemoting (via its internal
-    # Set-WSManQuickConfig) throws WSManFault 87 "The parameter is incorrect"
-    # on a machine whose WinRM is already fully configured (hit on mast01's
-    # bootstrap re-run). If WinRM is running and answering locally there is
-    # nothing for quickconfig to do -- skip it; the auth/encryption Set-Items
-    # below are idempotent and still run.
+    # Set-WSManQuickConfig) can fail on an already-configured machine, and the
+    # local WSMan CLIENT stack can be broken independently of the service --
+    # mast01: a CIDR entry in the WinHTTP proxy bypass made every local WSMan
+    # client call (Test-WSMan included) fault 87 while remote WinRM worked
+    # fine. So: health-check via raw TCP (not Test-WSMan), log the outcome
+    # either way, and treat an Enable-PSRemoting failure as a WARN -- the
+    # authoritative gate is the 5985 verification at the end of this script.
     $winrmAlready = $false
     try {
         if ((Get-Service WinRM -ErrorAction Stop).Status -eq 'Running') {
-            $null = Test-WSMan -ErrorAction Stop
-            $winrmAlready = $true
+            $tcpProbe = New-Object System.Net.Sockets.TcpClient
+            try {
+                $winrmAlready = $tcpProbe.ConnectAsync('127.0.0.1', 5985).Wait(3000)
+            } finally { $tcpProbe.Close() }
         }
     } catch { }
     if ($winrmAlready) {
-        Write-BootstrapMsg '  WinRM already configured and answering; skipping Enable-PSRemoting.' 'Green'
+        Write-BootstrapMsg '  WinRM service running and port 5985 answering; skipping Enable-PSRemoting.' 'Green'
     } else {
-        Enable-PSRemoting -Force -SkipNetworkProfileCheck
+        Write-BootstrapMsg '  WinRM not yet serving on 5985; running Enable-PSRemoting...' 'DarkGray'
+        try {
+            Enable-PSRemoting -Force -SkipNetworkProfileCheck
+        } catch {
+            Write-BootstrapMsg ("  WARN: Enable-PSRemoting failed ({0}); continuing -- the final 5985 verification decides." -f $_.Exception.Message) 'Yellow'
+        }
     }
     Set-Item WSMan:\localhost\Service\Auth\Basic -Value $true -Force
     try {
