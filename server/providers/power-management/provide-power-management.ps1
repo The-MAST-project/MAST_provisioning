@@ -45,7 +45,13 @@ try {
     foreach (${n} in ${nics}) {
         Write-PMLog ("Hardening NIC power management: {0} ({1})" -f ${n}.Name, ${n}.InterfaceDescription)
         # "Allow the computer to turn off this device to save power" -> off.
-        Set-NetAdapterPowerManagement -Name ${n}.Name -AllowComputerToTurnOffDevice Disabled -ErrorAction Stop
+        # AllowComputerToTurnOffDevice is a CIM PROPERTY, not a cmdlet
+        # parameter -- the parameter form throws "parameter cannot be found"
+        # (first hit on mast01's real I225-V; the dev VM has no Intel NIC, so
+        # this block had never executed). Get -> set property -> pipe back.
+        ${pm} = Get-NetAdapterPowerManagement -Name ${n}.Name -ErrorAction Stop
+        ${pm}.AllowComputerToTurnOffDevice = 'Disabled'
+        ${pm} | Set-NetAdapterPowerManagement -ErrorAction Stop
         # PCIe selective-suspend -> off (best effort; not all adapters expose it).
         Set-NetAdapterPowerManagement -Name ${n}.Name -SelectiveSuspend Disabled -ErrorAction SilentlyContinue
         # The unit is power-cycled via the DLI switch + BIOS S0, never woken by
