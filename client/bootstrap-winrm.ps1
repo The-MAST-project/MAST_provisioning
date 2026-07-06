@@ -410,12 +410,15 @@ function Sync-MastSystemTime {
         # CMOS Clock', clock 5 min slow, yet /resync "succeeded".)
         # Right after the service restart the first poll has usually not completed
         # yet, so a single immediate status check reports 'Local CMOS Clock' even
-        # when NTP is reachable -- resync + wait + check, with retries (same
-        # proven pattern as the provisioning timesync provider).
+        # when NTP is reachable -- resync + wait + check. ONE attempt only: on
+        # NTP-less networks (the common bootstrap case) each attempt costs ~18 s
+        # and the HTTP Date-header fallback below does the real work; the
+        # provisioning timesync provider keeps its own retries for the tiered
+        # one-time correction.
         $source = ''
         $lastSync = ''
         $synced = $false
-        for ($attempt = 1; $attempt -le 3 -and -not $synced; $attempt++) {
+        for ($attempt = 1; $attempt -le 1 -and -not $synced; $attempt++) {
             & w32tm.exe /resync /force | Out-Null
             Start-Sleep -Seconds 2
             $status   = & w32tm.exe /query /status 2>$null
@@ -426,7 +429,7 @@ function Sync-MastSystemTime {
             $synced = [bool]($source -and ($source -notmatch 'Local CMOS Clock') -and ($source -notmatch 'Free-running') `
                       -and $lastSync -and ($lastSync -notmatch 'unspecified'))
             if (-not $synced) {
-                Write-BootstrapMsg ("  resync attempt {0}/3: not locked yet (Source='{1}')." -f $attempt, $source) 'DarkGray'
+                Write-BootstrapMsg ("  resync did not lock (Source='{0}'); falling back to web time." -f $source) 'DarkGray'
             }
         }
         if ($synced) {
