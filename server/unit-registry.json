@@ -47,5 +47,15 @@
     },
     "timezone": "Asia/Jerusalem",
     "mac": "10-7C-61-5B-06-2D"
+  },
+  {
+    "hostname": "mast04",
+    "ip": "169.254.234.173",
+    "site": "ns",
+    "maintenance_window": {
+      "start_hour": 0,
+      "end_hour": 24
+    },
+    "timezone": "Asia/Jerusalem"
   }
 ]
