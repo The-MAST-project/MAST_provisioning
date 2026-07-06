@@ -5,5 +5,23 @@
     "site": "ns",
     "maintenance_window": { "start_hour": 0, "end_hour": 24 },
     "timezone": "Asia/Jerusalem"
+  },
+  {
+    "hostname": "mast00",
+    "site": "ns",
+    "maintenance_window": { "start_hour": 0, "end_hour": 24 },
+    "timezone": "Asia/Jerusalem"
+  },
+  {
+    "hostname": "mast02",
+    "site": "ns",
+    "maintenance_window": { "start_hour": 0, "end_hour": 24 },
+    "timezone": "Asia/Jerusalem"
+  },
+  {
+    "hostname": "mastw",
+    "site": "wis",
+    "maintenance_window": { "start_hour": 0, "end_hour": 24 },
+    "timezone": "Asia/Jerusalem"
   }
 ]
