@@ -8,8 +8,7 @@
     "provide-mast.ps1",
     "verify-mast.ps1",
     "mast-repo-list.ps1",
-    "mast-repos.txt",
-    "assets/mast_github.txt"
+    "mast-repos.txt"
   ],
   "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\verify-mast.ps1\" -CloneRoot \"C:\\MAST\\repos\""
 }

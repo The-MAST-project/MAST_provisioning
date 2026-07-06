@@ -12,7 +12,6 @@ vault/*
 .venv/
 venv/
 __pycache__/
-server/providers/mast/assets/mast_github.txt
 .claude/
 
 # vm/run-prov-test.py session logs are local debug artifacts -- do not commit.
