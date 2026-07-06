@@ -480,7 +480,17 @@ foreach ($unit in $units) {
                     } | Select-Object -First 1).mac
                 if ($primaryMac) {
                     try {
-                        $regUnits = @(Get-Content $UnitRegistry -Raw | ConvertFrom-Json)
+                        # PS 5.1: @(pipeline) collects OUTPUT OBJECTS, and
+                        # ConvertFrom-Json emits a JSON array as ONE object --
+                        # @(Get-Content ... | ConvertFrom-Json) is therefore a
+                        # 1-element array CONTAINING the units array. Where-Object
+                        # then member-enumerates it (matching everything, which
+                        # smeared one unit's MAC onto every entry) and the
+                        # single-element rewrap below double-nested the file.
+                        # @($var) on a variable already holding an array is the
+                        # identity, so assign first, wrap second.
+                        $regParsed = Get-Content $UnitRegistry -Raw | ConvertFrom-Json
+                        $regUnits = @($regParsed)
                         $me = $regUnits | Where-Object { $_.hostname -ieq $inv.hostname } | Select-Object -First 1
                         $currentMac = $null
                         if ($me) {
