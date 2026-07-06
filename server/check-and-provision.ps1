@@ -424,6 +424,7 @@ foreach ($unit in $units) {
                             mac         = $_.MacAddress
                             status      = [string]$_.Status
                             ip          = $(if ($ip) { $ip } else { '' })
+                            media       = [string]$_.PhysicalMediaType
                             description = $_.InterfaceDescription
                         }
                     })
@@ -468,6 +469,31 @@ foreach ($unit in $units) {
                 $rows | Sort-Object hostname, adapter | Export-Csv -Path (Join-Path $invDir 'unit-inventory.csv') -NoTypeInformation -Encoding UTF8
                 $macSummary = (@($inv.adapters) | Where-Object { $_.status -eq 'Up' } | ForEach-Object { $_.name + '=' + $_.mac }) -join ' '
                 Log-Event 'INVENTORY_OK' @{ unit=$hostname; site=$inv.site; macs_up=$macSummary; csv=(Join-Path $invDir 'unit-inventory.csv') }
+
+                # Persist the unit's PRIMARY MAC into its unit-registry.json
+                # entry (for the manual DNS registry): the first Up ETHERNET
+                # (802.3) adapter -- Wi-Fi is never connected on-site, and one
+                # ethernet is enough; the bench link qualifies. Atomic write,
+                # all other entry fields preserved.
+                $primaryMac = (@($inv.adapters) | Where-Object {
+                        $_.status -eq 'Up' -and $_.media -match '802\.3'
+                    } | Select-Object -First 1).mac
+                if ($primaryMac) {
+                    try {
+                        $regUnits = @(Get-Content $UnitRegistry -Raw | ConvertFrom-Json)
+                        $me = $regUnits | Where-Object { $_.hostname -ieq $inv.hostname } | Select-Object -First 1
+                        if ($me -and -not ($me.PSObject.Properties.Match('mac').Count -and $me.mac -eq $primaryMac)) {
+                            if ($me.PSObject.Properties.Match('mac').Count) { $me.mac = $primaryMac }
+                            else { $me | Add-Member -NotePropertyName mac -NotePropertyValue $primaryMac }
+                            $tmpReg = "$UnitRegistry.tmp"
+                            (ConvertTo-Json -InputObject $regUnits -Depth 5) | Out-File -FilePath $tmpReg -Encoding UTF8
+                            Move-Item -Force $tmpReg $UnitRegistry
+                            Log-Event 'REGISTRY_MAC_SET' @{ unit=$inv.hostname; mac=$primaryMac }
+                        }
+                    } catch {
+                        Log-Event 'REGISTRY_MAC_WARN' @{ unit=$hostname; error=$_.Exception.Message }
+                    }
+                }
             } catch {
                 Log-Event 'INVENTORY_WARN' @{ unit=$hostname; error=$_.Exception.Message }
             }
