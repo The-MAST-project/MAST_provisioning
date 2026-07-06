@@ -132,7 +132,7 @@ $script:AllowUnencryptedOk = $false
 # flag units missing newer bootstrap elements. BUMP THIS whenever you add a bootstrap
 # capability, and add a matching element (since = this number) to
 # client/bootstrap-elements.json so its current_version stays == this value.
-$script:BootstrapVersion = 5
+$script:BootstrapVersion = 6
 
 # --- Service trim list (applied by default; exempt with -SkipTrim) ------------
 # Non-essential / vendor services with no role on a headless control box. Service
@@ -359,6 +359,64 @@ function Show-BootstrapUserFixNetwork {
     Write-BootstrapMsg '  3) Reboot, sign in as mast, then re-run this script (it is safe to re-run).' 'Yellow'
     Write-BootstrapMsg '  Or from elevated PowerShell (example):' 'Yellow'
     Write-BootstrapMsg '    Get-NetConnectionProfile | Set-NetConnectionProfile -NetworkCategory Private' 'Yellow'
+}
+
+function Write-BootstrapDesktopReport([string]$HostNm, [string]$SiteCode) {
+    # Post-bootstrap operator report on the all-users desktop: what this machine
+    # is, its MACs (for site DHCP reservations), and the manual steps bootstrap
+    # cannot do itself (BIOS power policy, provisioning handoff). Plus a
+    # shortcut to the installation directory.
+    $desktop = 'C:\Users\Public\Desktop'
+    if (-not (Test-Path $desktop)) { New-Item -ItemType Directory -Path $desktop -Force | Out-Null }
+    $lines = @(
+        '================= MAST unit bootstrap report =================',
+        ('generated : {0}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')),
+        ('hostname  : {0}' -f $HostNm),
+        ('site      : {0}' -f $SiteCode),
+        ('bootstrap : version {0}' -f $script:BootstrapVersion),
+        ''
+        '--- Network adapters (record MACs for DHCP reservations) ---'
+    )
+    try {
+        foreach ($a in @(Get-NetAdapter -Physical -ErrorAction Stop | Sort-Object ifIndex)) {
+            $ip = (Get-NetIPAddress -InterfaceIndex $a.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue | Select-Object -First 1).IPAddress
+            $lines += ('  {0,-12} {1,-17} {2,-12} ip={3,-15} ({4})' -f $a.Name, $a.MacAddress, $a.Status, $(if ($ip) { $ip } else { '-' }), $a.InterfaceDescription)
+        }
+    } catch { $lines += ('  (adapter query failed: {0})' -f $_.Exception.Message) }
+    $lines += @(
+        '',
+        '--- MANUAL: BIOS power policy (do once per machine) ---',
+        'The unit must power back on by itself when mains power returns (the DLI',
+        'switch cuts and restores AC). In BIOS/UEFI setup:',
+        '  * Advanced -> APM Configuration -> "Restore AC Power Loss" = Power On',
+        '    (ASUS wording; other boards call it "AC Power Recovery" or "After',
+        '    Power Loss" -- set Power On, NOT Last State).',
+        '  * Disable "ErP Ready" / deep-sleep options if present (they can block',
+        '    power-on-after-mains).',
+        '',
+        '--- NEXT: provisioning handoff ---',
+        ('1) Ensure the prov server resolves {0} (DNS or hosts entry).' -f $HostNm),
+        ('2) Register {0} (hostname + site) in server\unit-registry.json on the' -f $HostNm),
+        '   prov server and run check-and-provision.ps1; or run',
+        ('   onboard-mast-unit.ps1 -HostName {0} -ProvServer <prov-ip> on this unit.' -f $HostNm),
+        '3) After provisioning + hardware hookup: run the "MAST Instrument',
+        '   Calibration" desktop shortcut to bind instrument COM ports.',
+        '',
+        'Logs: C:\MAST\logs\bootstrap-winrm.log ; provisioning logs land under C:\MAST\logs.'
+    )
+    $reportPath = Join-Path $desktop 'MAST Bootstrap Report.txt'
+    Set-Content -LiteralPath $reportPath -Value $lines -Encoding UTF8
+    Write-BootstrapMsg ("  Desktop report written: {0}" -f $reportPath) 'White'
+    try {
+        $ws = New-Object -ComObject WScript.Shell
+        $lnk = $ws.CreateShortcut((Join-Path $desktop 'MAST Installation Directory.lnk'))
+        $lnk.TargetPath = 'C:\MAST'
+        $lnk.Description = 'MAST installation directory (repos, logs, staging)'
+        $lnk.Save()
+        Write-BootstrapMsg '  Desktop shortcut written: MAST Installation Directory -> C:\MAST' 'White'
+    } catch {
+        Write-BootstrapMsg ("  [WARN] could not create C:\MAST desktop shortcut: {0}" -f $_.Exception.Message) 'Yellow'
+    }
 }
 
 function Show-BootstrapNextSteps([string]$HostNm) {
@@ -1375,6 +1433,8 @@ try {
     } catch {
         Write-BootstrapMsg ("  [WARN] could not write bootstrap-manifest.json: {0}" -f $_.Exception.Message) 'Yellow'
     }
+
+    Write-BootstrapDesktopReport -HostNm $MastHostName -SiteCode $Site
 
     Write-BootstrapBanner '' 'White'
     Write-BootstrapBanner '[OK] MAST bootstrap finished successfully.' 'Green'
