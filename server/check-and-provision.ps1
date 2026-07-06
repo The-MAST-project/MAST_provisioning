@@ -583,10 +583,58 @@ foreach ($unit in $units) {
             Start-UnitProgressTimer -Unit $hostname -Phase 'transfer' -StartUtc $tStart.ToUniversalTime()
             try {
                 $pullScript = Join-Path $PSScriptRoot '..\client\mast-pull-staging.ps1'
-                $xferResult = Invoke-Command -Session $session -FilePath $pullScript `
-                    -ArgumentList $provServer, $hostname, $smbUser, $smbPass, $unitStage, $srcUNC
+                # Observability: the pull runs as a job on the main session while
+                # the main thread polls the destination size over a second,
+                # lightweight session. TRANSFER_PROGRESS answers "where are we,
+                # at what rate, how long remains"; TRANSFER_STALL answers "is it
+                # even working" (no byte movement across 4 consecutive polls).
+                $pollSession = $null
+                try { $pollSession = New-PSSession @sessParams } catch {}
+                $xferJob = Invoke-Command -Session $session -FilePath $pullScript `
+                    -ArgumentList $provServer, $hostname, $smbUser, $smbPass, $unitStage, $srcUNC -AsJob
+                $pollIntervalS = 30
+                $lastBytes = [long]0
+                $stallPolls = 0
+                while (-not (Wait-Job $xferJob -Timeout $pollIntervalS)) {
+                    if (-not $pollSession) { continue }
+                    try {
+                        $done = Invoke-Command -Session $pollSession -ScriptBlock {
+                            param($p)
+                            [long]((Get-ChildItem -LiteralPath $p -Recurse -File -ErrorAction SilentlyContinue |
+                                Measure-Object Length -Sum).Sum)
+                        } -ArgumentList $unitStage
+                        if (-not $done) { $done = [long]0 }
+                        $elapsedS = [Math]::Max(1, ((Get-Date) - $tStart).TotalSeconds)
+                        $winRate  = [Math]::Max(0, ($done - $lastBytes) / $pollIntervalS)
+                        $avgRate  = $done / $elapsedS
+                        $etaS = -1
+                        if ($avgRate -gt 0) { $etaS = [int](($totalBytes - $done) / $avgRate) }
+                        $pct = 0.0
+                        if ($totalBytes -gt 0) { $pct = [Math]::Round(100.0 * $done / $totalBytes, 1) }
+                        if ($done -le $lastBytes) { $stallPolls++ } else { $stallPolls = 0 }
+                        Log-Event 'TRANSFER_PROGRESS' @{
+                            unit        = $hostname
+                            bytes_done  = $done
+                            bytes_total = $totalBytes
+                            pct         = $pct
+                            rate_mbps   = [Math]::Round($winRate / 1MB, 1)
+                            eta_s       = $etaS
+                        }
+                        if ($stallPolls -ge 4) {
+                            Log-Event 'TRANSFER_STALL' @{
+                                unit       = $hostname
+                                bytes_done = $done
+                                stalled_s  = [int]($pollIntervalS * $stallPolls)
+                            }
+                        }
+                        $lastBytes = $done
+                    } catch {}
+                }
+                $xferResult = Receive-Job $xferJob
+                Remove-Job $xferJob -Force -ErrorAction SilentlyContinue
             } finally {
                 Stop-UnitProgressTimer
+                if ($pollSession) { Remove-PSSession $pollSession -ErrorAction SilentlyContinue }
             }
 
             $xferDur = [int]((Get-Date) - $tStart).TotalSeconds
