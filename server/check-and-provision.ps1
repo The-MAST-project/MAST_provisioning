@@ -406,6 +406,73 @@ foreach ($unit in $units) {
 
         try {
             # ---------------------------------------------------------------
+            # 2a-inv. Unit inventory -- the same facts the bootstrap desktop
+            # report shows (hostname, site, bootstrap version, physical
+            # adapters with MACs), collected centrally so the operator can
+            # hand hostnames + MACs to whoever maintains the manual DNS
+            # registry. Per-unit JSON + a rollup CSV under
+            # C:\MAST\logs\prov\unit-inventory. Runs on every cycle
+            # (including -DryRun, so a dry run doubles as an inventory
+            # sweep); never fatal.
+            # ---------------------------------------------------------------
+            try {
+                $inv = Invoke-Command -Session $session -ScriptBlock {
+                    $adapters = @(Get-NetAdapter -Physical -ErrorAction SilentlyContinue | Sort-Object ifIndex | ForEach-Object {
+                        $ip = (Get-NetIPAddress -InterfaceIndex $_.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue | Select-Object -First 1).IPAddress
+                        [pscustomobject]@{
+                            name        = $_.Name
+                            mac         = $_.MacAddress
+                            status      = [string]$_.Status
+                            ip          = $(if ($ip) { $ip } else { '' })
+                            description = $_.InterfaceDescription
+                        }
+                    })
+                    $bootVer = $null
+                    if (Test-Path 'C:\MAST\bootstrap-manifest.json') {
+                        try { $bootVer = (Get-Content 'C:\MAST\bootstrap-manifest.json' -Raw | ConvertFrom-Json).bootstrap_version } catch {}
+                    }
+                    [pscustomobject]@{
+                        hostname          = $env:COMPUTERNAME
+                        site              = [string](Get-Content 'C:\ProgramData\MAST\site.txt' -ErrorAction SilentlyContinue)
+                        bootstrap_version = $bootVer
+                        adapters          = $adapters
+                    }
+                }
+                $invDir = 'C:\MAST\logs\prov\unit-inventory'
+                if (-not (Test-Path $invDir)) { New-Item -ItemType Directory -Path $invDir -Force | Out-Null }
+                $invRecord = [pscustomobject]@{
+                    hostname          = $inv.hostname
+                    site              = $inv.site
+                    bootstrap_version = $inv.bootstrap_version
+                    adapters          = $inv.adapters
+                    collected_utc     = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+                }
+                ($invRecord | ConvertTo-Json -Depth 4) | Set-Content -Path (Join-Path $invDir ($inv.hostname + '.json')) -Encoding UTF8
+                # Rollup CSV rebuilt from all per-unit JSONs: the artifact to
+                # send to the DNS registrar (hostname + MAC per adapter).
+                $rows = foreach ($j in Get-ChildItem $invDir -Filter '*.json') {
+                    $u = Get-Content $j.FullName -Raw | ConvertFrom-Json
+                    foreach ($a in @($u.adapters)) {
+                        [pscustomobject]@{
+                            hostname      = $u.hostname
+                            site          = $u.site
+                            adapter       = $a.name
+                            mac           = $a.mac
+                            last_ip       = $a.ip
+                            status        = $a.status
+                            description   = $a.description
+                            collected_utc = $u.collected_utc
+                        }
+                    }
+                }
+                $rows | Sort-Object hostname, adapter | Export-Csv -Path (Join-Path $invDir 'unit-inventory.csv') -NoTypeInformation -Encoding UTF8
+                $macSummary = (@($inv.adapters) | Where-Object { $_.status -eq 'Up' } | ForEach-Object { $_.name + '=' + $_.mac }) -join ' '
+                Log-Event 'INVENTORY_OK' @{ unit=$hostname; site=$inv.site; macs_up=$macSummary; csv=(Join-Path $invDir 'unit-inventory.csv') }
+            } catch {
+                Log-Event 'INVENTORY_WARN' @{ unit=$hostname; error=$_.Exception.Message }
+            }
+
+            # ---------------------------------------------------------------
             # 2a. Availability state recovery. If a prior cycle crashed
             # between the unavailable/available writes, the unit is silently
             # excluded from MAST scheduling. Treat the file as stale once
