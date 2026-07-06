@@ -486,7 +486,13 @@ foreach ($unit in $units) {
                             if ($me.PSObject.Properties.Match('mac').Count) { $me.mac = $primaryMac }
                             else { $me | Add-Member -NotePropertyName mac -NotePropertyValue $primaryMac }
                             $tmpReg = "$UnitRegistry.tmp"
-                            (ConvertTo-Json -InputObject $regUnits -Depth 5) | Out-File -FilePath $tmpReg -Encoding UTF8
+                            # PS 5.1: -InputObject with a collection serializes the
+                            # ARRAY WRAPPER ({value:[...],Count:N}) -- it corrupted
+                            # this file once. Pipe (which enumerates) and re-wrap
+                            # the single-element case explicitly.
+                            $regJson = $regUnits | ConvertTo-Json -Depth 5
+                            if (@($regUnits).Count -eq 1) { $regJson = "[`n" + $regJson + "`n]" }
+                            $regJson | Out-File -FilePath $tmpReg -Encoding UTF8
                             Move-Item -Force $tmpReg $UnitRegistry
                             Log-Event 'REGISTRY_MAC_SET' @{ unit=$inv.hostname; mac=$primaryMac }
                         }
