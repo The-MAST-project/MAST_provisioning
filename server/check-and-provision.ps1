@@ -482,9 +482,10 @@ foreach ($unit in $units) {
                     try {
                         $regUnits = @(Get-Content $UnitRegistry -Raw | ConvertFrom-Json)
                         $me = $regUnits | Where-Object { $_.hostname -ieq $inv.hostname } | Select-Object -First 1
-                        if ($me -and -not ($me.PSObject.Properties.Match('mac').Count -and $me.mac -eq $primaryMac)) {
-                            if ($me.PSObject.Properties.Match('mac').Count) { $me.mac = $primaryMac }
-                            else { $me | Add-Member -NotePropertyName mac -NotePropertyValue $primaryMac }
+                        $currentMac = $null
+                        if ($me) { $currentMac = $me.PSObject.Properties['mac'].Value }
+                        if ($me -and $currentMac -ne $primaryMac) {
+                            $me | Add-Member -NotePropertyName mac -NotePropertyValue $primaryMac -Force
                             $tmpReg = "$UnitRegistry.tmp"
                             # PS 5.1: -InputObject with a collection serializes the
                             # ARRAY WRAPPER ({value:[...],Count:N}) -- it corrupted

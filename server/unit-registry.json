@@ -17,8 +17,7 @@
       "start_hour": 0,
       "end_hour": 24
     },
-    "timezone": "Asia/Jerusalem",
-    "mac": "10-7C-61-5B-06-25"
+    "timezone": "Asia/Jerusalem"
   },
   {
     "hostname": "mast02",
@@ -27,8 +26,7 @@
       "start_hour": 0,
       "end_hour": 24
     },
-    "timezone": "Asia/Jerusalem",
-    "mac": "10-7C-61-5B-06-25"
+    "timezone": "Asia/Jerusalem"
   },
   {
     "hostname": "mastw",
@@ -37,7 +35,6 @@
       "start_hour": 0,
       "end_hour": 24
     },
-    "timezone": "Asia/Jerusalem",
-    "mac": "10-7C-61-5B-06-25"
+    "timezone": "Asia/Jerusalem"
   }
 ]
