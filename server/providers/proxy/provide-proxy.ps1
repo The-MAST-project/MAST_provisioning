@@ -14,6 +14,24 @@ param(
     [string]${ForceMode}  = 'use'
 )
 
+function Convert-NoProxyToWildcardBypass([string]$List) {
+    # WinINet/WinHTTP bypass lists do NOT understand CIDR -- the WSMan client
+    # even faults 87 "The parameter is incorrect" on every local operation
+    # while a CIDR entry is present (broke bootstrap re-runs on mast01). The
+    # NO_PROXY env var keeps CIDR for tools that support it; these two
+    # surfaces get wildcard prefixes plus <local>.
+    $parts = @()
+    foreach ($e in ($List -split ',')) {
+        $t = $e.Trim()
+        if (-not $t) { continue }
+        if ($t -match '^(\d+)\.(\d+)\.(\d+)\.\d+/24$') { $parts += ('{0}.{1}.{2}.*' -f $Matches[1], $Matches[2], $Matches[3]) }
+        elseif ($t -match '^(\d+)\.(\d+)\.\d+\.\d+/16$') { $parts += ('{0}.{1}.*' -f $Matches[1], $Matches[2]) }
+        else { $parts += $t }
+    }
+    if ($parts -notcontains '<local>') { $parts += '<local>' }
+    return ($parts -join ';')
+}
+
 ${ErrorActionPreference} = "Stop"
 
 ${mastLogDot} = Join-Path ${PSScriptRoot} 'mast-log.ps1'
@@ -112,7 +130,7 @@ function Set-WinINetProxy {
         Set-ItemProperty -Path $k -Name 'ProxyEnable' -Type DWord  -Value 1
         Set-ItemProperty -Path $k -Name 'ProxyServer' -Type String -Value $HostPort
         if ($NoProxyList) {
-            $bypass = ($NoProxyList -split ',') -join ';'
+            $bypass = Convert-NoProxyToWildcardBypass $NoProxyList
             Set-ItemProperty -Path $k -Name 'ProxyOverride' -Type String -Value $bypass
         } else {
             Remove-ItemProperty -Path $k -Name 'ProxyOverride' -ErrorAction SilentlyContinue
@@ -166,7 +184,7 @@ function Set-WinINetConnectionFlags {
     $k = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings\Connections'
     if (-not (Test-Path $k)) { New-Item -Path $k -Force | Out-Null }
     $flags = if ($Enable) { 0x02 } else { 0x01 }
-    $bypass = if ($NoProxyList) { ($NoProxyList -split ',') -join ';' } else { '' }
+    $bypass = if ($NoProxyList) { Convert-NoProxyToWildcardBypass $NoProxyList } else { '' }
     foreach ($name in @('DefaultConnectionSettings', 'SavedLegacySettings')) {
         $existing = $null
         try { $existing = (Get-ItemProperty -Path $k -Name $name -ErrorAction Stop).$name } catch {}
@@ -215,7 +233,7 @@ function Set-WinHttpProxy {
         [string]$NoProxyList
     )
     if ($Enable) {
-        $bypass = if ($NoProxyList) { ($NoProxyList -split ',') -join ';' } else { '<local>' }
+        $bypass = if ($NoProxyList) { Convert-NoProxyToWildcardBypass $NoProxyList } else { '<local>' }
         $cmd = "netsh winhttp set proxy `"$HostPort`" `"$bypass`""
     } else {
         $cmd = "netsh winhttp reset proxy"
