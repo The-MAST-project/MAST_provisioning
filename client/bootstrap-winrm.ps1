@@ -132,7 +132,7 @@ $script:AllowUnencryptedOk = $false
 # flag units missing newer bootstrap elements. BUMP THIS whenever you add a bootstrap
 # capability, and add a matching element (since = this number) to
 # client/bootstrap-elements.json so its current_version stays == this value.
-$script:BootstrapVersion = 4
+$script:BootstrapVersion = 5
 
 # --- Service trim list (applied by default; exempt with -SkipTrim) ------------
 # Non-essential / vendor services with no role on a headless control box. Service
@@ -1060,7 +1060,24 @@ try {
         Start-Sleep -Seconds 3
     } catch { }
 
-    Enable-PSRemoting -Force -SkipNetworkProfileCheck
+    # Re-run idempotency: Enable-PSRemoting (via its internal
+    # Set-WSManQuickConfig) throws WSManFault 87 "The parameter is incorrect"
+    # on a machine whose WinRM is already fully configured (hit on mast01's
+    # bootstrap re-run). If WinRM is running and answering locally there is
+    # nothing for quickconfig to do -- skip it; the auth/encryption Set-Items
+    # below are idempotent and still run.
+    $winrmAlready = $false
+    try {
+        if ((Get-Service WinRM -ErrorAction Stop).Status -eq 'Running') {
+            $null = Test-WSMan -ErrorAction Stop
+            $winrmAlready = $true
+        }
+    } catch { }
+    if ($winrmAlready) {
+        Write-BootstrapMsg '  WinRM already configured and answering; skipping Enable-PSRemoting.' 'Green'
+    } else {
+        Enable-PSRemoting -Force -SkipNetworkProfileCheck
+    }
     Set-Item WSMan:\localhost\Service\Auth\Basic -Value $true -Force
     try {
         Set-Item WSMan:\localhost\Service\AllowUnencrypted -Value $true -Force
