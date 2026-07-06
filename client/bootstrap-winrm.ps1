@@ -132,7 +132,7 @@ $script:AllowUnencryptedOk = $false
 # flag units missing newer bootstrap elements. BUMP THIS whenever you add a bootstrap
 # capability, and add a matching element (since = this number) to
 # client/bootstrap-elements.json so its current_version stays == this value.
-$script:BootstrapVersion = 3
+$script:BootstrapVersion = 4
 
 # --- Service trim list (applied by default; exempt with -SkipTrim) ------------
 # Non-essential / vendor services with no role on a headless control box. Service
@@ -438,25 +438,31 @@ function Sync-MastSystemTime {
             # HTTP probe -- works wherever TCP 80 works, is immune to the
             # broken-clock TLS trap (no certificate validation), and is accurate
             # to ~1-2 s, plenty to unbreak TLS validation.
-            $webTime = $null
+            # ALL math in UTC. Comparing in local time bit us on mast01: the
+            # same-run tzutil DST flip left this process's cached UTC offset
+            # stale, ToLocalTime() produced a web time 1 h low, and the
+            # fallback "corrected" a correct clock backwards by an hour.
+            # UtcNow and Set-Date -Adjust never consult the local offset.
+            $webUtc = $null
             foreach ($probeUrl in @('http://www.google.com', 'http://www.msftconnecttest.com/connecttest.txt')) {
                 try {
                     $resp = Invoke-WebRequest -Uri $probeUrl -Method Head -UseBasicParsing -TimeoutSec 10
                     $dateHeader = $resp.Headers['Date']
                     if ($dateHeader) {
-                        $webTime = [DateTime]::ParseExact($dateHeader, 'R', [System.Globalization.CultureInfo]::InvariantCulture).ToLocalTime()
+                        $webUtc = [DateTime]::ParseExact($dateHeader, 'R', [System.Globalization.CultureInfo]::InvariantCulture, ([System.Globalization.DateTimeStyles]::AssumeUniversal -bor [System.Globalization.DateTimeStyles]::AdjustToUniversal))
                         break
                     }
                 } catch { }
             }
-            if ($webTime) {
-                $skewSeconds = [Math]::Abs(($webTime - (Get-Date)).TotalSeconds)
+            if ($webUtc) {
+                $delta = $webUtc - [DateTime]::UtcNow
+                $skewSeconds = [Math]::Abs($delta.TotalSeconds)
                 if ($skewSeconds -gt 30) {
-                    Set-Date -Date $webTime | Out-Null
-                    Write-BootstrapMsg ("  NTP unreachable; clock set from an HTTP Date header (was {0:N0}s off; now {1})." -f $skewSeconds, (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')) 'Green'
+                    Set-Date -Adjust $delta | Out-Null
+                    Write-BootstrapMsg ("  NTP unreachable; clock adjusted {0:N0}s from an HTTP Date header (UTC now {1})." -f $delta.TotalSeconds, [DateTime]::UtcNow.ToString('yyyy-MM-dd HH:mm:ss')) 'Green'
                     Write-BootstrapMsg '  w32time stays configured; it will refine the clock when NTP becomes reachable (e.g. on the site network).' 'White'
                 } else {
-                    Write-BootstrapMsg ("  NTP unreachable, but the clock is already within {0:N1}s of web time -- fine for TLS; left as-is." -f $skewSeconds) 'Green'
+                    Write-BootstrapMsg ("  NTP unreachable, but the clock is already within {0:N1}s of web time (UTC-compared) -- fine for TLS; left as-is." -f $skewSeconds) 'Green'
                 }
             } else {
                 Write-BootstrapMsg '  [WARN] NTP did NOT actually sync -- the time service is still on the local clock.' 'Yellow'
@@ -616,6 +622,9 @@ try {
         if (${tzBefore} -ne 'Israel Standard Time' -or ${dstWasOff}) {
             & tzutil.exe /s 'Israel Standard Time'
             if (${LASTEXITCODE} -ne 0) { throw ("tzutil /s exited {0}" -f ${LASTEXITCODE}) }
+            # Drop this process's cached UTC offset so local-time math and log
+            # timestamps later in this same run see the new DST state.
+            [TimeZoneInfo]::ClearCachedData()
             Write-BootstrapMsg ("  Time zone set to Israel Standard Time (was '{0}'; auto-DST was {1}); local time now {2}." -f `
                 ${tzBefore}, $(if (${dstWasOff}) { 'OFF' } else { 'on' }), (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')) 'Green'
         } else {
