@@ -132,7 +132,7 @@ $script:AllowUnencryptedOk = $false
 # flag units missing newer bootstrap elements. BUMP THIS whenever you add a bootstrap
 # capability, and add a matching element (since = this number) to
 # client/bootstrap-elements.json so its current_version stays == this value.
-$script:BootstrapVersion = 7
+$script:BootstrapVersion = 8
 
 # --- Service trim list (applied by default; exempt with -SkipTrim) ------------
 # Non-essential / vendor services with no role on a headless control box. Service
@@ -368,6 +368,12 @@ function Write-BootstrapDesktopReport([string]$HostNm, [string]$SiteCode) {
     # shortcut to the installation directory.
     $desktop = 'C:\Users\Public\Desktop'
     if (-not (Test-Path $desktop)) { New-Item -ItemType Directory -Path $desktop -Force | Out-Null }
+    # On a provisioned machine the desktop is organized under Desktop\MAST
+    # (desktop-shortcuts provider); a bootstrap RE-run must not litter the
+    # root again -- write into Setup and Calibration when it exists.
+    $targetDir = $desktop
+    $setupDir = Join-Path $desktop 'MAST\Setup and Calibration'
+    if (Test-Path -LiteralPath $setupDir) { $targetDir = $setupDir }
     $lines = @(
         '================= MAST unit bootstrap report =================',
         ('generated : {0}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')),
@@ -404,12 +410,12 @@ function Write-BootstrapDesktopReport([string]$HostNm, [string]$SiteCode) {
         '',
         'Logs: C:\MAST\logs\bootstrap-winrm.log ; provisioning logs land under C:\MAST\logs.'
     )
-    $reportPath = Join-Path $desktop 'MAST Bootstrap Report.txt'
+    $reportPath = Join-Path $targetDir 'MAST Bootstrap Report.txt'
     Set-Content -LiteralPath $reportPath -Value $lines -Encoding UTF8
     Write-BootstrapMsg ("  Desktop report written: {0}" -f $reportPath) 'White'
     try {
         $ws = New-Object -ComObject WScript.Shell
-        $lnk = $ws.CreateShortcut((Join-Path $desktop 'MAST Installation Directory.lnk'))
+        $lnk = $ws.CreateShortcut((Join-Path $targetDir 'MAST Installation Directory.lnk'))
         $lnk.TargetPath = 'C:\MAST'
         $lnk.Description = 'MAST installation directory (repos, logs, staging)'
         $lnk.Save()
