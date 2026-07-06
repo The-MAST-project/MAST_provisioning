@@ -574,7 +574,10 @@ foreach ($unit in $units) {
             # ---------------------------------------------------------------
             $unitStage  = "C:\mast-staging\$RunId"
             $srcUNC     = "\\$provServer\mast-staging\$hostname\01-provisioning"
-            $files      = Get-ChildItem -Path $stagingDir -File
+            # Recurse: the payload has subdirectories (sxs\, module asset dirs);
+            # a top-level count understated bytes_total and sent the
+            # TRANSFER_PROGRESS percentage past 100.
+            $files      = Get-ChildItem -Path $stagingDir -File -Recurse
             $totalBytes = ($files | Measure-Object -Sum Length).Sum
             Log-Event 'TRANSFER_START' @{
                 unit      = $hostname
