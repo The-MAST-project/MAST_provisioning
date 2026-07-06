@@ -458,32 +458,37 @@ foreach ($unit in $units) {
             $buildLog = Join-Path $LogRoot "$RunId-$hostname-build.log"
             try {
                 # Run build in-process to avoid Start-Process quoting edge cases.
-                $args = @{
-                    Top        = $RepoTop
-                    HostName   = $hostname
-                    ProxyMode  = $ProxyMode
-                }
+                # OUT-OF-PROCESS build. In-process invocation (& $buildScript)
+                # bit twice: this script's Set-StrictMode leaked into the callee
+                # (PropertyNotFoundStrict on optional module.json keys), and in a
+                # detached console the shared PowerShell host blocked the build
+                # with zero output and zero CPU (mast01 first run). A child
+                # powershell.exe is the same proven context the VM harness
+                # builds in.
+                $buildArgList = @(
+                    '-NoProfile', '-ExecutionPolicy', 'Bypass',
+                    '-File', $buildScript,
+                    '-Top', $RepoTop,
+                    '-HostName', $hostname,
+                    '-ProxyMode', $ProxyMode
+                )
                 # Site selects the bootstrap config profile (config-bootstrap) and comes
                 # SOLELY from the unit's registry entry -- the operator's bootstrap choice --
                 # never from the hostname. If absent, build-mast's default applies; log it
                 # loudly so a production unit cannot silently take the dev profile.
                 if ($unit.site) {
-                    $args.Site = $unit.site
+                    $buildArgList += @('-Site', $unit.site)
                 } else {
                     Log-Event 'SITE_MISSING' @{ unit=$hostname; note='no site in registry entry; build-mast default applies' }
                 }
-                if ($modules) { $args.Modules = $modules }
+                if ($modules) { $buildArgList += @('-Modules', ($modules -join ',')) }
                 if ($TestMode) {
-                    $args.TestMode = $true
-                    $args.AllowMissingNoMachineLicense = $true
-                    $args.AllowMissingGithubToken = $true
+                    $buildArgList += @('-TestMode', '-AllowMissingNoMachineLicense', '-AllowMissingGithubToken')
                 }
-                # Child scope with StrictMode off: the build runs in-process (to
-                # avoid Start-Process quoting edge cases), but build-mast.ps1 is
-                # not StrictMode-clean and this script sets Set-StrictMode, which
-                # leaks into in-process callees (PropertyNotFoundStrict on
-                # optional module.json keys). Scoped off, not globally.
-                & { Set-StrictMode -Off; & $buildScript @args } *>&1 | Out-File -FilePath $buildLog -Encoding UTF8
+                & powershell.exe @buildArgList *>&1 | Out-File -FilePath $buildLog -Encoding UTF8
+                if ($LASTEXITCODE -ne 0) {
+                    throw "build-mast.ps1 exited $LASTEXITCODE (log: $buildLog)"
+                }
             } catch {
                 $_ | Out-String | Out-File -FilePath "$buildLog.err" -Encoding UTF8
                 Log-Event 'BUILD_FAIL' @{ unit=$hostname; exit_code=1; log=$buildLog }
