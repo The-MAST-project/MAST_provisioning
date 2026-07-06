@@ -2,6 +2,29 @@
 
 ---
 
+## [2026-07-06] Credential convention: vault stores ".\\mast"; each transport normalizes
+
+**Why:** The unit account keeps resurfacing in two spellings (".\\mast" vs "mast") and every
+few weeks a new consumer picks the wrong one for its transport -- most recently
+check-and-provision's WinRM Basic session failing "Access is denied" on the machine-relative
+form. There was never an actual flip-flop of the stored value (vault/creds.json.template has
+said ".\\mast" since it was introduced); what differs is what each auth stack accepts, and
+that mapping was never written down.
+
+**What:** The convention, now explicit: **vault/creds.json stores the machine-relative form
+".\\mast"**; every consumer normalizes to what its transport needs and never edits the vault:
+
+- WinRM **Basic** (HTTP 5985): bare SAM name ("mast") -- machine-relative is rejected with
+  Access-denied. check-and-provision strips the prefix (815a490); pywinrm via vm_lib tries a
+  candidate ladder (".\\mast" -> "mast" -> "<ip>\\mast") because host stacks vary.
+- PS Remoting **Negotiate/NTLM**: machine-relative ".\\mast" is correct (onboard-mast-unit's
+  ProvUser default).
+- **SSH**: bare name (vm_lib _ssh_username()).
+
+**Implications:** Do not "fix" the vault to bare "mast" (it would silently change what
+Negotiate consumers send) and do not add machine-relative prefixes at call sites -- normalize
+at the transport adapter, citing this entry.
+
 ## [2026-07-05] Dev-VM cycles mount the index disk file-backed; scratch letters picked device-aware
 
 **Why:** The first full end-to-end VM loop surfaced two latent imdisk defects. (1) The
