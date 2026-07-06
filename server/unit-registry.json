@@ -36,5 +36,15 @@
       "end_hour": 24
     },
     "timezone": "Asia/Jerusalem"
+  },
+  {
+    "hostname": "mast03",
+    "ip": "169.254.39.193",
+    "site": "ns",
+    "maintenance_window": {
+      "start_hour": 0,
+      "end_hour": 24
+    },
+    "timezone": "Asia/Jerusalem"
   }
 ]
