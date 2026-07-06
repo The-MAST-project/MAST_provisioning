@@ -1,6 +1,8 @@
 [
   {
     "hostname": "mast01",
+    "ip": "169.254.162.113",
+    "site": "ns",
     "maintenance_window": { "start_hour": 0, "end_hour": 24 },
     "timezone": "Asia/Jerusalem"
   }
