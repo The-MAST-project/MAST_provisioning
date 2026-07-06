@@ -2,6 +2,39 @@
 
 ---
 
+## [2026-07-06] Unit inventory + primary MAC live in unit-registry.json, collected every cycle
+
+**Why:** Site DNS/DHCP is a manual registry maintained by a person; they need hostname->MAC
+pairs. That information existed only on each unit (the bootstrap desktop report), and nothing
+collected it centrally.
+
+**What:** `check-and-provision.ps1` collects hostname/site/bootstrap-version/physical adapters
+(MAC, IP, media, status) from every unit it connects to -- including under `-DryRun`, so a dry
+run doubles as a fleet inventory sweep. Per-unit JSON + a rollup `unit-inventory.csv` land under
+`C:\MAST\logs\prov\unit-inventory`; the unit's **primary MAC** (first Up 802.3 adapter --
+never Wi-Fi, one ethernet suffices) is persisted into its `unit-registry.json` entry. Collection
+failures are a WARN, never fatal.
+
+**Implications:** `unit-registry.json` is the handoff artifact for the DNS registrar. Two PS 5.1
+serialization traps are codified in the writer: pipe into `ConvertTo-Json` (the `-InputObject`
+form serializes the collection wrapper and corrupted the file once) and `Add-Member -Force`.
+
+## [2026-07-06] Desktop layout: one MAST folder, class subfolders, vendor sweep
+
+**Why:** Shortcuts accumulated loose on the desktop (ours plus every third-party installer's),
+with no explanation of what anything is for.
+
+**What:** The `desktop-shortcuts` provider owns the desktop: everything lives under
+`Desktop\MAST` with class subfolders (Operations / Setup and Calibration / Development /
+Vendor), each with a README.txt explainer. It adopts bootstrap's root-level artifacts (report,
+C:\MAST shortcut), removes legacy loose copies, and sweeps any remaining loose `.lnk`/`.url`
+from the Public and mast desktops into `Vendor`. Verify enforces the structure AND the contract
+that no loose shortcuts remain at the desktop roots.
+
+**Implications:** Installers that drop shortcuts after order 2700 would fail the next verify's
+clean-root check -- that is intended (the sweep on the next cycle adopts them). Operators find
+tools by purpose; the desktop stays clean across re-provisions.
+
 ## [2026-07-06] Credential convention: vault stores ".\\mast"; each transport normalizes
 
 **Why:** The unit account keeps resurfacing in two spellings (".\\mast" vs "mast") and every
