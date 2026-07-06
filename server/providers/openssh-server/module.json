@@ -5,7 +5,8 @@
   "order": 200,
   "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-openssh-server.ps1\"",
   "commandfiles": [
-    "provide-openssh-server.ps1"
+    "provide-openssh-server.ps1",
+    "assets/OpenSSH-Win64-v10.0.0.0.msi"
   ],
   "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -Command \"${log}=Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\verify\\openssh-server-verify.log'; ${svc}=Get-Service -Name 'sshd' -ErrorAction SilentlyContinue; if (-not ${svc}) { 'sshd service not registered' | Out-File -FilePath ${log} -Encoding UTF8; exit 1 }; ${tries}=0; while (${svc}.Status -ne 'Running' -and ${tries} -lt 15) { Start-Sleep -Seconds 2; ${svc}.Refresh(); ${tries}++ }; if (${svc}.Status -eq 'Running') { Set-Content -Path ${log} -Value ('sshd Status=' + ${svc}.Status + ' StartType=' + ${svc}.StartType + ' waited=' + (${tries}*2) + 's'); Set-Content -Path (Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\smoke\\openssh-server-smoke.txt') -Value 'openssh_server_ok' } else { ('sshd never reached Running after 30s (last status=' + ${svc}.Status + ')') | Out-File -FilePath ${log} -Encoding UTF8; exit 1 }\""
 }

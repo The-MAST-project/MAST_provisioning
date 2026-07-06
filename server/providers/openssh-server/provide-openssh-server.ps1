@@ -48,7 +48,26 @@ try {
     # 1. sshd service must exist (means bootstrap installed the capability).
     ${svc} = Get-Service -Name 'sshd' -ErrorAction SilentlyContinue
     if ($null -eq ${svc}) {
-        throw "sshd service is not registered. Run client\bootstrap-winrm.ps1 on this unit (interactive, admin) to install the OpenSSH.Server capability. This provider cannot do it over WinRM."
+        # Bootstrap's in-box capability install needs Windows Update
+        # reachability AND an interactive token; an offline-bootstrapped unit
+        # (mast03) arrives here with no sshd and no way to add it via DISM
+        # over WinRM (FoD kept failing 0x8024402c even as SYSTEM). The
+        # bundled Win32-OpenSSH MSI has neither dependency: msiexec installs
+        # sshd + ssh-agent + the firewall rule fine under the WinRM logon.
+        ${msi} = Join-Path ${PSScriptRoot} 'OpenSSH-Win64-v10.0.0.0.msi'
+        if (-not (Test-Path -LiteralPath ${msi})) { ${msi} = Join-Path ${PSScriptRoot} 'assets\OpenSSH-Win64-v10.0.0.0.msi' }
+        if (-not (Test-Path -LiteralPath ${msi})) {
+            throw "sshd is not registered and the bundled OpenSSH MSI is missing from the payload. Re-run bootstrap online, or restage the payload."
+        }
+        Write-SshLog ("sshd not registered; installing bundled Win32-OpenSSH: {0}" -f ${msi})
+        ${mp} = Start-Process -FilePath 'msiexec.exe' -ArgumentList @('/i', ('"{0}"' -f ${msi}), '/qn', '/norestart') -PassThru -Wait -WindowStyle Hidden
+        try { ${mp}.Refresh() } catch {}
+        if ($null -eq ${mp}.ExitCode -or ((${mp}.ExitCode -ne 0) -and (${mp}.ExitCode -ne 3010))) {
+            throw ("OpenSSH MSI install failed (msiexec exit {0})." -f ${mp}.ExitCode)
+        }
+        ${svc} = Get-Service -Name 'sshd' -ErrorAction SilentlyContinue
+        if ($null -eq ${svc}) { throw 'OpenSSH MSI reported success but sshd is still not registered.' }
+        Write-SshLog 'Win32-OpenSSH installed (sshd registered).'
     }
     Write-SshLog ("sshd: Status={0} StartType={1}" -f ${svc}.Status, ${svc}.StartType)
 
