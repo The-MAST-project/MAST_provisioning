@@ -65,6 +65,13 @@ param(
     [string]   $VaultCreds,
     [string[]] $Modules,
     [string[]] $OnlyHosts,
+    # Proxy mode passed through to build-mast.ps1 (weizmann|direct). 'direct' is
+    # for provisioning a unit that cannot reach bcproxy (e.g. a bench link-local
+    # switch with the unit's own internet uplink). The proxy module then clears
+    # all proxy surfaces on the unit -- re-run the proxy module with a weizmann
+    # build once the unit is on a campus/site network.
+    [ValidateSet('weizmann','direct')]
+    [string]   $ProxyMode = 'weizmann',
     [switch]   $DryRun,
     [switch]   $Force,
     [switch]   $WinRMUseSSL,
@@ -450,6 +457,7 @@ foreach ($unit in $units) {
                 $args = @{
                     Top        = $RepoTop
                     HostName   = $hostname
+                    ProxyMode  = $ProxyMode
                 }
                 # Site selects the bootstrap config profile (config-bootstrap) and comes
                 # SOLELY from the unit's registry entry -- the operator's bootstrap choice --
