@@ -115,11 +115,27 @@ try {
         Write-ZwoLog ("ZWO suite already installed (ASIStudio.exe at {0}); skipping all installers (idempotent re-run)." -f ${asiStudioExe})
     } else {
         # ZWO ASI camera driver: NSIS (vendor) -- /S silent.
-        ${asiDriverPath} = Join-Path ${AssetsRoot} "ZWO_ASI_Cameras_driver_Setup_V3.25.exe"
-        if (-not (Test-Path ${asiDriverPath})) {
-            throw "ZWO ASI camera driver not found at ${asiDriverPath}"
+        # Per-installer guard: a partial prior run (died after this installer but
+        # before ASI Studio) leaves the driver registered while the suite guard
+        # above still re-runs everything; over an existing same-version install
+        # the setup ignores /S and blocks forever on a hidden "do you want to
+        # Reinstall?" Yes/No dialog (caught live on mast04, 2026-07-07). Skip by
+        # uninstall-registry presence instead.
+        ${asiDriverUninst} = Get-ItemProperty `
+            'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+            'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*' `
+            -ErrorAction SilentlyContinue |
+            Where-Object { $_.PSObject.Properties.Match('DisplayName').Count -and $_.DisplayName -like 'ZWO_ASI_Cameras_driver_3.25*' } |
+            Select-Object -First 1
+        if (${asiDriverUninst}) {
+            Write-ZwoLog ("ZWO ASI camera driver already installed ({0}); skipping its setup (re-run hangs on a hidden Reinstall prompt)." -f ${asiDriverUninst}.DisplayName)
+        } else {
+            ${asiDriverPath} = Join-Path ${AssetsRoot} "ZWO_ASI_Cameras_driver_Setup_V3.25.exe"
+            if (-not (Test-Path ${asiDriverPath})) {
+                throw "ZWO ASI camera driver not found at ${asiDriverPath}"
+            }
+            Invoke-ZwoInstaller -Path ${asiDriverPath} -ArgumentList @('/S') -Label 'ZWO ASI camera driver'
         }
-        Invoke-ZwoInstaller -Path ${asiDriverPath} -ArgumentList @('/S') -Label 'ZWO ASI camera driver'
 
         # ZWO ASCOM: Inno Setup -- do not use NSIS /S (hangs or fails under WinRM session 0).
         ${ascomPath} = Join-Path ${AssetsRoot} "ZWO_ASCOM_Setup_V6.5.32.exe"
