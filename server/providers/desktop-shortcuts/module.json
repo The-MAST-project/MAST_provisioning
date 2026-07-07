@@ -1,0 +1,12 @@
+{
+  "name": "desktop-shortcuts",
+  "version": "1.0",
+  "description": "Create operator desktop shortcuts on the Public (all-users) desktop: the local FastAPI control service (http://localhost:8000/), the site weather page (defaults to the Neot Smadar meteoblue forecast, named '<site> Weather (Meteoblue)'; override via -WeatherUrl), SAOImage DS9, and the C:\\MAST\\logs folder. Account-agnostic so they appear for the autologin 'mast' account.",
+  "order": 2700,
+  "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-desktop-shortcuts.ps1\" -FastApiUrl \"http://localhost:8000/\"",
+  "commandfiles": [
+    "provide-desktop-shortcuts.ps1",
+    "verify-desktop-shortcuts.ps1"
+  ],
+  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\verify-desktop-shortcuts.ps1\""
+}

@@ -1,0 +1,14 @@
+﻿{
+  "name": "astrometry",
+  "version": "0.97",
+  "description": "Expand the prebuilt astrometry.net 0.97 tree (binaries + Python wrappers + demo data) into C:\\cygwin64\\usr\\local\\astrometry. Depends on astrometry-dependencies (order 400) having installed the Cygwin runtime packages.",
+  "order": 500,
+  "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-astrometry.ps1\" -AssetsRoot \".\" -InstallRoot \"C:\\cygwin64\\usr\\local\\astrometry\"",
+  "commandfiles": [
+    "provide-astrometry.ps1",
+    "verify-astrometry.ps1",
+    "assets/astrometry.tgz"
+  ],
+  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\verify-astrometry.ps1\""
+}
+

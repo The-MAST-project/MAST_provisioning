@@ -1,11 +1,13 @@
-{
+﻿{
   "name": "chrome",
-  "description": "Install Google Chrome web browser.",
-  "order": 150,
+  "version": "148.0.7778.179",
+  "description": "Install Google Chrome from the offline Chrome Enterprise standalone MSI. Replaces the old online ChromeSetup.exe stub, which downloaded via WinHTTP/BITS and failed behind bcproxy (cryptnet revocation cannot complete through the proxy); the offline MSI installs with no network access. See DECISIONS.md 2026-05-27.",
+  "order": 2100,
   "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-chrome.ps1\" -AssetsRoot \".\"",
   "commandfiles": [
     "provide-chrome.ps1",
-    "assets/ChromeSetup.exe"
+    "assets/GoogleChromeStandaloneEnterprise64.msi"
   ],
-  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -Command \"${chromePath}='C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'; ${log}=Join-Path ${env:ProgramData} 'MAST\\logs\\chrome-verify.log'; if (Test-Path ${chromePath}) { Set-Content -Path ${log} -Value 'Chrome installed successfully'; Set-Content -Path (Join-Path ${env:ProgramData} 'MAST\\logs\\chrome-smoke.txt') -Value 'chrome_ok' } else { 'Chrome executable not found at ' + ${chromePath} | Out-File -FilePath ${log} -Encoding UTF8 }\""
+  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -Command \"${chromePath}='C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'; ${log}=Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\verify\\chrome-verify.log'; if (Test-Path ${chromePath}) { Set-Content -Path ${log} -Value 'Chrome installed successfully'; Set-Content -Path (Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\smoke\\chrome-smoke.txt') -Value 'chrome_ok' } else { 'Chrome executable not found at ' + ${chromePath} | Out-File -FilePath ${log} -Encoding UTF8; exit 1 }\""
 }
+

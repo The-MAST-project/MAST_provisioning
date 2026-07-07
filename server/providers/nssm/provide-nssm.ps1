@@ -3,7 +3,9 @@
 param(
     [string]${AssetsRoot} = ${PSScriptRoot},
     [string]${ZipPath},                                   # Optional explicit path to nssm-2.24.zip
-    [string]${InstallDir} = 'C:\Program Files\nssm'       # Final install location (added to PATH)
+    [string]${InstallDir} = 'C:\Program Files\nssm',      # Final install location (added to PATH)
+    # Re-extract/copy even if nssm.exe is already present (otherwise left as-is).
+    [switch]${Force}
 )
 
 # --- Import shared helpers ---
@@ -25,9 +27,22 @@ catch {
     throw "Failed to import provisioning.psm1: $($_.Exception.Message)"
 }
 
+# Idempotent skip: nssm.exe already present means it is installed. Re-assert PATH
+# and skip the unzip/copy. Use -Force to reinstall.
+${nssmExeGuard} = Join-Path ${InstallDir} 'nssm.exe'
+if (-not ${Force} -and (Test-Path ${nssmExeGuard})) {
+    Add-ToSystemPath -Dir ${InstallDir}
+    Write-Host "NSSM already installed at ${InstallDir}; skipping. Use -Force to reinstall."
+    exit 0
+}
+
 try {
     if (-not ${ZipPath}) {
-        ${ZipPath} = ${AssetsRoot}
+        ${ZipPath} = Get-ChildItem -Path ${AssetsRoot} -Filter 'nssm-*.zip' |
+            Select-Object -First 1 -ExpandProperty FullName
+        if (-not ${ZipPath}) {
+            throw "No nssm-*.zip found in ${AssetsRoot}"
+        }
     }
     if (-not (Test-Path ${ZipPath})) {
         throw "NSSM archive not found: ${ZipPath}"
@@ -65,7 +80,7 @@ try {
     # --- Verify installation ---
     try {
         ${verLine} = & ${destExe} 2>&1 | Select-Object -First 1
-        ${verLog}  = Join-Path ${env:ProgramData} 'MAST\logs\nssm-verify.log'
+        ${verLog}  = Join-Path (Get-MastVerifyDir) 'nssm-verify.log'
         ${verLine} | Out-File -FilePath ${verLog} -Encoding UTF8
         Write-Host "NSSM installed: ${verLine}"
     }

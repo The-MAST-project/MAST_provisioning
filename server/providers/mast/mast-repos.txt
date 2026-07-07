@@ -1,0 +1,12 @@
+# One repo per line: host and path only (no https://, no .git suffix).
+# Optionally append a ref (branch, tag, or commit hash) separated by whitespace.
+# If no ref is given the remote default branch is cloned.
+# Examples:
+#   github.com/ORG/REPO
+#   github.com/ORG/REPO main
+#   github.com/ORG/REPO v1.2.3
+#   github.com/ORG/REPO abc1234
+# Lines starting with # and blank lines are ignored.
+#github.com/The-MAST-project/MAST_unit.2024-12-12
+github.com/elibrody-weizmann/MAST_unit.2024-12-12 eli/vm-provisioning
+github.com/elibrody-weizmann/MAST_common eli/vm-provisioning

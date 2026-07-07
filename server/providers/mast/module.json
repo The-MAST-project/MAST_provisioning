@@ -1,11 +1,15 @@
-{
+﻿{
   "name": "mast",
+  "version": "git",
   "description": "Clone repos, create per-repo virtualenvs, and install requirements.txt in each.",
-  "order": 160,
-  "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-github.ps1\" -AssetsRoot \".\" -CloneRoot \"C:\\MAST\\repos\" -PythonExe \"C:\\Python312\\python.exe\"",
+  "order": 2200,
+  "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-mast.ps1\" -AssetsRoot \".\" -CloneRoot \"C:\\MAST\\repos\"",
   "commandfiles": [
     "provide-mast.ps1",
-    "assets/Git-2.52.0-64-bit.exe"
+    "verify-mast.ps1",
+    "mast-repo-list.ps1",
+    "mast-repos.txt"
   ],
-  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -Command \"if (Test-Path 'C:\\MAST\\repos') { Get-ChildItem 'C:\\MAST\\repos' -Directory | ForEach-Object { $py = Join-Path $_.FullName '.venv\\Scripts\\python.exe'; if (Test-Path $py) { & $py --version } } | Out-File -FilePath (Join-Path $env:ProgramData 'MAST\\logs\\github-verify.log') -Encoding UTF8; Set-Content -Path (Join-Path $env:ProgramData 'MAST\\logs\\github-smoke.txt') -Value 'github_ok' }\""
+  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\verify-mast.ps1\" -CloneRoot \"C:\\MAST\\repos\""
 }
+

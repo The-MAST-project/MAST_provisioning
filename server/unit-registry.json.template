@@ -1,0 +1,9 @@
+[
+  {
+    "_comment": "Template entry. Copy this file to unit-registry.json and edit. unit-registry.json is gitignored when it contains real secrets/credentials. The 'modules' field is OPTIONAL: omit it (or leave empty) to provision every provider discovered under server/providers/. Specify it only to deliberately restrict a unit to a subset. The 'site' field (e.g. 'ns', 'wis') selects the bootstrap config profile (config-bootstrap provider) and is the operator's bootstrap choice -- never derived from the hostname; required for non-dev units.",
+    "hostname": "mast01",
+    "site": "ns",
+    "maintenance_window": { "start_hour": 10, "end_hour": 16 },
+    "timezone": "Asia/Jerusalem"
+  }
+]

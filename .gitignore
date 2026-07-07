@@ -1,5 +1,30 @@
 server/tokens/
 staging/
-vault/
+vault/*
+!vault/README.md
+!vault/creds.json.template
+!vault/.gitkeep
 
+# Upstream now ships a stripped (no-indexes) astrometry.tgz under the cygwin provider,
+# so it is checked in rather than ignored. Keep this commented marker as a reminder
+# that the full ~30GB asset (with indexes) is not what lives in the repo.
 # server/providers/cygwin/assets/astrometry.tgz
+.venv/
+venv/
+__pycache__/
+.claude/
+
+# vm/run-prov-test.py session logs are local debug artifacts -- do not commit.
+vm/run-logs/*.log
+
+# vm/autounattend-mast.iso is a generated build artifact from vm/build-autounattend-iso.ps1.
+# Was tracked historically and slipped back in by accident -- now ignored.
+vm/autounattend-mast.iso
+
+# Stray *.tgz.bak-orig backups left during provider asset updates do not belong
+# in the repo. Keep them out so they cannot be committed by mistake.
+*.bak-orig
+
+# shared/ is the mast-shared SMB share backing dir (created by setup-smb-share.ps1).
+# It holds runtime artifacts staged for units (bootstrap files, etc.), not repo content.
+shared/

@@ -1,12 +1,14 @@
-{
+﻿{
   "name": "nomachine",
-  "description": "Install NoMachine Enterprise Client and Desktop, and apply license if provided.",
-  "order": 70,
+  "version": "9.0.188",
+  "description": "Install NoMachine Enterprise Desktop (server-side, accepts incoming sessions) and apply license if provided. Client is intentionally not installed.",
+  "order": 1300,
   "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-nomachine.ps1\" -AssetsRoot \".\"",
   "commandfiles": [
     "provide-nomachine.ps1",
-    "assets/nomachine-enterprise-client_9.0.188_11_x64.exe",
+    "verify-nomachine.ps1",
     "assets/nomachine-enterprise-desktop_9.0.188_11_x64.exe"
   ],
-  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -Command \"${log} = Join-Path $env:ProgramData 'MAST\\logs\\nomachine-verify.log'; Get-Service | Where-Object { $_.DisplayName -match 'NoMachine' -or $_.Name -match 'nx' } | Select-Object Name,Status | Out-File -FilePath ${log}; if (Test-Path 'C:\\ProgramData\\NoMachine\\licenses') { (Get-ChildItem 'C:\\ProgramData\\NoMachine\\licenses' -Filter '*.lic' | Select-Object -ExpandProperty Name) | Out-File -FilePath ${log} -Append }; Set-Content -Path (Join-Path $env:ProgramData 'MAST\\logs\\nomachine-smoke.txt') -Value 'nomachine_ok'\""
+  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\verify-nomachine.ps1\""
 }
+

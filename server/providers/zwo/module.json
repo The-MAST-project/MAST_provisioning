@@ -1,13 +1,21 @@
-{
-  "name": "cygwin",
-  "description": "Install Cygwin from a prebuilt cygwin64.tgz, run postinstall, add to PATH, and verify.",
-  "order": 120,
-  "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-cygwin.ps1\" -AssetsRoot \".\" -InstallRoot \"C:\\cygwin64\"",
+﻿{
+  "name": "zwo",
+  "version": "asistudio-1.16.2/ascom-6.5.32/driver-3.25",
+  "pin_target": "ZWO ASCOM 6.5.20 and ASIStudio 1.14.0.0 on mastw - acquire older installers to downgrade. See compare-mastw/GAPS.md.",
+  "description": "Install ZWO camera drivers, ASI Studio, and ASCOM driver.",
+  "order": 1800,
+  "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-zwo.ps1\" -AssetsRoot \".\"",
   "commandfiles": [
     "provide-zwo.ps1",
     "assets/ASIStudio_V1.16.2_x64_Setup.exe",
     "assets/ZWO_ASCOM_Setup_V6.5.32.exe",
-    "assets/ZWO_ASI_Cameras_driver_Setup_V3.25.exe"
+    "assets/ZWO_ASI_Cameras_driver_Setup_V3.25.exe",
+    "assets/zwo-driver-publisher.cer",
+    "assets/driver/x64/ASICAMUSB3.inf",
+    "assets/driver/x64/ASICAMUSB3.sys",
+    "assets/driver/x64/asicamusb3.cat",
+    "assets/driver/x64/WdfCoInstaller01009.dll"
   ],
-  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -Command \"$bin='C:\\cygwin64\\bin'; $bash=Join-Path $bin 'bash.exe'; $log=Join-Path $env:ProgramData 'MAST\\logs\\cygwin-verify.log'; if (Test-Path $bash) { & $bash -lc 'uname -a' | Out-File -FilePath $log -Encoding UTF8; & $bash -lc 'cygcheck -V' | Out-File -FilePath $log -Append -Encoding UTF8; Set-Content -Path (Join-Path $env:ProgramData 'MAST\\logs\\cygwin-smoke.txt') -Value 'cygwin_ok' } else { 'bash.exe not found' | Out-File -FilePath $log -Encoding UTF8 }\""
+  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -Command \"$log = Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\verify\\zwo-verify.log'; $smoke = Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\smoke\\zwo-smoke.txt'; $a1 = 'C:\\Program Files\\ASIStudio\\ASIStudio.exe'; $a2 = 'C:\\Program Files (x86)\\ASIStudio\\ASIStudio.exe'; $studio = ((Test-Path -LiteralPath $a1) -or (Test-Path -LiteralPath $a2)); $drv = ((& pnputil.exe /enum-drivers 2>&1) | Select-String 'asicamusb3.inf' -Quiet); if ($studio -and $drv) { Set-Content -Path $log -Value 'ZWO ASI Studio + ASICAMUSB3 camera driver installed'; Set-Content -Path $smoke -Value 'zwo_ok' } else { $msg = @(); if (-not $studio) { $msg += 'ASIStudio.exe not found under Program Files' }; if (-not $drv) { $msg += 'asicamusb3.inf not present in driver store (pnputil /enum-drivers)' }; ($msg -join '; ') | Out-File -FilePath $log -Encoding UTF8; exit 1 }\""
 }
+

@@ -1,0 +1,12 @@
+{
+  "name": "proxy",
+  "version": "1.1",
+  "description": "Soft proxy: probe http_proxy reachability and either set (Weizmann on-campus) or clear (off-campus / home network) machine-scope http_proxy/https_proxy/no_proxy env vars, HKCU IE/WinINet proxy keys (cygwin setup-x86_64.exe reads these), and machine WinHTTP proxy (Windows Update / BITS). Override with -ForceMode use|direct.",
+  "order": 100,
+  "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-proxy.ps1\"",
+  "commandfiles": [
+    "provide-proxy.ps1",
+    "verify-proxy.ps1"
+  ],
+  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\verify-proxy.ps1\""
+}

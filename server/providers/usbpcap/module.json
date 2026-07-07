@@ -1,0 +1,13 @@
+{
+  "name": "usbpcap",
+  "version": "1.5.4.0",
+  "description": "Install USBPcap (USB packet capture driver + tools) so Wireshark can sniff USB traffic from the cameras and serial-USB adapters. Sister to npcap (network) and wireshark (analyzer).",
+  "order": 1050,
+  "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-usbpcap.ps1\" -AssetsRoot \".\"",
+  "commandfiles": [
+    "provide-usbpcap.ps1",
+    "verify-usbpcap.ps1",
+    "assets/USBPcapSetup-1.5.4.0.exe"
+  ],
+  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\verify-usbpcap.ps1\""
+}

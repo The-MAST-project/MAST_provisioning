@@ -1,11 +1,16 @@
-{
+﻿{
   "name": "vscode",
-  "description": "Install Visual Studio Code with extensions for development.",
-  "order": 130,
+  "version": "1.121.0",
+  "description": "Install Visual Studio Code (offline per-user UserSetup) and the bundled Python extensions (ms-python.python + ms-python.debugpy) from staged .vsix files -- no marketplace access needed (units are behind bcproxy). Extensions install into the running mast account's profile.",
+  "order": 1900,
   "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-vscode.ps1\" -AssetsRoot \".\" -InstallRoot \"C:\\Program Files\\Microsoft VS Code\"",
   "commandfiles": [
     "provide-vscode.ps1",
-    "assets/VSCodeUserSetup-x64-1.105.1.exe"
+    "verify-vscode.ps1",
+    "assets/VSCodeUserSetup-x64-1.121.0.exe",
+    "assets/ms-python.python-2026.4.0-win32-x64.vsix",
+    "assets/ms-python.debugpy-2026.6.0-win32-x64.vsix"
   ],
-  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -Command \"${vscodePath}='C:\\Program Files\\Microsoft VS Code\\Code.exe'; ${log}=Join-Path ${env:ProgramData} 'MAST\\logs\\vscode-verify.log'; if (Test-Path ${vscodePath}) { Set-Content -Path ${log} -Value 'VSCode installed successfully'; Set-Content -Path (Join-Path ${env:ProgramData} 'MAST\\logs\\vscode-smoke.txt') -Value 'vscode_ok' } else { 'VSCode executable not found at ' + ${vscodePath} | Out-File -FilePath ${log} -Encoding UTF8 }\""
+  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\verify-vscode.ps1\""
 }
+

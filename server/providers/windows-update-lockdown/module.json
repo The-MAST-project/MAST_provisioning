@@ -1,0 +1,13 @@
+{
+  "name": "windows-update-lockdown",
+  "version": "1.0",
+  "description": "Keep automatic Windows Updates disabled. Windows self-heals its update components (WaaSMedicSvc / Update Orchestrator re-enable wuauserv and re-create scan tasks), so a one-time disable drifts back. This deploys enforce-no-updates.ps1 to C:\\ProgramData\\MAST\\windows-update and registers a daily + at-startup SYSTEM scheduled task ('mast-no-windows-updates') that re-asserts the GP NoAutoUpdate policy, re-disables the update services, and disables the UpdateOrchestrator/WindowsUpdate scan tasks; it also runs once at provision time. Best-effort by design (the Medic service can re-enable within a day; the daily run corrects drift).",
+  "order": 2350,
+  "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-windows-update-lockdown.ps1\"",
+  "commandfiles": [
+    "provide-windows-update-lockdown.ps1",
+    "verify-windows-update-lockdown.ps1",
+    "enforce-no-updates.ps1"
+  ],
+  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\verify-windows-update-lockdown.ps1\""
+}

@@ -1,11 +1,13 @@
-{
+﻿{
   "name": "imdisk",
-  "description": "Install ImDisk virtual disk driver and create a 10GB ramdisk at D: with boot-time activation.",
-  "order": 170,
-  "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -Command \"${wd} = Split-Path -Parent ${PSCommandPath}; & powershell.exe -ExecutionPolicy Bypass -NoProfile -File (Join-Path ${wd} 'provide-imdisk.ps1') -AssetsRoot ${wd}\"",
+  "version": "imdisktk-x64",
+  "description": "Install ImDisk virtual disk driver, build a sparse 32 GB NTFS index image (C:\\MAST\\Shared\\MAST-32GB-indexes-5202+5203.img) from the staged mast-indexes seed if it is not already present (the build mounts it file-backed to write the seed), then mount it as D: RAM-backed and VOLATILE (imdisk -a -m D: -t vm -f <image>) and register a boot-time task that re-mounts it the same way each boot. -t vm loads the index seed into RAM (fast solving) while runtime scratch writes are wiped on reboot; it commits ~32 GB RAM. The image is sparse: 32 GB logical, only ~10 GB of index files allocated on disk. Ordered before astrometry (500) so D:\\mast-indexes is reachable during astrometry's smoke solve.",
+  "order": 250,
+  "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-imdisk.ps1\" -AssetsRoot \".\"",
   "commandfiles": [
     "provide-imdisk.ps1",
     "assets/ImDiskTk-x64.zip"
   ],
-  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -Command \"${log} = Join-Path ${env:ProgramData} 'MAST\\logs\\imdisk-verify.log'; if (Test-Path 'C:\\Windows\\System32\\imdisk.exe') { 'ImDisk installed successfully' | Out-File -FilePath ${log}; Set-Content -Path (Join-Path ${env:ProgramData} 'MAST\\logs\\imdisk-smoke.txt') -Value 'imdisk_ok' } else { 'ImDisk executable not found' | Out-File -FilePath ${log} -Encoding UTF8 }\""
+  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -Command \"${log} = Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\verify\\imdisk-verify.log'; if (Test-Path 'C:\\Windows\\System32\\imdisk.exe') { 'ImDisk installed successfully' | Out-File -FilePath ${log} -Encoding UTF8; Set-Content -Path (Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\smoke\\imdisk-smoke.txt') -Value 'imdisk_ok' } else { 'ImDisk executable not found' | Out-File -FilePath ${log} -Encoding UTF8; exit 1 }\""
 }
+

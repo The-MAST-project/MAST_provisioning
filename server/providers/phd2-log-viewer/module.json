@@ -1,0 +1,13 @@
+{
+  "name": "phd2-log-viewer",
+  "version": "0.6.4",
+  "description": "Install PHDLogView (Andy Galasso's offline PHD2 guide-log analyzer). Companion to the phd2 provider (separate app, separate installer).",
+  "order": 1450,
+  "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-phd2-log-viewer.ps1\" -AssetsRoot \".\"",
+  "commandfiles": [
+    "provide-phd2-log-viewer.ps1",
+    "verify-phd2-log-viewer.ps1",
+    "assets/phdlogview_setup-0.6.4.exe"
+  ],
+  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\verify-phd2-log-viewer.ps1\""
+}

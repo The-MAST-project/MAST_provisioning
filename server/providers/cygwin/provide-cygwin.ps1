@@ -3,8 +3,10 @@
 param(
     [string]${AssetsRoot}  = ${PSScriptRoot},
     [string]${ArchiveName} = 'cygwin64-clean.tgz',
-    [string]${AstrometryArchiveName} = 'astrometry.tgz',
-    [string]${InstallRoot} = 'C:\cygwin64'
+    [string]${InstallRoot} = 'C:\cygwin64',
+    # Reinstall even if a healthy Cygwin is already present (re-extract + mirror +
+    # re-run postinstall). Without it, an existing healthy install is left as-is.
+    [switch]${Force}
 )
 
 # --- Import shared helpers from provisioning.psm1 (PS 5.1 safe) ---
@@ -23,6 +25,29 @@ try {
 }
 catch {
     throw "Failed to import provisioning.psm1: $($_.Exception.Message)"
+}
+
+# --- Idempotent skip: leave an already-healthy Cygwin in place ---------------
+# A full provision re-extracts the tgz, robocopy /MIR's the whole tree into
+# ${InstallRoot}, and re-runs every /etc/postinstall/*.sh -- minutes of work,
+# and re-running postinstall has caused hangs/drains before. If Cygwin is
+# already installed and bash actually runs, there is nothing to do; we only
+# re-assert PATH and refresh the verify log + smoke marker. Use -Force to
+# deliberately reinstall.
+${bashExeExisting} = Join-Path ${InstallRoot} 'bin\bash.exe'
+if (-not ${Force} -and (Test-Path ${bashExeExisting})) {
+    ${uname} = & ${bashExeExisting} -lc 'uname -a' 2>$null
+    if (${LASTEXITCODE} -eq 0 -and ${uname}) {
+        Write-Host ("Cygwin already installed and healthy at {0} ({1}); skipping extract/mirror/postinstall. Use -Force to reinstall." -f ${InstallRoot}, ${uname})
+        Add-ToSystemPath -Dir (Join-Path ${InstallRoot} 'bin')
+        ${verifyLogSkip} = Join-Path (Get-MastVerifyDir) 'cygwin-verify.log'
+        Confirm-Dir (Split-Path ${verifyLogSkip} -Parent)
+        ("{0}" -f ${uname}) | Out-File -FilePath ${verifyLogSkip} -Encoding UTF8
+        '(skipped reinstall: existing healthy Cygwin)' | Out-File -FilePath ${verifyLogSkip} -Append -Encoding UTF8
+        Set-Content -Path (Join-Path (Get-MastSmokeDir) 'cygwin-smoke.txt') -Value 'cygwin_ok' -Encoding ASCII
+        exit 0
+    }
+    Write-Host ("Cygwin present at {0} but 'uname' failed (exit={1}); reinstalling." -f ${InstallRoot}, ${LASTEXITCODE})
 }
 
 ${log} = Start-ProvisionLog -Component 'provide-cygwin'
@@ -67,9 +92,10 @@ try {
         throw "bash.exe not found at ${bashExe}"
     }
 
-    # Execute any pending /etc/postinstall/*.sh (rename to .done after success)
+    # Execute any pending /etc/postinstall/*.sh (rename to .done after success).
+    # Avoid temp scripts and CRLF/encoding issues by running inline.
     Write-Host "Running Cygwin postinstall scripts ..."
-    ${postInstallCmd} = @'
+    & ${bashExe} -lc @'
 set -e
 shopt -s nullglob
 for f in /etc/postinstall/*.sh; do
@@ -79,16 +105,9 @@ done
 exit 0
 '@
 
-    # Run inside Cygwin
-    ${tmpScript} = Join-Path ${env:TEMP} "cygwin_postinstall_$(Get-Random).sh"
-    Set-Content -Path ${tmpScript} -Value ${postInstallCmd} -Encoding ASCII
-    & ${bashExe} -lc "/usr/bin/dos2unix '${tmpScript}' >/dev/null 2>&1 || true"
-    & ${bashExe} -lc "/bin/chmod +x '${tmpScript}' && '${tmpScript}'"
-    Remove-Item -Force ${tmpScript} -ErrorAction SilentlyContinue
-
     # --- Verification: print versions and a simple command ---
     Write-Host "Verifying Cygwin ..."
-    ${verifyLog} = Join-Path ${env:ProgramData} 'MAST\logs\cygwin-verify.log'
+    ${verifyLog} = Join-Path (Get-MastVerifyDir) 'cygwin-verify.log'
     Confirm-Dir (Split-Path ${verifyLog} -Parent)
 
     # Capture uname, which, and cygcheck versions
@@ -97,13 +116,11 @@ exit 0
     & ${bashExe} -lc 'cygcheck -V'        | Out-File -FilePath ${verifyLog} -Append -Encoding UTF8
 
     # Smoke marker
-    Set-Content -Path (Join-Path ${env:ProgramData} 'MAST\logs\cygwin-smoke.txt') -Value 'cygwin_ok' -Encoding ASCII
+    Set-Content -Path (Join-Path (Get-MastSmokeDir) 'cygwin-smoke.txt') -Value 'cygwin_ok' -Encoding ASCII
 
     Write-Host "Cygwin installed to ${InstallRoot}. PATH updated. Verification log at ${verifyLog}."
-
-    Write-Host "Expanding Astrometry.net ..."
-    Expand-AnyArchive -ArchivePath ${astrometryArchivePath} -Destination "C:\cygwin64\usr\local\astrometry"
-    Write-Host "Astrometry.net expanded."
+    # Astrometry.net is now staged by the dedicated 'astrometry' provider (order 500),
+    # which runs after 'astrometry-dependencies' (order 400) installs cfitsio/wcs/etc.
 }
 finally {
     Stop-ProvisionLog

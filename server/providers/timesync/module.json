@@ -1,0 +1,11 @@
+{
+  "name": "timesync",
+  "version": "1.0",
+  "description": "Early clock correction + ongoing NTP config during provisioning. Units often cannot reach public NTP (UDP 123 blocked / no internet route); a wrong clock breaks the 'mast' git clone's TLS validation and destabilizes WinRM. Configures an ORDERED priority list -- 1) site RPi (-RpiNtp, injected per-site by build -Site) 2) Weizmann internal (ntp/ntp2.weizmann.ac.il) 3) provisioning server (auto-discovered) 4) time.windows.com -- and corrects the clock once by probing the tiers in strict order (first lock wins). Steady state leaves ALL tiers in the w32time manualpeerlist (prov server now PERMANENT, not one-time), letting w32time auto-select/fail over. Runs first (order 50), before any HTTPS/TLS step. Best-effort: logs loudly, does not abort.",
+  "order": 50,
+  "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-timesync.ps1\"",
+  "commandfiles": [
+    "provide-timesync.ps1"
+  ],
+  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -Command \"${log}=Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\verify\\timesync-verify.log'; ${smoke}=Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\smoke\\timesync-smoke.txt'; if (-not (Test-Path $smoke)) { 'timesync smoke marker missing' | Out-File -FilePath ${log} -Encoding UTF8 -Append; exit 1 }; ${body}=(Get-Content $smoke -Raw).Trim(); if ($body -match '^timesync_ok') { exit 0 } elseif ($body -match '^timesync_warn') { ('time sync best-effort WARN (clock not corrected; HTTPS may fail): ' + $body) | Out-File -FilePath ${log} -Encoding UTF8 -Append; exit 0 } else { ('unexpected timesync smoke body: ' + $body) | Out-File -FilePath ${log} -Encoding UTF8 -Append; exit 1 } \""
+}

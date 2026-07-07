@@ -1,0 +1,13 @@
+{
+  "name": "jupyter",
+  "version": "notebook-7",
+  "description": "Install Jupyter Notebook (7.x) + a Python kernel + a basic scientific/astronomy stack (numpy, scipy, matplotlib, pandas, astropy, astroquery, photutils, ipywidgets) into a dedicated, contained venv at C:\\MAST\\jupyter\\.venv (online pip via the proxy, same as the mast repo requirements), so notebooks are ready to use without hand-installing packages. All Jupyter state (data/config/runtime) is kept under C:\\MAST\\jupyter so it does not litter the user profile; launch-jupyter.cmd sets the JUPYTER_* dirs + working dir. The desktop-shortcuts provider (order 2700) adds a Public-desktop 'Jupyter Notebook' shortcut to the launcher.",
+  "order": 2050,
+  "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-jupyter.ps1\"",
+  "commandfiles": [
+    "provide-jupyter.ps1",
+    "verify-jupyter.ps1",
+    "launch-jupyter.cmd"
+  ],
+  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\verify-jupyter.ps1\""
+}

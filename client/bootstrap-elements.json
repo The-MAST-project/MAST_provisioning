@@ -1,0 +1,17 @@
+{
+  "_comment": "Source of truth for the bootstrap element HISTORY, read by tools/fleet-drift-report.py. Each element's 'since' is the bootstrap version (client/bootstrap-winrm.ps1 $script:BootstrapVersion) that introduced it. current_version must equal max(since) AND the $script:BootstrapVersion constant. When you add a bootstrap capability: add an element with since = the new version, bump current_version here, and bump $script:BootstrapVersion in bootstrap-winrm.ps1 to match (the report warns if they drift). The report reads each unit's C:\\MAST\\bootstrap-manifest.json (stamped at bootstrap time) and lists elements with since > the unit's stamped version as 'may need applying'.",
+  "current_version": 1,
+  "elements": [
+    { "id": "mast-admin-account", "since": 1, "description": "Create local 'mast' admin account with the provisioning password" },
+    { "id": "auto-logon", "since": 1, "description": "Winlogon AutoAdminLogon for headless unattended sign-in" },
+    { "id": "windows-update-suppress", "since": 1, "description": "Suppress Windows Update automatic installs" },
+    { "id": "dhcp-ipv4", "since": 1, "description": "Ensure IPv4 uses DHCP (the fleet identifies units by hostname)" },
+    { "id": "winrm-http-basic", "since": 1, "description": "WinRM over HTTP 5985 + Basic auth, firewall port open, network profile Private" },
+    { "id": "npcap", "since": 1, "description": "Npcap packet-capture driver (interactive install)" },
+    { "id": "computer-rename", "since": 1, "description": "Rename the computer to mastNN" },
+    { "id": "telemetry-privacy-harden", "since": 1, "description": "Diagnostic data = Security; disable DiagTrack/dmwappushservice, advertising ID, activity feed, Cortana/web search" },
+    { "id": "locale-en-us", "since": 1, "description": "Regional format English (United States), system + per-user" },
+    { "id": "firewall-off", "since": 1, "description": "Disable Windows Firewall on all profiles (units sit on an isolated VLAN)" },
+    { "id": "service-trim", "since": 1, "description": "Stop + disable non-essential vendor services (Spooler, Search, Intel LMS, vendor helpers)" }
+  ]
+}
