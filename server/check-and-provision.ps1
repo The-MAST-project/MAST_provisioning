@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
   Autonomous MAST provisioning driver -- replaces run-prov-test.py once stable.
@@ -352,7 +352,12 @@ foreach ($unit in $units) {
     # The third fallback exists so units can omit "modules" from unit-registry.json and pick up
     # newly-added providers automatically -- no per-unit list refresh needed.
     if ($Modules) {
-        $modules = $Modules
+        # powershell.exe -File does not comma-split arguments, so
+        # "-Modules ascom,zwo" arrives as ONE string element; the build script
+        # re-joins/splits on ',' and works, but the smoke loop then probes for
+        # a literal "ascom,zwo" smoke marker and fails the unit (2026-07-07).
+        # Normalize once here.
+        $modules = @($Modules | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
     } elseif ($unit.PSObject.Properties.Match('modules').Count -gt 0 -and $unit.modules) {
         $modules = $unit.modules
     } else {
