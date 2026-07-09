@@ -57,7 +57,16 @@ WINRM_PORT = 5985
 WINRM_ENCODED_CMD_MAX = 8000
 WINRM_CALL_TIMEOUT_S = 60 * 60
 WINRM_BOOT_TIMEOUT_S = 15 * 60
+# Thread-join granularity: the timeout is still checked every HEARTBEAT_INTERVAL_S.
 HEARTBEAT_INTERVAL_S = 30
+# The heartbeat LOG cadence is separate and backs off (30s -> ... -> _MAX_GAP_S)
+# so a long step does not scroll an identical "still running" line every 30s
+# (mast04 ascom: 65 min of them). After _ESCALATE_S the line escalates to a WARN
+# on a slower _ESCALATE_GAP_S cadence, so a genuinely stuck step stands out
+# instead of blending into routine chatter.
+HEARTBEAT_MAX_GAP_S = 120
+HEARTBEAT_ESCALATE_S = 600
+HEARTBEAT_ESCALATE_GAP_S = 300
 
 # VirtualBox -- canonical path on Windows. Override by setting VBOXMANAGE_PATH
 # in the environment if VirtualBox is installed elsewhere.
@@ -455,14 +464,28 @@ def _run_with_heartbeat(
     t = threading.Thread(target=worker, daemon=True)
     start = time.monotonic()
     t.start()
+    last_log = start
+    log_gap = HEARTBEAT_INTERVAL_S
     while t.is_alive():
         t.join(timeout=HEARTBEAT_INTERVAL_S)
         if t.is_alive():
             now = time.monotonic()
             elapsed = int(now - start)
-            step_start = step_timer[0] if step_timer is not None else start
-            step = int(now - step_start)
-            _log(f"  ... {label} still running ({_fmt_mmss(elapsed)} elapsed, step {_fmt_mmss(step)})")
+            # Timeout is checked every interval, but LOG on a backing-off /
+            # escalating cadence so a long step does not repeat identically.
+            if (now - last_log) >= log_gap:
+                step_start = step_timer[0] if step_timer is not None else start
+                step = int(now - step_start)
+                if elapsed >= HEARTBEAT_ESCALATE_S:
+                    _log(
+                        f"  [WARN] {label} STILL running after {_fmt_mmss(elapsed)} "
+                        f"(step {_fmt_mmss(step)}) - unusually long, may be stuck"
+                    )
+                    log_gap = HEARTBEAT_ESCALATE_GAP_S
+                else:
+                    _log(f"  ... {label} still running ({_fmt_mmss(elapsed)} elapsed, step {_fmt_mmss(step)})")
+                    log_gap = min(HEARTBEAT_MAX_GAP_S, log_gap * 2)
+                last_log = now
             if elapsed >= timeout_s:
                 raise TimeoutError(
                     f"{label} exceeded {timeout_s}s timeout - likely hung"

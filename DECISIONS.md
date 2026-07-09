@@ -2,6 +2,38 @@
 
 ---
 
+## [2026-07-09] Provisioning-log noise: rate-limit link-flap warnings; escalate the heartbeat
+
+**Why:** The mast04 overnight failure (2026-07-07) buried five meaningful events under hundreds
+of untimestamped WinRM "connection interrupted/restored" WARNING lines, plus an ascom step that
+logged an identical "still running" heartbeat every 30 s for 65 minutes. The signal (module
+boundaries, EXCEPTION, RUN_END) was un-findable without grep gymnastics. (The related
+TRANSFER_PROGRESS pct>100 / negative-ETA bug is a separate commit -- the junction-aware
+bytes_total fix.)
+
+**What:** Two logging changes, keeping the meaningful signal:
+- **Link-flap warnings are captured and rate-limited, not suppressed** (chosen over silencing them
+  outright, per Eli). The driver captures the PSRP robust-connection warnings for each long phase
+  (execute via `-WarningVariable`, transfer via the job's Warning stream) and emits ONE timestamped
+  `WINRM_LINK_FLAP` summary event with interrupted/restored/other counts, via the pure classifier
+  `server/lib/mast-winrm-warn.ps1` (`Measure-WinRmFlap`). A flaky link is still visible (the counts),
+  but as one line per phase, not hundreds.
+- **The `vm_lib.py` heartbeat escalates instead of repeating.** The timeout is still checked every
+  `HEARTBEAT_INTERVAL_S` (30 s), but the LOG cadence backs off (30 s -> up to `HEARTBEAT_MAX_GAP_S`
+  120 s) and, past `HEARTBEAT_ESCALATE_S` (10 min), switches to a `[WARN]` line on a slower
+  `HEARTBEAT_ESCALATE_GAP_S` (5 min) cadence -- so a genuinely stuck step stands out rather than
+  scrolling identically.
+
+**Implications:** Capturing native PSRP transport warnings via `-WarningVariable` / the job Warning
+stream is best-effort -- if a future PowerShell writes them through a channel these do not catch,
+the `WINRM_LINK_FLAP` counts would read low; that surfaces only on a genuinely flaky link (not
+reproducible on the stable bench VM), so it carries real-run acceptance. Hard phase timeouts remain
+item 6 (#7); this is purely the log-noise item 4 of `MAST_provisioning#10`. Pure classifiers are
+covered by `server/tests/mast-winrm-warn.Tests.ps1` and the heartbeat by
+`vm/tests/test_vm_lib.py::test_run_with_heartbeat_escalates_and_rate_limits`.
+
+---
+
 ## [2026-07-09] Operator "MAST Proxy" desktop tool + shared proxy-lib.ps1 (one implementation)
 
 **Why:** Units must end provisioning on the Weizmann proxy, but the state is fragile (three

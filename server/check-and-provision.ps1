@@ -101,6 +101,7 @@ if (-not $VaultCreds)   { $VaultCreds   = Join-Path $RepoTop 'vault\creds.json' 
 . (Join-Path $RepoTop 'server\lib\mast-timezone.ps1')
 . (Join-Path $RepoTop 'server\lib\mast-proxy-assert.ps1')
 . (Join-Path $RepoTop 'server\lib\mast-staging-size.ps1')
+. (Join-Path $RepoTop 'server\lib\mast-winrm-warn.ps1')
 Import-Module (Join-Path $RepoTop 'server\lib\mast-modules.psm1') -Force -DisableNameChecking
 
 # Cached "all modules discovered on disk" list. Used as the fall-back when
@@ -787,7 +788,15 @@ foreach ($unit in $units) {
                     } catch {}
                 }
                 $xferResult = Receive-Job $xferJob
+                # Capture any PSRP link-flap warnings the transfer job accrued so
+                # they become one WINRM_LINK_FLAP summary, not raw noise.
+                $xferWarn = @()
+                try { $xferWarn = @($xferJob.ChildJobs | ForEach-Object { $_.Warning } | Where-Object { $_ } | ForEach-Object { [string]$_.Message }) } catch {}
                 Remove-Job $xferJob -Force -ErrorAction SilentlyContinue
+                if ($xferWarn.Count -gt 0) {
+                    $tflap = Measure-WinRmFlap -Messages $xferWarn
+                    Log-Event 'WINRM_LINK_FLAP' @{ unit=$hostname; phase='transfer'; interrupted=$tflap.Interrupted; restored=$tflap.Restored; other=$tflap.Other; sample=$tflap.OtherSample }
+                }
             } finally {
                 Stop-UnitProgressTimer
                 if ($pollSession) { Remove-PSSession $pollSession -ErrorAction SilentlyContinue }
@@ -847,6 +856,7 @@ foreach ($unit in $units) {
             Log-Event 'EXECUTE_START' @{ unit=$hostname; run_id=$RunId }
             $eStart = Get-Date
             Start-UnitProgressTimer -Unit $hostname -Phase 'execute' -StartUtc $eStart.ToUniversalTime()
+            $execWarn = $null
             try {
                 $execResult = Invoke-Command -Session $session -ScriptBlock {
                     param($stagePath, $provSrv, $smbUsr, $smbPwd, $runId, $heldBy)
@@ -863,9 +873,16 @@ foreach ($unit in $units) {
                         -HeldBy       $heldBy `
                         -AllowReboot
                     return [int]$LASTEXITCODE
-                } -ArgumentList $unitStage, $provServer, $smbUser, $smbPass, $RunId, $provServer
+                } -ArgumentList $unitStage, $provServer, $smbUser, $smbPass, $RunId, $provServer `
+                    -WarningVariable execWarn -WarningAction SilentlyContinue
             } finally {
                 Stop-UnitProgressTimer
+            }
+            # Rate-limit the PSRP robust-connection "interrupted/restored" warning
+            # flood into ONE timestamped summary instead of hundreds of raw lines.
+            if ($execWarn -and @($execWarn).Count -gt 0) {
+                $flap = Measure-WinRmFlap -Messages (@($execWarn) | ForEach-Object { [string]$_ })
+                Log-Event 'WINRM_LINK_FLAP' @{ unit=$hostname; phase='execute'; interrupted=$flap.Interrupted; restored=$flap.Restored; other=$flap.Other; sample=$flap.OtherSample }
             }
             $execRc = [int]($execResult | Select-Object -Last 1)
             $eDur   = [int]((Get-Date) - $eStart).TotalSeconds

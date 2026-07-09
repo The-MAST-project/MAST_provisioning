@@ -83,6 +83,47 @@ def test_minify_ps_strips_comments_blanks_and_indent():
     assert vm_lib.winrm_encoded_cmd_len(out) <= vm_lib.winrm_encoded_cmd_len(raw)
 
 
+def test_run_with_heartbeat_escalates_and_rate_limits():
+    # A long step must not scroll an identical "still running" line every
+    # interval (mast04 ascom: 65 min of them). The log cadence backs off and
+    # escalates to a WARN past the threshold, while the hard timeout still fires.
+    import time
+
+    keys = (
+        "HEARTBEAT_INTERVAL_S", "HEARTBEAT_MAX_GAP_S",
+        "HEARTBEAT_ESCALATE_S", "HEARTBEAT_ESCALATE_GAP_S", "_log",
+    )
+    orig = {k: getattr(vm_lib, k) for k in keys}
+    logs: list[str] = []
+    try:
+        vm_lib.HEARTBEAT_INTERVAL_S = 0.1
+        vm_lib.HEARTBEAT_MAX_GAP_S = 0.4
+        vm_lib.HEARTBEAT_ESCALATE_S = 1        # elapsed is int-seconds
+        vm_lib.HEARTBEAT_ESCALATE_GAP_S = 0.5
+        vm_lib._log = lambda m: logs.append(m)
+
+        def slow():
+            time.sleep(1.6)
+            return "done"
+
+        assert vm_lib._run_with_heartbeat(slow, "ascom", timeout_s=100) == "done"
+        # Rate-limited: far fewer than the ~16 a fixed 0.1s cadence would emit.
+        assert len(logs) < 10, f"heartbeat not rate-limited: {len(logs)} lines"
+        # Escalated to a WARN once past the threshold.
+        assert any("[WARN]" in m and "STILL running" in m for m in logs)
+
+        # The hard timeout still fires with the new cadence.
+        raised = False
+        try:
+            vm_lib._run_with_heartbeat(lambda: time.sleep(1.0), "hang", timeout_s=0)
+        except TimeoutError:
+            raised = True
+        assert raised, "hard timeout must still fire"
+    finally:
+        for k, v in orig.items():
+            setattr(vm_lib, k, v)
+
+
 def _run_all() -> int:
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0
