@@ -2,6 +2,39 @@
 
 ---
 
+## [2026-07-09] End-of-run proxy-posture guard instead of patching a phantom re-introduction
+
+**Why:** #10 item 3 ("only the proxy provider may own proxy state; audit astrometry-dependencies /
+chrome / vscode") was filed against a mast03 symptom (2026-07-08): a `-ProxyMode direct` run ended
+with bcproxy still set, so `git fetch` in the mast module died with "Could not resolve proxy:
+bcproxy". A full code audit does not support the filed root cause: no module outside the `proxy`
+provider writes any proxy surface (machine `http_proxy`/`https_proxy` env, WinINet
+`ProxyEnable`/`ProxyServer`, machine WinHTTP, or the WPAD/`DefaultConnectionSettings` blob). chrome
+and vscode only reference bcproxy in comments (both use offline installers); astrometry-dependencies
+uses bcproxy solely to drive the cygwin `setup.exe` (`setup.rc` + `--proxy`), already keys off an
+explicit `-ProxyMode` (no probing), and writes `net-method=Direct` with no proxy on a direct run.
+The re-introduction was also intermittent (a later mast03 run was clean), and mast03 is unreachable
+until the site trip, so the exact mechanism cannot be diagnosed now. Patching the named modules
+would fix a phantom.
+
+**What:** Rather than change proxy *management* (which stays solely in the `proxy` provider), add a
+READ-ONLY end-of-run assertion. After the last module, `check-and-provision.ps1` reads the unit's
+proxy surfaces over WinRM and classifies them via `server/lib/mast-proxy-assert.ps1`
+(`Get-ProxyDirtySurfaces`): the machine `http_proxy`/`https_proxy` env vars are **critical** (git
+reads those -- a dirty one on a `-ProxyMode direct` run is a hard `UNIT_FAIL reason=proxy_dirty_on_direct`
+naming the surface); WinINet / WinHTTP are **advisory** (real proxy surfaces that do not break git,
+logged `PROXY_ASSERT_WARN`). A `weizmann` run warns if the unit ended with no proxy at all (units
+should end on the Weizmann proxy). Pester coverage in `server/tests/mast-proxy-assert.Tests.ps1`.
+
+**Implications:** The guard turns exactly the intermittent, silent re-introduction that bit mast03
+into a loud, surface-naming failure that will be caught on the next direct run at the site -- without
+guessing at a culprit the code does not contain. It runs after `mast` (order 2200), so it catches a
+proxy set by any source. The `astrometry-dependencies` hardcoded bcproxy host duplicates the proxy
+provider's value; DRY-ing that (a shared `proxy-lib.ps1`) is left to the separate operator
+proxy-tool item in #8, not folded in here. This is the proxy item of `MAST_provisioning#10`.
+
+---
+
 ## [2026-07-09] Availability lease is released on every exit and reclaimable by a new run
 
 **Why:** `check-and-provision.ps1` marks a unit unavailable (availability.json,

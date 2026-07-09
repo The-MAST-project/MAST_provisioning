@@ -99,6 +99,7 @@ if (-not $VaultCreds)   { $VaultCreds   = Join-Path $RepoTop 'vault\creds.json' 
 
 . (Join-Path $RepoTop 'server\lib\mast-log.ps1')
 . (Join-Path $RepoTop 'server\lib\mast-timezone.ps1')
+. (Join-Path $RepoTop 'server\lib\mast-proxy-assert.ps1')
 Import-Module (Join-Path $RepoTop 'server\lib\mast-modules.psm1') -Force -DisableNameChecking
 
 # Cached "all modules discovered on disk" list. Used as the fall-back when
@@ -909,6 +910,60 @@ foreach ($unit in $units) {
                              -PayloadHash $payloadHash -GitSha $gitSha
                 $exitCode = 1
                 continue
+            }
+
+            # ---------------------------------------------------------------
+            # 9b. Proxy-posture assertion (READ-ONLY; proxy state is owned by
+            # the proxy provider). Runs after the LAST module, so it catches a
+            # proxy re-introduced anywhere in the run -- e.g. the intermittent
+            # bcproxy that broke `git fetch` in the mast module on mast03
+            # 2026-07-08 despite -ProxyMode direct. A dirty machine env surface
+            # (what git reads) on a direct run is a hard failure; WinINet/WinHTTP
+            # are reported as advisory. See server\lib\mast-proxy-assert.ps1.
+            # ---------------------------------------------------------------
+            $proxyPosture = Invoke-Command -Session $session -ScriptBlock {
+                $r = @{}
+                $r.http_proxy  = [Environment]::GetEnvironmentVariable('http_proxy','Machine')
+                $r.https_proxy = [Environment]::GetEnvironmentVariable('https_proxy','Machine')
+                $ini = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings'
+                $en = 0; $srv = ''
+                try {
+                    $p = Get-ItemProperty -Path $ini -ErrorAction Stop
+                    if ($null -ne $p.ProxyEnable) { $en  = [int]$p.ProxyEnable }
+                    if ($null -ne $p.ProxyServer) { $srv = [string]$p.ProxyServer }
+                } catch {}
+                $r.wininet_enable = $en
+                $r.wininet_server = $srv
+                $wh = ''
+                try { $wh = (netsh winhttp show proxy 2>$null | Out-String) } catch {}
+                $r.winhttp = $wh
+                $r
+            }
+            $proxyDirty = Get-ProxyDirtySurfaces -Posture $proxyPosture
+            if ($ProxyMode -eq 'direct') {
+                if ($proxyDirty.Advisory.Count -gt 0) {
+                    Log-Event 'PROXY_ASSERT_WARN' @{ unit=$hostname; mode='direct'; advisory=($proxyDirty.Advisory -join '; ') }
+                }
+                if ($proxyDirty.Critical.Count -gt 0) {
+                    Log-Event 'PROXY_ASSERT_FAIL' @{ unit=$hostname; mode='direct'; dirty=($proxyDirty.Critical -join '; ') }
+                    Log-Event 'UNIT_FAIL' @{ unit=$hostname; reason='proxy_dirty_on_direct'; dirty=($proxyDirty.Critical -join '; ') }
+                    Log-Activity -Unit $hostname -Outcome 'FAIL' -Reason 'proxy_dirty_on_direct' `
+                                 -DurationS ([int]((Get-Date) - $unitStart).TotalSeconds) `
+                                 -PayloadHash $payloadHash -GitSha $gitSha
+                    $exitCode = 1
+                    continue
+                }
+                Log-Event 'PROXY_ASSERT_OK' @{ unit=$hostname; mode='direct' }
+            } else {
+                # weizmann: the unit should END on the Weizmann proxy. Warn (do
+                # not fail) if no surface is set -- the proxy provider owns
+                # making it so; this only flags a unit that slipped through as
+                # if direct.
+                if ($proxyDirty.Critical.Count -eq 0 -and $proxyDirty.Advisory.Count -eq 0) {
+                    Log-Event 'PROXY_ASSERT_WARN' @{ unit=$hostname; mode='weizmann'; note='no proxy surface set; unit should end on Weizmann proxy' }
+                } else {
+                    Log-Event 'PROXY_ASSERT_OK' @{ unit=$hostname; mode='weizmann' }
+                }
             }
 
             # ---------------------------------------------------------------
