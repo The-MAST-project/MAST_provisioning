@@ -32,6 +32,7 @@ foreach (${d} in @(${mastRoot}, ${dirOps}, ${dirSetup}, ${dirDev}, ${dirVendor})
 ${required} = @(
     (Join-Path ${dirOps}   'MAST Unit (FastAPI).url'),
     (Join-Path ${dirOps}   'MAST Logs.lnk'),
+    (Join-Path ${dirOps}   'MAST Proxy.lnk'),
     (Join-Path ${dirSetup} 'MAST Instrument Calibration.lnk'),
     (Join-Path ${dirSetup} 'MAST Installation Directory.lnk')
 )

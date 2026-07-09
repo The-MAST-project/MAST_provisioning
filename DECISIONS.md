@@ -2,6 +2,34 @@
 
 ---
 
+## [2026-07-09] Operator "MAST Proxy" desktop tool + shared proxy-lib.ps1 (one implementation)
+
+**Why:** Units must end provisioning on the Weizmann proxy, but the state is fragile (three
+surfaces -- machine env, WinINet, WinHTTP) and an on-site operator arriving with a bench-provisioned
+(`-ProxyMode direct`) unit needs to flip it to Weizmann and confirm it took, with no controller /
+WinRM / staging. Re-implementing the surface logic in a second script would drift from the
+`proxy` provider.
+
+**What:** Factored all proxy-surface logic out of `provide-proxy.ps1` into
+`server/providers/proxy/proxy-lib.ps1` (verbatim function bodies + a `Set-MastProxyState` /
+`Get-MastProxyPosture` orchestration and a pluggable logger). The provider now dot-sources the lib
+and routes its output into the provisioning log; behavior is unchanged (its verification readback
+still guards the set). A new `set-proxy.ps1` -- an interactive Show / Set Weizmann / Set Direct /
+Re-verify tool that self-elevates and probes bcproxy:8080 vs github:443 -- consumes the SAME lib.
+`provide-proxy.ps1` copies both scripts to `C:\ProgramData\MAST\proxy\` and the `desktop-shortcuts`
+provider adds a "MAST Proxy" shortcut under Desktop\MAST\Operations, mirroring the
+`instrument-profiles` -> `calibrate-instruments.ps1` launcher pattern. Pure helpers covered by
+`server/tests/proxy-lib.Tests.ps1`.
+
+**Implications:** One proxy implementation shared by the provider and the operator tool -- no
+drifting second copy. `proxy-lib.ps1` lives in the provider directory (not `server/lib`) because it
+must travel to the unit alongside `set-proxy.ps1`. This is the operator proxy-tool item from
+`MAST_provisioning#8`, folded into the v3 batch; it complements (does not replace) the direct-run
+proxy-posture guard added the same day, whose weizmann-run warning is the "assert Weizmann" pairing
+that item mentioned.
+
+---
+
 ## [2026-07-09] End-of-run proxy-posture guard instead of patching a phantom re-introduction
 
 **Why:** #10 item 3 ("only the proxy provider may own proxy state; audit astrometry-dependencies /
