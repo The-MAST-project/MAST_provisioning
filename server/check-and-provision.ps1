@@ -100,6 +100,7 @@ if (-not $VaultCreds)   { $VaultCreds   = Join-Path $RepoTop 'vault\creds.json' 
 . (Join-Path $RepoTop 'server\lib\mast-log.ps1')
 . (Join-Path $RepoTop 'server\lib\mast-timezone.ps1')
 . (Join-Path $RepoTop 'server\lib\mast-proxy-assert.ps1')
+. (Join-Path $RepoTop 'server\lib\mast-staging-size.ps1')
 Import-Module (Join-Path $RepoTop 'server\lib\mast-modules.psm1') -Force -DisableNameChecking
 
 # Cached "all modules discovered on disk" list. Used as the fall-back when
@@ -715,14 +716,16 @@ foreach ($unit in $units) {
             # ---------------------------------------------------------------
             $unitStage  = "C:\mast-staging\$RunId"
             $srcUNC     = "\\$provServer\mast-staging\$hostname\01-provisioning"
-            # Recurse: the payload has subdirectories (sxs\, module asset dirs);
-            # a top-level count understated bytes_total and sent the
-            # TRANSFER_PROGRESS percentage past 100.
-            $files      = Get-ChildItem -Path $stagingDir -File -Recurse
-            $totalBytes = ($files | Measure-Object -Sum Length).Sum
+            # Payload size AS ROBOCOPY COPIES IT -- Get-StagingPayloadSize
+            # (server\lib\mast-staging-size.ps1) descends through directory
+            # junctions (e.g. mast-indexes -> C:\MAST\mast-indexes), which a
+            # plain Get-ChildItem -Recurse does not, so bytes_total no longer
+            # undercounts and TRANSFER_PROGRESS no longer runs past 100%.
+            $stageSize  = Get-StagingPayloadSize -Path $stagingDir
+            $totalBytes = [long]$stageSize.Bytes
             Log-Event 'TRANSFER_START' @{
                 unit      = $hostname
-                files     = $files.Count
+                files     = $stageSize.Files
                 bytes     = $totalBytes
                 src_unc   = $srcUNC
                 dst_local = $unitStage
@@ -756,10 +759,14 @@ foreach ($unit in $units) {
                         $elapsedS = [Math]::Max(1, ((Get-Date) - $tStart).TotalSeconds)
                         $winRate  = [Math]::Max(0, ($done - $lastBytes) / $pollIntervalS)
                         $avgRate  = $done / $elapsedS
+                        # eta_s = -1 means "unknown" (no rate yet). Clamp the
+                        # computed value at 0 and pct at 100 so a transient
+                        # done>total (robocopy retry / metadata) cannot resurface
+                        # the negative-ETA / pct>100 noise this item fixes.
                         $etaS = -1
-                        if ($avgRate -gt 0) { $etaS = [int](($totalBytes - $done) / $avgRate) }
+                        if ($avgRate -gt 0) { $etaS = [Math]::Max(0, [int](($totalBytes - $done) / $avgRate)) }
                         $pct = 0.0
-                        if ($totalBytes -gt 0) { $pct = [Math]::Round(100.0 * $done / $totalBytes, 1) }
+                        if ($totalBytes -gt 0) { $pct = [Math]::Min(100.0, [Math]::Round(100.0 * $done / $totalBytes, 1)) }
                         if ($done -le $lastBytes) { $stallPolls++ } else { $stallPolls = 0 }
                         Log-Event 'TRANSFER_PROGRESS' @{
                             unit        = $hostname
