@@ -365,6 +365,11 @@ foreach ($unit in $units) {
     }
     $payloadHash = ''
     $gitSha      = ''
+    # Set true once this run writes the unavailable availability lease (step 6);
+    # reset to false after the happy-path "mark available" (step 10). The per-unit
+    # finally uses it to release the lease on any early/failed exit so a re-run is
+    # not blocked until the TTL.
+    $leaseHeld = $false
 
     $resolved = $null
     try {
@@ -551,13 +556,20 @@ foreach ($unit in $units) {
                 $isOurs  = ($owner -eq $RunId)
                 if ($isOurs) {
                     Log-Event 'AVAIL_LEASE_SELF' @{ unit=$hostname; owner=$owner; reason=$avail.reason }
-                } elseif (-not $isStale) {
-                    Log-Event 'AVAIL_LEASE_LIVE' @{ unit=$hostname; owner=$owner; reason=$avail.reason; expires=$(if ($expUtc) { $expUtc.ToString('yyyy-MM-ddTHH:mm:ssZ') } else { 'unknown' }) }
-                    Log-Activity -Unit $hostname -Outcome 'SKIP' -Reason 'avail_lease_live' `
-                                 -DurationS ([int]((Get-Date) - $unitStart).TotalSeconds)
-                    continue
                 } else {
-                    Log-Event 'AVAIL_STALE_RECOVER' @{ unit=$hostname; prior_run=$owner; reason=$avail.reason; expired_utc=$expUtc.ToString('yyyy-MM-ddTHH:mm:ssZ') }
+                    # Reclaim a lease held by any OTHER run. check-and-provision is
+                    # the sole writer of availability.json and the unit-side
+                    # execute-lease.json is the real mutual-exclusion guard (an
+                    # overlapping cycle would still SKIP at execute), so a
+                    # non-current owner means a prior run that has ended -- or a
+                    # hard-killed one that could not release. Reclaiming lets an
+                    # immediate re-run proceed instead of no-op'ing until the ~2 h
+                    # TTL, which stranded same-unit re-runs (mast03 2026-07-08).
+                    # $isStale is reported (not gated on) so the TTL-expiry signal
+                    # survives in the logs; this replaces the former
+                    # AVAIL_LEASE_LIVE (SKIP) and AVAIL_STALE_RECOVER events.
+                    $expStr = if ($null -ne $expUtc) { $expUtc.ToString('yyyy-MM-ddTHH:mm:ssZ') } else { 'none' }
+                    Log-Event 'AVAIL_LEASE_RECLAIM' @{ unit=$hostname; prior_run=$owner; reason=$avail.reason; expires=$expStr; stale=$isStale }
                     # Fall through; the cycle will write a fresh availability+lease shortly.
                 }
             }
@@ -689,6 +701,7 @@ foreach ($unit in $units) {
                             $expectedUtc.ToString('yyyy-MM-ddTHH:mm:ssZ'), `
                             $RunId
             Log-Event 'AVAIL_SET' @{ unit=$hostname; available='false'; reason='provisioning'; expected_return_utc=$expectedUtc.ToString('yyyy-MM-ddTHH:mm:ssZ'); lease_owner=$RunId }
+            $leaseHeld = $true
 
             # ---------------------------------------------------------------
             # 7. Transfer staging payload via SMB pull (robocopy on unit)
@@ -909,6 +922,7 @@ foreach ($unit in $units) {
                 Move-Item -Force $tmp (Join-Path $statusDir 'availability.json')
             }
             Log-Event 'AVAIL_SET' @{ unit=$hostname; available='true' }
+            $leaseHeld = $false
 
             Log-Event 'UNIT_OK' @{ unit=$hostname; payload_hash=$payloadHash }
             Log-Activity -Unit $hostname -Outcome 'OK' -Reason 'updated' `
@@ -916,6 +930,33 @@ foreach ($unit in $units) {
                          -PayloadHash $payloadHash -GitSha $gitSha
         }
         finally {
+            # Release the availability lease on ANY exit path that left it held
+            # (smoke failure, exception, mid-run bail) so the next cycle is not
+            # blocked. Written as available:false WITHOUT a live lease (no
+            # lease_owner / expected_return_utc): the science scheduler keeps
+            # avoiding an unverified unit, but a re-run reclaims it immediately.
+            # A dead session (the network-drop case) throws here and the lease
+            # persists -- that path is covered by the reclaim-on-next-run logic
+            # at step 2a.
+            if ($leaseHeld -and $session -and $session.State -eq 'Opened') {
+                try {
+                    Invoke-Command -Session $session -ScriptBlock {
+                        $statusDir = 'C:\MAST\status'
+                        New-Item -ItemType Directory -Force -Path $statusDir | Out-Null
+                        $tmp = Join-Path $statusDir 'availability.json.tmp'
+                        $a = [ordered]@{
+                            available    = $false
+                            reason       = 'provisioning_incomplete'
+                            released_utc = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+                        }
+                        ($a | ConvertTo-Json) | Out-File -FilePath $tmp -Encoding UTF8 -NoNewline
+                        Move-Item -Force $tmp (Join-Path $statusDir 'availability.json')
+                    }
+                    Log-Event 'AVAIL_RELEASE' @{ unit=$hostname; reason='provisioning_incomplete' }
+                } catch {
+                    Log-Event 'AVAIL_RELEASE_WARN' @{ unit=$hostname; error=$_.Exception.Message }
+                }
+            }
             if ($session) { Remove-PSSession $session -ErrorAction SilentlyContinue }
         }
     }
