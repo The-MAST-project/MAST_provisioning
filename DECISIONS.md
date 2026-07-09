@@ -2,6 +2,36 @@
 
 ---
 
+## [2026-07-09] Registry timezones stay IANA; the driver maps IANA->Windows for 5.1
+
+**Why:** `unit-registry.json` stores IANA timezone ids (`Asia/Jerusalem`), but the driver
+runs under Windows PowerShell 5.1 (.NET Framework 4.x), whose `TimeZoneInfo.FindSystemTimeZoneById`
+only knows Windows ids and has no `TryConvertIanaIdToWindowsId` (that arrived in .NET 6). The
+lookup therefore threw and `check-and-provision.ps1` silently fell back to server-local time --
+defeating the already-shipped maintenance-window enforcement. It only looked fine because the
+prov server is itself in Israel; on a differently-zoned (or Linux) server it would mis-time every
+window. Observed in production on mast01/mast03 2026-07-06 (`MAINT_TZ_WARN ... 'Asia/Jerusalem'
+was not found`). The setup doc compounded the drift by telling operators to use Windows names
+(`tzutil /l`) while the live registry used IANA.
+
+**What:** Keep IANA as the canonical registry form (portable: .NET 6+/`pwsh`/a future Linux prov
+server resolve IANA natively) and add a resolver, `server/lib/mast-timezone.ps1`, that the driver
+dot-sources. `Resolve-TimeZoneInfo` tries the id directly first (a valid Windows id, or IANA under
+.NET 6+), then falls back to a small curated IANA->Windows map for the 5.1 path, and throws if the
+id resolves under neither. `Test-InMaintenanceWindow` calls it instead of `FindSystemTimeZoneById`
+directly; the `MAINT_TZ_WARN` fallback now fires only for a genuinely unresolvable id. Chose the
+mapping layer over storing Windows ids in the registry to preserve the Linux-portability direction
+in `autonomous-provisioning-requirements.md`. Pester coverage in `server/tests/mast-timezone.Tests.ps1`;
+the setup doc now prescribes IANA.
+
+**Implications:** A new fleet timezone must be added to the map in `mast-timezone.ps1` (a raw
+Windows name still passes through, but IANA is canonical). This is the gating timezone fix from
+`MAST_provisioning#10` (the autonomous-loop activation batch); consider promoting the
+`MAINT_TZ_WARN` fallback to a hard failure once the unattended loop makes windows load-bearing,
+so a mis-resolved zone stops rather than silently provisions at the wrong hour.
+
+---
+
 ## [2026-07-06] Unit inventory + primary MAC live in unit-registry.json, collected every cycle
 
 **Why:** Site DNS/DHCP is a manual registry maintained by a person; they need hostname->MAC

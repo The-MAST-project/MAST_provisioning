@@ -157,7 +157,7 @@ Edit the file to describe each unit you want to manage. Minimum entry:
 [
   {
     "hostname": "mast01",
-    "timezone": "Israel Standard Time",
+    "timezone": "Asia/Jerusalem",
     "maintenance_window": { "start_hour": 10, "end_hour": 16 }
   }
 ]
@@ -172,7 +172,7 @@ used.
 [
   {
     "hostname": "mast-debug-01",
-    "timezone": "Israel Standard Time",
+    "timezone": "Asia/Jerusalem",
     "maintenance_window": { "start_hour": 0, "end_hour": 24 },
     "modules": ["cygwin", "astrometry-dependencies", "astrometry"]
   }
@@ -182,7 +182,14 @@ used.
 Notes:
 - `hostname` must be the DNS-resolvable Windows computer name (`mast01` -
   `mast20`). Do not use IP addresses.
-- `timezone` must be a Windows timezone name (run `tzutil /l` for the list).
+- `timezone` should be an **IANA** timezone id (e.g. `Asia/Jerusalem`; full
+  list at the [IANA tz database](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones)).
+  IANA ids keep the registry portable (a future Linux prov server resolves them
+  natively). The driver maps the fleet's IANA ids to Windows ids for the
+  Windows PowerShell 5.1 (.NET Framework) `TimeZoneInfo`, which does not know
+  IANA ids natively -- see `server/lib/mast-timezone.ps1`. A raw Windows name
+  (from `tzutil /l`) also resolves, but IANA is the canonical form; add a new
+  IANA id to the map in `mast-timezone.ps1` if the fleet grows into a new zone.
 - `maintenance_window` hours are in the unit's local time. Set `start_hour: 0,
   end_hour: 24` to allow provisioning at any time (useful while setting up).
 - `modules` (optional) controls which providers `build-mast.ps1` stages.

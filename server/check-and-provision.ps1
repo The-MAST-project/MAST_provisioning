@@ -98,6 +98,7 @@ if (-not $UnitRegistry) { $UnitRegistry = Join-Path $RepoTop 'server\unit-regist
 if (-not $VaultCreds)   { $VaultCreds   = Join-Path $RepoTop 'vault\creds.json' }
 
 . (Join-Path $RepoTop 'server\lib\mast-log.ps1')
+. (Join-Path $RepoTop 'server\lib\mast-timezone.ps1')
 Import-Module (Join-Path $RepoTop 'server\lib\mast-modules.psm1') -Force -DisableNameChecking
 
 # Cached "all modules discovered on disk" list. Used as the fall-back when
@@ -249,13 +250,18 @@ function Test-InMaintenanceWindow {
     $nowUtc = [DateTime]::UtcNow
     try {
         if ($tz) {
-            $zone = [System.TimeZoneInfo]::FindSystemTimeZoneById($tz)
+            # Resolve-TimeZoneInfo (server\lib\mast-timezone.ps1) accepts IANA
+            # ids (as stored in unit-registry.json) as well as Windows ids, so
+            # the 5.1 driver no longer silently falls back to server-local time
+            # on an IANA id it cannot natively resolve.
+            $zone = Resolve-TimeZoneInfo -Id $tz
             $local = [System.TimeZoneInfo]::ConvertTimeFromUtc($nowUtc, $zone)
         } else {
             $local = $nowUtc.ToLocalTime()
         }
     } catch {
-        # Bad timezone id -- fall back to server local time but flag it.
+        # Genuinely unresolvable timezone id -- fall back to server local time
+        # but flag it loudly so the mis-timed window is visible.
         $local = $nowUtc.ToLocalTime()
         Log-Event 'MAINT_TZ_WARN' @{ unit=$Unit.hostname; tz=$tz; err=$_.Exception.Message }
     }
