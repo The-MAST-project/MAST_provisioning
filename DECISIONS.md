@@ -2,6 +2,35 @@
 
 ---
 
+## [2026-07-12] Activate the autonomous loop: `--loop` service mode
+
+**Why:** Item 8 -- the last gate for the autonomous provisioning goal. The driver
+needs to run continuously on a cadence (the requirements doc's "long-lived service
+beats periodic-fire scheduler"), replacing the PowerShell `install-scheduled-task.ps1`
++ Task Scheduler path with a platform-agnostic Python service.
+
+**What:** `server/check_and_provision.py --loop` runs `Driver().run()` cycles on
+`--interval-seconds` (default 1800), via `prov.driver.run_loop`. A fresh Driver per
+cycle (fresh run_id / log dir); per-unit maintenance windows already gate the
+disruptive steps, so the loop just fires on cadence and each unit provisions only
+inside its window. A cycle that throws is logged and does NOT stop the loop (a
+service must stay up). SIGINT/SIGTERM set a stop event used both as the between-cycle
+check and the interruptible inter-cycle sleep (`ev.wait`), so a stop signal exits
+promptly instead of waiting out the interval. `--max-cycles N` bounds a run
+(supervised one-shot / testing). The per-OS **service wrapper** is the only part
+that differs by platform -- example `server/deploy/mast-provision.service` (systemd)
+and NSSM instructions in `server/deploy/README.md`; the loop itself is portable.
+
+**Implications:** Validated on the mast-unit VM (two dry-run cycles ~interval apart,
+each a fresh run to `exit_code=0`, then clean stop at `--max-cycles`). With items 1-8
+landed, the Python driver covers the full autonomous path; flipping it on is a
+deployment step (install the service, set `--interval-seconds` + `MAST_SERVER_ROOT`).
+The PowerShell driver + `install-scheduled-task.ps1` stay until retired. Real-fleet
+cadence + reboot-survival still await a real unit (VM reboots don't return reachable
+-- harness artifact, see the reference memory).
+
+---
+
 ## [2026-07-12] Detached execute: run provisioning as a self-detaching task the driver polls
 
 **Why:** The synchronous execute (run over the WinRM/SSH session, driver blocks on it)

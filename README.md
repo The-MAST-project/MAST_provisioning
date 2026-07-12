@@ -237,7 +237,9 @@ This is the only path operators run by hand. Everything else is autonomous.
 > driver is validated on a real run. Once landed, run it with
 > `python server/check_and_provision.py [--only-hosts ...] [--dry-run]`
 > (`pip install -r server/requirements.txt` first); pure-logic tests live in
-> `server/prov/tests/`. See DECISIONS.md 2026-07-12.
+> `server/prov/tests/`. The **supervised loop** is `--loop` (`--interval-seconds`,
+> `--max-cycles`); run it as a service per **[server/deploy/README.md](server/deploy/README.md)**
+> (systemd unit / NSSM). See DECISIONS.md 2026-07-12.
 
 For complete step-by-step instructions starting from a bare Windows machine,
 see **[docs/provisioning-server-setup.md](docs/provisioning-server-setup.md)**.

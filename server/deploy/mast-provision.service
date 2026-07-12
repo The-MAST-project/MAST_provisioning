@@ -1,0 +1,27 @@
+# systemd unit for the MAST autonomous provisioning loop (Linux prov server).
+# Example -- adjust WorkingDirectory, the python/venv path, User, and
+# MAST_SERVER_ROOT for your host, then:
+#   sudo cp mast-provision.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now mast-provision
+#   journalctl -u mast-provision -f
+[Unit]
+Description=MAST autonomous provisioning loop
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mast
+WorkingDirectory=/opt/mast/MAST_provisioning
+ExecStart=/opt/mast/venv/bin/python server/check_and_provision.py --loop --interval-seconds 1800
+# The driver's own logs/status live here (unit-side C:\MAST is unaffected).
+Environment=MAST_SERVER_ROOT=/var/lib/mast
+Restart=on-failure
+RestartSec=30
+# Graceful stop: SIGTERM sets the loop's stop event; it exits after the current
+# cycle (or wakes immediately from the inter-cycle wait). Give a cycle time to finish.
+KillSignal=SIGTERM
+TimeoutStopSec=600
+
+[Install]
+WantedBy=multi-user.target

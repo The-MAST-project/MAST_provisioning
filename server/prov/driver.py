@@ -740,3 +740,40 @@ class Driver:
             self.log.event("RETENTION_FAIL", err=f"{type(e).__name__}: {e}")
         self.log.event("RUN_END", exit_code=self.exit_code, units_checked=self.units_checked,
                        units_updated=units_updated, units_failed=units_failed, duration_s=duration_s)
+
+
+def run_loop(
+    cfg: Config,
+    interval_s: int,
+    *,
+    max_cycles: int | None = None,
+    sleep_fn=time.sleep,
+    stop=None,
+) -> None:
+    """Item 8: run provisioning cycles on a cadence (the supervised -Loop mode).
+
+    Each cycle is a fresh Driver().run() over all units; per-unit maintenance
+    windows already gate the disruptive steps, so the loop simply fires on
+    ``interval_s`` and units provision only inside their window. A cycle that
+    throws is logged and does NOT kill the loop (a service must stay up). ``stop``
+    is a callable checked before each cycle and before each sleep (wired to
+    SIGINT/SIGTERM by the CLI for graceful service shutdown); ``max_cycles`` and
+    ``sleep_fn`` are injection points for tests. The per-OS service wrapper
+    (systemd unit / NSSM) just runs `check_and_provision.py --loop`.
+    """
+    stop = stop or (lambda: False)
+    cycle = 0
+    while not stop():
+        cycle += 1
+        started = datetime.now(timezone.utc)
+        print(f"[loop] cycle {cycle} start {started.strftime('%Y-%m-%dT%H:%M:%SZ')}", flush=True)
+        try:
+            code = Driver(cfg).run()
+            print(f"[loop] cycle {cycle} end exit_code={code}", flush=True)
+        except Exception as e:  # noqa: BLE001 -- a bad cycle must not stop the service
+            print(f"[loop] cycle {cycle} ERROR {type(e).__name__}: {e}", flush=True)
+        if max_cycles is not None and cycle >= max_cycles:
+            break
+        if stop():
+            break
+        sleep_fn(interval_s)
