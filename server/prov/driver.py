@@ -51,6 +51,15 @@ UNIT_PULL_SCRIPT = r"C:\MAST\mast-pull-staging.ps1"
 AVAIL_TTL_S = 7200          # 2 h; matches execute-lease default
 WINRM_PORT = transport.WINRM_PORT
 
+# Phase watchdogs (item 6): each long phase has a hard timeout so a hung step
+# fails with a structured event instead of blocking the loop forever. Quick
+# remote reads (inventory/availability/manifest/smoke/proxy/archive) get a short
+# ceiling; build/transfer/execute get generous ones sized to a slow real link.
+PROBE_TIMEOUT_S = 180
+BUILD_TIMEOUT_S = 1800
+TRANSFER_TIMEOUT_S = 3600
+EXECUTE_TIMEOUT_S = 3600
+
 EXIT_OK = 0
 EXIT_UNIT_FAIL = 1
 EXIT_FATAL = 2
@@ -318,11 +327,13 @@ class Driver:
         except OSError:
             return False
 
-    def _ps_out(self, session: Any, script: str, label: str) -> str:
+    def _ps_out(self, session: Any, script: str, label: str,
+                timeout_s: int = PROBE_TIMEOUT_S) -> str:
         # tee_stdout=False: these are internal probes whose stdout is a marker the
         # caller parses -- keep them out of the controller log (esp. the big
-        # base64 archive pull).
-        r = transport.run_ps(session, script, label=label, echo=False, tee_stdout=False)
+        # base64 archive pull). timeout_s bounds a hung remote read (watchdog).
+        r = transport.run_ps(session, script, label=label, echo=False,
+                             tee_stdout=False, timeout_s=timeout_s)
         return (r.std_out or b"").decode("utf-8", "replace")
 
     def _inventory(self, session: Any, unit: dict) -> None:
@@ -399,8 +410,16 @@ class Driver:
             args += ["-Modules", ",".join(modules)]
         if self.cfg.test_mode:
             args += ["-TestMode", "-AllowMissingNoMachineLicense", "-AllowMissingGithubToken"]
-        with build_log.open("wb") as fh:
-            rc = subprocess.run(args, stdout=fh, stderr=subprocess.STDOUT).returncode
+        try:
+            with build_log.open("wb") as fh:
+                rc = subprocess.run(args, stdout=fh, stderr=subprocess.STDOUT,
+                                    timeout=BUILD_TIMEOUT_S).returncode
+        except subprocess.TimeoutExpired:
+            self.log.event("BUILD_FAIL", unit=host, reason="timeout",
+                           timeout_s=BUILD_TIMEOUT_S, log=str(build_log))
+            self.log.activity(host, "BUILD_FAIL", "timeout", dur())
+            self.exit_code = EXIT_UNIT_FAIL
+            return None, None
         if rc != 0:
             self.log.event("BUILD_FAIL", unit=host, exit_code=rc, log=str(build_log))
             self.log.activity(host, "BUILD_FAIL", "exception", dur())
@@ -441,7 +460,14 @@ class Driver:
             f"-SrcUNC {_ps_lit(src_unc)}; "
             f"Write-Output ('PULLRESULT ' + ($r | ConvertTo-Json -Compress -Depth 6))"
         )
-        res = _marker_json(self._ps_out(session, script, f"transfer:{host}"), "PULLRESULT ") or {}
+        try:
+            out = self._ps_out(session, script, f"transfer:{host}", timeout_s=TRANSFER_TIMEOUT_S)
+        except TimeoutError:
+            self.log.event("TRANSFER_FAIL", unit=host, reason="timeout", timeout_s=TRANSFER_TIMEOUT_S, duration_s=dur())
+            self.log.activity(host, "TRANSFER_FAIL", "timeout", dur(), payload_hash, git_sha)
+            self.exit_code = EXIT_UNIT_FAIL
+            return False
+        res = _marker_json(out, "PULLRESULT ") or {}
         outcome, rc = res.get("outcome"), res.get("rc")
         if outcome == "NET_USE_FAIL":
             self.log.event("TRANSFER_FAIL", unit=host, reason="net_use_failed", rc=rc, detail=res.get("detail"), duration_s=dur())
@@ -470,7 +496,14 @@ class Driver:
             f"-RunId {_ps_lit(self.run_id)} -HeldBy {_ps_lit(self.prov_server)} -AllowReboot; "
             "exit $LASTEXITCODE"
         )
-        r = transport.run_ps(session, script, label=f"execute:{host}", echo=False)
+        try:
+            r = transport.run_ps(session, script, label=f"execute:{host}", echo=False,
+                                 timeout_s=EXECUTE_TIMEOUT_S)
+        except TimeoutError:
+            self.log.event("EXECUTE_FAIL", unit=host, reason="timeout", timeout_s=EXECUTE_TIMEOUT_S, duration_s=dur())
+            self.log.activity(host, "EXECUTE_FAIL", "timeout", dur(), payload_hash, git_sha)
+            self.exit_code = EXIT_UNIT_FAIL
+            return False
         rc = r.status_code
         if rc != 0:
             self.log.event("EXECUTE_FAIL", unit=host, exit_code=rc, duration_s=dur())
