@@ -2,6 +2,62 @@
 
 ---
 
+## [2026-07-12] Port the provisioning server orchestration to Python (platform-agnostic)
+
+**Why:** The autonomous provisioning loop must be platform-agnostic -- the prov
+server may run on Linux -- while the provisioned units stay Windows. The driver
+was PowerShell (`server/check-and-provision.ps1`), which ties the control plane
+to Windows. **Standing forward requirement (per Eli):** the provisioning server
+must be genuinely platform-agnostic -- all paths and mechanisms run end-to-end
+against the Windows units with no per-platform patching or extra code.
+
+**What:** A new Python package `server/prov/` becomes the server-side control
+plane, replacing the PowerShell driver. Landed so far (this commit):
+- **`transport.py`** -- the WinRM/SSH transport, **lifted** out of `vm/vm_lib.py`
+  (which was labeled throwaway test scaffolding) so the shipped driver owns it.
+  `vm_lib.py` is now a thin shim that re-exports `prov.transport` and keeps only
+  the VirtualBox (test-only) helpers; the `vm/` harness is unchanged.
+- **Pure-logic modules** ported 1:1 from the PowerShell libs, each with pytest
+  mirroring the Pester tests: `retention.py`, `proxy_assert.py`, `winrm_flap.py`,
+  `staging_size.py`, and `maintenance_window.py`. The maintenance-window port
+  drops the IANA->Windows timezone shim (`mast-timezone.ps1`): Python's `zoneinfo`
+  resolves IANA ids natively.
+- Still to land: `logevents.py` (server-side of `mast-log.ps1`), `driver.py` (the
+  orchestrator), and the `check_and_provision.py` CLI. The PowerShell driver stays
+  in place and remains authoritative until the Python driver is validated on a
+  real run (the deferred VM test); then it retires.
+
+**Scope boundary (what stays PowerShell / infra):** the steps the driver *drives*
+stay as-is and are invoked, not rewritten -- `build-mast.ps1` (produces Windows
+staging; shelled via `pwsh`/`powershell.exe`), `mast-pull-staging.ps1` and
+`execute-mast-provisioning.ps1` (run on the unit), all providers. **Transfer is
+SMB for all platforms** (unit pulls via `net use`+robocopy from `\\server\share`;
+a Linux server serves the share via Samba) -- one universal transfer path, share
+hosting is deployment infra, not driver code.
+
+**Implications / port gotchas being designed for:**
+- **Server-side root:** the driver's own logs/status were under `SystemDrive\MAST`
+  (Windows-only); the Python driver resolves a portable server root (unit-side
+  `C:\MAST` is unchanged -- units are Windows).
+- **Remote Windows paths are literal strings, never `pathlib.Path`** (Path mangles
+  `C:\...`/UNC on a Linux server).
+- **`zoneinfo` needs the `tzdata` pip package on Windows** (no bundled db there),
+  else IANA ids fall back to server-local with a MAINT_TZ_WARN -- a dependency to
+  add on the Windows host to preserve the timezone fix.
+- **UTF-8 BOM:** reads stay BOM-tolerant (PS 5.1 writes a BOM); the Python driver
+  writes plain UTF-8 + LF and uses atomic `os.replace`.
+- **PowerShell exe** resolved portably (`pwsh` on Linux, `powershell.exe` on
+  Windows); structured results from unit-side scripts come back as JSON over the
+  session (not live PS objects); `-AllowReboot` can drop the session mid-run.
+
+**Directional (recommended, not yet committed):** move to **SSH-first transport**
+(retire WinRM, sequenced with item 6's detached-execute, which neutralizes WinRM's
+only real advantage) and standardize all MAST JSON on **UTF-8-no-BOM + LF** with
+unit-side PS writers switching to `[IO.File]::WriteAllText`. Recorded as direction;
+decisions pending.
+
+---
+
 ## [2026-07-12] Systematic per-run log archival + retention on the prov server
 
 **Why:** Every run scattered evidence with no lifecycle: the controller log already landed under
