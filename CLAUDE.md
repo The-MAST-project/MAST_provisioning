@@ -124,13 +124,40 @@ Scripts that need to run standalone (e.g. bootstrap on a USB drive) must use the
 variant (no `throw`) and keep a local fallback only for functions the lib may not be present
 to supply.
 
-### Python shared helpers (`vm/run-prov-test.py`)
+### Python shared helpers (`server/prov/transport.py`)
+
+The WinRM/SSH transport is the canonical `server/prov/transport.py` (lifted out of
+`vm/vm_lib.py`, which now re-exports it and keeps only VBox test helpers). Import from
+`prov.transport` in new server code; `vm/` scripts keep importing `vm_lib`.
 
 | Helper | Purpose |
 |--------|---------|
 | `_ps_escape(s)` | Escape a string for embedding in a PS single-quoted string (`'` -> `''`). Never inline `.replace("'", "''")`. |
-| `_find_unit_log_path(session, log_filename)` | Locate the newest session log on the unit. Never duplicate the embedded PS snippet. |
+| `connect_unit(host, cred)` | WinRM-preferred, SSH-fallback session to a unit. Prefer over `winrm_session` for real work. |
+| `run_ps(session, script, ...)` | Run PS on a unit with heartbeat + hard timeout + resilient retry. |
 | `winrm_session(host, cred, read_timeout_s, op_timeout_s)` | Construct a `winrm.Session`. Never instantiate `winrm.Session` directly outside this factory. |
+
+### The server orchestration is being ported to Python (platform-agnostic)
+
+The server-side control plane is moving from `server/check-and-provision.ps1` to the Python
+package **`server/prov/`** (`MAST_provisioning#10` item 9 / PR #13; rationale in `DECISIONS.md`
+2026-07-12). **Standing requirement: the provisioning server must be platform-agnostic — all
+paths and mechanisms run end-to-end against the Windows units with no per-platform patching or
+extra code.** Consequences for any new server code:
+
+- **Remote/unit paths are literal strings** (`C:\MAST\...`, `\\server\share`), never `pathlib.Path`
+  (Path mangles them on a non-Windows server). Only local server paths use `Path`/`os`.
+- **Transfer is SMB for all platforms** (unit pulls via `net use`+robocopy; Samba serves the share
+  on Linux). Don't add a non-SMB transfer path.
+- **Read PS-written JSON BOM-tolerantly** (`transport.load_json_file` / `parse_json_text`); write
+  plain UTF-8 + LF and rename atomically (`os.replace`).
+- Resolve the PowerShell exe portably (`pwsh` on Linux, `powershell.exe` on Windows).
+- On Windows, `zoneinfo` needs the `tzdata` pip package (else IANA tz ids fall back to server-local).
+- The steps the driver *drives* stay PowerShell (`build-mast.ps1`, `mast-pull-staging.ps1`,
+  `execute-mast-provisioning.ps1`, providers) — invoke them, don't rewrite them.
+
+Test the package with `.venv/bin/python -m pytest server/prov/tests`. Directional (not yet
+committed): SSH-first transport (see #6) and a UTF-8-no-BOM JSON standard.
 
 ## `net use` argument order
 
