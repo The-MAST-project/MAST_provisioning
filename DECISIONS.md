@@ -2,6 +2,46 @@
 
 ---
 
+## [2026-07-12] Detached execute: run provisioning as a self-detaching task the driver polls
+
+**Why:** The synchronous execute (run over the WinRM/SSH session, driver blocks on it)
+dies if the transport session drops mid-run -- the "execute dies with its session" failure
+that #6/#7 call out, and the one advantage WinRM had (resume a Receive across a blip). For
+the unattended loop, execute must survive a session drop; that also unblocks WinRM retirement.
+
+**What:** Execute now runs **detached** from the driver's session, encapsulated in one
+standalone unit-side script `client/mast-run-detached.ps1` (Eli's "put the moving parts in a
+script that runs standalone on the unit" steer):
+- `-Register`: registers a **triggerless** scheduled task (interactive `mast`, elevated) that
+  re-invokes the script `-Run`, then Starts it and returns. Triggerless = it only runs when
+  Started, so it never re-fires at a later logon and re-provisions the unit.
+- `-Run` (in the interactive session): reads `detached-run.json`, decrypts the SMB password
+  from the DPAPI-`LocalMachine` blob, runs `execute-mast-provisioning.ps1`, and writes
+  `execute-result.json` (`running` -> `done` + `exit_code`).
+- The driver writes the inputs (config + blob), invokes `-Register`, then **polls
+  `execute-result.json`**, reconnecting (`connect_unit`) if the session drops, bounded by the
+  `EXECUTE_TIMEOUT_S` watchdog; it reads `exit_code` and deletes the task. Returns the
+  (possibly reconnected) session so downstream phases use the live one.
+
+**Credential handling:** execute needs the SMB password (it maps `Z: -> \\prov\mast-shared`).
+A network-logon session (SSH/WinRM) **cannot** `cmdkey` (validated: "Credentials cannot be
+saved from this logon session"), so the driver writes the pass as a **DPAPI-`LocalMachine`**
+blob (machine-bound, encrypted, never plaintext; a network logon CAN LocalMachine-Protect) and
+the detached runner decrypts it in the interactive session (LocalMachine decrypts from any
+session on the box). No credential is passed to the detached process and none sits in
+cleartext. See the reference memory / `reference_mast_unit_windows_cred_reboot`.
+
+**Implications:** Validated end-to-end on the mast-unit VM (detached task ran execute, Z:
+mapped from the decrypted blob, driver polled the marker to `exit_code=0`, smoke passed).
+The **session-drop reconnect** and **reboot-survival** (`-AllowReboot`) paths are coded but
+not VM-validatable here -- in-place VM reboots don't return reachable (a VBox harness artifact,
+see the reference memory), so those await a real unit. WinRM retirement can follow now that the
+detached task, not a live Receive, carries execute across drops. The steady-state durable-Z
+provider (`mast-shared-mount`, so Z: persists across reboots without provisioning) is a
+separate later item; detached execute maps Z: itself via the decrypted blob.
+
+---
+
 ## [2026-07-12] Adopt SSH-first transport and a UTF-8-no-BOM JSON standard
 
 **Supersedes** the "directional (recommended, not yet committed)" note at the end

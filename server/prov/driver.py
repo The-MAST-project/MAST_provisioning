@@ -29,6 +29,7 @@ import os
 import shutil
 import socket
 import subprocess
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -47,6 +48,14 @@ UNIT_AVAIL = r"C:\MAST\status\availability.json"
 UNIT_INSTALLED = r"C:\MAST\installed-manifest.json"
 UNIT_SMOKE_DIR = r"C:\MAST\logs\smoke"
 UNIT_PULL_SCRIPT = r"C:\MAST\mast-pull-staging.ps1"
+# Detached-execute (item 6): the standalone runner + the files the driver writes
+# for it (config has no secret; the SMB pass is a machine-bound DPAPI blob).
+UNIT_DETACHED_RUNNER = r"C:\MAST\mast-run-detached.ps1"
+UNIT_DETACHED_CFG = r"C:\MAST\status\detached-run.json"
+UNIT_SMB_BLOB = r"C:\MAST\status\smb-cred.dpapi"
+UNIT_EXECUTE_RESULT = r"C:\MAST\status\execute-result.json"
+DETACHED_TASK = "MAST-Execute-Detached"
+EXECUTE_POLL_INTERVAL_S = 15
 
 AVAIL_TTL_S = 7200          # 2 h; matches execute-lease default
 WINRM_PORT = transport.WINRM_PORT
@@ -287,8 +296,9 @@ class Driver:
                 if not self._transfer(session, host, dur, payload_hash, git_sha):
                     return  # TRANSFER_FAIL already logged
 
-                # Phase 8 -- execute.
-                if not self._execute(session, host, dur, payload_hash, git_sha):
+                # Phase 8 -- execute (detached; may reconnect and replace session).
+                ok, session = self._execute(session, host, dur, payload_hash, git_sha)
+                if not ok:
                     return  # EXECUTE_FAIL already logged
 
                 # Phase 9 -- smoke.
@@ -485,33 +495,89 @@ class Driver:
         self._unit_stage = unit_stage
         return True
 
-    def _execute(self, session: Any, host: str, dur, payload_hash: str, git_sha: str) -> bool:
-        self.log.event("EXECUTE_START", unit=host, run_id=self.run_id)
-        stage = self._unit_stage
-        script = (
-            "Set-ExecutionPolicy Bypass -Scope Process -Force; "
-            f"& (Join-Path {_ps_lit(stage)} 'execute-mast-provisioning.ps1') "
-            f"-StagingPath {_ps_lit(stage)} -ProvServer {_ps_lit(self.prov_server)} "
-            f"-SmbUser {_ps_lit(self.smb_user)} -SmbPass {_ps_lit(self.smb_pass)} "
-            f"-RunId {_ps_lit(self.run_id)} -HeldBy {_ps_lit(self.prov_server)} -AllowReboot; "
-            "exit $LASTEXITCODE"
+    def _write_detached_inputs(self, session: Any, stage: str) -> None:
+        """Write the detached runner's inputs: config (no secret) + the SMB pass
+        as a machine-bound DPAPI-LocalMachine blob (a network-logon session CAN
+        LocalMachine-Protect; the runner decrypts it in the interactive session)."""
+        self._write_unit_json(session, UNIT_DETACHED_CFG, {
+            "run_id": self.run_id, "staging_path": stage, "prov_server": self.prov_server,
+            "smb_user": self.smb_user, "held_by": self.prov_server,
+        })
+        enc = (
+            "$ErrorActionPreference='Stop'; Add-Type -AssemblyName System.Security; "
+            f"$b=[Text.Encoding]::UTF8.GetBytes({_ps_lit(self.smb_pass)}); "
+            "$e=[Security.Cryptography.ProtectedData]::Protect($b,$null,"
+            "[Security.Cryptography.DataProtectionScope]::LocalMachine); "
+            f"[IO.File]::WriteAllBytes({_ps_lit(UNIT_SMB_BLOB)},$e)"
         )
+        transport.run_ps(session, enc, label="dpapi-blob", echo=False, tee_stdout=False, timeout_s=PROBE_TIMEOUT_S)
+
+    def _execute(self, session: Any, host: str, dur, payload_hash: str, git_sha: str) -> tuple[bool, Any]:
+        """Detached execute (item 6): run execute-mast-provisioning.ps1 as a
+        detached scheduled task (via client/mast-run-detached.ps1) and poll its
+        result marker, reconnecting if the transport session drops mid-run -- so a
+        WinRM/SSH blip no longer kills the run. Returns (ok, session) since a
+        reconnect replaces the session for the downstream phases.
+
+        NOTE: reboot-survival (execute's -AllowReboot dropping the unit) can't be
+        validated on the VM (see reference memory); the session-drop path is the
+        common case and is handled here."""
+        self.log.event("EXECUTE_START", unit=host, run_id=self.run_id, mode="detached")
+        stage = self._unit_stage
+        self._write_detached_inputs(session, stage)
+        runner_src = (self.cfg.repo_top / "client" / "mast-run-detached.ps1").read_text(encoding="utf-8")
+        transport.upload_file(session, UNIT_DETACHED_RUNNER, runner_src, label="detached-runner")
+
+        reg = self._ps_out(session, f"& {_ps_lit(UNIT_DETACHED_RUNNER)} -Register", f"execute-register:{host}")
+        if "DETACHED_REGISTERED" not in reg:
+            self.log.event("EXECUTE_FAIL", unit=host, reason="detached_register_failed",
+                           detail=reg.strip()[:200], duration_s=dur())
+            self.log.activity(host, "EXECUTE_FAIL", "detached_register_failed", dur(), payload_hash, git_sha)
+            self.exit_code = EXIT_UNIT_FAIL
+            return False, session
+
+        poll_ps = (f"if (Test-Path {_ps_lit(UNIT_EXECUTE_RESULT)}) "
+                   f"{{ Get-Content {_ps_lit(UNIT_EXECUTE_RESULT)} -Raw }}")
+        deadline = time.monotonic() + EXECUTE_TIMEOUT_S
+        result = None
+        last_beat = 0.0
+        while time.monotonic() < deadline:
+            try:
+                result = _parse_json_or_none(self._ps_out(session, poll_ps, f"execute-poll:{host}"))
+                if result and result.get("status") == "done":
+                    break
+                now = time.monotonic()
+                if now - last_beat >= 90:
+                    self.log.event("EXECUTE_RUNNING", unit=host, elapsed_s=dur(),
+                                   status=(result or {}).get("status", "starting"))
+                    last_beat = now
+            except Exception as e:  # noqa: BLE001 -- session dropped; reconnect and keep polling
+                self.log.event("EXECUTE_RECONNECT", unit=host, error=f"{type(e).__name__}: {e}")
+                transport._dispose_winrm_session(session)
+                try:
+                    session = transport.connect_unit(host, self.unit_cred)
+                except Exception as e2:  # noqa: BLE001
+                    self.log.event("EXECUTE_RECONNECT_WAIT", unit=host, error=f"{type(e2).__name__}: {e2}")
+            time.sleep(EXECUTE_POLL_INTERVAL_S)
+
         try:
-            r = transport.run_ps(session, script, label=f"execute:{host}", echo=False,
-                                 timeout_s=EXECUTE_TIMEOUT_S)
-        except TimeoutError:
+            self._ps_out(session, f"schtasks /delete /tn {DETACHED_TASK} /f", f"execute-cleanup:{host}")
+        except Exception:  # noqa: BLE001
+            pass
+
+        if not result or result.get("status") != "done":
             self.log.event("EXECUTE_FAIL", unit=host, reason="timeout", timeout_s=EXECUTE_TIMEOUT_S, duration_s=dur())
             self.log.activity(host, "EXECUTE_FAIL", "timeout", dur(), payload_hash, git_sha)
             self.exit_code = EXIT_UNIT_FAIL
-            return False
-        rc = r.status_code
+            return False, session
+        rc = int(result.get("exit_code", 1))
         if rc != 0:
             self.log.event("EXECUTE_FAIL", unit=host, exit_code=rc, duration_s=dur())
             self.log.activity(host, "EXECUTE_FAIL", f"exit_{rc}", dur(), payload_hash, git_sha)
             self.exit_code = EXIT_UNIT_FAIL
-            return False
-        self.log.event("EXECUTE_OK", unit=host, duration_s=dur())
-        return True
+            return False, session
+        self.log.event("EXECUTE_OK", unit=host, duration_s=dur(), mode="detached")
+        return True, session
 
     def _smoke(self, session: Any, host: str, modules: list[str], dur, payload_hash: str, git_sha: str) -> bool:
         self.log.event("SMOKE_START", unit=host)
