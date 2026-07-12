@@ -406,7 +406,10 @@ class Driver:
                            reason=avail.get("reason"), expires=exp or "none", stale=is_stale)
 
     def _build(self, unit: dict, host: str, modules: list[str], dur) -> tuple[str | None, str | None]:
-        self.log.event("BUILD_START", unit=host)
+        # test_mode in the event is the auditable record of whether this build
+        # passed -AllowMissing* (dev/test) or ran as a production build that
+        # fails loud on any missing input (item 7). Production omits --test-mode.
+        self.log.event("BUILD_START", unit=host, test_mode=self.cfg.test_mode)
         build_script = self.cfg.repo_top / "build" / "build-mast.ps1"
         build_log = self.log_root / f"{self.run_id}-{host}-build.log"
         args = [_powershell_exe(), "-NoProfile", "-ExecutionPolicy", "Bypass",
