@@ -302,6 +302,18 @@ class SshSession:
         rc = stdout.channel.recv_exit_status()
         return _SshResponse(rc, out, err)
 
+    def put_file(self, remote_path: str, data: bytes) -> None:
+        """Write bytes to a Windows path over SFTP. Avoids the base64-over-
+        EncodedCommand upload, which busts cmd.exe's ~8191 command-line limit
+        when OpenSSH's default shell is cmd.exe (seen uploading the pull script).
+        Windows OpenSSH's sftp-server accepts forward-slash paths."""
+        sftp = self._client.open_sftp()
+        try:
+            with sftp.file(remote_path.replace("\\", "/"), "wb") as f:
+                f.write(data)
+        finally:
+            sftp.close()
+
     def close(self) -> None:
         try:
             self._client.close()
@@ -760,6 +772,7 @@ def run_ps(
     label: str = "",
     timeout_s: int = WINRM_CALL_TIMEOUT_S,
     echo: bool = True,
+    tee_stdout: bool = True,
     step_timer: list[float] | None = None,
 ) -> winrm.Response:
     """Run a PowerShell script via WinRM with heartbeat logging and a hard timeout.
@@ -768,12 +781,18 @@ def run_ps(
     a long-running command (e.g. WinRM listener wedged during heavy install
     IO) does not abandon the running command on the unit. The hard ceiling
     is still enforced by _run_with_heartbeat via timeout_s.
+
+    tee_stdout=False suppresses echoing the remote stdout to the log sink -- use
+    it for internal probes whose stdout is a marker/JSON payload the caller parses
+    (e.g. inventory, smoke, proxy, the base64 archive pull), so those do not flood
+    the controller log; the caller still gets the bytes on the returned Response.
     """
     tag = f"[{label}] " if label else ""
-    # Fail fast & locally on oversized inline dispatch (SSH is exempt -- no
-    # cmd.exe command-line limit on the exec channel).
-    if not isinstance(session, SshSession):
-        assert_inline_dispatchable(script, label)
+    # Fail fast & locally on oversized inline dispatch. This applies to SSH too:
+    # Windows OpenSSH's exec runs the command through cmd.exe (~8191-char limit),
+    # so a large -EncodedCommand busts it there as well (seen uploading the pull
+    # script -- now sent via SFTP). Large payloads must be file/SFTP-dispatched.
+    assert_inline_dispatchable(script, label)
     if echo:
         _log(f"{tag}>>> {script[:120].rstrip()}")
     r = _run_with_heartbeat(
@@ -782,7 +801,7 @@ def run_ps(
         timeout_s=timeout_s,
         step_timer=step_timer,
     )
-    if r.std_out:
+    if tee_stdout and r.std_out:
         _log_raw(r.std_out.decode(errors="replace").rstrip())
     if r.std_err:
         brief = _format_winrm_stderr(r.std_err.decode(errors="replace"))
@@ -887,6 +906,17 @@ def upload_file_b64(
         raise RuntimeError(f"upload_file_b64 failed for {label}: exit {r.status_code}: {err}")
 
 
+def upload_file(session: Any, remote_path: str, content: str, label: str = "file") -> None:
+    """Upload text content to a Windows path, transport-appropriately: SFTP over
+    SSH (no command-line-length limit), base64-over-run_ps over WinRM (WSMan has
+    no cmd.exe limit). Prefer this over upload_file_b64 at call sites."""
+    if isinstance(session, SshSession):
+        session.put_file(remote_path, content.encode("utf-8"))
+        _log(f"Uploaded {label} via SFTP ({len(content)} chars)")
+    else:
+        upload_file_b64(session, remote_path, content, label=label)
+
+
 # ---------------------------------------------------------------------------
 # Public API. vm_lib re-exports this surface (plus a few underscored helpers it
 # and its tests use) so existing `from vm_lib import ...` call sites keep working.
@@ -904,6 +934,6 @@ __all__ = [
     # creds + transport
     "load_creds", "winrm_session", "ssh_session", "wait_for_ssh",
     "connect_unit", "wait_for_winrm", "run_ps", "check_rc",
-    "upload_file_b64", "winrm_encoded_cmd_len", "assert_inline_dispatchable",
+    "upload_file", "upload_file_b64", "winrm_encoded_cmd_len", "assert_inline_dispatchable",
     "SshSession",
 ]

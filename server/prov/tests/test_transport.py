@@ -98,6 +98,26 @@ def test_run_with_heartbeat_escalates_and_rate_limits():
             setattr(T, k, v)
 
 
+def test_upload_file_routes_ssh_to_sftp_else_b64(monkeypatch):
+    # SSH sessions upload via SFTP (no cmd.exe command-line limit); anything else
+    # falls back to the base64-over-run_ps path.
+    class _FakeSsh(T.SshSession):
+        def __init__(self):  # bypass paramiko connect
+            self.put_calls = []
+        def put_file(self, remote_path, data):
+            self.put_calls.append((remote_path, data))
+
+    ssh = _FakeSsh()
+    T.upload_file(ssh, r"C:\MAST\x.ps1", "hello", label="x")
+    assert ssh.put_calls == [(r"C:\MAST\x.ps1", b"hello")]
+
+    b64_called = {}
+    monkeypatch.setattr(T, "upload_file_b64",
+                        lambda s, p, c, label="file": b64_called.update(path=p, content=c))
+    T.upload_file(object(), r"C:\MAST\y.ps1", "world", label="y")
+    assert b64_called == {"path": r"C:\MAST\y.ps1", "content": "world"}
+
+
 def test_vm_lib_shim_reexports_transport_surface():
     # The vm/ harness imports these from vm_lib; the shim must still surface them.
     import sys

@@ -218,10 +218,12 @@ class Driver:
             return int((datetime.now(timezone.utc) - unit_start).total_seconds())
 
         try:
-            # Phase 1 -- reachability (TCP probe).
-            if not self._tcp_open(host, WINRM_PORT):
+            # Phase 1 -- reachability. Probe both transports (SSH-first, WinRM
+            # fallback): reachable if EITHER port is open, so a unit whose WinRM
+            # regressed (post-reboot Public-profile 401) is still driven over SSH.
+            if not (self._tcp_open(host, transport.SSH_PORT) or self._tcp_open(host, WINRM_PORT)):
                 self.log.event("UNIT_UNREACHABLE", unit=host, resolved_ip=resolved)
-                self.log.activity(host, "UNREACHABLE", "winrm_port_closed", dur())
+                self.log.activity(host, "UNREACHABLE", "ssh_and_winrm_ports_closed", dur())
                 self.exit_code = EXIT_UNIT_FAIL
                 return
 
@@ -317,7 +319,10 @@ class Driver:
             return False
 
     def _ps_out(self, session: Any, script: str, label: str) -> str:
-        r = transport.run_ps(session, script, label=label, echo=False)
+        # tee_stdout=False: these are internal probes whose stdout is a marker the
+        # caller parses -- keep them out of the controller log (esp. the big
+        # base64 archive pull).
+        r = transport.run_ps(session, script, label=label, echo=False, tee_stdout=False)
         return (r.std_out or b"").decode("utf-8", "replace")
 
     def _inventory(self, session: Any, unit: dict) -> None:
@@ -428,7 +433,7 @@ class Driver:
                        src_unc=src_unc, dst_local=unit_stage)
         # Ship the pull script (it runs before the payload arrives), then run it.
         pull_src = (self.cfg.repo_top / "client" / "mast-pull-staging.ps1").read_text(encoding="utf-8")
-        transport.upload_file_b64(session, UNIT_PULL_SCRIPT, pull_src, label="pull-script")
+        transport.upload_file(session, UNIT_PULL_SCRIPT, pull_src, label="pull-script")
         script = (
             f"$r = & {_ps_lit(UNIT_PULL_SCRIPT)} -ProvServer {_ps_lit(self.prov_server)} "
             f"-UnitHostname {_ps_lit(host)} -SmbUser {_ps_lit(self.smb_user)} "
