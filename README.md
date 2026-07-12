@@ -229,6 +229,16 @@ This is the only path operators run by hand. Everything else is autonomous.
 
 ## Autonomous loop on the prov server
 
+> **Python port in progress (MAST_provisioning#10 item 9).** The server
+> orchestration is being ported to a platform-agnostic Python driver
+> (`server/check_and_provision.py` + the `server/prov/` package) so the prov
+> server can run on any OS while units stay Windows. The PowerShell
+> `check-and-provision.ps1` below **remains authoritative** until the Python
+> driver is validated on a real run. Once landed, run it with
+> `python server/check_and_provision.py [--only-hosts ...] [--dry-run]`
+> (`pip install -r server/requirements.txt` first); pure-logic tests live in
+> `server/prov/tests/`. See DECISIONS.md 2026-07-12.
+
 For complete step-by-step instructions starting from a bare Windows machine,
 see **[docs/provisioning-server-setup.md](docs/provisioning-server-setup.md)**.
 

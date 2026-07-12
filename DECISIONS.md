@@ -2,6 +2,40 @@
 
 ---
 
+## [2026-07-12] Adopt SSH-first transport and a UTF-8-no-BOM JSON standard
+
+**Supersedes** the "directional (recommended, not yet committed)" note at the end
+of the same-day "Port the provisioning server orchestration to Python" entry
+below -- Eli approved both, so they are now decided.
+
+**Why:** As the server orchestration becomes platform-agnostic Python, the two
+Windows-flavored fragilities in the transport/data layer should go. WinRM
+Basic-over-HTTP carries a large resilient-Receive retry layer (it exists only
+because WinRM's HTTP Receive model breaks under load), ships credentials base64
+on 5985, imposes the EncodedCommand size ceiling, and is the channel that fails
+the post-reboot Public-profile 401 -- exactly where SSH already saves us. And PS
+5.1's UTF-8 BOM on written JSON trips every non-PowerShell reader.
+
+**What:**
+- **SSH-first transport.** `prov.transport.connect_unit` now prefers SSH (paramiko),
+  with WinRM (pywinrm) as fallback (`prefer='ssh'` default). WinRM stays as the
+  fallback until item 6's detached-execute lands -- which neutralizes WinRM's only
+  real advantage (resuming a command across a network blip) -- after which the WinRM
+  code retires. Recommendation + rationale recorded on #6; robustness pairing is #7.
+- **UTF-8-no-BOM + LF for all MAST JSON.** The Python driver writes plain UTF-8 +
+  LF and renames atomically (`os.replace`); reads stay BOM-tolerant
+  (`transport.load_json_file` / `parse_json_text`) as a permanent safety net for
+  existing PS-written files. Follow-up: unit-side PS writers (execute, availability)
+  switch from `Out-File -Encoding UTF8` to `[IO.File]::WriteAllText` with a no-BOM
+  `UTF8Encoding($false)` (5.1 has no `utf8NoBOM`).
+
+**Implications:** OpenSSH goes from fallback to load-bearing on every unit
+(bootstrap-winrm.ps1 already installs it); host keys should be pinned for production
+(currently `AutoAddPolicy`). The driver's own writes are BOM-free immediately; full
+BOM retirement waits on the unit-side writer change.
+
+---
+
 ## [2026-07-12] Port the provisioning server orchestration to Python (platform-agnostic)
 
 **Why:** The autonomous provisioning loop must be platform-agnostic -- the prov

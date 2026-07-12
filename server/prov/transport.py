@@ -24,10 +24,8 @@ from __future__ import annotations
 
 import base64
 import json
-import os
 import re
 import socket
-import subprocess
 import sys
 import threading
 import time
@@ -376,41 +374,48 @@ def connect_unit(
     host: str,
     cred: dict[str, str],
     winrm_wait_s: int = WINRM_BOOT_TIMEOUT_S,
-    allow_ssh_fallback: bool = True,
+    allow_ssh_fallback: bool = True,   # kept for call-site compat; unused when prefer='ssh'
+    prefer: str = "ssh",
 ) -> Any:
-    """Return a unit session exposing .run_ps() -- a pywinrm Session when WinRM is
-    usable, else an SshSession. Prefers WinRM, but if WinRM's port is open while
-    Basic auth is rejected (the post-reboot Public-profile 401 regression) and
-    SSH authenticates, it switches to SSH within seconds rather than blocking the
-    full boot timeout. While the unit is still booting (TCP closed) it keeps
-    waiting up to winrm_wait_s. Raises if neither channel comes up."""
-    _log(
-        f"Connecting to unit {host} (WinRM preferred"
-        f"{', SSH fallback' if allow_ssh_fallback else ''})..."
-    )
+    """Return a unit session exposing .run_ps() -- an SshSession by default, a
+    pywinrm Session only as fallback.
+
+    SSH-first (the adopted direction, DECISIONS.md 2026-07-12): SSH is encrypted,
+    uniform across server OSes, and already the channel that survives the
+    post-reboot Public-profile 401 that makes WinRM Basic refuse. WinRM is kept
+    as a fallback until item 6's detached-execute lands, after which it retires
+    (pass prefer='winrm' to force the legacy order). Keeps waiting up to
+    winrm_wait_s while the unit is still booting; raises if neither comes up."""
+    _log(f"Connecting to unit {host} ({prefer}-first, {'WinRM' if prefer == 'ssh' else 'SSH'} fallback)...")
     deadline = time.monotonic() + winrm_wait_s
     users = _candidate_users(host, cred.get("user", "")) or [cred.get("user", "")]
     while time.monotonic() < deadline:
-        sess, state = _winrm_probe_once(host, cred, users)
-        if state == "ok":
-            _log(f"Connected to {host} over WinRM (user={cred['user']!r}).")
-            return sess
-        if state == "auth_rejected" and allow_ssh_fallback:
-            _log(
-                f"WinRM on {host}: TCP {WINRM_PORT} open but Basic auth rejected "
-                "(likely post-reboot Public-profile regression). Trying SSH fallback..."
-            )
+        if prefer == "ssh":
             try:
                 s = ssh_session(host, cred, connect_timeout_s=20)
                 _log(f"Connected to {host} over SSH (user={_ssh_username(cred['user'])!r}).")
                 return s
             except Exception as e:
-                _log(f"  SSH not ready yet ({type(e).__name__}: {e}); will keep trying.")
+                _log(f"  SSH not ready yet ({type(e).__name__}: {e}); trying WinRM fallback...")
+            sess, state = _winrm_probe_once(host, cred, users)
+            if state == "ok":
+                _log(f"Connected to {host} over WinRM fallback (user={cred['user']!r}).")
+                return sess
+        else:  # legacy WinRM-first (post-reboot 401 -> SSH)
+            sess, state = _winrm_probe_once(host, cred, users)
+            if state == "ok":
+                _log(f"Connected to {host} over WinRM (user={cred['user']!r}).")
+                return sess
+            if state == "auth_rejected" and allow_ssh_fallback:
+                try:
+                    s = ssh_session(host, cred, connect_timeout_s=20)
+                    _log(f"Connected to {host} over SSH (user={_ssh_username(cred['user'])!r}).")
+                    return s
+                except Exception as e:
+                    _log(f"  SSH not ready yet ({type(e).__name__}: {e}); will keep trying.")
         time.sleep(5)
-    if allow_ssh_fallback:
-        _log(f"WinRM not usable within {winrm_wait_s}s; final SSH attempt...")
-        return wait_for_ssh(host, cred, timeout=60)
-    raise TimeoutError(f"Unit {host} not reachable over WinRM within {winrm_wait_s}s")
+    _log(f"Neither channel usable within {winrm_wait_s}s; final SSH attempt...")
+    return wait_for_ssh(host, cred, timeout=60)
 
 
 def _candidate_users(host: str, raw_user: str) -> list[str]:
