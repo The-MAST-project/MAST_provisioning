@@ -77,7 +77,11 @@ param(
     [switch]   $WinRMUseSSL,
     [switch]   $TestMode,
     [int]      $MaintenanceWindowStart = -1,
-    [int]      $MaintenanceWindowEnd   = -1
+    [int]      $MaintenanceWindowEnd   = -1,
+    # Retention: how many most-recent per-run log dirs to keep under
+    # C:\MAST\logs\prov\sessions. Older dirs are pruned at end of run so a
+    # host up for weeks-to-years does not grow logs without bound.
+    [int]      $RetainRuns = 60
 )
 
 $ErrorActionPreference = 'Stop'
@@ -102,6 +106,7 @@ if (-not $VaultCreds)   { $VaultCreds   = Join-Path $RepoTop 'vault\creds.json' 
 . (Join-Path $RepoTop 'server\lib\mast-proxy-assert.ps1')
 . (Join-Path $RepoTop 'server\lib\mast-staging-size.ps1')
 . (Join-Path $RepoTop 'server\lib\mast-winrm-warn.ps1')
+. (Join-Path $RepoTop 'server\lib\mast-log-archive.ps1')
 Import-Module (Join-Path $RepoTop 'server\lib\mast-modules.psm1') -Force -DisableNameChecking
 
 # Cached "all modules discovered on disk" list. Used as the fall-back when
@@ -1042,6 +1047,31 @@ foreach ($unit in $units) {
                     Log-Event 'AVAIL_RELEASE_WARN' @{ unit=$hostname; error=$_.Exception.Message }
                 }
             }
+            # Archive the unit's own session dir back under this run's log tree
+            # (item 5). execute-mast-provisioning.ps1 keys its session dir on the
+            # run id we passed, so the path is deterministic. Every non-dead
+            # session hits this -- success, smoke-fail, proxy-fail -- which is
+            # exactly when a post-mortem needs the unit-side logs. A dead session
+            # (network drop) cannot be pulled; that evidence stays on the unit.
+            if ($session -and $session.State -eq 'Opened') {
+                try {
+                    $unitSessionDir = "C:\MAST\logs\sessions\$RunId"
+                    $unitLogsExist = Invoke-Command -Session $session -ScriptBlock {
+                        param($p) Test-Path $p
+                    } -ArgumentList $unitSessionDir
+                    if ($unitLogsExist) {
+                        $unitDest = Join-Path $LogRoot ("unit-" + $hostname)
+                        New-Item -ItemType Directory -Path $unitDest -Force | Out-Null
+                        Copy-Item -FromSession $session -Path $unitSessionDir `
+                            -Destination $unitDest -Recurse -Force -ErrorAction Stop
+                        Log-Event 'UNIT_LOGS_ARCHIVED' @{ unit=$hostname; src=$unitSessionDir; dest=$unitDest }
+                    } else {
+                        Log-Event 'UNIT_LOGS_ABSENT' @{ unit=$hostname; src=$unitSessionDir }
+                    }
+                } catch {
+                    Log-Event 'UNIT_LOGS_ARCHIVE_WARN' @{ unit=$hostname; error=$_.Exception.Message }
+                }
+            }
             if ($session) { Remove-PSSession $session -ErrorAction SilentlyContinue }
         }
     }
@@ -1096,8 +1126,25 @@ try {
         exit_code     = $exitCode
     }
     Write-MastStatusFileAtomic -Path (Get-MastLastRunPath) -Object $lastRun
+    # Snapshot the run's status into its own log dir (item 5): last-run.json is
+    # latest-only and gets overwritten next cycle, so a per-run copy keeps this
+    # run's outcome pinned alongside its controller + unit logs for post-mortems.
+    Write-MastStatusFileAtomic -Path (Join-Path $LogRoot 'last-run.json') -Object $lastRun
 } catch {
     Log-Event 'HEARTBEAT_WRITE_FAIL' @{ err=$_.Exception.Message }
+}
+
+# Retention (item 5): prune per-run log dirs beyond the newest $RetainRuns so a
+# long-lived host does not accumulate them without bound. This run's dir is the
+# newest and is always kept (RetainRuns >= 1).
+try {
+    $pruned = Invoke-MastProvRetention -SessionsRoot (Join-Path $provLogsStable 'sessions') `
+        -Retain $RetainRuns -Logger { param($m) Log-Event 'RETENTION_WARN' @{ msg=$m } }
+    if (@($pruned).Count -gt 0) {
+        Log-Event 'RETENTION_PRUNED' @{ count=@($pruned).Count; retained=$RetainRuns }
+    }
+} catch {
+    Log-Event 'RETENTION_FAIL' @{ err=$_.Exception.Message }
 }
 
 Log-Event 'RUN_END' @{ exit_code=$exitCode; units_checked=$UnitsChecked; units_updated=$UnitsUpdated; units_failed=$UnitsFailed; duration_s=$DurationS }

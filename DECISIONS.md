@@ -2,6 +2,41 @@
 
 ---
 
+## [2026-07-12] Systematic per-run log archival + retention on the prov server
+
+**Why:** Every run scattered evidence with no lifecycle: the controller log already landed under
+`C:\MAST\logs\prov\sessions\<run-id>\`, but the unit's *own* session dir (acquisition, per-provider,
+execute logs) piled up on the unit under a timestamp name and was never pulled back, `last-run.json`
+held only the latest cycle, and nothing ever pruned old dirs -- unbounded growth on a host meant to
+run for weeks-to-years unattended. A post-mortem depended on nothing having overwritten the evidence.
+This is item 5 of `MAST_provisioning#10` -- the log *lifecycle*, distinct from item 4 (log *noise*).
+
+**What:** The run driver now owns each run's full log set under one per-`run_id` location:
+- **Deterministic unit session dir.** `client/execute-mast-provisioning.ps1` keys its session dir on
+  the server-supplied `-RunId` (`C:\MAST\logs\sessions\<run-id>`) when present, instead of a local
+  timestamp -- so the controller knows the exact path to pull. Manual runs (no `-RunId`) keep the
+  timestamp-named dir; an explicit `MAST_LOG_SESSION_DIR` still wins.
+- **Pull the unit logs back.** In the per-unit `finally` (while the PSSession is still open) the
+  driver `Copy-Item -FromSession`s the unit's session dir into `<run-log-dir>\unit-<hostname>\`.
+  Every non-dead session hits this -- success, smoke-fail, proxy-fail -- i.e. exactly when the
+  unit-side logs matter. A dead session (network drop) cannot be pulled; that evidence stays on the
+  unit (same limitation as lease release).
+- **Per-run status snapshot.** `last-run.json` is also written into the run's own dir, so this run's
+  outcome stays pinned next to its logs after the live file is overwritten next cycle.
+- **Bounded retention.** New `-RetainRuns` (default 60) keeps the newest N run dirs and prunes the
+  rest at end of run. The delete DECISION is a pure function (`Select-MastProvPrunableRuns` in
+  `server/lib/mast-log-archive.ps1`, keep-newest-N by the run id's embedded timestamp); the
+  filesystem runner (`Invoke-MastProvRetention`) is a thin wrapper. Non-conforming dir names are
+  never pruned, and the current run is always the newest so it is never eligible.
+
+**Implications:** A count cap (not an age cap) was chosen as the single retention knob -- it is the
+one that actually bounds growth and is obviously correct; an age dimension can be added later without
+changing the guarantee. Pulling the unit dir over WinRM is cheap (text logs, not FITS). The pure
+retention logic is covered by `server/tests/mast-log-archive.Tests.ps1`; the pull-back and prune I/O
+carry real-run acceptance on the VM/unit.
+
+---
+
 ## [2026-07-09] Provisioning-log noise: rate-limit link-flap warnings; escalate the heartbeat
 
 **Why:** The mast04 overnight failure (2026-07-07) buried five meaningful events under hundreds

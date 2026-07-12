@@ -31,6 +31,14 @@ if (-not (Test-Path ${invokeDot})) {
 }
 . ${invokeDot}
 
+# When the orchestrator supplies a run id, key the unit-side session dir on it
+# (C:\MAST\logs\sessions\<run-id>) so the controller can archive this exact dir
+# back under its own per-run log tree. A manual run (no -RunId) keeps the
+# timestamp-named dir. Honors an explicit MAST_LOG_SESSION_DIR override if set.
+if (-not [string]::IsNullOrWhiteSpace(${RunId}) -and
+    [string]::IsNullOrWhiteSpace(${env:MAST_LOG_SESSION_DIR})) {
+    ${env:MAST_LOG_SESSION_DIR} = Join-Path (Get-MastLogsBase) ("sessions\" + ${RunId})
+}
 ${logDir} = Get-MastLogSessionDir
 New-Item -ItemType Directory -Path ${logDir} -Force | Out-Null
 ${smokeDir} = Get-MastSmokeDir
