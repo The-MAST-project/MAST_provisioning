@@ -8,6 +8,8 @@ vm/ harness imports.
 """
 import base64
 
+import pytest
+
 from prov import transport as T
 
 
@@ -128,3 +130,32 @@ def test_vm_lib_shim_reexports_transport_surface():
                  "check_rc", "wait_for_winrm", "WINRM_PORT", "REPO_ROOT",
                  "_ps_escape", "_run_with_heartbeat", "vbox", "vm_state"):
         assert hasattr(vm_lib, name), f"vm_lib missing re-export: {name}"
+
+
+def test_dump_json_file_writes_no_bom_and_lf(tmp_path):
+    p = tmp_path / "x.json"
+    T.dump_json_file(p, {"a": 1, "b": [2, 3]})
+    raw = p.read_bytes()
+    assert not raw.startswith(b"\xef\xbb\xbf"), "no UTF-8 BOM"
+    assert b"\r" not in raw, "LF only, never CRLF (adopted no-BOM+LF standard)"
+    assert T.load_json_file(p) == {"a": 1, "b": [2, 3]}
+
+
+def test_missing_pywinrm_raises_importerror_not_systemexit():
+    # A missing optional dependency must raise a catchable ImportError, not
+    # sys.exit at import time (which would kill any tool/test that imports the
+    # module and breaks the module's import-purity contract).
+    import importlib
+    import sys
+
+    saved = sys.modules.get("winrm")
+    try:
+        sys.modules["winrm"] = None  # makes `import winrm` raise ImportError
+        with pytest.raises(ImportError):
+            importlib.reload(T)
+    finally:
+        if saved is not None:
+            sys.modules["winrm"] = saved
+        else:
+            sys.modules.pop("winrm", None)
+        importlib.reload(T)  # rebuild cleanly so downstream tests see a good module

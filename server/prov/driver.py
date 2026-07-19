@@ -480,19 +480,29 @@ class Driver:
             self.log.activity(host, "TRANSFER_FAIL", "timeout", dur(), payload_hash, git_sha)
             self.exit_code = EXIT_UNIT_FAIL
             return False
-        res = _marker_json(out, "PULLRESULT ") or {}
-        outcome, rc = res.get("outcome"), res.get("rc")
-        if outcome == "NET_USE_FAIL":
-            self.log.event("TRANSFER_FAIL", unit=host, reason="net_use_failed", rc=rc, detail=res.get("detail"), duration_s=dur())
-            self.log.activity(host, "TRANSFER_FAIL", f"net_use_rc_{rc}", dur(), payload_hash, git_sha)
+        res = _marker_json(out, "PULLRESULT ")
+        outcome = (res or {}).get("outcome")
+        rc = (res or {}).get("rc")
+        # Fail CLOSED: only a recognized 'OK' pull is a success. Any other
+        # outcome -- NET_USE_FAIL/HUNG, ROBOCOPY_ERROR, DISK_INSUFFICIENT -- or a
+        # missing/garbled PULLRESULT marker must NOT proceed to execute against an
+        # unverified staging dir. The PS driver rejected only NET_USE_FAIL and
+        # ROBOCOPY_ERROR, letting NET_USE_HUNG / DISK_INSUFFICIENT / a lost marker
+        # fall through to success; the Python driver is the go-forward one and
+        # whitelists success instead (DECISIONS.md 2026-07-19).
+        if outcome != "OK":
+            reason = {
+                "NET_USE_FAIL": "net_use_failed",
+                "NET_USE_HUNG": "net_use_hung",
+                "ROBOCOPY_ERROR": "robocopy_error",
+                "DISK_INSUFFICIENT": "disk_insufficient",
+            }.get(outcome, "unrecognized_pull_result")
+            self.log.event("TRANSFER_FAIL", unit=host, reason=reason, outcome=outcome or "none",
+                           rc=rc, detail=(res or {}).get("detail"), duration_s=dur())
+            self.log.activity(host, "TRANSFER_FAIL", f"{reason}_rc_{rc}", dur(), payload_hash, git_sha)
             self.exit_code = EXIT_UNIT_FAIL
             return False
-        if outcome == "ROBOCOPY_ERROR":
-            self.log.event("TRANSFER_FAIL", unit=host, reason="robocopy_error", rc=rc, detail=res.get("detail"), duration_s=dur())
-            self.log.activity(host, "TRANSFER_FAIL", f"robocopy_rc_{rc}", dur(), payload_hash, git_sha)
-            self.exit_code = EXIT_UNIT_FAIL
-            return False
-        # Success (incl. NET_USE_HUNG / DISK_INSUFFICIENT fall-through, matching PS).
+        # outcome == 'OK': robocopy rc 0-7 (0 no-op, 1 copied, 2-7 info/warning).
         note = {0: "no_changes", 1: "files_copied"}.get(rc, f"robocopy_warning_rc_{rc}")
         self.log.event("TRANSFER_OK", unit=host, bytes=size.bytes, robocopy_rc=rc, note=note)
         self._unit_stage = unit_stage

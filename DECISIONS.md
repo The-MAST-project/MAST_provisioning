@@ -2,6 +2,56 @@
 
 ---
 
+## [2026-07-19] Transfer phase fails CLOSED: whitelist `OK`, not blacklist two failures
+
+**Why:** A code review before switching the autonomous loop on found the SMB
+transfer phase was the only phase that failed *open*. `prov.driver._transfer`
+rejected exactly two pull outcomes (`NET_USE_FAIL`, `ROBOCOPY_ERROR`) and let
+everything else fall through to `TRANSFER_OK` -- so `NET_USE_HUNG`,
+`DISK_INSUFFICIENT`, and (worst) a **missing/garbled `PULLRESULT` marker** were
+all treated as successful transfers, and the driver would proceed to *execute*
+against a staging dir that was never verified as copied. The remote rc from the
+pull is not even checked. Every other phase already fails closed (smoke treats a
+missing marker as `<missing>`->FAIL; execute requires `DETACHED_REGISTERED` + a
+`status=="done"` poll). This is the one gap that matters for unattended runs. The
+PowerShell driver (`server/check-and-provision.ps1`) has the identical logic --
+the Python port faithfully reproduced it.
+
+**What:** `_transfer` now **whitelists the single documented success outcome**:
+`TRANSFER_OK` requires `outcome == "OK"` (the pull script's own success value;
+robocopy rc 0-7). Any other outcome -- or an unparseable/absent marker -- logs
+`TRANSFER_FAIL` (with a specific `reason`: `net_use_failed`, `net_use_hung`,
+`robocopy_error`, `disk_insufficient`, or `unrecognized_pull_result`) and stops
+the unit before execute. This is a **deliberate divergence from PowerShell
+parity**: the Python driver is the go-forward orchestrator (the PS driver is
+slated for retirement), so it is corrected rather than kept bug-compatible.
+
+Landed alongside two transport-hygiene fixes and a test-harness addition, all in
+the same review pass:
+- `prov.transport` no longer `sys.exit()`s at import when pywinrm is missing --
+  it raises a catchable `ImportError`. `sys.exit` on import killed any tool/test
+  that merely imported the module and broke the module's stated import-purity.
+- `dump_json_file` writes `newline="\n"` so a Windows prov server cannot emit
+  CRLF, matching the UTF-8-no-BOM + LF standard already used by
+  `write_status_atomic`.
+- New `server/prov/tests/test_driver_flow.py`: an in-process `FakeSession`
+  (subclassing `SshSession`, no paramiko) drives `Driver._process_unit` through
+  the full phase flow, covering the happy path and the transfer / execute / smoke
+  / register / reachability failure branches -- the orchestration layer the
+  earlier suite left entirely to the VM run. Suite: 74 passed, `ruff check` clean.
+
+**Implications:** A transfer that used to be silently accepted (hung mount, full
+disk, lost marker) now fails the unit loudly and is retried next cycle instead of
+executing against a bad payload. A future pull-script change that adds a new
+success outcome must also be added to the whitelist (fail-closed by default is
+the intended safety posture). Log/telemetry change: two `TRANSFER_FAIL` activity
+reasons were unified into the `{reason}_rc_{rc}` form. The VM re-validation
+(negative test: break the pull, confirm it fails closed and does not execute) is
+the acceptance gate before this ships. `ruff format` is intentionally NOT run --
+this repo lints with `ruff check` only and is not format-managed.
+
+---
+
 ## [2026-07-12] Activate the autonomous loop: `--loop` service mode
 
 **Why:** Item 8 -- the last gate for the autonomous provisioning goal. The driver

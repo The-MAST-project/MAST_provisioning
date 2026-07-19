@@ -26,7 +26,6 @@ import base64
 import json
 import re
 import socket
-import sys
 import threading
 import time
 from datetime import datetime, timezone
@@ -36,12 +35,14 @@ from typing import Any, Callable
 try:
     import winrm  # type: ignore[import]
     from winrm.exceptions import WinRMOperationTimeoutError  # type: ignore[import]
-except ImportError:
-    sys.exit(
-        "ERROR: pywinrm is required.\n"
-        "Install it with:  pip install pywinrm\n"
-        "Then re-run this script."
-    )
+except ImportError as e:
+    # Raise (catchable) rather than sys.exit at import time: this module claims
+    # import-purity, and killing the process on import breaks any tool/test that
+    # merely imports it. pywinrm is still a declared runtime dependency.
+    raise ImportError(
+        "pywinrm is required for prov.transport (the WinRM fallback transport). "
+        "Install it with: pip install pywinrm"
+    ) from e
 
 # requests is a hard dependency of pywinrm, so this import is always safe.
 import requests  # type: ignore[import]
@@ -138,8 +139,9 @@ def parse_json_text(text: str) -> object:
 
 
 def dump_json_file(path: Path, data: object, *, indent: int = 4) -> None:
-    """Write JSON to a file as plain UTF-8 (no BOM)."""
-    Path(path).write_text(json.dumps(data, indent=indent), encoding="utf-8")
+    """Write JSON to a file as plain UTF-8 + LF, no BOM (the adopted standard;
+    newline='\\n' stops a Windows server translating to CRLF)."""
+    Path(path).write_text(json.dumps(data, indent=indent), encoding="utf-8", newline="\n")
 
 
 # ---------------------------------------------------------------------------
