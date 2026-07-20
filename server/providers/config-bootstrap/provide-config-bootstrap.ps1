@@ -47,5 +47,19 @@ ${configBody} = ('machine_role = "{0}"{1}{2}' -f ${Role}, [Environment]::NewLine
 Set-Content -LiteralPath ${targetPath} -Encoding UTF8 -Value ${configBody}
 Write-CfgLog ("Wrote {0} (machine_role={1})" -f ${targetPath}, ${Role})
 
+# Retire the pre-machine_role scheme so a re-provisioned unit is left with only the new
+# config.toml: remove the legacy role-named bootstrap file and the machine-wide
+# MAST_PROJECT env var. No-ops on a fresh install (neither exists yet).
+${legacyToml} = 'C:\WIS\{0}.toml' -f ${Role}
+if (Test-Path -LiteralPath ${legacyToml}) {
+    Remove-Item -LiteralPath ${legacyToml} -Force
+    Write-CfgLog ("Removed legacy bootstrap file {0}" -f ${legacyToml})
+}
+if ($null -ne [Environment]::GetEnvironmentVariable('MAST_PROJECT', 'Machine')) {
+    [Environment]::SetEnvironmentVariable('MAST_PROJECT', $null, 'Machine')
+    ${env:MAST_PROJECT} = $null
+    Write-CfgLog 'Removed legacy machine-wide MAST_PROJECT env var.'
+}
+
 Write-CfgLog 'config-bootstrap complete.'
 exit 0

@@ -42,6 +42,13 @@ if (${content} -match '(?m)^\s*machine_role\s*=\s*"?([A-Za-z]+)"?') {
     ${fail} += "missing key 'machine_role'"
 }
 
+# 3) The pre-machine_role scheme is gone (clean migration): no legacy role-named file,
+# no machine-wide MAST_PROJECT env var.
+${legacyToml} = 'C:\WIS\{0}.toml' -f ${Role}
+if (Test-Path -LiteralPath ${legacyToml}) { ${fail} += ("legacy bootstrap file still present: {0}" -f ${legacyToml}) }
+${mp} = [Environment]::GetEnvironmentVariable('MAST_PROJECT', 'Machine')
+if ($null -ne ${mp}) { ${fail} += ("legacy machine-wide MAST_PROJECT still set: '{0}'" -f ${mp}) }
+
 if (${fail}.Count -eq 0) {
     W 'PASS bootstrap config (config.toml + machine_role) in place'
     Write-MastSmokeOk -Module 'config-bootstrap' | Out-Null
