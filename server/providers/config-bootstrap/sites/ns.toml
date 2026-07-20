@@ -4,7 +4,8 @@
 # cross-checks site/project/controller_host/location against the DB 'sites'
 # document at startup, so these MUST agree with that doc.
 #
-# location matches the DB 'sites' doc for ns (read 2026-06-29).
+# location matches the mast-ns-control DB 'sites' doc for ns (read 2026-07-20;
+# the prior 2026-06-29 lat/long were wrong -- likely read from labcomp's local dev DB).
 site = "ns"
 project = "mast"
 controller_host = "mast-ns-control"
@@ -13,6 +14,6 @@ domain = "weizmann.ac.il"
 # mongo_port = 27017
 
 [location]
-latitude = 30.0533026
-longitude = 35.0386461
+latitude = 30.05301166519461
+longitude = 35.04079611164462
 elevation = 400
