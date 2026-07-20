@@ -16,13 +16,13 @@ Set-Content -LiteralPath ${verifyLog} -Encoding UTF8 -Value ("[{0}] verify-confi
 
 ${fail} = @()
 
-# 1) C:\WIS\<role>.toml exists and carries the required bootstrap keys. Parsed with a
+# 1) C:\WIS\config.toml exists and carries the required bootstrap keys. Parsed with a
 # light line check (no tomllib: python is order 600, not yet installed at order 150).
-${targetPath} = 'C:\WIS\{0}.toml' -f ${Role}
+${targetPath} = 'C:\WIS\config.toml'
 if (Test-Path -LiteralPath ${targetPath}) {
     W ("bootstrap file present: {0}" -f ${targetPath})
     ${content} = Get-Content -LiteralPath ${targetPath} -Raw
-    foreach (${key} in 'site', 'project', 'controller_host', 'database', 'domain') {
+    foreach (${key} in 'site', 'project', 'machine_role', 'controller_host', 'database', 'domain') {
         if (${content} -notmatch ("(?m)^\s*{0}\s*=" -f ${key})) { ${fail} += ("missing key '{0}' in {1}" -f ${key}, ${targetPath}) }
     }
     if (${content} -notmatch '(?m)^\s*\[location\]') { ${fail} += "missing [location] section" }
@@ -33,13 +33,17 @@ if (Test-Path -LiteralPath ${targetPath}) {
     ${fail} += ("bootstrap file missing: {0}" -f ${targetPath})
 }
 
-# 2) MAST_PROJECT machine env var is set to the role.
-${mp} = [Environment]::GetEnvironmentVariable('MAST_PROJECT', 'Machine')
-W ("MAST_PROJECT (Machine) = '{0}' (expect '{1}')" -f ${mp}, ${Role})
-if (${mp} -ne ${Role}) { ${fail} += ("MAST_PROJECT machine env is '{0}', expected '{1}'" -f ${mp}, ${Role}) }
+# 2) machine_role in the file equals the provisioned role (there is no env var anymore).
+if (${content} -match '(?m)^\s*machine_role\s*=\s*"?([A-Za-z]+)"?') {
+    ${mr} = ${Matches}[1]
+    W ("machine_role = '{0}' (expect '{1}')" -f ${mr}, ${Role})
+    if (${mr} -ne ${Role}) { ${fail} += ("machine_role is '{0}', expected '{1}'" -f ${mr}, ${Role}) }
+} else {
+    ${fail} += "missing key 'machine_role'"
+}
 
 if (${fail}.Count -eq 0) {
-    W 'PASS bootstrap config + MAST_PROJECT in place'
+    W 'PASS bootstrap config (config.toml + machine_role) in place'
     Write-MastSmokeOk -Module 'config-bootstrap' | Out-Null
     exit 0
 }

@@ -3,7 +3,7 @@ param(
     # Injected by build-mast.ps1 -Site (mirrors the proxy/astrometry command tweaks).
     [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string]${Site},
     [string]${AssetsRoot} = '.',
-    # Machine role -> MAST_PROJECT and the C:\WIS\<role>.toml file name. Units only today.
+    # Machine role -> the `machine_role` field written into C:\WIS\config.toml. Units only today.
     [string]${Role} = 'unit'
 )
 
@@ -34,20 +34,18 @@ if (-not (Test-Path -LiteralPath ${siteFile})) {
 }
 Write-CfgLog ("Site profile: {0}" -f ${siteFile})
 
-# Deploy verbatim to C:\WIS\<role>.toml. The file is copied as-is (single source of
-# truth in the repo); MAST_common reads it utf-8-sig so a BOM, if any, is tolerated.
-${targetPath} = 'C:\WIS\{0}.toml' -f ${Role}
+# Deploy to the fixed path C:\WIS\config.toml. The site profile is per-site and carries
+# no role, so the machine's role is injected as a top-level `machine_role` key, prepended
+# ahead of the profile body (a top-level key must precede the [location] table). MAST_common
+# reads the file utf-8-sig, so the BOM that Set-Content -Encoding UTF8 writes is tolerated.
+# There is no MAST_PROJECT env var anymore -- the role lives in the file.
+${targetPath} = 'C:\WIS\config.toml'
 ${wisDir} = Split-Path -Parent ${targetPath}
 New-Item -ItemType Directory -Path ${wisDir} -Force | Out-Null
-Copy-Item -LiteralPath ${siteFile} -Destination ${targetPath} -Force
-Write-CfgLog ("Wrote {0}" -f ${targetPath})
-
-# Persist MAST_PROJECT machine-wide so the mast-unit NSSM service (and any process)
-# resolves the role-based config path C:\WIS\<role>.toml. config-bootstrap runs at
-# order 150, before mast (2200) installs/starts the service, so the service inherits it.
-[Environment]::SetEnvironmentVariable('MAST_PROJECT', ${Role}, 'Machine')
-${env:MAST_PROJECT} = ${Role}
-Write-CfgLog ("Set MAST_PROJECT={0} (Machine)." -f ${Role})
+${profileBody} = Get-Content -LiteralPath ${siteFile} -Raw
+${configBody} = ('machine_role = "{0}"{1}{2}' -f ${Role}, [Environment]::NewLine, ${profileBody})
+Set-Content -LiteralPath ${targetPath} -Encoding UTF8 -Value ${configBody}
+Write-CfgLog ("Wrote {0} (machine_role={1})" -f ${targetPath}, ${Role})
 
 Write-CfgLog 'config-bootstrap complete.'
 exit 0

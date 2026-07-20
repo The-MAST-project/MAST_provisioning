@@ -55,7 +55,7 @@ param(
   [string]${ImdiskMountType} = 'vm',
 
   # Site whose bootstrap profile (server/providers/config-bootstrap/sites/<Site>.toml)
-  # becomes the unit's C:\WIS\unit.toml via the config-bootstrap provider. Selected
+  # becomes the unit's C:\WIS\config.toml via the config-bootstrap provider. Selected
   # EXPLICITLY here, never derived from the hostname (per the config-file epic). The
   # config-bootstrap switch case below validates it against the available profiles.
   [string]${Site} = 'wis'
@@ -316,7 +316,7 @@ function Generate-Commands([string[]]${Mods}) {
       }
       'config-bootstrap' {
         # Inject the explicitly-selected -Site so the provider deploys
-        # sites/<Site>.toml as C:\WIS\unit.toml. Fail the build early with a
+        # sites/<Site>.toml as C:\WIS\config.toml. Fail the build early with a
         # helpful message if that site has no profile.
         ${siteProfile} = Join-Path ${providersRoot} ('config-bootstrap\sites\{0}.toml' -f ${Site})
         if (-not (Test-Path -LiteralPath ${siteProfile})) {
