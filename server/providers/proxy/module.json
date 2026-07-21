@@ -6,7 +6,8 @@
   "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-proxy.ps1\"",
   "commandfiles": [
     "provide-proxy.ps1",
-    "verify-proxy.ps1"
+    "verify-proxy.ps1",
+    "proxy-lib.ps1"
   ],
   "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\verify-proxy.ps1\""
 }

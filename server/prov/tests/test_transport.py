@@ -120,6 +120,100 @@ def test_upload_file_routes_ssh_to_sftp_else_b64(monkeypatch):
     assert b64_called == {"path": r"C:\MAST\y.ps1", "content": "world"}
 
 
+def test_ssh_run_ps_returns_on_exit_status_not_eof():
+    # Guards the general fix (2026-07-21): a detached grandchild (a service
+    # started by mast-services-finalize/NSSM, or the net-use Start-Job in
+    # mast-pull-staging.ps1) can inherit the stdout handle and hold the pipe
+    # open so channel EOF never arrives. run_ps must complete on the command's
+    # exit status and drain buffered output -- never block on read()-to-EOF.
+    class _FakeChan:
+        def __init__(self):
+            self._out = [b"OK\r\n"]
+            self._err = []
+            self.closed = False
+            self.exec_cmd = None
+
+        def exec_command(self, cmd):
+            self.exec_cmd = cmd
+
+        def recv_ready(self):
+            return bool(self._out)
+
+        def recv(self, _n):
+            return self._out.pop(0)
+
+        def recv_stderr_ready(self):
+            return bool(self._err)
+
+        def recv_stderr(self, _n):
+            return self._err.pop(0)
+
+        def exit_status_ready(self):
+            # Command exited (exit-status sent) though a lingering child keeps
+            # the pipe from ever reaching EOF -- a read()-to-EOF would hang here.
+            return True
+
+        def recv_exit_status(self):
+            return 0
+
+        def close(self):
+            self.closed = True
+
+    chan = _FakeChan()
+
+    class _FakeSsh(T.SshSession):
+        def __init__(self):  # bypass paramiko connect
+            self._client = type(
+                "C", (), {"get_transport": lambda _s: type(
+                    "Tr", (), {"open_session": lambda _s2: chan})()}
+            )()
+
+    r = _FakeSsh().run_ps("Write-Host OK")
+    assert r.status_code == 0
+    assert r.std_out == b"OK\r\n"
+    assert r.std_err == b""
+    assert chan.closed, "channel must be closed in finally"
+    assert "-EncodedCommand" in chan.exec_cmd
+
+
+def test_ssh_run_ps_deadline_bails_on_stuck_command():
+    # Guards the #10 "bound the SSH exec channel" fix: a genuinely stuck command
+    # never sends exit-status, so the loop must bail on timeout_s (raising) and
+    # the finally must close the channel -- otherwise the daemon worker thread
+    # + channel leak across --loop cycles.
+    class _StuckChan:
+        def __init__(self):
+            self.closed = False
+
+        def exec_command(self, _cmd):
+            pass
+
+        def recv_ready(self):
+            return False
+
+        def recv_stderr_ready(self):
+            return False
+
+        def exit_status_ready(self):
+            return False  # never exits
+
+        def close(self):
+            self.closed = True
+
+    chan = _StuckChan()
+
+    class _FakeSsh(T.SshSession):
+        def __init__(self):
+            self._client = type(
+                "C", (), {"get_transport": lambda _s: type(
+                    "Tr", (), {"open_session": lambda _s2: chan})()}
+            )()
+
+    with pytest.raises(TimeoutError):
+        _FakeSsh().run_ps("Start-Sleep 999", timeout_s=0.2)
+    assert chan.closed, "stuck channel must be closed on deadline"
+
+
 def test_vm_lib_shim_reexports_transport_surface():
     # The vm/ harness imports these from vm_lib; the shim must still surface them.
     import sys

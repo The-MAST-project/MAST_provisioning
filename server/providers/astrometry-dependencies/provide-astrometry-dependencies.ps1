@@ -194,7 +194,11 @@ try {
     # at random ASLR addresses and breaks Cygwin's fork() emulation (see
     # 'child_info_fork::abort: Loaded to different address' in cygwin.com FAQ).
     Write-Host "Running Cygwin postinstall scripts ..."
-    & ${bashExe} -lc @'
+    # Strip CR before handing the script to bash: if this .ps1 is checked out
+    # CRLF (Windows core.autocrlf), the here-string carries \r into bash, which
+    # fails with "syntax error near $'do\r'". Normalizing to LF makes this step
+    # immune to the file's line endings.
+    ${postinstallSh} = @'
 set -e
 shopt -s nullglob
 for f in /etc/postinstall/*.sh; do
@@ -203,6 +207,7 @@ for f in /etc/postinstall/*.sh; do
 done
 exit 0
 '@
+    & ${bashExe} -lc (${postinstallSh} -replace "`r", "")
     if ($LASTEXITCODE -ne 0) {
         throw "Cygwin postinstall scripts failed (exit ${LASTEXITCODE})."
     }
