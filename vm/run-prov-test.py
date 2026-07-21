@@ -71,7 +71,6 @@ import subprocess
 import sys
 import threading
 import time
-import types
 import urllib.error
 import urllib.request
 from contextlib import contextmanager
@@ -120,7 +119,6 @@ from vm_lib import (
     unit_reset_to_snapshot,
     unit_start,
     unit_stop,
-    upload_file,
     vbox,
     vm_state,
     wait_for_ssh,
@@ -544,80 +542,33 @@ def phase_execute(
     smb_pass: str = "",
 ) -> Any:
     with timed("EXECUTE PHASE"):
-        log("Starting execute-mast-provisioning.ps1 on unit (detached; up to 90 min)...")
+        log("Starting execute-mast-provisioning.ps1 on unit (up to 90 min)...")
         log(
             f"Streaming latest provisioning-execute.log under {MAST_LOGS_BASE}\\sessions "
-            f"from unit every {EXECUTE_POLL_INTERVAL_S}s; waiting on a done-marker."
+            f"from unit every {EXECUTE_POLL_INTERVAL_S}s..."
         )
 
         smb_pass_ps = _ps_escape(smb_pass)
-        marker = f"{staging_path}\\execute-done.marker"
-        out_file = f"{staging_path}\\execute-run.out"
-        err_file = f"{staging_path}\\execute-run.err"
-        wrapper = f"{staging_path}\\_run-execute.ps1"
-        mod_args = (
-            f",'-Modules','{','.join(modules)}'"
-            if modules and sorted(modules) != sorted(all_modules())
-            else ""
-        )
-
-        # Detached launch + done-marker completion (SSH). A blocking run_ps drains
-        # the SSH channel to EOF, which never comes: execute-mast-provisioning.ps1
-        # leaves a child (a service started by mast-services-finalize/NSSM) holding
-        # stdout open, so the read rides the full timeout even after execute has
-        # finished. Instead a wrapper runs execute as a *child* with -Wait -PassThru
-        # -- so execute's own `exit N` exits the child (not the wrapper), and we get
-        # $p.ExitCode by process handle, not by pipe EOF -- then writes that code to
-        # a marker. The wrapper is launched detached; the host polls the marker.
-        wrapper_body = (
-            "$ErrorActionPreference = 'Continue'\n"
-            "$p = Start-Process powershell.exe -Wait -PassThru -WindowStyle Hidden "
-            f"-WorkingDirectory '{staging_path}' "
-            f"-RedirectStandardOutput '{out_file}' -RedirectStandardError '{err_file}' "
-            "-ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File',"
-            f"'{staging_path}\\execute-mast-provisioning.ps1',"
-            f"'-StagingPath','{staging_path}','-ProvServer','{PROV_SERVER}',"
-            f"'-SmbUser','{smb_user}','-SmbPass','{smb_pass_ps}'{mod_args}\n"
-            f"Set-Content -LiteralPath '{marker}' -Value $p.ExitCode -Encoding ascii\n"
-        )
-        upload_file(unit, wrapper, wrapper_body, label="execute wrapper")
-        run_ps(
-            unit,
-            f"Remove-Item -LiteralPath '{marker}' -Force -ErrorAction SilentlyContinue; "
-            "Start-Process powershell.exe -WindowStyle Hidden -ArgumentList "
-            f"'-NoProfile','-ExecutionPolicy','Bypass','-File','{wrapper}'",
-            label="execute-launch", timeout_s=120,
-        )
-
         step_timer: list[float] = [time.monotonic()]
         poller = ExecuteLogPoller(host_unit, unit_cred, step_timer=step_timer)
         poller.start()
-        rc: int | None = None
         try:
-            deadline = time.monotonic() + WINRM_TIMEOUT_S
-            while time.monotonic() < deadline:
-                time.sleep(EXECUTE_POLL_INTERVAL_S)
-                mr = run_ps(
-                    unit,
-                    f"if (Test-Path -LiteralPath '{marker}') "
-                    f"{{ (Get-Content -LiteralPath '{marker}' -Raw).Trim() }}",
-                    label="execute-wait", timeout_s=90, echo=False, tee_stdout=False,
-                )
-                txt = (mr.std_out or b"").decode(errors="replace").strip()
-                if txt:
-                    rc = int(txt) if txt.lstrip("-").isdigit() else 1
-                    break
-            if rc is None:
-                raise TimeoutError(
-                    f"execute did not finish within {WINRM_TIMEOUT_S}s "
-                    f"(no done-marker at {marker})"
-                )
+            execute_cmd = (
+                "Set-ExecutionPolicy Bypass -Scope Process -Force; "
+                f"& '{staging_path}\\execute-mast-provisioning.ps1' "
+                f"-StagingPath '{staging_path}' "
+                f"-ProvServer '{PROV_SERVER}' "
+                f"-SmbUser '{smb_user}' "
+                f"-SmbPass '{smb_pass_ps}'"
+            )
+            if modules and sorted(modules) != sorted(all_modules()):
+                execute_cmd += f" -Modules '{','.join(modules)}'"
+            r = run_ps(unit, execute_cmd, label="execute", timeout_s=WINRM_TIMEOUT_S, step_timer=step_timer)
         finally:
             poller.stop()
 
-        r = types.SimpleNamespace(status_code=rc, std_out=b"", std_err=b"")
-        if rc != 0:
-            log(f"Execute exited with code {rc} - fetching tail of execute log...")
+        if r.status_code != 0:
+            log(f"Execute exited with code {r.status_code} - fetching tail of execute log...")
             _fetch_execute_log_tail(unit)
 
         return r

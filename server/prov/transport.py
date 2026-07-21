@@ -298,11 +298,36 @@ class SshSession:
             "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass "
             f"-EncodedCommand {enc}"
         )
-        _stdin, stdout, stderr = self._client.exec_command(cmd, timeout=None)
-        out = stdout.read()
-        err = stderr.read()
-        rc = stdout.channel.recv_exit_status()
-        return _SshResponse(rc, out, err)
+        # Key completion off the command's EXIT STATUS, not channel EOF. A
+        # detached grandchild (a service started by mast-services-finalize/NSSM,
+        # or the net-use Start-Job in mast-pull-staging.ps1) can inherit the
+        # stdout handle and hold the pipe open long after the invoked
+        # powershell.exe has exited; a `stdout.read()` to EOF then blocks until
+        # the caller's timeout even though the command finished (observed as the
+        # transfer/execute run_ps "hang" on 2026-07-21). exit_status_ready() goes
+        # true when the command process exits regardless of the lingering handle,
+        # so drain whatever is buffered and return on that -- never wait for EOF.
+        chan = self._client.get_transport().open_session()
+        try:
+            chan.exec_command(cmd)
+            out = bytearray()
+            err = bytearray()
+            while True:
+                while chan.recv_ready():
+                    out += chan.recv(65536)
+                while chan.recv_stderr_ready():
+                    err += chan.recv_stderr(65536)
+                if chan.exit_status_ready():
+                    while chan.recv_ready():
+                        out += chan.recv(65536)
+                    while chan.recv_stderr_ready():
+                        err += chan.recv_stderr(65536)
+                    break
+                time.sleep(0.1)
+            rc = chan.recv_exit_status()
+            return _SshResponse(rc, bytes(out), bytes(err))
+        finally:
+            chan.close()
 
     def put_file(self, remote_path: str, data: bytes) -> None:
         """Write bytes to a Windows path over SFTP. Avoids the base64-over-
