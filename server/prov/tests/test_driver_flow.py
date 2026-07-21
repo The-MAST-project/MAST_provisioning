@@ -26,7 +26,7 @@ class FakeSession(T.SshSession):
         self._responder = responder
         self.scripts: list[str] = []
 
-    def run_ps(self, script: str) -> T._SshResponse:
+    def run_ps(self, script: str, timeout_s: float | None = None) -> T._SshResponse:
         self.scripts.append(script)
         rc, out = self._responder(script)
         return T._SshResponse(rc, out.encode("utf-8"), b"")

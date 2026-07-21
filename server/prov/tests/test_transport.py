@@ -176,6 +176,44 @@ def test_ssh_run_ps_returns_on_exit_status_not_eof():
     assert "-EncodedCommand" in chan.exec_cmd
 
 
+def test_ssh_run_ps_deadline_bails_on_stuck_command():
+    # Guards the #10 "bound the SSH exec channel" fix: a genuinely stuck command
+    # never sends exit-status, so the loop must bail on timeout_s (raising) and
+    # the finally must close the channel -- otherwise the daemon worker thread
+    # + channel leak across --loop cycles.
+    class _StuckChan:
+        def __init__(self):
+            self.closed = False
+
+        def exec_command(self, _cmd):
+            pass
+
+        def recv_ready(self):
+            return False
+
+        def recv_stderr_ready(self):
+            return False
+
+        def exit_status_ready(self):
+            return False  # never exits
+
+        def close(self):
+            self.closed = True
+
+    chan = _StuckChan()
+
+    class _FakeSsh(T.SshSession):
+        def __init__(self):
+            self._client = type(
+                "C", (), {"get_transport": lambda _s: type(
+                    "Tr", (), {"open_session": lambda _s2: chan})()}
+            )()
+
+    with pytest.raises(TimeoutError):
+        _FakeSsh().run_ps("Start-Sleep 999", timeout_s=0.2)
+    assert chan.closed, "stuck channel must be closed on deadline"
+
+
 def test_vm_lib_shim_reexports_transport_surface():
     # The vm/ harness imports these from vm_lib; the shim must still surface them.
     import sys

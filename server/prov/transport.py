@@ -290,7 +290,7 @@ class SshSession:
         )
         self._client = client
 
-    def run_ps(self, script: str) -> _SshResponse:
+    def run_ps(self, script: str, timeout_s: float | None = None) -> _SshResponse:
         # Mirror pywinrm: hand powershell the script as a UTF-16LE base64
         # -EncodedCommand so quoting/newlines survive the SSH command line intact.
         enc = base64.b64encode(script.encode("utf_16_le")).decode("ascii")
@@ -307,9 +307,18 @@ class SshSession:
         # transfer/execute run_ps "hang" on 2026-07-21). exit_status_ready() goes
         # true when the command process exits regardless of the lingering handle,
         # so drain whatever is buffered and return on that -- never wait for EOF.
+        #
+        # timeout_s bounds the loop so a *genuinely* stuck command (one that
+        # never sends exit-status) bails here rather than spinning forever: the
+        # _run_with_heartbeat watchdog raises TimeoutError in the caller thread,
+        # but this loop runs in a daemon worker thread that Python cannot kill,
+        # so without its own deadline the thread + channel would leak across
+        # --loop cycles (#10 "bound the SSH exec channel"). On the deadline we
+        # raise and the finally tears the channel down.
         chan = self._client.get_transport().open_session()
         try:
             chan.exec_command(cmd)
+            deadline = None if timeout_s is None else time.monotonic() + timeout_s
             out = bytearray()
             err = bytearray()
             while True:
@@ -323,6 +332,10 @@ class SshSession:
                     while chan.recv_stderr_ready():
                         err += chan.recv_stderr(65536)
                     break
+                if deadline is not None and time.monotonic() >= deadline:
+                    raise TimeoutError(
+                        f"SSH run_ps exceeded {timeout_s}s with no exit status"
+                    )
                 time.sleep(0.1)
             rc = chan.recv_exit_status()
             return _SshResponse(rc, bytes(out), bytes(err))
@@ -695,6 +708,7 @@ def _resilient_run_ps(
     *,
     log_label: str,
     transient_retry_budget_s: int = _TRANSIENT_RETRY_BUDGET_S,
+    timeout_s: float | None = None,
 ) -> winrm.Response:
     """Drop-in replacement for ``session.run_ps`` that survives transient
     WinRM HTTP failures without abandoning the running command on the unit.
@@ -711,7 +725,7 @@ def _resilient_run_ps(
     Receive loop to make resilient, so it is run directly via its own run_ps.
     """
     if isinstance(session, SshSession):
-        return session.run_ps(script)
+        return session.run_ps(script, timeout_s=timeout_s)
 
     encoded = base64.b64encode(script.encode("utf_16_le")).decode("ascii")
     command_line = f"powershell -encodedcommand {encoded}"
@@ -823,7 +837,9 @@ def run_ps(
     if echo:
         _log(f"{tag}>>> {script[:120].rstrip()}")
     r = _run_with_heartbeat(
-        lambda: _resilient_run_ps(session, script, log_label=f"{tag}run_ps"),
+        lambda: _resilient_run_ps(
+            session, script, log_label=f"{tag}run_ps", timeout_s=timeout_s
+        ),
         label=f"{tag}run_ps",
         timeout_s=timeout_s,
         step_timer=step_timer,
