@@ -279,6 +279,52 @@ def test_resilient_run_ps_reconnects_and_retries_on_ssh_drop(monkeypatch):
     assert s.reconnects == 1, "should reconnect before the retry"
 
 
+def test_reconnect_retries_until_channel_returns(monkeypatch):
+    # Patient reconnect: keep probing (gentle backoff) until _connect succeeds,
+    # so a transient VM-under-load drop is ridden out.
+    monkeypatch.setattr(T.time, "sleep", lambda *_a, **_k: None)
+
+    class _S(T.SshSession):
+        def __init__(self_):
+            self_.attempts = 0
+            self_.closed = False
+
+        def close(self_):
+            self_.closed = True
+
+        def _connect(self_, connect_timeout_s=None):
+            self_.attempts += 1
+            if self_.attempts < 3:
+                raise OSError("VM still unreachable")
+
+    s = _S()
+    s.reconnect(max_wait_s=180)
+    assert s.closed, "reconnect must tear down the dead client first"
+    assert s.attempts == 3, "should keep probing until the channel returns"
+
+
+def test_reconnect_gives_up_after_max_wait(monkeypatch):
+    # If the channel never comes back inside the window, reconnect raises the
+    # last connection error rather than hanging forever.
+    monkeypatch.setattr(T.time, "sleep", lambda *_a, **_k: None)
+
+    class _S(T.SshSession):
+        def __init__(self_):
+            self_.attempts = 0
+
+        def close(self_):
+            pass
+
+        def _connect(self_, connect_timeout_s=None):
+            self_.attempts += 1
+            raise OSError("down")
+
+    s = _S()
+    with pytest.raises(OSError):
+        s.reconnect(max_wait_s=0)
+    assert s.attempts >= 1
+
+
 def test_resilient_run_ps_does_not_retry_on_timeout(monkeypatch):
     # A genuinely stuck (alive) command hits the deadline as TimeoutError; it
     # must NOT be reconnected/re-run (re-running a live 42-min execute is wrong).

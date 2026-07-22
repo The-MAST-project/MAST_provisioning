@@ -75,3 +75,40 @@ upload_file_b64(
 If you find yourself wanting a helper that is not here but feels generic
 (e.g. tail-a-remote-file, restart-a-service, fetch-Windows-event-log) --
 add it to `vm_lib.py` rather than inlining it in your debug script.
+
+## Known quirk: the dev VM's SSH drops out under heavy provisioning IO
+
+On the VirtualBox dev VM (`mast-unit` / `mast-wis-01`, host-only
+`192.168.56.113`), the SSH control channel goes **unreachable for a window
+during heavy disk/CPU load and then recovers on its own** when the load eases.
+Observed repeatedly (2026-07-21/22): a drop during the transfer phase's
+multi-GB `robocopy` SMB pull, and again during the `cygwin` provider's
+extract + `robocopy /MIR`. Symptoms while it is happening:
+
+- `run_ps` stops receiving output/exit-status; the harness heartbeat logs
+  `... still running` with no progress.
+- A fresh TCP connect to `:22` from the host fails with `WinError 10060`
+  (timed out), even though **ICMP ping to the VM still succeeds, the VBox
+  host-only adapter is Up, `VMState=running`, the guest desktop is
+  responsive, and the `sshd` service is running** the whole time. So it is
+  not the network, not a crash, and not `sshd` dying -- the VM's SSH just
+  stops servicing connections transiently under load and comes back.
+
+**This is a dev-VM resource limitation, not a code bug**, and almost
+certainly specific to the constrained VirtualBox guest (8 GB RAM, sharing the
+host disk) doing large IO while also servicing SSH. The physical units have
+real resources and are not expected to hit it (but worth a glance if a real
+unit ever shows the same signature under a full provision).
+
+**Mitigation in the transport (not a fix for the VM):**
+`prov.transport.SshSession` sets an SSH **keepalive** (`SSH_KEEPALIVE_S`) so a
+silent/half-open drop is detected in ~30 s instead of spinning to the command
+timeout, and `run_ps` surfaces a dead channel as `ConnectionError`.
+`_resilient_run_ps` then **reconnects and re-runs** the (idempotent) command;
+`SshSession.reconnect()` is *patient* -- it polls for `:22` to come back with a
+gently increasing backoff (short probes first, so it recovers almost as soon as
+the channel returns) for up to `SSH_RECONNECT_MAX_WAIT_S`. `TimeoutError` (a
+genuinely stuck, still-connected command) is deliberately **not** retried.
+
+If a run still fails here, it means the unreachable window outlasted
+`SSH_RECONNECT_MAX_WAIT_S` -- re-run once the VM is idle, or bump that constant.
