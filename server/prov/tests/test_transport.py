@@ -120,6 +120,29 @@ def test_upload_file_routes_ssh_to_sftp_else_b64(monkeypatch):
     assert b64_called == {"path": r"C:\MAST\y.ps1", "content": "world"}
 
 
+def _make_fake_ssh(chan, active=True):
+    """A SshSession whose paramiko client hands out `chan` and whose transport
+    reports active/inactive per `active` (bool or 0-arg callable)."""
+    is_active = active if callable(active) else (lambda: active)
+
+    class _Tr:
+        def open_session(self_):
+            return chan
+
+        def is_active(self_):
+            return is_active()
+
+    class _Client:
+        def get_transport(self_):
+            return _Tr()
+
+    class _FakeSsh(T.SshSession):
+        def __init__(self_):  # bypass paramiko connect
+            self_._client = _Client()
+
+    return _FakeSsh()
+
+
 def test_ssh_run_ps_returns_on_exit_status_not_eof():
     # Guards the general fix (2026-07-21): a detached grandchild (a service
     # started by mast-services-finalize/NSSM, or the net-use Start-Job in
@@ -160,15 +183,7 @@ def test_ssh_run_ps_returns_on_exit_status_not_eof():
             self.closed = True
 
     chan = _FakeChan()
-
-    class _FakeSsh(T.SshSession):
-        def __init__(self):  # bypass paramiko connect
-            self._client = type(
-                "C", (), {"get_transport": lambda _s: type(
-                    "Tr", (), {"open_session": lambda _s2: chan})()}
-            )()
-
-    r = _FakeSsh().run_ps("Write-Host OK")
+    r = _make_fake_ssh(chan).run_ps("Write-Host OK")
     assert r.status_code == 0
     assert r.std_out == b"OK\r\n"
     assert r.std_err == b""
@@ -178,9 +193,9 @@ def test_ssh_run_ps_returns_on_exit_status_not_eof():
 
 def test_ssh_run_ps_deadline_bails_on_stuck_command():
     # Guards the #10 "bound the SSH exec channel" fix: a genuinely stuck command
-    # never sends exit-status, so the loop must bail on timeout_s (raising) and
-    # the finally must close the channel -- otherwise the daemon worker thread
-    # + channel leak across --loop cycles.
+    # (transport alive, never sends exit-status) must bail on timeout_s (raising)
+    # and the finally must close the channel -- otherwise the daemon worker
+    # thread + channel leak across --loop cycles.
     class _StuckChan:
         def __init__(self):
             self.closed = False
@@ -201,17 +216,138 @@ def test_ssh_run_ps_deadline_bails_on_stuck_command():
             self.closed = True
 
     chan = _StuckChan()
-
-    class _FakeSsh(T.SshSession):
-        def __init__(self):
-            self._client = type(
-                "C", (), {"get_transport": lambda _s: type(
-                    "Tr", (), {"open_session": lambda _s2: chan})()}
-            )()
-
     with pytest.raises(TimeoutError):
-        _FakeSsh().run_ps("Start-Sleep 999", timeout_s=0.2)
+        _make_fake_ssh(chan, active=True).run_ps("Start-Sleep 999", timeout_s=0.2)
     assert chan.closed, "stuck channel must be closed on deadline"
+
+
+def test_ssh_run_ps_raises_connectionerror_on_dead_transport():
+    # Guards the keepalive/drop-detection fix (2026-07-22): a silent/half-open
+    # drop leaves the loop with no data + no exit-status + no close event. The
+    # keepalive flips transport.is_active() False; run_ps must raise
+    # ConnectionError (so _resilient_run_ps reconnects) rather than spin to the
+    # deadline.
+    class _DeadChan:
+        def __init__(self):
+            self.closed = False
+
+        def exec_command(self, _cmd):
+            pass
+
+        def recv_ready(self):
+            return False
+
+        def recv_stderr_ready(self):
+            return False
+
+        def exit_status_ready(self):
+            return False
+
+        def close(self):
+            self.closed = True
+
+    chan = _DeadChan()
+    with pytest.raises(ConnectionError):
+        _make_fake_ssh(chan, active=False).run_ps("x", timeout_s=30)
+    assert chan.closed
+
+
+def test_resilient_run_ps_reconnects_and_retries_on_ssh_drop(monkeypatch):
+    # A dropped control channel must trigger reconnect + one re-run of the
+    # (idempotent) command, not a hard failure.
+    monkeypatch.setattr(T.time, "sleep", lambda *_a, **_k: None)
+    monkeypatch.setattr(T, "_log", lambda *_a, **_k: None)
+
+    class _FlakySsh(T.SshSession):
+        def __init__(self_):
+            self_.calls = 0
+            self_.reconnects = 0
+
+        def run_ps(self_, script, timeout_s=None):
+            self_.calls += 1
+            if self_.calls == 1:
+                raise ConnectionError("dropped")
+            return T._SshResponse(0, b"ok", b"")
+
+        def reconnect(self_):
+            self_.reconnects += 1
+
+    s = _FlakySsh()
+    r = T._resilient_run_ps(s, "Write-Host hi", log_label="t", timeout_s=5)
+    assert r.status_code == 0 and r.std_out == b"ok"
+    assert s.calls == 2, "should re-run once after the drop"
+    assert s.reconnects == 1, "should reconnect before the retry"
+
+
+def test_reconnect_retries_until_channel_returns(monkeypatch):
+    # Patient reconnect: keep probing (gentle backoff) until _connect succeeds,
+    # so a transient VM-under-load drop is ridden out.
+    monkeypatch.setattr(T.time, "sleep", lambda *_a, **_k: None)
+
+    class _S(T.SshSession):
+        def __init__(self_):
+            self_.attempts = 0
+            self_.closed = False
+
+        def close(self_):
+            self_.closed = True
+
+        def _connect(self_, connect_timeout_s=None):
+            self_.attempts += 1
+            if self_.attempts < 3:
+                raise OSError("VM still unreachable")
+
+    s = _S()
+    s.reconnect(max_wait_s=180)
+    assert s.closed, "reconnect must tear down the dead client first"
+    assert s.attempts == 3, "should keep probing until the channel returns"
+
+
+def test_reconnect_gives_up_after_max_wait(monkeypatch):
+    # If the channel never comes back inside the window, reconnect raises the
+    # last connection error rather than hanging forever.
+    monkeypatch.setattr(T.time, "sleep", lambda *_a, **_k: None)
+
+    class _S(T.SshSession):
+        def __init__(self_):
+            self_.attempts = 0
+
+        def close(self_):
+            pass
+
+        def _connect(self_, connect_timeout_s=None):
+            self_.attempts += 1
+            raise OSError("down")
+
+    s = _S()
+    with pytest.raises(OSError):
+        s.reconnect(max_wait_s=0)
+    assert s.attempts >= 1
+
+
+def test_resilient_run_ps_does_not_retry_on_timeout(monkeypatch):
+    # A genuinely stuck (alive) command hits the deadline as TimeoutError; it
+    # must NOT be reconnected/re-run (re-running a live 42-min execute is wrong).
+    monkeypatch.setattr(T.time, "sleep", lambda *_a, **_k: None)
+    monkeypatch.setattr(T, "_log", lambda *_a, **_k: None)
+
+    class _StuckSsh(T.SshSession):
+        def __init__(self_):
+            self_.calls = 0
+            self_.reconnects = 0
+
+        def run_ps(self_, script, timeout_s=None):
+            self_.calls += 1
+            raise TimeoutError("stuck")
+
+        def reconnect(self_):
+            self_.reconnects += 1
+
+    s = _StuckSsh()
+    with pytest.raises(TimeoutError):
+        T._resilient_run_ps(s, "x", log_label="t", timeout_s=5)
+    assert s.calls == 1, "a live-but-stuck command must not be re-run"
+    assert s.reconnects == 0
 
 
 def test_vm_lib_shim_reexports_transport_surface():

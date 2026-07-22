@@ -230,6 +230,27 @@ def _dispose_winrm_session(sess: Any | None) -> None:
 # detects an SshSession and calls run_ps directly.
 
 SSH_PORT = 22
+# Send an SSH keepalive this often so a silent/half-open control channel (peer
+# gone, no RST) is detected within ~this many seconds instead of run_ps spinning
+# to its full timeout (the 2026-07-22 hour-long transfer hang: the labcomp2<->VM
+# channel went silent mid-transfer and paramiko never noticed).
+SSH_KEEPALIVE_S = 30
+# On a detected connection drop, reconnect and re-run the command this many times
+# before giving up. The commands run over this transport (SMB pull, execute) are
+# idempotent/re-runnable, so a fresh attempt after a transient blip is safe.
+SSH_RECONNECT_ATTEMPTS = 2
+# Reconnect patience. The dev VM's SSH goes unreachable under heavy provisioning
+# IO (SMB pull, cygwin extract) and recovers when load eases (see
+# vm/DEBUGGING.md). So on a drop, poll for the channel to come back with a
+# *gently* increasing backoff -- short waits first so recovery is caught almost
+# as soon as it returns, growing slowly so a longer outage does not hammer --
+# up to a total wait. Each probe uses a short connect timeout so a still-down VM
+# fails fast (rather than sitting on the default 30s) and we retry sooner.
+SSH_RECONNECT_MAX_WAIT_S = 180
+SSH_RECONNECT_PROBE_TIMEOUT_S = 5
+SSH_RECONNECT_INITIAL_DELAY_S = 1.0
+SSH_RECONNECT_DELAY_GROWTH = 1.3
+SSH_RECONNECT_MAX_DELAY_S = 15.0
 
 
 def _ssh_username(raw_user: str) -> str:
@@ -266,29 +287,76 @@ class SshSession:
         port: int = SSH_PORT,
         connect_timeout_s: int = 30,
     ) -> None:
+        self.host = host
+        self._cred = cred
+        self._user = _ssh_username(cred["user"])
+        self._port = port
+        self._connect_timeout_s = connect_timeout_s
+        self._connect()
+
+    def _connect(self, connect_timeout_s: float | None = None) -> None:
         try:
             import paramiko  # lazy: keep vm_lib import-pure and paramiko optional
         except ImportError as e:
             raise RuntimeError(
                 "paramiko is required for the SSH fallback (pip install paramiko)."
             ) from e
-        self.host = host
-        self._user = _ssh_username(cred["user"])
+        timeout = self._connect_timeout_s if connect_timeout_s is None else connect_timeout_s
         client = paramiko.SSHClient()
         # The unit's host key is not pre-pinned in this lab pipeline; accept it.
         client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         client.connect(
-            hostname=host,
-            port=port,
+            hostname=self.host,
+            port=self._port,
             username=self._user,
-            password=cred["pass"],
-            timeout=connect_timeout_s,
-            banner_timeout=connect_timeout_s,
-            auth_timeout=connect_timeout_s,
+            password=self._cred["pass"],
+            timeout=timeout,
+            banner_timeout=timeout,
+            auth_timeout=timeout,
             allow_agent=False,
             look_for_keys=False,
         )
+        transport = client.get_transport()
+        if transport is not None:
+            # Detect a silent/half-open peer within ~SSH_KEEPALIVE_S instead of
+            # letting a long, output-quiet command (SMB pull, execute) sit on a
+            # dead channel until its timeout.
+            transport.set_keepalive(SSH_KEEPALIVE_S)
         self._client = client
+
+    def reconnect(self, max_wait_s: float = SSH_RECONNECT_MAX_WAIT_S) -> None:
+        """Tear down the dead transport and re-establish it, waiting out a
+        transient drop. Probes with a gently increasing backoff (short first, so
+        recovery is caught almost as soon as the channel returns) using a short
+        per-probe connect timeout, up to max_wait_s total. Raises the last
+        connection error if the channel never comes back inside the window.
+
+        Used by _resilient_run_ps to retry a command across a drop -- see the
+        SSH_RECONNECT_* constants and vm/DEBUGGING.md for why the VM's SSH goes
+        away under heavy provisioning IO."""
+        try:
+            import paramiko
+            conn_errors: tuple[type[BaseException], ...] = (
+                OSError, EOFError, paramiko.SSHException,
+            )
+        except ImportError:
+            conn_errors = (OSError, EOFError)
+        self.close()
+        deadline = time.monotonic() + max_wait_s
+        delay = SSH_RECONNECT_INITIAL_DELAY_S
+        last_exc: BaseException | None = None
+        while True:
+            try:
+                self._connect(connect_timeout_s=SSH_RECONNECT_PROBE_TIMEOUT_S)
+                return
+            except conn_errors as e:
+                last_exc = e
+                if time.monotonic() >= deadline:
+                    break
+                time.sleep(delay)
+                delay = min(SSH_RECONNECT_MAX_DELAY_S, delay * SSH_RECONNECT_DELAY_GROWTH)
+        assert last_exc is not None
+        raise last_exc
 
     def run_ps(self, script: str, timeout_s: float | None = None) -> _SshResponse:
         # Mirror pywinrm: hand powershell the script as a UTF-16LE base64
@@ -315,7 +383,8 @@ class SshSession:
         # so without its own deadline the thread + channel would leak across
         # --loop cycles (#10 "bound the SSH exec channel"). On the deadline we
         # raise and the finally tears the channel down.
-        chan = self._client.get_transport().open_session()
+        transport = self._client.get_transport()
+        chan = transport.open_session()
         try:
             chan.exec_command(cmd)
             deadline = None if timeout_s is None else time.monotonic() + timeout_s
@@ -332,15 +401,34 @@ class SshSession:
                     while chan.recv_stderr_ready():
                         err += chan.recv_stderr(65536)
                     break
+                # A silent/half-open drop leaves the loop with no data, no
+                # exit-status, and no close event -- it would spin to the
+                # deadline (observed 2026-07-22). The keepalive flips the
+                # transport inactive within ~SSH_KEEPALIVE_S of such a drop;
+                # surface it as ConnectionError so _resilient_run_ps reconnects
+                # and retries rather than burning the whole timeout.
+                if not transport.is_active():
+                    raise ConnectionError(
+                        "SSH transport went inactive mid-command (connection dropped)"
+                    )
                 if deadline is not None and time.monotonic() >= deadline:
                     raise TimeoutError(
                         f"SSH run_ps exceeded {timeout_s}s with no exit status"
                     )
                 time.sleep(0.1)
             rc = chan.recv_exit_status()
+            # -1 == the channel closed without ever delivering an exit status,
+            # i.e. the connection dropped rather than the command finishing.
+            if rc == -1:
+                raise ConnectionError(
+                    "SSH channel closed before exit status (connection dropped)"
+                )
             return _SshResponse(rc, bytes(out), bytes(err))
         finally:
-            chan.close()
+            try:
+                chan.close()
+            except Exception:
+                pass
 
     def put_file(self, remote_path: str, data: bytes) -> None:
         """Write bytes to a Windows path over SFTP. Avoids the base64-over-
@@ -725,7 +813,39 @@ def _resilient_run_ps(
     Receive loop to make resilient, so it is run directly via its own run_ps.
     """
     if isinstance(session, SshSession):
-        return session.run_ps(script, timeout_s=timeout_s)
+        try:
+            import paramiko
+            conn_errors: tuple[type[BaseException], ...] = (
+                ConnectionError, EOFError, OSError, paramiko.SSHException,
+            )
+        except ImportError:
+            conn_errors = (ConnectionError, EOFError, OSError)
+        # Reconnect + re-run on a dropped control channel. TimeoutError is NOT
+        # caught here: a command that is genuinely stuck (alive, no exit-status)
+        # must not be re-run. The commands sent over this transport (SMB pull,
+        # execute) are idempotent, so a fresh attempt after a transient blip is
+        # safe. A re-run restarts the whole command -- fine for the ~minutes-long
+        # pull; execute relies on its providers' skip-guards to no-op what
+        # already landed.
+        for attempt in range(SSH_RECONNECT_ATTEMPTS + 1):
+            try:
+                return session.run_ps(script, timeout_s=timeout_s)
+            except TimeoutError:
+                # A live-but-stuck command (deadline hit); re-running it is wrong
+                # (would restart a 42-min execute). NB: TimeoutError subclasses
+                # OSError, so this clause must precede conn_errors.
+                raise
+            except conn_errors as e:
+                if attempt >= SSH_RECONNECT_ATTEMPTS:
+                    raise
+                _log(
+                    f"  ... {log_label} SSH connection dropped "
+                    f"({type(e).__name__}: {e}); waiting for the channel to "
+                    f"recover, then retrying "
+                    f"(attempt {attempt + 2}/{SSH_RECONNECT_ATTEMPTS + 1})"
+                )
+                session.reconnect()  # patient: polls until the VM is back or the window elapses
+        raise RuntimeError("unreachable: SSH retry loop exhausted")  # pragma: no cover
 
     encoded = base64.b64encode(script.encode("utf_16_le")).decode("ascii")
     command_line = f"powershell -encodedcommand {encoded}"
