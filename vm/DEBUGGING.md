@@ -112,3 +112,17 @@ genuinely stuck, still-connected command) is deliberately **not** retried.
 
 If a run still fails here, it means the unreachable window outlasted
 `SSH_RECONNECT_MAX_WAIT_S` -- re-run once the VM is idle, or bump that constant.
+
+### Distinct but related: the *host* (labcomp2) sleeping mid-run
+
+A separate, longer outage is labcomp2 itself sleeping. It is set to never sleep
+on AC, but **unplugged it will follow its battery idle-sleep timer** -- on
+2026-07-22 it slept during execute and the run failed (a powered-down host
+outlasts any reconnect window, and the SSH keepalive/patient-reconnect above
+cannot help when the whole host is down). `run-prov-test.py` now **brackets the
+whole run in a no-sleep directive** (`_keep_awake()` -> `SetThreadExecutionState`
+`ES_CONTINUOUS | ES_SYSTEM_REQUIRED`): process-scoped (auto-released on
+exit/crash), holds the system awake regardless of AC/battery, and does not touch
+global power settings. So an unplugged labcomp2 no longer naps mid-run. It does
+not override a lid-close or a critical-battery hibernate, so keep the machine
+plugged in for long runs anyway.

@@ -63,6 +63,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import ctypes
 import json
 import os
 import re
@@ -144,6 +145,37 @@ PULL_REPOS_SCRIPT = REPO_ROOT / "server" / "providers" / "mast" / "pull-mast-rep
 MAST_LOGS_BASE = "C:\\MAST\\logs"
 SMOKE_LOG_DIR = f"{MAST_LOGS_BASE}\\smoke"
 VERIFY_LOG_DIR = f"{MAST_LOGS_BASE}\\verify"
+
+# Keep the host (labcomp2) awake for the whole run. labcomp2 is set to never
+# sleep on AC, but if it is unplugged its battery idle-sleep timer still fires --
+# on 2026-07-22 it slept mid-execute and the run failed (a powered-down host
+# outlasts any reconnect window). SetThreadExecutionState is process-scoped
+# (auto-released on exit/crash) and does NOT change global power settings;
+# ES_SYSTEM_REQUIRED keeps the system awake (the display may still sleep).
+_ES_CONTINUOUS = 0x80000000
+_ES_SYSTEM_REQUIRED = 0x00000001
+
+
+@contextmanager
+def _keep_awake() -> Generator[None, None, None]:
+    set_state = None
+    if sys.platform == "win32":
+        try:
+            set_state = ctypes.windll.kernel32.SetThreadExecutionState
+            set_state(_ES_CONTINUOUS | _ES_SYSTEM_REQUIRED)
+            log("[keep-awake] holding the host awake (no-sleep) for the run")
+        except Exception as e:  # a power hint must never break a run
+            log(f"[keep-awake] could not set no-sleep (continuing): {e}")
+            set_state = None
+    try:
+        yield
+    finally:
+        if set_state is not None:
+            try:
+                set_state(_ES_CONTINUOUS)  # clear the request -> restore normal sleep policy
+            except Exception:
+                pass
+
 
 def _discover_all_modules() -> list[str]:
     """Return module names in execution order by calling the PowerShell helper
@@ -1097,7 +1129,7 @@ def main() -> None:
     run_log = LOG_ROOT / f"{run_ts}-run.log"
     run_started = time.monotonic()
 
-    with log_to_file(run_log):
+    with log_to_file(run_log), _keep_awake():
         log(f"Run log: {run_log}")
         log(f"Modules: {', '.join(modules)}")
         if phases is not None:
