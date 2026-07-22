@@ -59,17 +59,53 @@ Per-module drift is then a precise classification:
 **up-to-date** | **needs-update** (installed hash ≠ latest build hash) |
 **needs-repair** (live state ≠ recorded; tier-2 only) | **missing** | **extra**.
 
+## Resolution requirement
+
+Tracking must detect a change to **any deployed artifact a module produces** —
+including generated and argument-driven ones — not just a bumped `version` or an
+edited primary script. **Worked example that must register as drift:** repointing
+the FastAPI desktop shortcut from `http://localhost:8000/` to `.../docs` (the #8
+item). That target lives in the `desktop-shortcuts` **`module.json` `command`
+args** (`-FastApiUrl ...`), *not* in its `commandfiles`; and its
+`verify-desktop-shortcuts.ps1` checks only that the `.url` files **exist**, never
+where they point. So a naive design (hash `commandfiles`, verify presence) leaves
+the stale shortcut **invisible to both** the build hash and the verify. Two rules
+follow, baked into the stages:
+
+1. **The per-module hash must cover every determinant of the module's deployed
+   output** — the `commandfiles` bytes **plus the `module.json` `command` string
+   and its args, plus `version`** (plus any build parameter that shapes the
+   output, e.g. `-Site`). If an input changes what gets deployed, it must be
+   inside the hash boundary.
+2. **Tier-2 verify must answer "is it *current*?", not just "is it present?"**
+   for staleness-sensitive artifacts (shortcut targets, config-file contents,
+   `.reg` values): compare the deployed artifact's content/target against what the
+   current build would produce, not mere existence. Today's `verify-*.ps1` are
+   largely presence-only, so making the staleness-sensitive ones content-aware is
+   explicit tier-2 scope.
+
+This is the general resolution bar for the whole epic; the stages below are
+written to meet it, and any provider whose output is generated or arg/config-
+driven (shortcuts, config-bootstrap, first-logon `.reg` imports, instrument
+profiles) is audited against both rules.
+
 ## Stages
 
 ### Stage 1 — Per-module content hash in `build-manifest.json` (build side)
 
 - In `build-mast.ps1`'s existing per-module flatten loop (`foreach ($m in
-  $Modules)`), compute each module's content hash from its **source
-  `commandfiles`** under `server/providers/<module>/` — **not** a staging subdir
-  (staging is flattened). Reuse the `Get-PayloadHash` rolling-SHA-256 algorithm
-  scoped to the module's `commandfiles` (`<commandfile-relative-path>:<sha256>`,
-  sorted). Source-tracked `mast` (version `rolling`) keys its hash off the git
-  SHA, consistent with today's `module_versions`.
+  $Modules)`), compute each module's content hash over **all determinants of its
+  deployed output** (per Resolution rule 1), *not* just the payload bytes:
+  - its **source `commandfiles`** under `server/providers/<module>/` — **not** a
+    staging subdir (staging is flattened) — via the `Get-PayloadHash`
+    rolling-SHA-256 algorithm (`<commandfile-relative-path>:<sha256>`, sorted);
+  - **plus the resolved `module.json` `command` string and its args** (this is
+    what makes the FastApiUrl→`/docs` repoint register as drift; today it lives
+    only in `command`);
+  - **plus the `version`** and any build parameter that shapes the module's
+    output (e.g. `-Site`, which selects the weather URL default).
+  Source-tracked `mast` (version `rolling`) folds the git SHA in, consistent with
+  today's `module_versions`.
 - Extend `build-manifest.json` with a `modules` map: `{ <module>: { version,
   hash } }` (fold the existing `module_versions` into it, or add alongside and
   deprecate). **Keep the aggregate `payload_hash`** as the fast top-level
@@ -115,10 +151,20 @@ Per-module drift is then a precise classification:
   on the unit to compute **live** state, independent of the written manifest →
   catches **runtime drift** (service stopped, file deleted) where the hash still
   "matches" but the module is broken → classifies **needs-repair**.
-- Reuses the existing per-provider `verify-*.ps1` (no new per-module logic). The
-  two tiers: fast written-hash compare (routine loop) + computed re-run (on
-  demand / periodic).
-- **Tests:** dispatcher enumerates providers and maps verify exit codes → state.
+- **Verifies must be content-aware where staleness matters (Resolution rule 2).**
+  Today's `verify-*.ps1` are largely presence-only — e.g.
+  `verify-desktop-shortcuts.ps1` only `Test-Path`s the `.url` files, so a shortcut
+  pointing at a stale target passes. Upgrade the staleness-sensitive verifies to
+  compare the deployed artifact's **content/target** against what the current
+  build would produce (shortcut target URLs, config-file values, first-logon
+  `.reg` imports, instrument profiles). This is the detection path for
+  determinants the fleet-uniform build hash can't see per-unit (e.g. a
+  site-derived weather URL) and for post-install edits.
+- Reuses the existing per-provider `verify-*.ps1` framing (no new per-module
+  dispatch logic). The two tiers: fast written-hash compare (routine loop) +
+  content-aware computed re-run (on demand / periodic).
+- **Tests:** dispatcher enumerates providers and maps verify exit codes → state;
+  a content-aware verify flags a deployed shortcut whose target ≠ expected.
 
 ## Documentation (per-stage, required)
 
