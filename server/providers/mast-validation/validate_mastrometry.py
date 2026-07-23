@@ -78,7 +78,8 @@ def main() -> int:
     if str(unit_src) not in sys.path:
         sys.path.insert(0, str(unit_src))
 
-    os.environ.setdefault("MAST_PROJECT", "unit")
+    # Machine identity/role comes from C:\WIS\config.toml (machine_role), laid down by
+    # config-bootstrap before this runs -- no MAST_PROJECT env var.
 
     # Preconditions -- HARD FAIL if not met (a run without a real solve is invalid).
     if not fits_path.exists():
