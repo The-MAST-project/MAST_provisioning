@@ -3,25 +3,13 @@
 param(
     [string]${AssetsRoot}  = ${PSScriptRoot},
     [string]${CygwinRoot}  = 'C:\cygwin64',
+    # The mirror URL the frozen package cache was originally downloaded from.
+    # With --local-install nothing is fetched from it: setup-x86_64.exe only
+    # uses it to select the matching URL-encoded subfolder inside the cache
+    # tree. Must match the mirror the cache was harvested from (see
+    # build/harvest-cygwin-cache.ps1).
     [string]${MirrorSite}  = 'https://cygwin.itefix.net',
-    [string]${ProxyHost}   = 'bcproxy.weizmann.ac.il:8080',
     [string]${SetupName}   = 'setup-x86_64.exe',
-    # Explicit proxy mode for setup-x86_64.exe. Defaults to 'use' (matching
-    # the provider-level default in provide-proxy.ps1 and the common case of
-    # a unit inside the Weizmann campus network). build-mast.ps1 -ProxyMode
-    # flips this to 'direct' for runs against a unit that cannot reach
-    # bcproxy (off-campus, no VPN, etc.) -- independent of whether the run
-    # itself is a dev/test or a prod cycle.
-    #
-    # 'direct' is NOT the same as "just don't pass --proxy". setup-x86_64.exe
-    # defaults to IE5 net-method which does WinINet+WPAD autodiscovery and
-    # can still pick up a proxy even when HKCU ProxyEnable=0 -- which is why
-    # earlier runs saw `net: Proxy` and 12007 errors despite the proxy
-    # provider correctly clearing every other surface. The conclusive fix:
-    # pre-write setup.rc with net-method=Direct so setup.exe skips IE5
-    # entirely.
-    [ValidateSet('use','direct')]
-    [string]${ProxyMode}   = 'use',
     # Re-run setup-x86_64.exe + pip even if the astrometry runtime DLLs are
     # already present (otherwise an already-satisfied unit is left as-is).
     [switch]${Force}
@@ -65,13 +53,8 @@ catch {
     throw "Failed to import provisioning.psm1: $($_.Exception.Message)"
 }
 
-# Shared WinINet posture helpers (best-effort cert revocation through bcproxy).
-${_netDot} = Join-Path ${PSScriptRoot} 'mast-net.ps1'
-if (-not (Test-Path ${_netDot})) { ${_netDot} = Join-Path ${PSScriptRoot} '..\..\lib\mast-net.ps1' }
-. ${_netDot}
-
 # Idempotent skip: if every astrometry runtime DLL is already present in the
-# cygwin bin dir (the exact set verify checks), the network setup-x86_64.exe
+# cygwin bin dir (the exact set verify checks), the offline setup-x86_64.exe
 # package install + pip wheel have nothing to do. Use -Force to re-run.
 ${_reqDlls} = @('cygcfitsio-10.dll','cygwcs-4.dll','cygnetpbm-10.dll','cygcairo-2.dll','cygpng16-16.dll','cygjpeg-8.dll','cygcurl-4.dll','libpython3.9.dll')
 ${_binDir}  = Join-Path ${CygwinRoot} 'bin'
@@ -92,77 +75,64 @@ try {
         throw "bash.exe not found at ${bashExe}. The 'cygwin' provider must run before this one."
     }
 
-    # setup-x86_64.exe local-package-dir; lives under the Cygwin root so subsequent
-    # re-runs (or admins doing a manual setup.exe pass) reuse the cache.
-    ${pkgCache} = Join-Path ${CygwinRoot} 'var\cache\setup'
-    Confirm-Dir ${pkgCache}
-
-    # Explicit proxy mode (no probing). See -ProxyMode param-block comment
-    # for the rationale; tl;dr setup-x86_64.exe with no --proxy defaults to
-    # IE5 net-method and finds a proxy via WPAD even when HKCU ProxyEnable=0,
-    # so "just clear env vars" is not enough -- we must positively tell
-    # setup.exe which net-method to use via setup.rc.
-    ${useProxy} = (${ProxyMode} -eq 'use')
-    ${modeBanner} = if (${useProxy}) { '*** WEIZMANN-PROXY MODE ***' } else { '*** NO-WEIZMANN-PROXY (DIRECT) MODE ***' }
-    Write-Host "==================================================================="
-    Write-Host ("[astrometry-deps] {0}" -f ${modeBanner})
-    Write-Host "==================================================================="
-
-    # Pre-write <root>\etc\setup\setup.rc with the chosen net-method. Format
-    # matches what setup-x86_64.exe itself writes: key on one line, value
-    # on the next line, blank line between records. setup.exe reads this
-    # at startup before any CLI parsing, so it overrides the IE5 default.
-    ${setupRcDir}  = Join-Path ${CygwinRoot} 'etc\setup'
-    Confirm-Dir ${setupRcDir}
-    ${setupRcPath} = Join-Path ${setupRcDir} 'setup.rc'
-    ${netMethod}   = if (${useProxy}) { 'Proxy' } else { 'Direct' }
-    ${rcLines} = @(
-        'last-cache',
-        ${pkgCache},
-        '',
-        'net-method',
-        ${netMethod},
-        ''
-    )
-    if (${useProxy}) {
-        ${rcLines} += @('http-proxy', ${ProxyHost}, '')
-        ${rcLines} += @('ftp-proxy',  ${ProxyHost}, '')
+    # Frozen offline package cache, staged into the payload by build-mast.ps1
+    # from the build-host vendor path C:\MAST\cygwin-pkg-cache (see issue #20
+    # and docs/cygwin-freeze-plan.md). The install is FULLY OFFLINE
+    # (--local-install): setup-x86_64.exe reads packages from this cache and
+    # never touches the network, so the installed cygwin is deterministic
+    # (3.6.9, matching the bundled fitsio wheel tag) regardless of what the
+    # live itefix mirror currently serves. This also removes every proxy
+    # concern the online install needed (setup.rc net-method, --proxy,
+    # WinINet cert-revocation posture) -- they were download-only.
+    ${pkgCache} = Join-Path ${AssetsRoot} 'cygwin-pkg-cache'
+    if (-not (Test-Path -LiteralPath ${pkgCache})) {
+        throw "Frozen cygwin package cache not staged at ${pkgCache}. The build host must populate C:\MAST\cygwin-pkg-cache once (build/harvest-cygwin-cache.ps1) and build-mast.ps1 stages it."
     }
-    Set-Content -LiteralPath ${setupRcPath} -Encoding ASCII -Value (${rcLines} -join "`n")
-    Write-Host ("Wrote setup.rc with net-method={0} to {1}" -f ${netMethod}, ${setupRcPath})
+    ${cacheIni} = @(Get-ChildItem -LiteralPath ${pkgCache} -Filter 'setup.ini' -File -Recurse -ErrorAction SilentlyContinue)
+    if (${cacheIni}.Count -eq 0) {
+        throw "Staged cygwin package cache at ${pkgCache} holds no setup.ini; re-harvest it (build/harvest-cygwin-cache.ps1 -Force)."
+    }
+    # setup-x86_64.exe chdirs INTO the local package dir, so a RELATIVE
+    # --local-package-dir (AssetsRoot is '.' at run time) breaks its own
+    # setup.ini lookup: the log shows '.ini setup_version is (null)', the
+    # package DB comes up empty, and every requested package reports
+    # "not found". Resolve to an absolute path. Caught on the first offline
+    # run, 2026-07-23.
+    ${pkgCache} = Convert-Path -LiteralPath ${pkgCache}
 
+    Write-Host "==================================================================="
+    Write-Host  "[astrometry-deps] *** OFFLINE MODE (frozen package cache) ***"
+    Write-Host "==================================================================="
+
+    # --site does not download anything under --local-install; it only selects
+    # the matching URL-encoded mirror subfolder inside the cache tree.
+    #
+    # --upgrade-also is REQUIRED even offline: the cygwin provider's tgz ships
+    # an older base (cygwin 3.6.5), and without the flag setup only installs
+    # MISSING packages -- the installed 'cygwin' base is kept at 3.6.5, pip's
+    # platform tag stays cygwin_3_6_5, the 3_6_9 wheel is rejected, and the
+    # 3.6.9-built astrometry binaries die with STATUS_ENTRYPOINT_NOT_FOUND
+    # (caught on the second offline run, 2026-07-23). Against the FROZEN ini
+    # the flag is deterministic: everything upgrades to the frozen curr
+    # (cygwin 3.6.9-1) and can never drift newer -- and it reproduces exactly
+    # the transaction the fleet ran online on 2026-07-06, whose downloads ARE
+    # this cache, so every needed archive is present by construction.
     ${setupArgs} = @(
         '--quiet-mode',
         '--no-shortcuts','--no-desktop','--no-startmenu','--no-write-registry',
+        '--local-install',
         '--upgrade-also',
         '--root', ${CygwinRoot},
         '--site', ${MirrorSite},
         '--local-package-dir', ${pkgCache},
         '--packages', ${Packages}
     )
-    if (${useProxy}) {
-        ${setupArgs} = @('--proxy', ${ProxyHost}) + ${setupArgs}
-    }
 
-    Write-Host ("Running ${setupPath} for packages: ${Packages} (proxy={0})" -f $(if (${useProxy}) { ${ProxyHost} } else { 'direct' }))
-
-    # setup-x86_64.exe fetches over HTTPS via WinINet and HARD-fails the TLS
-    # handshake (error 12057) when the server-cert revocation check cannot
-    # complete -- which is the case through bcproxy, where CryptoAPI's cryptnet
-    # CRL/OCSP retrieval returns 0x80070057. Make revocation best-effort (the
-    # same posture git uses) for the duration of the setup.exe run only, then
-    # restore. See mast-net.ps1 / DECISIONS.md 2026-05-27.
-    ${prevRev} = Disable-WinINetCertRevocationCheck
-    Write-Host ("[astrometry-deps] WinINet server-cert revocation set best-effort for setup.exe (prev={0})." -f $(if ($null -eq ${prevRev}) { 'unset' } else { ${prevRev} }))
-    try {
-        ${proc} = Start-Process -FilePath ${setupPath} -ArgumentList ${setupArgs} `
-            -Wait -PassThru -NoNewWindow
-        try { ${proc}.Refresh() } catch {}
-        ${exit} = ${proc}.ExitCode
-    } finally {
-        Restore-WinINetCertRevocationCheck -Previous ${prevRev}
-        Write-Host "[astrometry-deps] WinINet server-cert revocation check restored."
-    }
+    Write-Host ("Running ${setupPath} offline for packages: ${Packages} (cache: {0})" -f ${pkgCache})
+    ${proc} = Start-Process -FilePath ${setupPath} -ArgumentList ${setupArgs} `
+        -Wait -PassThru -NoNewWindow
+    try { ${proc}.Refresh() } catch {}
+    ${exit} = ${proc}.ExitCode
     if ($null -eq ${exit}) {
         throw "setup-x86_64.exe did not report an exit code (treating as failure)."
     }

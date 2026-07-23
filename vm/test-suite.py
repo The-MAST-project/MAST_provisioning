@@ -237,19 +237,19 @@ SCENARIOS: list[Scenario] = [
     ),
     # STUB: requires a unit with reachability to bcproxy.weizmann.ac.il:8080
     # (campus network or Weizmann VPN). The dev VirtualBox VM on the home
-    # network cannot exercise this path -- everything from build-mast.ps1's
-    # -ProxyMode plumbing to provide-astrometry-dependencies.ps1's setup.rc
-    # net-method=Proxy is currently only unit-test-grade for the 'weizmann'
-    # case. See autonomous-provisioning-requirements.md item "Proxy-mode
-    # 'weizmann' end-to-end coverage" for full assertions; the harness
-    # additions needed to promote to ACTIVE:
+    # network cannot exercise this path -- build-mast.ps1's -ProxyMode
+    # plumbing (proxy provider -ForceMode) is currently only unit-test-grade
+    # for the 'weizmann' case. Note: cygwin setup.exe no longer downloads at
+    # all (astrometry-dependencies installs offline from the frozen staged
+    # cache, issue #20), so the proxy surfaces to assert are env vars,
+    # WinINet, and WinHTTP only. See autonomous-provisioning-requirements.md
+    # item "Proxy-mode 'weizmann' end-to-end coverage" for full assertions;
+    # the harness additions needed to promote to ACTIVE:
     #   1. spawn run-prov-test.py with --proxy-mode weizmann
     #   2. parse verify-proxy smoke body, assert mode=use ie_enable=1
     #      ie_server='bcproxy.weizmann.ac.il:8080'
-    #   3. parse astrometry-dependencies log, assert net: Proxy seen and no
-    #      12007s; package fetches completed
-    #   4. read HKCU Internet Settings/ProxyEnable, ProxyServer via WinRM
-    #   5. parse 'netsh winhttp show proxy' output on the unit
+    #   3. read HKCU Internet Settings/ProxyEnable, ProxyServer via WinRM
+    #   4. parse 'netsh winhttp show proxy' output on the unit
     # Promote to ACTIVE only after a first successful run against a
     # bcproxy-reachable unit.
     Scenario(
@@ -257,8 +257,7 @@ SCENARIOS: list[Scenario] = [
         description=(
             "Full provision with --proxy-mode weizmann against a unit that can "
             "reach bcproxy.weizmann.ac.il:8080. Asserts that all three proxy "
-            "surfaces (env vars, WinINet, WinHTTP) are configured AND that "
-            "cygwin setup.exe actually downloads through the proxy (no 12007)."
+            "surfaces (env vars, WinINet, WinHTTP) are configured."
         ),
         phases="",
         modules="",
