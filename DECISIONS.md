@@ -2,6 +2,45 @@
 
 ---
 
+## [2026-07-23] build-manifest.json carries per-module content hashes (`module_state`)
+
+**Why:** Drift detection is whole-payload: the single `payload_hash` over the
+flattened staging tree can say a unit differs from the build but not *which
+module*, so any drift means a full reprovision. The per-module-tracking epic
+(#22) needs a per-module fingerprint on the build side first (Stage 1). The
+hash boundary must cover more than file bytes: a module's deployed output is
+also shaped by build-time injected command args (`-Site`, `-ForceMode`,
+`-RpiNtp`, the desktop-shortcut `-FastApiUrl` -- which lives only in
+`module.json` `command`), which no staged-file hash sees. The worked example
+that must register as drift: repointing the FastAPI shortcut URL changes no
+commandfile byte at all.
+
+**What:** `build-manifest.json` gains `module_state`: per module `{version,
+hash}`. `Get-ModuleContentHash` (in the new dot-sourceable
+`build/build-manifest-lib.ps1`, where `Get-PayloadHash` also moved so Pester
+can test both without running a build) hashes (a) the module's source
+commandfiles under `server/providers/<module>/` -- hashed at the source, since
+staging is flattened and has no per-module subtree; (b) the module's
+**resolved** `commands.json` entries (provide + verify + any finalize), i.e.
+the command strings with the injected args baked in; (c) the resolved version
+(`git` -> SHA, as in `module_versions`). File lines sorted by path, command
+lines order-preserving (execution order is behavior), category prefixes
+(`file:`/`cmd:`/`version:`) keep inputs collision-free. Missing commandfiles
+are skipped -- by hash time a gap can only be a `-TestMode` optional payload;
+production builds have already thrown in the staging pass. `module_versions`
+stays alongside as a deprecated duplicate (`tools/fleet-drift-report.py` still
+reads it; removed when the report keys on `module_state` in Stage 3). The
+aggregate `payload_hash` is unchanged as the fast "anything changed?" gate.
+Tests: `server/tests/build-manifest-lib.Tests.ps1`.
+
+**Implications:** Stage 2 can merge `{version, hash}` per executed module into
+a cumulative `installed-manifest.json`; Stage 3 gets per-module drift
+classification and targeted `-Modules` updates. Build-host-vendored payloads
+(cygwin-pkg-cache, mast-indexes, NetFx3 SxS, licenses) are *outside* the
+per-module hash boundary -- the aggregate `payload_hash` still catches their
+staged bytes; the same accepted boundary is documented in #24 for the release
+version. Plan: `docs/per-module-tracking-plan.md`.
+
 ## [2026-07-23] Astrometry cygwin installs offline from a frozen package cache
 
 **Why:** `provide-astrometry-dependencies.ps1` installed cygwin from the

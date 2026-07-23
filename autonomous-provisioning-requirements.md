@@ -452,6 +452,13 @@ Two levels:
    levels the unit can answer)** in Phase 1, where the same `verify-<name>.ps1` scripts are
    the level-2 (configuration) check.
 
+**Per-module build fingerprint:** `build-manifest.json` also carries `module_state` --
+per module `{version, hash}`, where the hash covers the module's source commandfiles,
+its **resolved** `commands.json` entries (build-time injected args like `-Site` /
+`-ForceMode` included), and its resolved version (`build/build-manifest-lib.ps1`). The
+drift *compare* above is still whole-payload; per-module drift classification and
+targeted `-Modules` updates are the rest of the per-module-tracking epic (#22).
+
 ---
 
 ### Unit Onboarding: bootstrap (unit) + server-side paperwork **[PARTIAL]**

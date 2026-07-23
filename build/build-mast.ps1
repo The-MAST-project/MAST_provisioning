@@ -649,29 +649,11 @@ if (${Modules} -contains 'astrometry-dependencies') {
 # Consumed by check-and-provision.ps1 to decide whether a unit needs an update,
 # and copied to C:\MAST\installed-manifest.json on the unit by
 # execute-mast-provisioning.ps1 once provisioning succeeds.
+# Hash helpers (Get-PayloadHash, Get-ModuleContentHash) live in the
+# dot-sourceable build-manifest-lib.ps1 so the Pester suite can exercise them
+# without running a build.
 # ---------------------------------------------------------------------------
-function Get-PayloadHash {
-    param([Parameter(Mandatory)][string]$StagingDir)
-
-    # Hash inputs: every regular file under the staging dir, in lexical order,
-    # combining "<relative-path>:<sha256>" into a single rolling hash.
-    # commands.json is included implicitly. build-manifest.json is excluded
-    # (we are generating it now).
-    $sha = [System.Security.Cryptography.SHA256]::Create()
-    $bytes = [System.IO.MemoryStream]::new()
-    $files = Get-ChildItem -Path $StagingDir -File -Recurse |
-                Where-Object { $_.Name -ne 'build-manifest.json' } |
-                Sort-Object FullName
-    foreach ($f in $files) {
-        $rel = $f.FullName.Substring($StagingDir.Length).TrimStart('\','/').Replace('\','/')
-        $fileHash = (Get-FileHash -Path $f.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-        $line = [System.Text.Encoding]::UTF8.GetBytes("$rel`:$fileHash`n")
-        $bytes.Write($line, 0, $line.Length)
-    }
-    $bytes.Position = 0
-    $digest = $sha.ComputeHash($bytes)
-    return ([System.BitConverter]::ToString($digest) -replace '-','').ToLowerInvariant()
-}
+. (Join-Path ${PSScriptRoot} 'build-manifest-lib.ps1')
 
 function Get-GitSha {
     param([Parameter(Mandatory)][string]$RepoTop)
@@ -693,10 +675,19 @@ function Get-GitSha {
 ${payloadHash} = Get-PayloadHash -StagingDir ${staging}
 ${gitSha}      = Get-GitSha -RepoTop ${Top}
 
-# Aggregate per-module versions from each provider's module.json. The 'version'
-# field is required; a missing one is a build error (fail loud rather than emit
-# a manifest with silent gaps). The literal string 'git' is substituted with the
-# current git SHA so source-tracked modules (e.g. mast) report a meaningful hash.
+# Per-module version + content hash from each provider's module.json. The
+# 'version' field is required; a missing one is a build error (fail loud rather
+# than emit a manifest with silent gaps). The literal string 'git' is
+# substituted with the current git SHA so source-tracked modules (e.g. mast)
+# report a meaningful hash. The content hash (Get-ModuleContentHash) covers the
+# module's source commandfiles + its RESOLVED commands.json entries (provide +
+# verify, with build-time injected args) + the resolved version -- see
+# build-manifest-lib.ps1 and docs/per-module-tracking-plan.md.
+# module_versions is kept alongside for existing consumers
+# (tools/fleet-drift-report.py) and is deprecated: it duplicates
+# module_state.<name>.version and goes away once the fleet report keys on
+# module_state (per-module-tracking Stage 3).
+${moduleState}    = [ordered]@{}
 ${moduleVersions} = [ordered]@{}
 foreach (${vm} in ${Modules}) {
     ${vmf} = Read-ModuleManifest -ModuleName ${vm}
@@ -707,6 +698,17 @@ foreach (${vm} in ${Modules}) {
     ${vstr} = [string]${vmf}.version
     if (${vstr} -eq 'git') { ${vstr} = ${gitSha} }
     ${moduleVersions}[${vm}] = ${vstr}
+
+    ${vmCmdFiles} = @()
+    if (${vmf}.commandfiles) { ${vmCmdFiles} = @(${vmf}.commandfiles | ForEach-Object { [string]$_ }) }
+    ${vmCmds} = @(${cmds} |
+        Where-Object { $_.module -eq ${vm} -or $_.module -eq (${vm} + '-verify') } |
+        ForEach-Object { [string]$_.cmd })
+    ${moduleState}[${vm}] = [ordered]@{
+        version = ${vstr}
+        hash    = Get-ModuleContentHash -ProviderDir (Join-Path ${providersRoot} ${vm}) `
+                    -CommandFiles ${vmCmdFiles} -Commands ${vmCmds} -Version ([string]${vstr})
+    }
 }
 
 ${manifest}    = [pscustomobject]@{
@@ -715,6 +717,7 @@ ${manifest}    = [pscustomobject]@{
     payload_hash    = ${payloadHash}
     hostname        = ${HostName}
     modules         = ${Modules}
+    module_state    = ${moduleState}
     module_versions = ${moduleVersions}
 }
 (${manifest} | ConvertTo-Json -Depth 4) |
