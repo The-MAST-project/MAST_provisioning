@@ -106,10 +106,22 @@ try {
 
     # --site does not download anything under --local-install; it only selects
     # the matching URL-encoded mirror subfolder inside the cache tree.
+    #
+    # --upgrade-also is REQUIRED even offline: the cygwin provider's tgz ships
+    # an older base (cygwin 3.6.5), and without the flag setup only installs
+    # MISSING packages -- the installed 'cygwin' base is kept at 3.6.5, pip's
+    # platform tag stays cygwin_3_6_5, the 3_6_9 wheel is rejected, and the
+    # 3.6.9-built astrometry binaries die with STATUS_ENTRYPOINT_NOT_FOUND
+    # (caught on the second offline run, 2026-07-23). Against the FROZEN ini
+    # the flag is deterministic: everything upgrades to the frozen curr
+    # (cygwin 3.6.9-1) and can never drift newer -- and it reproduces exactly
+    # the transaction the fleet ran online on 2026-07-06, whose downloads ARE
+    # this cache, so every needed archive is present by construction.
     ${setupArgs} = @(
         '--quiet-mode',
         '--no-shortcuts','--no-desktop','--no-startmenu','--no-write-registry',
         '--local-install',
+        '--upgrade-also',
         '--root', ${CygwinRoot},
         '--site', ${MirrorSite},
         '--local-package-dir', ${pkgCache},

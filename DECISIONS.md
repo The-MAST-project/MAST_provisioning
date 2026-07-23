@@ -21,8 +21,12 @@ the validated fleet installed) via the new `build/harvest-cygwin-cache.ps1`,
 stored **build-host-vendored** at `C:\MAST\cygwin-pkg-cache` (like the
 astrometry index seed -- binary, not in git), staged into the payload by
 `build-mast.ps1` (warn under `-TestMode`, throw for production builds), and
-installed with `setup-x86_64.exe --local-install` (no `--site` download, no
-`--upgrade-also`). Version stays **3.6.9** rather than re-pinning to 3.6.10:
+installed with `setup-x86_64.exe --local-install --upgrade-also` (no `--site`
+download; `--upgrade-also` is kept -- the cygwin provider's tgz ships an older
+base (3.6.5) and without the flag setup leaves it in place, so pip's platform
+tag stays `cygwin_3_6_5` and the pinned wheel is still rejected; against the
+frozen ini the flag is deterministic and reproduces the fleet's actual
+2026-07-06 transaction). Version stays **3.6.9** rather than re-pinning to 3.6.10:
 it matches the existing wheel (no rebuild), keeps the fleet uniform
 (mast01-04 already run 3.6.9), and a patch bump buys nothing used here
 (identical `cygcfitsio-10` / `libpython3.9` ABI) while costing a wheel

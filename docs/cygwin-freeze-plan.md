@@ -34,8 +34,11 @@ deterministic and matches the wheel, with no live-mirror dependency.
   index seed (`C:\MAST\mast-indexes`), the NoMachine licenses vault, and the
   PlateSolve3 catalog — the repo stays lean; the cache is staged into the payload
   at build time.
-- **Install: fully offline** (`setup-x86_64.exe --local-install`) — no `--site`
-  download, no `--upgrade-also`, so there is no reintroduced drift surface.
+- **Install: fully offline** (`setup-x86_64.exe --local-install
+  --upgrade-also`) — no `--site` download, so there is no reintroduced drift
+  surface. `--upgrade-also` stays: the cygwin tgz base is older (3.6.5) and
+  must be lifted to the frozen 3.6.9; against the frozen ini the flag is
+  deterministic (found on first validation, 2026-07-23).
 
 ## Steps
 
@@ -66,7 +69,9 @@ deterministic and matches the wheel, with no live-mirror dependency.
   `--packages <same set>`. Pass the original `--site https://cygwin.itefix.net`
   value only so setup selects the matching cache subfolder — with
   `--local-install` no download occurs (verify on first run).
-- **Drop `--upgrade-also`.** Make the proxy `setup.rc` write + the WinINet
+- **Keep `--upgrade-also`** (needed to lift the tgz's 3.6.5 base to the frozen
+  3.6.9; deterministic against the frozen ini). Make the proxy `setup.rc`
+  write + the WinINet
   cert-revocation-disable block conditional/removed (both are online-download-only
   concerns).
 - Net: setup installs exactly the frozen 3.6.9 set → `uname -r` = 3.6.9 → pip
