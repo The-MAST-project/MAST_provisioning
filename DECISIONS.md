@@ -2,6 +2,43 @@
 
 ---
 
+## [2026-07-23] Astrometry cygwin installs offline from a frozen package cache
+
+**Why:** `provide-astrometry-dependencies.ps1` installed cygwin from the
+**live** itefix mirror (`--site https://cygwin.itefix.net --upgrade-also`),
+while the bundled fitsio wheel is **version-pinned** in its filename tag
+(`cygwin_3_6_9`). pip derives the cygwin platform tag from the *running*
+cygwin, so when the rolling mirror moved 3.6.9 -> 3.6.10 a fresh provision
+installed 3.6.10 and pip rejected the wheel ("not a supported wheel on this
+platform"), failing the module on any newly provisioned unit (issue #20).
+Root cause: a pinned wheel coupled to an unpinned, live-mirror-tracking
+cygwin.
+
+**What:** Freeze the exact known-good package set and install fully offline.
+The cache is **harvested once from a working unit** (mast01's own
+`C:\cygwin64\var\cache\setup`, ~174 MB -- authoritative because it *is* what
+the validated fleet installed) via the new `build/harvest-cygwin-cache.ps1`,
+stored **build-host-vendored** at `C:\MAST\cygwin-pkg-cache` (like the
+astrometry index seed -- binary, not in git), staged into the payload by
+`build-mast.ps1` (warn under `-TestMode`, throw for production builds), and
+installed with `setup-x86_64.exe --local-install` (no `--site` download, no
+`--upgrade-also`). Version stays **3.6.9** rather than re-pinning to 3.6.10:
+it matches the existing wheel (no rebuild), keeps the fleet uniform
+(mast01-04 already run 3.6.9), and a patch bump buys nothing used here
+(identical `cygcfitsio-10` / `libpython3.9` ABI) while costing a wheel
+rebuild + fleet re-provision. The proxy plumbing the online download needed
+(`-ProxyMode`, `setup.rc` net-method, `--proxy`, the WinINet
+cert-revocation toggle) is removed from this provider -- it was
+download-only. Module version bumped to `0.97-deps-2`.
+
+**Implications:** The installed cygwin is deterministic regardless of what
+the live mirror serves, and astrometry-deps now works on offline/bench units
+(an #8 gap). **Locked coupling:** the frozen cygwin version and the fitsio
+wheel tag move together -- refreshing the cache to a newer cygwin REQUIRES
+rebuilding the wheel in the same change (documented in DEPENDENCIES.md).
+Real units need no re-provision (already 3.6.9); each build host needs the
+one-time harvest. Full plan: `docs/cygwin-freeze-plan.md`.
+
 ## [2026-07-19] Transfer phase fails CLOSED: whitelist `OK`, not blacklist two failures
 
 **Why:** A code review before switching the autonomous loop on found the SMB

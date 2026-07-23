@@ -118,7 +118,7 @@ renumbering.
 |   200 | `openssh-server` | Drift check for OpenSSH Server (install/config owned by `bootstrap-winrm.ps1`) |
 |   250 | `imdisk` | ImDisk driver; mount D: from the astrometry index image, persist across reboots |
 |   300 | `cygwin` | Cygwin environment from a prebuilt tgz (postinstall, PATH) |
-|   400 | `astrometry-dependencies` | Cygwin packages for astrometry.net + bundled `fitsio` wheel |
+|   400 | `astrometry-dependencies` | Cygwin packages for astrometry.net (offline, from the frozen build-host cache `C:\MAST\cygwin-pkg-cache`) + bundled `fitsio` wheel |
 |   500 | `astrometry` | Prebuilt astrometry.net 0.97 tree into `C:\cygwin64\usr\local\astrometry` |
 |   600 | `python` | Python 3.12.2 + virtualenv |
 |   700 | `git` | Git for Windows (silent) + PATH |
