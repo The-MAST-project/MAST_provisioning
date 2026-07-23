@@ -979,7 +979,7 @@ scenario in `vm/test-suite.py` and reference it from the row.
 | 3 | GitHub token (`mast_github.txt`)             | `-AllowMissingGithubToken`; `mast` module fetch skipped or unauthenticated                                  | Authenticated via Credential Manager / deploy key on prov server                                                             | blocker (Exception #3)    | needs scenario                                      |
 | 4 | Astrometry payload (`astrometry.tgz` + .img) | `-TestMode`; optional, sometimes absent; smoke degrades to skip                                             | Payload mandatory and version-verified; failure to fetch blocks the run                                                      | blocker (Exception #4)    | scenario `full-provision` (when payload present)    |
 | 5 | Bootstrap security posture                   | WinRM HTTP (5985) + Basic + AllowUnencrypted=true                                                           | HTTPS (5986) + cert-validated transport; HTTP only for first-boot onboarding                                                 | blocker (Exception #5)    | needs scenario                                      |
-| 6 | Proxy mode end-to-end                        | `--proxy-mode direct` (dev VM on home network can't reach bcproxy)                                          | `--proxy-mode weizmann` (default); cygwin setup.exe + WinINet + WinHTTP all route through `bcproxy.weizmann.ac.il:8080`      | blocker (Exception #6)    | STUB `proxy-weizmann-on-campus`                     |
+| 6 | Proxy mode end-to-end                        | `--proxy-mode direct` (dev VM on home network can't reach bcproxy)                                          | `--proxy-mode weizmann` (default); WinINet + WinHTTP route through `bcproxy.weizmann.ac.il:8080` (cygwin setup.exe no longer downloads: astrometry-dependencies installs offline from the frozen staged cache, issue #20) | blocker (Exception #6)    | STUB `proxy-weizmann-on-campus`                     |
 | 7 | Reboot orchestration                         | `provide-reboot.ps1` detects pending reboot and writes `C:\MAST\state\reboot-requested.flag`; harness ignores it and resets the VM to snapshot at end of cycle | `check-and-provision.ps1` consumes the flag, schedules the reboot inside the maintenance window, waits for WinRM to return, re-verifies smoke state | blocker (Exception #7)    | STUB `reboot-occurs-and-unit-recovers`              |
 | 8 | Cycle isolation                              | VM snapshot reset between cycles -- every cycle starts from `post-prepare`                                  | No rollback; unit state persists across runs. Idempotency is load-bearing.                                                   | covered indirectly        | scenarios `idempotent-after-manifest-wipe`, `idempotent-reprovision` (STUB) |
 | 9 | Maintenance window enforcement               | Harness runs whenever invoked; windows not honored                                                          | `check-and-provision.ps1` honors per-unit `maintenance_window`; outside the window units get `outcome=SKIP_MAINTENANCE`      | **DONE** in prod driver   | not exercisable in harness (driver-only)            |
@@ -1050,10 +1050,11 @@ but the code path is correct. This exception is resolved.
 - **Current exception:** the dev VirtualBox VM lives on the host's NAT-ed home network and
   cannot reach `bcproxy.weizmann.ac.il:8080`, so the only proxy mode regularly exercised by
   `vm/run-prov-test.py` is `--proxy-mode direct`. The `weizmann` code paths
-  (`provide-proxy.ps1 -ForceMode use`, `provide-astrometry-dependencies.ps1 -ProxyMode use`
-  pre-writing `setup.rc` with `net-method=Proxy`, `netsh winhttp set proxy bcproxy:8080`,
+  (`provide-proxy.ps1 -ForceMode use`, `netsh winhttp set proxy bcproxy:8080`,
   WinINet `ProxyEnable=1`) are unit-test-grade -- they run on every build through the
   argument-plumbing path but their actual network effect against a live proxy is unverified.
+  (cygwin setup.exe is no longer a proxy consumer: astrometry-dependencies installs
+  offline from the frozen staged cache -- issue #20.)
 - **Why it's a blocker:** production units inside the campus are 100% reliant on the
   `weizmann` path. A regression there would not surface in `direct`-mode dev runs and
   could ship undetected. The risk is concrete: this exact scenario (env vars cleared but
@@ -1065,12 +1066,9 @@ but the code path is correct. This exception is resolved.
   1. Provisions with `--proxy-mode weizmann`.
   2. Asserts `verify-proxy.ps1` exits 0 with smoke body `mode=use ie_enable=1
      ie_server='bcproxy.weizmann.ac.il:8080'`.
-  3. Asserts `astrometry-dependencies` succeeds (real download through bcproxy completes).
-  4. Asserts a fresh `setup-x86_64.exe` log line says `net: Proxy` and the package fetch
-     URLs resolve through the proxy (no 12007s).
-  5. Asserts `netsh winhttp show proxy` reports `Proxy Server(s) :
+  3. Asserts `netsh winhttp show proxy` reports `Proxy Server(s) :
      bcproxy.weizmann.ac.il:8080`.
-  6. Asserts HKCU `Internet Settings\ProxyEnable=1`, `ProxyServer=bcproxy.weizmann.ac.il:8080`.
+  4. Asserts HKCU `Internet Settings\ProxyEnable=1`, `ProxyServer=bcproxy.weizmann.ac.il:8080`.
 
   Tracked as STUB scenario `proxy-weizmann-on-campus` in `vm/test-suite.py`; promote to
   ACTIVE once it has been run successfully against a Weizmann-reachable unit at least once

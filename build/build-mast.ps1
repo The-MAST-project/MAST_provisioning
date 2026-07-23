@@ -31,12 +31,10 @@ param(
   # Dev/test: allow missing large optional assets (skip with warning).
   [switch]${TestMode},
   # Proxy mode for this build, baked into the staged commands.json:
-  #   weizmann -> proxy provider gets -ForceMode use; astrometry-dependencies
-  #               gets -ProxyMode use (passes --proxy bcproxy:8080 to setup.exe
-  #               and writes setup.rc with net-method=Proxy).
-  #   direct   -> proxy provider gets -ForceMode direct; astrometry-dependencies
-  #               gets -ProxyMode direct (writes setup.rc with net-method=Direct
-  #               so setup.exe skips IE5/WPAD discovery).
+  #   weizmann -> proxy provider gets -ForceMode use.
+  #   direct   -> proxy provider gets -ForceMode direct.
+  # (astrometry-dependencies no longer takes a proxy mode: its cygwin install
+  # is fully offline from the staged frozen package cache -- see issue #20.)
   # Default is 'weizmann' (the common on-campus case). Runs against a unit
   # that cannot reach bcproxy MUST override to 'direct' -- regardless of
   # whether the run is dev or prod; the deciding factor is purely the
@@ -275,7 +273,6 @@ ${allLicFiles} = Get-ChildItem -Path ${licensesVault} -Filter '*.lic' -File -Err
 # Translate the build-level ProxyMode (weizmann|direct) into the values that
 # the individual providers expect on their own command lines.
 ${proxyForceMode}    = if (${ProxyMode} -eq 'weizmann') { 'use' } else { 'direct' }
-${astroDepProxyMode} = ${proxyForceMode}   # provide-astrometry-dependencies.ps1 uses identical naming
 # Per-site RPi NTP server (the #1 time peer); injected into the timesync command by -Site.
 # Single source of the per-site RPi value. Sites without one are simply absent (RPi tier skipped).
 ${siteRpiNtp} = @{ 'ns' = '10.23.1.222' }
@@ -286,7 +283,7 @@ ${proxyBanner} = if (${ProxyMode} -eq 'weizmann') { '*** WEIZMANN-PROXY MODE ***
 Write-Host "==================================================================="
 Write-Host ("[build-mast] {0}" -f ${proxyBanner})
 Write-Host ("[build-mast] proxy provider           -> -ForceMode {0}" -f ${proxyForceMode})
-Write-Host ("[build-mast] astrometry-dependencies  -> -ProxyMode {0}" -f ${astroDepProxyMode})
+Write-Host  "[build-mast] astrometry-dependencies  -> offline (frozen cygwin-pkg-cache; no proxy mode)"
 Write-Host "==================================================================="
 
 # Build commands list once (same for all), then tweak per host only if we add a SingleLicensePath
@@ -305,9 +302,6 @@ function Generate-Commands([string[]]${Mods}) {
     switch (${m}) {
       'proxy' {
         ${cmd} = ${cmd} + (" -ForceMode {0}" -f ${proxyForceMode})
-      }
-      'astrometry-dependencies' {
-        ${cmd} = ${cmd} + (" -ProxyMode {0}" -f ${astroDepProxyMode})
       }
       'imdisk' {
         if (${ImdiskMountType} -ne 'vm') {
@@ -618,6 +612,32 @@ if (${Modules} -contains 'planewave') {
         Write-Host (" Staged PlateSolve3 catalog installer + data ({0:N1} GB)." -f ((Get-Item ${ps3CatalogDataSrc}).Length / 1GB))
     } else {
         Write-Warning ("PlateSolve3 catalog vendor files missing under {0} (need Setup_PlateSolve3_Catalog.exe + Setup_PlateSolve3_Catalog-1.bin); download them from planewave.com once. 'ps3cli --server' will have no catalog and the planewave verify will FAIL on the unit." -f ${ps3CatalogSrcDir})
+    }
+}
+
+# Frozen Cygwin package cache (astrometry-dependencies). Like the astrometry
+# index seed, it is build-host-vendored (binary, ~174 MB, not in git) and
+# staged into the payload here. provide-astrometry-dependencies.ps1 installs
+# from it FULLY OFFLINE (setup-x86_64.exe --local-install) so the installed
+# cygwin is deterministic (3.6.9, matching the bundled fitsio wheel tag) and
+# has no live-mirror dependency -- the itefix mirror is rolling and moving
+# past 3.6.9 broke the pinned wheel (issue #20). Populate once per build host
+# via build/harvest-cygwin-cache.ps1 (harvests a working unit's own cache).
+${cygCacheSrc} = 'C:\MAST\cygwin-pkg-cache'
+if (${Modules} -contains 'astrometry-dependencies') {
+    ${cygCacheIni} = @()
+    if (Test-Path -LiteralPath ${cygCacheSrc}) {
+        ${cygCacheIni} = @(Get-ChildItem -LiteralPath ${cygCacheSrc} -Filter 'setup.ini' -File -Recurse -ErrorAction SilentlyContinue)
+    }
+    if (${cygCacheIni}.Count -gt 0) {
+        ${cacheFiles} = @(Get-ChildItem -LiteralPath ${cygCacheSrc} -File -Recurse -ErrorAction SilentlyContinue)
+        ${cacheMb}    = ((${cacheFiles} | Measure-Object Length -Sum).Sum / 1MB)
+        New-LinkOrCopy -Target ${cygCacheSrc} -LinkPath (Join-Path ${staging} 'cygwin-pkg-cache')
+        Write-Host (" Staged frozen cygwin package cache: cygwin-pkg-cache\ ({0} files, {1:N0} MB); astrometry-dependencies installs offline from it." -f ${cacheFiles}.Count, ${cacheMb})
+    } elseif (${TestMode}) {
+        Write-Warning ("Frozen cygwin package cache missing/invalid at {0}; run build/harvest-cygwin-cache.ps1 once to populate it. astrometry-dependencies will FAIL on the unit. Continuing due to -TestMode." -f ${cygCacheSrc})
+    } else {
+        throw ("Frozen cygwin package cache missing/invalid at {0} (need setup.ini under it). Run build/harvest-cygwin-cache.ps1 once to populate it from a working unit." -f ${cygCacheSrc})
     }
 }
 
