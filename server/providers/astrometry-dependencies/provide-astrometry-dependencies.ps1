@@ -92,6 +92,13 @@ try {
     if (${cacheIni}.Count -eq 0) {
         throw "Staged cygwin package cache at ${pkgCache} holds no setup.ini; re-harvest it (build/harvest-cygwin-cache.ps1 -Force)."
     }
+    # setup-x86_64.exe chdirs INTO the local package dir, so a RELATIVE
+    # --local-package-dir (AssetsRoot is '.' at run time) breaks its own
+    # setup.ini lookup: the log shows '.ini setup_version is (null)', the
+    # package DB comes up empty, and every requested package reports
+    # "not found". Resolve to an absolute path. Caught on the first offline
+    # run, 2026-07-23.
+    ${pkgCache} = Convert-Path -LiteralPath ${pkgCache}
 
     Write-Host "==================================================================="
     Write-Host  "[astrometry-deps] *** OFFLINE MODE (frozen package cache) ***"
