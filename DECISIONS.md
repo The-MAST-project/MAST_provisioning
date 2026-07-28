@@ -2,6 +2,74 @@
 
 ---
 
+## [2026-07-28] mast-clone: the venv is unconditional at `<top>/.venv`, installed in one resolve
+
+**Why:** The first cut of `tools/mast-clone.{sh,ps1}` (see the entry below) made the
+virtual environment optional and caller-placed: `--venv <path>` / `-Venv <path>`, with
+`--no-install` and `--no-seed` to opt out of parts of it. Three problems followed. A
+caller could point `--venv` at one directory while `--top` pointed at another, so the
+`mast.pth` written inside the venv referenced a *different* source tree than the one just
+cloned -- silently. The optionality meant "clone succeeded" and "the machine can run the
+code" were separate outcomes with no obvious link between them. And installing each
+repo's `requirements.txt` in its own `uv pip install` let a compound role clobber itself.
+
+That last one was not hypothetical. The `control` role selects `control` *and* `gui`,
+which share one machine and therefore one venv. Their requirements files had been pinned
+from their own local venvs, built eleven months apart, and disagreed on five shared
+packages (`astropy`, `httpx`, `pydantic`, `pymongo`, `rich`). Installed one after the
+other, the last file simply won, and the control service would have run versions it was
+never tested against, with nothing reported.
+
+**What:** The venv is now unconditional and derived, never passed in. It is always
+`<top>/.venv`, always created with `uv venv --seed` (so `pip` exists in it -- uv omits pip
+otherwise, which breaks anything shelling out to it), always populated, and always given
+a `mast.pth`. `--venv`, `--no-venv`, `--no-install`, `--no-seed`, `--python` and
+`--bootstrap-uv` are all gone, along with their PowerShell equivalents. Deriving the path
+from `--top` makes the mismatched-`mast.pth` case unrepresentable rather than merely
+discouraged.
+
+Requirements are installed in **one** `uv pip install` invocation carrying every selected
+repo's `-r`, rather than one call per repo. uv then resolves them together and fails
+loudly on a contradiction. Reconciling the pins is the caller's job, and the failure text
+says so.
+
+`uv` is acquired rather than requested: since the venv is always built, a missing `uv`
+would only ever mean a broken run, so the pinned `#!uv-version` is fetched into
+`<top>/.tools` automatically when uv is absent -- still checksum-verified against the
+`.sha256` GitHub publishes, still never `curl | sh`, still never "latest". The
+interpreter *version* remains deliberately unpinned: which Python a machine has is
+provisioning's concern, not this script's.
+
+Both scripts also generate `<top>/mast.code-workspace`, a VS Code multi-root workspace
+listing the folders actually cloned. Opening `<top>` as a plain folder would make VS Code
+read only `<top>/.vscode` and ignore the per-repo `.vscode` directories that `control`,
+`spec`, `gui` and `unit` each ship (all tracked); a multi-root workspace is the one
+arrangement where each repo keeps its own folder-scoped `settings.json` and its
+`launch.json` entries, with nothing copied or merged. It is written only when absent, so
+a hand-edited workspace survives `--update`.
+
+**Implications:**
+
+- **There is no clone-only mode any more.** Every run builds and populates the venv, so
+  every run needs network and takes install time. `--update` refreshes the checkouts
+  *and* re-resolves. That is the price of "a successful run means a runnable machine".
+- **Repos that share a machine must agree on shared pins.** This is now enforced rather
+  than hoped for. `MAST_control` and `MAST_gui` were re-pinned jointly against PyPI to
+  satisfy it; any future pair sharing a role inherits the same constraint.
+- **The generated workspace sets `python.analysis.extraPaths` to `[".."]`,** which is what
+  makes Pylance resolve `common` from each folder -- `mast.pth` fixes runtime, but static
+  analysis does not reliably follow `.pth` files. A folder-scoped `extraPaths` *replaces*
+  the workspace value rather than merging with it, so `MAST_unit` -- the only consumer
+  that sets `extraPaths` itself, for the Standa ximc wrapper -- had to prepend `".."` to
+  its own list. Any repo that later adds `extraPaths` must do the same.
+- **`python.defaultInterpreterPath` in the generated workspace is an absolute path.**
+  `<top>/.venv` is a sibling of the folder roots rather than inside one, so VS Code cannot
+  auto-discover it. The file is generated per machine, so a machine-specific path in it is
+  acceptable; it is not something to commit anywhere.
+- Extension entries in the workspace are **recommendations only** -- VS Code prompts, it
+  never installs. Installing them (`code --install-extension`) is provisioning's job; a
+  unit may have no editor at all.
+
 ## [2026-07-28] Role-driven flat source layout: `mast-clone.{sh,ps1}` + a single `common` clone
 
 **Why:** `MAST_common` was vendored into four consumers as a git submodule (`common/` in

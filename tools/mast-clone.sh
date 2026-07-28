@@ -18,11 +18,11 @@
 # repo root *is* the 'common' package. Cloning it into a folder literally named
 # 'common' and putting <top> on sys.path makes every existing
 # 'from common.X import ...' resolve unchanged -- no source edits, and no need
-# for the submodule. See --venv for how sys.path gets set at runtime.
+# for the submodule. The venv at <top>/.venv is how sys.path gets set at runtime.
 #
 # Usage:
 #   mast-clone.sh --top ~/mast --role unit
-#   mast-clone.sh --top /opt/mast --role control --https --venv /opt/mast/venv
+#   mast-clone.sh --top /opt/mast --role control --https
 #   mast-clone.sh --top ~/mast --role all --update
 #
 # Companion: tools/mast-clone.ps1 (same manifest, same layout, for Windows).
@@ -38,11 +38,7 @@ ROLES=""
 TRANSPORT="ssh"
 UPDATE=0
 DRY_RUN=0
-VENV=""
-PYTHON=""
-NO_INSTALL=0
-BOOTSTRAP_UV=0
-SEED=1
+VENV=""      # always <top>/.venv; derived once TOP_ABS is known
 UV=""
 declare -A BRANCH_OVERRIDE=()
 
@@ -63,29 +59,6 @@ Options:
                          --branch unit=acquisition_tuning. Repeatable.
                          Default comes from the manifest, NOT from the remote's
                          default HEAD -- see mast-repos.tsv for why that matters.
-  --venv <path>          Create the venv if absent (uv venv), install each
-                         cloned repo's requirements.txt into it (uv pip install),
-                         and write <path>/lib/pythonX.Y/site-packages/mast.pth
-                         containing <top>, so 'import common' works in that venv
-                         with no PYTHONPATH and no service-env changes.
-                         One venv per machine is the intended shape: the .pth
-                         puts every cloned repo on sys.path at once, so a second
-                         venv would isolate nothing.
-                         Requires uv on PATH -- see the uv note below.
-  --python <ver|exe>     Python for 'uv venv --python', e.g. 3.12 or a full path.
-                         Omit to let uv pick. Ignored if the venv already exists.
-  --no-install           With --venv, create the venv and write mast.pth but
-                         skip the requirements install. For offline runs.
-  --bootstrap-uv         If uv is absent, download the version pinned by the
-                         '#!uv-version' directive in the manifest, verify it
-                         against the .sha256 GitHub publishes beside it, and
-                         unpack it into <top>/.tools. Without this flag a
-                         missing uv is a hard error. Never pipes a remote
-                         script into a shell, and never installs "latest".
-  --no-seed              Create the venv without pip. By default the venv is
-                         seeded (uv venv --seed) so pip exists in it -- uv does
-                         not install pip otherwise, which breaks anything that
-                         shells out to it (pip freeze, pip list, IDE tooling).
   --update               For folders that already exist, fast-forward them.
                          Without this, existing folders are only fetched.
   --dry-run              Print what would happen; change nothing.
@@ -101,11 +74,6 @@ while [ $# -gt 0 ]; do
         --https)   TRANSPORT="https"; shift ;;
         --update)  UPDATE=1; shift ;;
         --dry-run) DRY_RUN=1; shift ;;
-        --venv)         VENV="${2:-}"; shift 2 ;;
-        --python)       PYTHON="${2:-}"; shift 2 ;;
-        --no-install)   NO_INSTALL=1; shift ;;
-        --bootstrap-uv) BOOTSTRAP_UV=1; shift ;;
-        --no-seed)      SEED=0; shift ;;
         --branch)
             ov="${2:-}"
             case "$ov" in
@@ -185,6 +153,8 @@ if [ "$DRY_RUN" -eq 0 ]; then
 fi
 TOP_ABS="$(cd -- "$TOP" 2>/dev/null && pwd || echo "$TOP")"
 
+VENV="${TOP_ABS}/.venv"
+
 CLONED=()
 while IFS=$'\t' read -r dir repo roles manifest_branch; do
     case "$dir" in ''|\#*) continue ;; esac
@@ -261,7 +231,7 @@ bootstrap_uv() {
     case "$(uname -s)" in
         Linux)  asset="uv-x86_64-unknown-linux-gnu.tar.gz" ;;
         Darwin) asset="uv-aarch64-apple-darwin.tar.gz" ;;
-        *)      die "--bootstrap-uv does not know this platform: $(uname -s)" ;;
+        *)      die "cannot bootstrap uv on this platform: $(uname -s); install uv yourself" ;;
     esac
     url="https://github.com/astral-sh/uv/releases/download/${ver}/${asset}"
     tmpd="$(mktemp -d)"
@@ -286,37 +256,27 @@ bootstrap_uv() {
 }
 
 if [ -n "$VENV" ]; then
+    # uv is acquired, never optional: the venv is always built, so a missing uv
+    # would simply mean a broken run. If it is not on PATH we fetch the pinned
+    # version into <top>/.tools -- checksum-verified, never "latest", never a
+    # remote script piped into a shell.
     if command -v uv >/dev/null 2>&1; then
         UV="$(command -v uv)"
     elif [ -x "${TOP_ABS}/.tools/uv" ]; then
         UV="${TOP_ABS}/.tools/uv"
-    elif [ "$BOOTSTRAP_UV" -eq 1 ]; then
-        if [ "$DRY_RUN" -eq 0 ]; then
-            bootstrap_uv "$UV_VERSION" "${TOP_ABS}/.tools"
-            UV="${TOP_ABS}/.tools/uv"
-        else
-            echo "       would bootstrap uv ${UV_VERSION} into ${TOP_ABS}/.tools"
-            UV="${TOP_ABS}/.tools/uv"
-        fi
+    elif [ "$DRY_RUN" -eq 1 ]; then
+        echo "       would bootstrap uv ${UV_VERSION} into ${TOP_ABS}/.tools"
+        UV="${TOP_ABS}/.tools/uv"
     else
-        die "uv is not on PATH, but --venv needs it.
-       Re-run with --bootstrap-uv to fetch the pinned version (${UV_VERSION}),
-       checksum-verified, into ${TOP_ABS}/.tools -- or install uv yourself."
+        bootstrap_uv "$UV_VERSION" "${TOP_ABS}/.tools"
+        UV="${TOP_ABS}/.tools/uv"
     fi
-    info "uv: ${UV}$([ "$DRY_RUN" -eq 0 ] && [ -x "$UV" ] && echo " ($("$UV" --version 2>/dev/null))")"
-
     if [ ! -d "$VENV" ]; then
-        info "creating venv ${VENV}${PYTHON:+ (python ${PYTHON})}"
+        info "creating venv ${VENV}"
         if [ "$DRY_RUN" -eq 0 ]; then
-            seed_arg=""
-            [ "$SEED" -eq 1 ] && seed_arg="--seed"
-            if [ -n "$PYTHON" ]; then
-                "$UV" venv $seed_arg --python "$PYTHON" "$VENV" || die "uv venv failed"
-            else
-                "$UV" venv $seed_arg "$VENV" || die "uv venv failed"
-            fi
+            "$UV" venv --seed "$VENV" || die "uv venv failed"
         else
-            echo "       would run: $UV venv $([ "$SEED" -eq 1 ] && echo '--seed ')${PYTHON:+--python $PYTHON }$VENV"
+            echo "       would run: $UV venv --seed $VENV"
         fi
     else
         info "venv ${VENV} exists, reusing"
@@ -330,26 +290,42 @@ if [ -n "$VENV" ]; then
     if [ "$DRY_RUN" -eq 1 ] && [ -z "$VPY" ]; then VPY="$VENV/bin/python"; fi
     [ -n "$VPY" ] || die "no interpreter under '$VENV' after creation"
 
-    if [ "$NO_INSTALL" -eq 1 ]; then
-        info "--no-install given, skipping requirements"
+    # ONE resolve, not one per repo. A compound role (control = control +
+    # gui) puts several requirements files into a single venv, and those
+    # files can pin the same package differently -- control and gui
+    # currently disagree on astropy, httpx, pydantic, pymongo and rich.
+    # Installing them one after another would silently let the last file
+    # win, leaving a service running versions it was never tested against.
+    # Passing every -r in one invocation makes uv resolve them together and
+    # fail loudly on a contradiction, which is the only safe outcome: repos
+    # that share a machine must agree on shared pins.
+    REQ_ARGS=()
+    REQ_NAMES=""
+    for d in "${CLONED[@]}"; do
+        req="${TOP_ABS}/${d}/requirements.txt"
+        # MAST_control shipped this as 'required.txt' until the rename;
+        # accept the old name so a not-yet-updated clone still provisions.
+        if [ ! -f "$req" ] && [ -f "${TOP_ABS}/${d}/required.txt" ]; then
+            req="${TOP_ABS}/${d}/required.txt"
+            warn "${d}: using legacy 'required.txt' -- rename it to requirements.txt"
+        fi
+        [ -f "$req" ] || continue
+        REQ_ARGS+=(-r "$req")
+        REQ_NAMES="${REQ_NAMES}${REQ_NAMES:+, }${d}"
+    done
+    if [ ${#REQ_ARGS[@]} -eq 0 ]; then
+        info "no requirements files among the cloned repos"
     else
-        for d in "${CLONED[@]}"; do
-            req="${TOP_ABS}/${d}/requirements.txt"
-            # MAST_control shipped this as 'required.txt' until the rename;
-            # accept the old name so a not-yet-updated clone still provisions.
-            if [ ! -f "$req" ] && [ -f "${TOP_ABS}/${d}/required.txt" ]; then
-                req="${TOP_ABS}/${d}/required.txt"
-                warn "${d}: using legacy 'required.txt' -- rename it to requirements.txt"
-            fi
-            [ -f "$req" ] || continue
-            info "${d}: installing $(basename "$req")"
-            if [ "$DRY_RUN" -eq 0 ]; then
-                "$UV" pip install --python "$VPY" -r "$req" \
-                    || die "uv pip install failed for ${d} (${req})"
-            else
-                echo "       would run: $UV pip install --python $VPY -r $req"
-            fi
-        done
+        info "installing requirements from: ${REQ_NAMES}"
+        if [ "$DRY_RUN" -eq 0 ]; then
+            "$UV" pip install --python "$VPY" "${REQ_ARGS[@]}" \
+                || die "uv pip install failed.
+   If it reports conflicting versions, two repos sharing this machine pin
+   the same package differently; reconcile the requirements files rather
+   than installing them separately."
+        else
+            echo "       would run: $UV pip install --python $VPY ${REQ_ARGS[*]}"
+        fi
     fi
 fi
 
@@ -371,6 +347,58 @@ if [ -n "$VENV" ]; then
             printf '%s\n' "$TOP_ABS" > "${sp}/mast.pth"
         fi
     fi
+fi
+
+# --- VS Code multi-root workspace -----------------------------------------
+#
+# Opening <top> as a plain folder makes VS Code read only <top>/.vscode, so the
+# per-repo .vscode directories (control, spec, gui and unit each ship one) are
+# ignored. A multi-root workspace is the one arrangement where every repo keeps
+# its own folder-scoped settings.json and its launch.json entries, with no
+# copying or merging: the repos stay the source of truth.
+#
+# Written only when absent -- people customise these, and silently clobbering a
+# hand-edited workspace on every --update would be its own bug.
+WS="${TOP_ABS}/mast.code-workspace"
+if [ -e "$WS" ]; then
+    info "$(basename "$WS") exists, leaving it alone"
+elif [ "$DRY_RUN" -eq 1 ]; then
+    echo "       would write ${WS}"
+else
+    info "writing ${WS}"
+    {
+        printf '{\n  "folders": [\n'
+        n=${#CLONED[@]}; i=0
+        for d in "${CLONED[@]}"; do
+            i=$((i+1))
+            if [ "$i" -lt "$n" ]; then printf '    { "path": "%s" },\n' "$d"
+            else                       printf '    { "path": "%s" }\n'  "$d"; fi
+        done
+        printf '  ],\n  "settings": {\n'
+        # Absolute, because <top>/.venv is a sibling of the folder roots rather
+        # than inside one, so VS Code cannot auto-discover it. This file is
+        # generated per machine, so a machine-specific path here is fine.
+        printf '    "python.defaultInterpreterPath": "%s/bin/python",\n' "$VENV"
+        # Relative to each folder root, i.e. <top>. This is what makes Pylance
+        # resolve 'common' in every folder: mast.pth fixes runtime, but static
+        # analysis does not reliably follow .pth files.
+        printf '    "python.analysis.extraPaths": [".."],\n'
+        printf '    "files.exclude": { ".venv": true, ".tools": true }\n'
+        printf '  },\n'
+        # Recommendations only prompt; they never install. Installing is
+        # provisioning's job (code --install-extension), not this script's --
+        # a unit may have no editor at all. Listed because the repos' own
+        # settings depend on them: Pylance for the language server, ruff as the
+        # configured formatter, debugpy for the "type": "debugpy" launch
+        # configs, PowerShell for the one PS launch config.
+        printf '  "extensions": {\n    "recommendations": [\n'
+        printf '      "ms-python.python",\n'
+        printf '      "ms-python.vscode-pylance",\n'
+        printf '      "ms-python.debugpy",\n'
+        printf '      "charliermarsh.ruff",\n'
+        printf '      "ms-vscode.PowerShell"\n'
+        printf '    ]\n  }\n}\n'
+    } > "$WS"
 fi
 
 # --- shadowing guard ------------------------------------------------------
@@ -396,9 +424,3 @@ if [ "$shadow_problems" -eq 1 ]; then
     warn "shadowing problems detected (see above)"
 fi
 info "done. ${#CLONED[@]} folder(s) under ${TOP_ABS}"
-if [ -z "$VENV" ]; then
-    echo
-    echo "  To make 'from common...' importable in a shell, either:"
-    echo "    export PYTHONPATH=\"${TOP_ABS}\${PYTHONPATH:+:\$PYTHONPATH}\""
-    echo "  or re-run with --venv <path> to write a mast.pth (preferred for services)."
-fi
