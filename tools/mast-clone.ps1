@@ -1,0 +1,510 @@
+#Requires -Version 5.1
+<#
+.SYNOPSIS
+  Populate a top folder with the MAST repos for a given role.
+
+.DESCRIPTION
+  Creates a flat hierarchy under -Top:
+
+    <Top>\
+      common\    MAST_common          (the 'common' Python package)
+      unit\      MAST_unit.2024-12-12
+      control\   MAST_control
+      gui\       MAST_gui
+      spec\      MAST_spec
+      claude\    mast-claude-config
+
+  Which folders appear is driven by -Role and the manifest mast-repos.tsv,
+  which is the single source of truth shared with tools/mast-clone.sh.
+
+  WHY THE LAYOUT WORKS: MAST_common's repo root carries an __init__.py, so the
+  repo root *is* the 'common' package. Cloning it into a folder literally named
+  'common' and putting <Top> on sys.path makes every existing
+  'from common.X import ...' resolve unchanged -- no source edits, and no
+  submodule. See -Venv for how sys.path gets set at runtime.
+
+  Used two ways:
+    1. At provisioning time, to fetch the unit repos onto a unit machine.
+    2. Casually, to clone a development environment anywhere.
+
+  Idempotent: re-running fetches existing clones rather than re-cloning, and
+  never merges over local work unless -Update is given (and even then only
+  fast-forward, only on a clean tree).
+
+.PARAMETER Top
+  Top folder to populate. Created if missing. Required.
+
+.PARAMETER Role
+  One or more of: unit, control, spec, all. Required. 'all' pulls every repo.
+  Roles union, so -Role unit,spec is valid.
+
+.PARAMETER Transport
+  'ssh' (default) or 'https'. SSH suits dev boxes with keys loaded; HTTPS suits
+  provisioning-time on a fresh unit that has no key material.
+
+.PARAMETER Branch
+  Hashtable overriding the manifest branch for a folder, e.g.
+  -Branch @{ unit = 'acquisition_tuning' }. The default comes from
+  mast-repos.tsv, NOT from the remote's default HEAD: MAST_common and
+  MAST_control both have an abandoned 2-commit 'main' as their GitHub default
+  while real work lives on 'master'. See mast-repos.tsv for the full note.
+
+.PARAMETER Python
+  Python for 'uv venv --python', e.g. 3.12 or a full path. Omit to let uv pick.
+  Ignored if the venv already exists.
+
+.PARAMETER NoInstall
+  With -Venv, create the venv and write mast.pth but skip the requirements
+  install. For offline runs.
+
+.PARAMETER BootstrapUv
+  If uv is absent, download the version pinned by the '#!uv-version' directive
+  in the manifest, verify it against the .sha256 GitHub publishes beside it,
+  and unpack it into <Top>\.tools. Without this switch a missing uv is a hard
+  error. Never pipes a remote script into a shell, never installs "latest".
+
+.PARAMETER NoSeed
+  Create the venv without pip. By default the venv is seeded (uv venv --seed)
+  so pip exists in it -- uv does not install pip otherwise, which breaks
+  anything that shells out to it (pip freeze, pip list, IDE tooling).
+
+.PARAMETER Venv
+  Create the venv if absent (uv venv), install each cloned repo's
+  requirements.txt into it (uv pip install), and write
+  <Venv>\Lib\site-packages\mast.pth containing <Top>, so
+  'import common' works for that interpreter with no PYTHONPATH. Preferred over
+  the environment variable because the MAST code runs as NSSM services, which
+  do not inherit a shell's environment.
+
+.PARAMETER Update
+  For folders that already exist, fast-forward them. Without this they are only
+  fetched.
+
+.PARAMETER DryRun
+  Print what would happen; change nothing.
+
+.EXAMPLE
+  .\mast-clone.ps1 -Top C:\MAST\src -Role unit -Transport https
+
+.EXAMPLE
+  .\mast-clone.ps1 -Top D:\dev\mast -Role all -Update -Venv D:\dev\mast\venv
+
+.NOTES
+  Companion: tools/mast-clone.sh (same manifest, same layout, for Linux).
+  ASCII-only and Windows PowerShell 5.1 compatible per repo CLAUDE.md.
+#>
+[CmdletBinding()]
+param(
+    [Parameter(Mandatory = $true)]
+    [string] $Top,
+
+    [Parameter(Mandatory = $true)]
+    [string[]] $Role,
+
+    [ValidateSet('ssh', 'https')]
+    [string] $Transport = 'ssh',
+
+    [hashtable] $Branch = @{},
+
+    [string] $Venv = '',
+
+    [string] $Python = '',
+
+    [switch] $NoInstall,
+
+    [switch] $BootstrapUv,
+
+    [switch] $NoSeed,
+
+    [switch] $Update,
+
+    [switch] $DryRun
+)
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+
+$Org = 'The-MAST-project'
+$Manifest = Join-Path $PSScriptRoot 'mast-repos.tsv'
+
+function Write-Info { param([string] $Message) Write-Host "[mast-clone] $Message" }
+function Write-Warn { param([string] $Message) Write-Warning "[mast-clone] $Message" }
+
+function Invoke-Native {
+    # Run a native exe, stream its output to the host, return its exit code.
+    #
+    # WHY THIS EXISTS: with $ErrorActionPreference = 'Stop' (set at the top of
+    # this script), Windows PowerShell 5.1 wraps every stderr line of a native
+    # command redirected with 2>&1 into an ErrorRecord and THROWS on the first
+    # one. git writes ordinary progress ("Cloning into '...'") to stderr, so a
+    # perfectly successful clone aborts the script. PowerShell 7 does not
+    # behave this way, so this only ever bites on the 5.1 target -- which is
+    # exactly where provisioning runs. Dropping to 'Continue' for the duration
+    # of the call is the documented workaround; $LASTEXITCODE still carries the
+    # real success/failure.
+    param([string] $Exe, [string[]] $NativeArgs)
+    $saved = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        & $Exe @NativeArgs 2>&1 | Out-Host
+        return $LASTEXITCODE
+    }
+    finally { $ErrorActionPreference = $saved }
+}
+
+function Invoke-Git {
+    # Echo-and-execute, honouring -DryRun. Returns $true on success.
+    #
+    # git's own output MUST go straight to the host via Out-Host. A bare
+    # '& git ...' emits to the success stream, and a PowerShell function
+    # returns *everything* on that stream -- so the caller would receive
+    # git's stdout lines plus the boolean, i.e. a non-empty array, which is
+    # always truthy. Every failure check would then silently pass.
+    param([string[]] $GitArgs)
+    if ($DryRun) {
+        Write-Host ("       would run: git " + ($GitArgs -join ' '))
+        return $true
+    }
+    $code = Invoke-Native -Exe 'git' -NativeArgs $GitArgs
+    if ($code -ne 0) { return $false }
+    return $true
+}
+
+if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+    throw 'git is not on PATH'
+}
+
+# Never let git stop to ask for credentials. Provisioning runs unattended (WinRM
+# task, SSH session, scheduled task), where there is no console to prompt on.
+# Without this, a private repo sends git through Git Credential Manager, which
+# fails to persist to 'wincredman' in a non-interactive session, then tries to
+# open a tty, and only then reports a confusing "could not read Username".
+# With this set, a missing credential fails immediately and says so.
+$env:GIT_TERMINAL_PROMPT = '0'
+if (-not (Test-Path -LiteralPath $Manifest)) {
+    throw "manifest not found: $Manifest"
+}
+
+# --- load the manifest ----------------------------------------------------
+$rows = @()
+foreach ($line in (Get-Content -LiteralPath $Manifest)) {
+    $trimmed = $line.Trim()
+    if ($trimmed.Length -eq 0) { continue }
+    if ($trimmed.StartsWith('#')) { continue }
+    $parts = $line -split "`t"
+    if ($parts.Count -lt 4) { continue }
+    $rows += [pscustomobject]@{
+        Dir    = $parts[0].Trim()
+        Repo   = $parts[1].Trim()
+        Roles  = ($parts[2].Trim() -split ',')
+        Branch = $parts[3].Trim()
+    }
+}
+if ($rows.Count -eq 0) { throw "manifest '$Manifest' yielded no rows" }
+
+# Pinned tool versions live in the manifest too, as '#!<key><tab><value>', so
+# the ps1 and sh halves cannot drift. They start with '#', so the row loop above
+# already skipped them.
+$UvVersion = ''
+foreach ($line in (Get-Content -LiteralPath $Manifest)) {
+    if ($line -match '^#!uv-version\s+(\S+)') { $UvVersion = $Matches[1]; break }
+}
+
+# Validate roles against the manifest so a typo fails loudly rather than
+# silently cloning nothing.
+$knownRoles = @($rows | ForEach-Object { $_.Roles } | Sort-Object -Unique)
+$selected = @()
+foreach ($r in $Role) {
+    foreach ($one in ($r -split ',')) {
+        $one = $one.Trim()
+        if ($one.Length -eq 0) { continue }
+        if ($one -ne 'all' -and $knownRoles -notcontains $one) {
+            throw ("unknown role '{0}'; known roles: all {1}" -f $one, ($knownRoles -join ' '))
+        }
+        $selected += $one
+    }
+}
+if ($selected.Count -eq 0) { throw '-Role resolved to nothing' }
+$wantsAll = ($selected -contains 'all')
+
+Write-Info ("top       : {0}" -f $Top)
+Write-Info ("roles     : {0}" -f ($selected -join ' '))
+Write-Info ("transport : {0}" -f $Transport)
+if ($DryRun) { Write-Info 'DRY RUN -- nothing will be modified' }
+
+if (-not $DryRun) {
+    $null = New-Item -ItemType Directory -Path $Top -Force
+}
+$topAbs = $Top
+if (Test-Path -LiteralPath $Top) {
+    $topAbs = (Resolve-Path -LiteralPath $Top).Path
+}
+
+# --- clone / refresh ------------------------------------------------------
+$cloned = @()
+foreach ($row in $rows) {
+    $wanted = $wantsAll
+    if (-not $wanted) {
+        foreach ($rr in $row.Roles) {
+            if ($selected -contains $rr) { $wanted = $true; break }
+        }
+    }
+    if (-not $wanted) { continue }
+
+    $dest = Join-Path $topAbs $row.Dir
+    if ($Transport -eq 'ssh') {
+        $url = "git@github.com:$Org/$($row.Repo).git"
+    }
+    else {
+        $url = "https://github.com/$Org/$($row.Repo).git"
+    }
+
+    # Manifest branch is the default; -Branch overrides it. Never fall back to
+    # the remote default HEAD -- for common and control that is an abandoned
+    # 2-commit stub (see mast-repos.tsv).
+    $pin = $row.Branch
+    if ($Branch.ContainsKey($row.Dir)) { $pin = [string] $Branch[$row.Dir] }
+    if (-not $pin) { throw ("{0}: no branch in manifest and no -Branch override" -f $row.Dir) }
+
+    $cloned += $row.Dir
+
+    if (Test-Path -LiteralPath (Join-Path $dest '.git')) {
+        # Idempotent re-run. Never merge implicitly -- local work is sacred.
+        $actual = ''
+        & git -C $dest remote get-url origin 2>$null | ForEach-Object { $actual = $_ }
+        if ($actual -notlike "*$($row.Repo)*") {
+            Write-Warn ("{0}: origin is '{1}', expected a {2} remote -- skipping" -f $row.Dir, $actual, $row.Repo)
+            continue
+        }
+        Write-Info ("{0}: exists, fetching" -f $row.Dir)
+        $null = Invoke-Git @('-C', $dest, 'fetch', '--prune', 'origin')
+        if ($Update) {
+            $dirty = $false
+            if (-not $DryRun) {
+                $status = & git -C $dest status --porcelain
+                if ($status) { $dirty = $true }
+            }
+            if ($dirty) {
+                Write-Warn ("{0}: working tree dirty -- not fast-forwarding" -f $row.Dir)
+            }
+            else {
+                Write-Info ("{0}: fast-forwarding" -f $row.Dir)
+                if (-not (Invoke-Git @('-C', $dest, 'merge', '--ff-only', '@{u}'))) {
+                    Write-Warn ("{0}: not a fast-forward, left alone" -f $row.Dir)
+                }
+            }
+        }
+    }
+    elseif (Test-Path -LiteralPath $dest) {
+        Write-Warn ("{0}: '{1}' exists but is not a git clone -- skipping" -f $row.Dir, $dest)
+        continue
+    }
+    else {
+        Write-Info ("{0}: cloning {1} (branch {2})" -f $row.Dir, $row.Repo, $pin)
+        if (-not (Invoke-Git @('clone', '--branch', $pin, $url, $dest))) {
+            throw ("{0}: clone failed" -f $row.Dir)
+        }
+    }
+}
+
+# --- sanity check: the file the whole scheme rests on ---------------------
+#
+# MAST_common's root __init__.py is what makes 'common' an importable package.
+# If it is missing, the clone landed on the wrong branch (the 2-commit 'main'
+# stub) and every 'from common.X import ...' in the fleet will fail. Catch it
+# here, at provisioning time, instead of at service start on a dark unit.
+$commonDir = Join-Path $topAbs 'common'
+if ((-not $DryRun) -and (Test-Path -LiteralPath $commonDir) -and
+    (-not (Test-Path -LiteralPath (Join-Path $commonDir '__init__.py')))) {
+    $onBranch = & git -C $commonDir rev-parse --abbrev-ref HEAD 2>$null
+    throw ("common\__init__.py is missing -- 'common' is not an importable package. " +
+           "The clone almost certainly landed on the wrong branch. On branch: {0}. " +
+           "Expected the branch pinned in mast-repos.tsv." -f $onBranch)
+}
+
+# --- venv creation and population ------------------------------------------
+#
+# uv does both jobs: 'uv venv' creates, 'uv pip install' populates. It is
+# required rather than optional -- falling back to python -m venv + pip would
+# resolve a different dependency set than the one uv locks onto, so a fleet
+# provisioned by two different paths would drift, which is the whole thing
+# these scripts exist to prevent.
+#
+# Requirements are installed per cloned repo. MAST_common ships only
+# requirements-dev.txt (no runtime deps of its own), so it contributes nothing
+# here; unit/control/gui/spec each carry a pinned requirements.txt.
+
+function Install-PinnedUv {
+    # Pinned + checksum-verified, deliberately NOT 'irm ... | iex':
+    #   - the pipe executes whatever the URL serves at that moment, unreviewed;
+    #   - it installs "latest", so machines provisioned weeks apart get
+    #     different resolvers and the fleet drifts.
+    param([string] $Version, [string] $Dest)
+
+    if (-not $Version) { throw "no '#!uv-version' directive in the manifest" }
+    $asset = 'uv-x86_64-pc-windows-msvc.zip'
+    $url   = "https://github.com/astral-sh/uv/releases/download/$Version/$asset"
+    $tmp   = Join-Path ([System.IO.Path]::GetTempPath()) ("mast-uv-" + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $tmp -Force | Out-Null
+    try {
+        Write-Info "bootstrapping uv $Version from $url"
+        # TLS 1.2 is not the default in Windows PowerShell 5.1; GitHub requires it.
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        $zip = Join-Path $tmp $asset
+        Invoke-WebRequest -Uri $url          -OutFile $zip          -UseBasicParsing
+        Invoke-WebRequest -Uri "$url.sha256" -OutFile "$zip.sha256" -UseBasicParsing
+
+        $expected = ((Get-Content -LiteralPath "$zip.sha256" -Raw).Trim() -split '\s+')[0]
+        $actual   = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash
+        if ($expected -ne $actual) {
+            throw ("uv checksum MISMATCH -- refusing to install.`n" +
+                   "       expected: $expected`n" +
+                   "       actual:   $actual")
+        }
+        Write-Info "uv checksum verified (sha256 $actual)"
+
+        $unz = Join-Path $tmp 'unz'
+        # Expand-Archive exists in 5.1 (PSCommunityExtensions ships in-box since 5.0).
+        Expand-Archive -LiteralPath $zip -DestinationPath $unz -Force
+        $bin = Get-ChildItem -Path $unz -Recurse -Filter 'uv.exe' | Select-Object -First 1
+        if ($null -eq $bin) { throw 'uv.exe not found in the downloaded archive' }
+        if (-not (Test-Path -LiteralPath $Dest)) {
+            New-Item -ItemType Directory -Path $Dest -Force | Out-Null
+        }
+        Copy-Item -LiteralPath $bin.FullName -Destination (Join-Path $Dest 'uv.exe') -Force
+    }
+    finally {
+        Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+if ($Venv) {
+    $uvExe = ''
+    $localUv = Join-Path $topAbs '.tools\uv.exe'
+    $onPath = Get-Command uv -ErrorAction SilentlyContinue
+    if ($null -ne $onPath) {
+        $uvExe = $onPath.Source
+    }
+    elseif (Test-Path -LiteralPath $localUv) {
+        $uvExe = $localUv
+    }
+    elseif ($BootstrapUv) {
+        if ($DryRun) {
+            Write-Host ("       would bootstrap uv {0} into {1}" -f $UvVersion, (Join-Path $topAbs '.tools'))
+        }
+        else {
+            Install-PinnedUv -Version $UvVersion -Dest (Join-Path $topAbs '.tools')
+        }
+        $uvExe = $localUv
+    }
+    else {
+        throw ("uv is not on PATH, but -Venv needs it.`n" +
+               "       Re-run with -BootstrapUv to fetch the pinned version ($UvVersion),`n" +
+               "       checksum-verified, into $topAbs\.tools -- or install uv yourself.")
+    }
+    Write-Info "uv: $uvExe"
+
+    if (-not (Test-Path -LiteralPath $Venv)) {
+        Write-Info ("creating venv {0}{1}" -f $Venv, $(if ($Python) { " (python $Python)" } else { '' }))
+        $venvArgs = @('venv')
+        if (-not $NoSeed) { $venvArgs += '--seed' }
+        if ($Python)      { $venvArgs += @('--python', $Python) }
+        $venvArgs += $Venv
+        if ($DryRun) {
+            Write-Host ("       would run: {0} {1}" -f $uvExe, ($venvArgs -join ' '))
+        }
+        else {
+            $code = Invoke-Native -Exe $uvExe -NativeArgs $venvArgs
+            if ($code -ne 0) { throw 'uv venv failed' }
+        }
+    }
+    else {
+        Write-Info "venv $Venv exists, reusing"
+    }
+
+    # Interpreter path differs by platform: Windows Scripts\, POSIX bin/.
+    $vpy = ''
+    foreach ($cand in @((Join-Path $Venv 'Scripts\python.exe'), (Join-Path $Venv 'bin/python'))) {
+        if (Test-Path -LiteralPath $cand) { $vpy = $cand; break }
+    }
+    if ($DryRun -and -not $vpy) { $vpy = Join-Path $Venv 'Scripts\python.exe' }
+    if (-not $vpy) { throw "no interpreter under '$Venv' after creation" }
+
+    if ($NoInstall) {
+        Write-Info '-NoInstall given, skipping requirements'
+    }
+    else {
+        foreach ($d in $cloned) {
+            $req = Join-Path $topAbs "$d\requirements.txt"
+            # MAST_control shipped this as 'required.txt' until the rename;
+            # accept the old name so a not-yet-updated clone still provisions.
+            if (-not (Test-Path -LiteralPath $req)) {
+                $legacy = Join-Path $topAbs "$d\required.txt"
+                if (Test-Path -LiteralPath $legacy) {
+                    $req = $legacy
+                    Write-Warn "${d}: using legacy 'required.txt' -- rename it to requirements.txt"
+                }
+                else { continue }
+            }
+            Write-Info ("{0}: installing {1}" -f $d, (Split-Path -Leaf $req))
+            if ($DryRun) {
+                Write-Host ("       would run: {0} pip install --python {1} -r {2}" -f $uvExe, $vpy, $req)
+            }
+            else {
+                $code = Invoke-Native -Exe $uvExe -NativeArgs @('pip','install','--python',$vpy,'-r',$req)
+                if ($code -ne 0) { throw "uv pip install failed for $d ($req)" }
+            }
+        }
+    }
+}
+
+# --- sys.path wiring ------------------------------------------------------
+#
+# A .pth in the venv beats setting PYTHONPATH: the MAST code runs as NSSM
+# services, which do not inherit a shell's environment, and a .pth also works
+# automatically for pytest and IDE test runners on the same interpreter.
+if ($Venv) {
+    $sp = Join-Path $Venv 'Lib\site-packages'
+    if (-not (Test-Path -LiteralPath $sp)) {
+        $alt = @(Get-ChildItem -Path (Join-Path $Venv 'lib') -Filter 'python*' -Directory -ErrorAction SilentlyContinue)
+        if ($alt.Count -gt 0) { $sp = Join-Path $alt[0].FullName 'site-packages' }
+    }
+    if (-not (Test-Path -LiteralPath $sp)) {
+        Write-Warn ("no site-packages under '{0}' -- skipping mast.pth" -f $Venv)
+    }
+    else {
+        $pth = Join-Path $sp 'mast.pth'
+        Write-Info ("writing {0} -> {1}" -f $pth, $topAbs)
+        if (-not $DryRun) {
+            Set-Content -LiteralPath $pth -Value $topAbs -Encoding ASCII
+        }
+    }
+}
+
+# --- shadowing guard ------------------------------------------------------
+#
+# With <Top> on sys.path the sibling folders become importable top-level names,
+# and three of them collide with real modules: spec\spec.py, unit\src\unit.py,
+# control\control\. Python resolves these correctly ONLY because those repo
+# roots have no __init__.py (a dir without one is a mere namespace portion, and
+# a real module found anywhere on the path beats it). If someone ever adds an
+# __init__.py to a consumer repo root, that repo silently shadows its own
+# module. Fail loudly here rather than debugging it later.
+$shadowProblems = $false
+foreach ($d in $cloned) {
+    if ($d -eq 'common') { continue }   # common's root __init__.py is required
+    if (Test-Path -LiteralPath (Join-Path (Join-Path $topAbs $d) '__init__.py')) {
+        Write-Warn ("{0}\__init__.py exists -- it will shadow '{0}' as a package and break imports" -f $d)
+        $shadowProblems = $true
+    }
+}
+
+Write-Host ''
+if ($shadowProblems) { Write-Warn 'shadowing problems detected (see above)' }
+Write-Info ("done. {0} folder(s) under {1}" -f $cloned.Count, $topAbs)
+if (-not $Venv) {
+    Write-Host ''
+    Write-Host "  To make 'from common...' importable in a shell, either:"
+    Write-Host ("    `$env:PYTHONPATH = '{0}'" -f $topAbs)
+    Write-Host '  or re-run with -Venv <path> to write a mast.pth (preferred for services).'
+}

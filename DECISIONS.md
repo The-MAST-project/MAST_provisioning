@@ -2,6 +2,97 @@
 
 ---
 
+## [2026-07-28] Role-driven flat source layout: `mast-clone.{sh,ps1}` + a single `common` clone
+
+**Why:** `MAST_common` was vendored into four consumers as a git submodule (`common/` in
+control, gui, spec; `src/common/` in unit). That costs a `chore/bump-common-gitlink` PR in
+every consumer for each common change -- three of the four had one as their most recent
+commit -- and it means four working copies of the same code on a dev box. Separately, there
+was no single command to lay down "the repos this machine needs", either at provisioning
+time or when cloning a dev environment.
+
+**What:** `tools/mast-clone.sh` and `tools/mast-clone.ps1` populate a top folder with a flat
+hierarchy whose folder names are fixed: `common`, `unit`, `control`, `gui`, `spec`, `claude`.
+A `-Role` / `--role` parameter (`unit`, `control`, `spec`, `all`) selects the subset; roles
+union and de-duplicate, so `all` needs no special case. `gui` is deliberately *not* a role --
+it ships as part of `control`. `claude` (mast-claude-config) comes with every role.
+
+Both scripts read one manifest, `tools/mast-repos.tsv` (dir / repo / roles / branch); neither
+hardcodes a repo list, per the repo's DRY rule. Adding a repo is a one-line manifest change.
+
+The `common` folder name is load-bearing rather than cosmetic. `MAST_common`'s repo root
+carries an `__init__.py`, so the repo root *is* the `common` package. Cloning it into a folder
+named exactly `common` and putting `<top>` on `sys.path` makes all ~982 existing
+`from common.X import ...` statements resolve unchanged -- no source edits, no submodule.
+Cloning it as `MAST_common` (the old habit) cannot work, which is precisely why each vendored
+copy carries a `common/tests/conftest.py` that fabricates a module alias via
+`importlib.util.spec_from_file_location`; that shim and the five ad-hoc `sys.path.insert`
+sites in MAST_gui become deletable.
+
+`sys.path` is wired with a `mast.pth` written into a venv's `site-packages` (`--venv` /
+`-Venv`), not by exporting `PYTHONPATH`. The MAST code runs as NSSM services on units and
+systemd on Linux hosts, neither of which inherits a shell environment; a `.pth` is per-venv
+and additionally works for pytest and IDE test runners. `PYTHONPATH` remains a documented
+convenience for interactive shells only.
+
+`--venv` / `-Venv` does not merely write that `.pth`: it creates the venv and installs each
+cloned repo's `requirements.txt` into it, so one command takes a bare machine to a runnable
+one. Provisioning no longer owns venv population. **One venv per machine**, not per repo --
+the `.pth` puts every cloned repo on `sys.path` at once, so a second venv would isolate
+nothing; on the control host that means the control and gui services share it.
+
+`uv` does both jobs (`uv venv`, `uv pip install`) and is **required**, not preferred. A
+fallback to `python -m venv` + `pip` would resolve a different dependency set than uv locks
+onto, so a fleet provisioned by two different paths would drift -- the exact failure this
+layout exists to prevent. `--bootstrap-uv` / `-BootstrapUv` fetches the version pinned by the
+`#!uv-version` directive in the manifest, verifies it against the `.sha256` GitHub publishes
+beside the release artifact, and unpacks the single static binary into `<top>/.tools`. It is
+deliberately not `curl ... | sh` / `irm ... | iex`: a pipe executes whatever the URL serves at
+that moment, unreviewed, and installs "latest", which reintroduces per-machine drift. The venv
+is seeded (`uv venv --seed`) so `pip` exists in it, since uv otherwise omits it and anything
+shelling out to `pip` breaks; `--no-seed` opts out.
+
+**Implications:**
+
+- **Branches are pinned in the manifest, never taken from the remote's default HEAD.**
+  `MAST_common`'s GitHub default branch is `main` with 2 commits (last 2024-12-28) while all
+  721 commits of real work are on `master`; `MAST_control` has the same trap (`main`, 2
+  commits, 2024-04-26, vs 148 on `master`). A plain `git clone` lands on the stub and yields a
+  `common/` with no `__init__.py`, breaking every import on the unit. The consumers'
+  `.gitmodules` already pinned `branch = master`, corroborating this. Both scripts therefore
+  hard-fail if `common/__init__.py` is absent after cloning. Fixing the two GitHub default
+  branches would remove the trap; until then the manifest column is the only guard.
+- **Sibling folders become importable top-level names,** and three collide with real modules:
+  `spec/spec.py`, `unit/src/unit.py`, `control/control/`. This resolves correctly *only*
+  because those repo roots have no `__init__.py` -- a directory without one is merely a
+  namespace portion, and a real module found anywhere on `sys.path` beats it regardless of
+  path order (verified against the real repo trees with `<top>` deliberately first). Adding an
+  `__init__.py` to any consumer repo root would silently shadow that repo's own module, so
+  both scripts warn when they see one.
+- **The scripts are safe to adopt before de-submoduling.** A clone without
+  `--recurse-submodules` leaves `<repo>/common/` empty; an empty directory loses to
+  `<top>/common/__init__.py` under the same namespace rule. Removing the submodules from the
+  four consumers is therefore an independent follow-up, not a flag day.
+- Re-running is idempotent: existing clones are fetched, never merged, unless `--update` is
+  given, and even then only fast-forward and only on a clean tree.
+- **`GIT_TERMINAL_PROMPT=0` is set in both scripts.** Provisioning is unattended, so git must
+  never stop to ask for credentials. Without it, a private repo (`MAST_unit.2024-12-12` is the
+  only one) sends git through Git Credential Manager, which cannot persist to `wincredman` in
+  a non-interactive session, then tries to open a tty, and only then reports a confusing
+  "could not read Username". With it set, the clone simply succeeds where a usable credential
+  exists and fails immediately and legibly where it does not.
+- **Windows PowerShell 5.1 turns a successful `git clone` into a fatal error.** With
+  `$ErrorActionPreference = 'Stop'`, 5.1 wraps every stderr line of a native command
+  redirected via `2>&1` into an ErrorRecord and throws on the first one -- and git writes
+  ordinary progress ("Cloning into '...'") to stderr. PowerShell 7 does not, so this is
+  invisible to any test run under `pwsh` and only bites on the 5.1 target, which is where
+  provisioning runs. `Invoke-Native` drops the preference to `Continue` for the duration of
+  each native call and reports success from `$LASTEXITCODE` instead. Any future native
+  invocation in this script must go through it.
+- This is the first `.sh` in a repo that was until now 100% PowerShell. The bash half exists
+  because the control and gui hosts are Linux; the two scripts must be kept in step, with
+  `mast-repos.tsv` as the shared source of truth.
+
 ## [2026-07-06] Unit inventory + primary MAC live in unit-registry.json, collected every cycle
 
 **Why:** Site DNS/DHCP is a manual registry maintained by a person; they need hostname->MAC
