@@ -21,7 +21,7 @@
   repo root *is* the 'common' package. Cloning it into a folder literally named
   'common' and putting <Top> on sys.path makes every existing
   'from common.X import ...' resolve unchanged -- no source edits, and no
-  submodule. See -Venv for how sys.path gets set at runtime.
+  submodule. The venv at <Top>\.venv is how sys.path gets set at runtime.
 
   Used two ways:
     1. At provisioning time, to fetch the unit repos onto a unit machine.
@@ -49,33 +49,6 @@
   MAST_control both have an abandoned 2-commit 'main' as their GitHub default
   while real work lives on 'master'. See mast-repos.tsv for the full note.
 
-.PARAMETER Python
-  Python for 'uv venv --python', e.g. 3.12 or a full path. Omit to let uv pick.
-  Ignored if the venv already exists.
-
-.PARAMETER NoInstall
-  With -Venv, create the venv and write mast.pth but skip the requirements
-  install. For offline runs.
-
-.PARAMETER BootstrapUv
-  If uv is absent, download the version pinned by the '#!uv-version' directive
-  in the manifest, verify it against the .sha256 GitHub publishes beside it,
-  and unpack it into <Top>\.tools. Without this switch a missing uv is a hard
-  error. Never pipes a remote script into a shell, never installs "latest".
-
-.PARAMETER NoSeed
-  Create the venv without pip. By default the venv is seeded (uv venv --seed)
-  so pip exists in it -- uv does not install pip otherwise, which breaks
-  anything that shells out to it (pip freeze, pip list, IDE tooling).
-
-.PARAMETER Venv
-  Create the venv if absent (uv venv), install each cloned repo's
-  requirements.txt into it (uv pip install), and write
-  <Venv>\Lib\site-packages\mast.pth containing <Top>, so
-  'import common' works for that interpreter with no PYTHONPATH. Preferred over
-  the environment variable because the MAST code runs as NSSM services, which
-  do not inherit a shell's environment.
-
 .PARAMETER Update
   For folders that already exist, fast-forward them. Without this they are only
   fetched.
@@ -87,7 +60,7 @@
   .\mast-clone.ps1 -Top C:\MAST\src -Role unit -Transport https
 
 .EXAMPLE
-  .\mast-clone.ps1 -Top D:\dev\mast -Role all -Update -Venv D:\dev\mast\venv
+  .\mast-clone.ps1 -Top D:\dev\mast -Role all -Update
 
 .NOTES
   Companion: tools/mast-clone.sh (same manifest, same layout, for Linux).
@@ -105,16 +78,6 @@ param(
     [string] $Transport = 'ssh',
 
     [hashtable] $Branch = @{},
-
-    [string] $Venv = '',
-
-    [string] $Python = '',
-
-    [switch] $NoInstall,
-
-    [switch] $BootstrapUv,
-
-    [switch] $NoSeed,
 
     [switch] $Update,
 
@@ -378,82 +341,92 @@ function Install-PinnedUv {
     }
 }
 
-if ($Venv) {
-    $uvExe = ''
-    $localUv = Join-Path $topAbs '.tools\uv.exe'
-    $onPath = Get-Command uv -ErrorAction SilentlyContinue
-    if ($null -ne $onPath) {
-        $uvExe = $onPath.Source
-    }
-    elseif (Test-Path -LiteralPath $localUv) {
-        $uvExe = $localUv
-    }
-    elseif ($BootstrapUv) {
-        if ($DryRun) {
-            Write-Host ("       would bootstrap uv {0} into {1}" -f $UvVersion, (Join-Path $topAbs '.tools'))
-        }
-        else {
-            Install-PinnedUv -Version $UvVersion -Dest (Join-Path $topAbs '.tools')
-        }
-        $uvExe = $localUv
+$Venv = Join-Path $topAbs '.venv'
+
+# uv is acquired, never optional: the venv is always built, so a missing uv
+# would simply mean a broken run. If it is not on PATH we fetch the pinned
+# version into <Top>\.tools -- checksum-verified, never "latest", never a
+# remote script piped into a shell.
+$uvExe   = ''
+$localUv = Join-Path $topAbs '.tools\uv.exe'
+$onPath  = Get-Command uv -ErrorAction SilentlyContinue
+if ($null -ne $onPath) {
+    $uvExe = $onPath.Source
+}
+elseif (Test-Path -LiteralPath $localUv) {
+    $uvExe = $localUv
+}
+elseif ($DryRun) {
+    Write-Host ("       would bootstrap uv {0} into {1}" -f $UvVersion, (Join-Path $topAbs '.tools'))
+    $uvExe = $localUv
+}
+else {
+    Install-PinnedUv -Version $UvVersion -Dest (Join-Path $topAbs '.tools')
+    $uvExe = $localUv
+}
+Write-Info "uv: $uvExe"
+
+if (-not (Test-Path -LiteralPath $Venv)) {
+    Write-Info "creating venv $Venv"
+    if ($DryRun) {
+        Write-Host ("       would run: {0} venv --seed {1}" -f $uvExe, $Venv)
     }
     else {
-        throw ("uv is not on PATH, but -Venv needs it.`n" +
-               "       Re-run with -BootstrapUv to fetch the pinned version ($UvVersion),`n" +
-               "       checksum-verified, into $topAbs\.tools -- or install uv yourself.")
+        $code = Invoke-Native -Exe $uvExe -NativeArgs @('venv', '--seed', $Venv)
+        if ($code -ne 0) { throw 'uv venv failed' }
     }
-    Write-Info "uv: $uvExe"
+}
+else {
+    Write-Info "venv $Venv exists, reusing"
+}
 
-    if (-not (Test-Path -LiteralPath $Venv)) {
-        Write-Info ("creating venv {0}{1}" -f $Venv, $(if ($Python) { " (python $Python)" } else { '' }))
-        $venvArgs = @('venv')
-        if (-not $NoSeed) { $venvArgs += '--seed' }
-        if ($Python)      { $venvArgs += @('--python', $Python) }
-        $venvArgs += $Venv
-        if ($DryRun) {
-            Write-Host ("       would run: {0} {1}" -f $uvExe, ($venvArgs -join ' '))
+# Interpreter path differs by platform: Windows Scripts\, POSIX bin/.
+$vpy = ''
+foreach ($cand in @((Join-Path $Venv 'Scripts\python.exe'), (Join-Path $Venv 'bin/python'))) {
+    if (Test-Path -LiteralPath $cand) { $vpy = $cand; break }
+}
+if ($DryRun -and -not $vpy) { $vpy = Join-Path $Venv 'Scripts\python.exe' }
+if (-not $vpy) { throw "no interpreter under '$Venv' after creation" }
+
+# ONE resolve, not one per repo. A compound role (control = control + gui) puts
+# several requirements files into a single venv, and those files can pin the
+# same package differently. Installing them one after another would silently
+# let the last file win, leaving a service running versions it was never tested
+# against. Passing every -r in one invocation makes uv resolve them together and
+# fail loudly on a contradiction, which is the only safe outcome: repos that
+# share a machine must agree on shared pins.
+$reqArgs  = @('pip', 'install', '--python', $vpy)
+$reqNames = @()
+foreach ($d in $cloned) {
+    $req = Join-Path $topAbs "$d\requirements.txt"
+    # MAST_control shipped this as 'required.txt' until the rename; accept the
+    # old name so a not-yet-updated clone still provisions.
+    if (-not (Test-Path -LiteralPath $req)) {
+        $legacy = Join-Path $topAbs "$d\required.txt"
+        if (Test-Path -LiteralPath $legacy) {
+            $req = $legacy
+            Write-Warn "${d}: using legacy 'required.txt' -- rename it to requirements.txt"
         }
-        else {
-            $code = Invoke-Native -Exe $uvExe -NativeArgs $venvArgs
-            if ($code -ne 0) { throw 'uv venv failed' }
-        }
+        else { continue }
+    }
+    $reqArgs  += @('-r', $req)
+    $reqNames += $d
+}
+if ($reqNames.Count -eq 0) {
+    Write-Info 'no requirements files among the cloned repos'
+}
+else {
+    Write-Info ("installing requirements from: {0}" -f ($reqNames -join ', '))
+    if ($DryRun) {
+        Write-Host ("       would run: {0} {1}" -f $uvExe, ($reqArgs -join ' '))
     }
     else {
-        Write-Info "venv $Venv exists, reusing"
-    }
-
-    # Interpreter path differs by platform: Windows Scripts\, POSIX bin/.
-    $vpy = ''
-    foreach ($cand in @((Join-Path $Venv 'Scripts\python.exe'), (Join-Path $Venv 'bin/python'))) {
-        if (Test-Path -LiteralPath $cand) { $vpy = $cand; break }
-    }
-    if ($DryRun -and -not $vpy) { $vpy = Join-Path $Venv 'Scripts\python.exe' }
-    if (-not $vpy) { throw "no interpreter under '$Venv' after creation" }
-
-    if ($NoInstall) {
-        Write-Info '-NoInstall given, skipping requirements'
-    }
-    else {
-        foreach ($d in $cloned) {
-            $req = Join-Path $topAbs "$d\requirements.txt"
-            # MAST_control shipped this as 'required.txt' until the rename;
-            # accept the old name so a not-yet-updated clone still provisions.
-            if (-not (Test-Path -LiteralPath $req)) {
-                $legacy = Join-Path $topAbs "$d\required.txt"
-                if (Test-Path -LiteralPath $legacy) {
-                    $req = $legacy
-                    Write-Warn "${d}: using legacy 'required.txt' -- rename it to requirements.txt"
-                }
-                else { continue }
-            }
-            Write-Info ("{0}: installing {1}" -f $d, (Split-Path -Leaf $req))
-            if ($DryRun) {
-                Write-Host ("       would run: {0} pip install --python {1} -r {2}" -f $uvExe, $vpy, $req)
-            }
-            else {
-                $code = Invoke-Native -Exe $uvExe -NativeArgs @('pip','install','--python',$vpy,'-r',$req)
-                if ($code -ne 0) { throw "uv pip install failed for $d ($req)" }
-            }
+        $code = Invoke-Native -Exe $uvExe -NativeArgs $reqArgs
+        if ($code -ne 0) {
+            throw ("uv pip install failed.`n" +
+                   "       If it reports conflicting versions, two repos sharing this machine`n" +
+                   "       pin the same package differently; reconcile the requirements files`n" +
+                   "       rather than installing them separately.")
         }
     }
 }
@@ -481,6 +454,64 @@ if ($Venv) {
     }
 }
 
+# --- VS Code multi-root workspace -----------------------------------------
+#
+# Opening <Top> as a plain folder makes VS Code read only <Top>\.vscode, so the
+# per-repo .vscode directories (control, spec, gui and unit each ship one) are
+# ignored. A multi-root workspace is the one arrangement where every repo keeps
+# its own folder-scoped settings.json and its launch.json entries, with no
+# copying or merging: the repos stay the source of truth.
+#
+# Written only when absent -- people customise these, and silently clobbering a
+# hand-edited workspace on every -Update would be its own bug.
+$ws = Join-Path $topAbs 'mast.code-workspace'
+if (Test-Path -LiteralPath $ws) {
+    Write-Info 'mast.code-workspace exists, leaving it alone'
+}
+elseif ($DryRun) {
+    Write-Host "       would write $ws"
+}
+else {
+    Write-Info "writing $ws"
+    $folders = ($cloned | ForEach-Object { '    { "path": "' + $_ + '" }' }) -join ",`n"
+    # Absolute, because <Top>\.venv is a sibling of the folder roots rather than
+    # inside one, so VS Code cannot auto-discover it. This file is generated per
+    # machine, so a machine-specific path here is fine. JSON needs the
+    # backslashes escaped.
+    $interp = (Join-Path $Venv 'Scripts\python.exe') -replace '\\', '\\\\'
+    $lines = @(
+        '{',
+        '  "folders": [',
+        $folders,
+        '  ],',
+        '  "settings": {',
+        ('    "python.defaultInterpreterPath": "' + $interp + '",'),
+        # Relative to each folder root, i.e. <Top>. This is what makes Pylance
+        # resolve 'common' in every folder: mast.pth fixes runtime, but static
+        # analysis does not reliably follow .pth files.
+        '    "python.analysis.extraPaths": [".."],',
+        '    "files.exclude": { ".venv": true, ".tools": true }',
+        '  },',
+        # Recommendations only prompt; they never install. Installing is
+        # provisioning's job (code --install-extension), not this script's -- a
+        # unit may have no editor at all. Listed because the repos' own settings
+        # depend on them: Pylance for the language server, ruff as the configured
+        # formatter, debugpy for the "type": "debugpy" launch configs, PowerShell
+        # for the one PS launch config.
+        '  "extensions": {',
+        '    "recommendations": [',
+        '      "ms-python.python",',
+        '      "ms-python.vscode-pylance",',
+        '      "ms-python.debugpy",',
+        '      "charliermarsh.ruff",',
+        '      "ms-vscode.PowerShell"',
+        '    ]',
+        '  }',
+        '}'
+    )
+    Set-Content -LiteralPath $ws -Value $lines -Encoding ascii
+}
+
 # --- shadowing guard ------------------------------------------------------
 #
 # With <Top> on sys.path the sibling folders become importable top-level names,
@@ -502,9 +533,6 @@ foreach ($d in $cloned) {
 Write-Host ''
 if ($shadowProblems) { Write-Warn 'shadowing problems detected (see above)' }
 Write-Info ("done. {0} folder(s) under {1}" -f $cloned.Count, $topAbs)
-if (-not $Venv) {
-    Write-Host ''
-    Write-Host "  To make 'from common...' importable in a shell, either:"
-    Write-Host ("    `$env:PYTHONPATH = '{0}'" -f $topAbs)
-    Write-Host '  or re-run with -Venv <path> to write a mast.pth (preferred for services).'
-}
+Write-Host ''
+Write-Host ("  Open {0} in VS Code, or activate the venv:" -f (Join-Path $topAbs 'mast.code-workspace'))
+Write-Host ("    {0}" -f (Join-Path $Venv 'Scripts\Activate.ps1'))
