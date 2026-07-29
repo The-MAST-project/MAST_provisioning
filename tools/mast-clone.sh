@@ -196,6 +196,35 @@ while IFS=$'\t' read -r dir repo roles manifest_branch; do
     fi
 done < "$MANIFEST"
 
+# --- disarm the vestigial 'common' submodule ------------------------------
+#
+# control, gui, spec and unit still declare MAST_common as a submodule, so each
+# clone carries a committed gitlink and an empty <repo>/common (or
+# <repo>/src/common) mount point. It is inert here -- <top>/common has an
+# __init__.py and so is a regular package, which beats an empty directory
+# (a mere namespace portion) wherever it appears on sys.path, verified with
+# <top>/<repo> deliberately first.
+#
+# The real hazard is someone running 'git submodule update --init' in one of
+# these clones: that materialises a SECOND common, stale the moment <top>/common
+# moves, and then which one wins depends on how the process was started.
+# 'update = none' makes --init skip it ("Skipping submodule 'common'").
+# Note submodule.<name>.active = false is NOT enough -- --init overrides it.
+#
+# This is local config only, so the working tree stays clean and --update keeps
+# working. Removing the gitlink instead would leave every clone permanently
+# dirty. Retiring the submodules properly is a separate change in each repo.
+if [ "$DRY_RUN" -eq 0 ]; then
+    for d in "${CLONED[@]}"; do
+        [ "$d" = "common" ] && continue
+        if [ -f "${TOP_ABS}/${d}/.gitmodules" ] &&
+           grep -q 'submodule "common"' "${TOP_ABS}/${d}/.gitmodules" 2>/dev/null; then
+            git -C "${TOP_ABS}/${d}" config --local submodule.common.update none
+            info "${d}: pinned submodule.common.update=none (vestigial submodule left unpopulated)"
+        fi
+    done
+fi
+
 # --- sanity check: the file the whole scheme rests on ---------------------
 #
 # MAST_common's root __init__.py is what makes 'common' an importable package.
@@ -309,9 +338,20 @@ if [ -n "$VENV" ]; then
             req="${TOP_ABS}/${d}/required.txt"
             warn "${d}: using legacy 'required.txt' -- rename it to requirements.txt"
         fi
-        [ -f "$req" ] || continue
-        REQ_ARGS+=(-r "$req")
-        REQ_NAMES="${REQ_NAMES}${REQ_NAMES:+, }${d}"
+        if [ -f "$req" ]; then
+            REQ_ARGS+=(-r "$req")
+            REQ_NAMES="${REQ_NAMES}${REQ_NAMES:+, }${d}"
+        fi
+        # requirements-dev.txt too: it is where the fleet pins ruff
+        # (ruff==0.16.0 in every repo) and pytest. Formatter output differs
+        # between ruff versions, so a missing or unpinned ruff quietly breaks
+        # the "every repo formats identically" guarantee -- see the note at the
+        # top of each repo's ruff.toml.
+        dev="${TOP_ABS}/${d}/requirements-dev.txt"
+        if [ -f "$dev" ]; then
+            REQ_ARGS+=(-r "$dev")
+            REQ_NAMES="${REQ_NAMES}${REQ_NAMES:+, }${d}(dev)"
+        fi
     done
     if [ ${#REQ_ARGS[@]} -eq 0 ]; then
         info "no requirements files among the cloned repos"
@@ -359,7 +399,10 @@ fi
 #
 # Written only when absent -- people customise these, and silently clobbering a
 # hand-edited workspace on every --update would be its own bug.
-WS="${TOP_ABS}/mast.code-workspace"
+# Name carries the role(s), so a machine that later gains a second top folder
+# for a different role does not end up with two files called the same thing.
+ROLE_SLUG="$(echo "${SELECTED# }" | tr " " "\n" | sort | tr "\n" "-" | sed "s/-$//")"
+WS="${TOP_ABS}/mast-${ROLE_SLUG}.code-workspace"
 if [ -e "$WS" ]; then
     info "$(basename "$WS") exists, leaving it alone"
 elif [ "$DRY_RUN" -eq 1 ]; then
@@ -383,6 +426,9 @@ else
         # resolve 'common' in every folder: mast.pth fixes runtime, but static
         # analysis does not reliably follow .pth files.
         printf '    "python.analysis.extraPaths": [".."],\n'
+        # The Ruff extension ships its own ruff and uses it by default, which
+        # would silently ignore the pinned ruff==0.16.0 installed above.
+        printf '    "ruff.importStrategy": "fromEnvironment",\n'
         printf '    "files.exclude": { ".venv": true, ".tools": true }\n'
         printf '  },\n'
         # Recommendations only prompt; they never install. Installing is

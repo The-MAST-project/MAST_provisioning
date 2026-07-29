@@ -2,6 +2,67 @@
 
 ---
 
+## [2026-07-29] mast-clone: dev tooling in the venv, role-named workspace, submodule disarmed
+
+**Why:** Four things surfaced once `mast-clone` was actually run on a unit and on the
+control host rather than only under `pwsh` on Linux.
+
+The generated workspace carried a **doubled** interpreter path
+(`C:\\temp\\...\\python.exe` after JSON decoding). The `.ps1` escaped backslashes with a
+four-backslash replacement, but .NET replacement strings treat a backslash as literal
+rather than as an escape, so each separator was doubled twice. Invisible on Linux, where
+`Join-Path` produces forward slashes and there is nothing to escape.
+
+The venv had **no ruff**. Every repo pins `ruff==0.16.0`, but in `requirements-dev.txt`,
+which the scripts never installed -- and the pin is deliberate policy, not incidental:
+each `ruff.toml` says outright that config alone is not enough because formatter output
+differs between ruff versions.
+
+`control` and `gui` clones showed an **empty `common` folder marked as a submodule**. The
+consumers still carry a committed gitlink, so a clone without `--recurse-submodules`
+leaves the mount point empty. Harmless for imports -- `<top>/common` has an `__init__.py`
+and so is a regular package, which beats an empty directory (a namespace portion)
+wherever it sits on `sys.path`, verified with `<top>/<repo>` deliberately first -- but a
+stray `git submodule update --init` would materialise a SECOND `common`, stale from the
+moment `<top>/common` moves.
+
+Finally, `mast.code-workspace` was a fixed name, so a machine with two top folders for
+different roles would have two files called the same thing.
+
+**What:**
+
+- `.ps1` backslash escaping fixed: the replacement is now two backslashes, which is what
+  JSON needs. Verified by round-tripping the generated file through a JSON decoder rather
+  than by reading the code.
+- The workspace is named `mast-<role>.code-workspace`; multiple roles sort and join, so
+  `--role unit,spec` yields `mast-spec-unit.code-workspace`.
+- Each repo's `requirements-dev.txt` joins the same single `uv pip install`, bringing
+  `ruff==0.16.0` and `pytest`. The workspace also sets `"ruff.importStrategy":
+  "fromEnvironment"`, without which the Ruff extension uses its own bundled binary and
+  the pin is decorative.
+- After cloning, each consumer that still declares the submodule gets
+  `submodule.common.update = none` in its **local** config, so `git submodule update
+  --init` reports `Skipping submodule 'common'`. Note `submodule.<name>.active = false`
+  is NOT sufficient: `--init` overrides it and clones anyway.
+
+**Implications:**
+
+- **The submodule is disarmed, not removed.** `.gitmodules` still declares it and the
+  gitlink is still committed, so anyone cloning outside these scripts gets the old
+  behaviour, and the empty folder still shows in VS Code. Local config was the only lever
+  that leaves the working tree clean: `git rm --cached common` or removing the directory
+  both leave every clone permanently dirty, which would break `--update` (fast-forward
+  only, clean tree). Retiring the submodules properly remains one small PR per consumer.
+- **Dev dependencies are installed on units too.** `ruff` and `pytest` are unnecessary
+  there but harmless, and gating dev deps by role costs more complexity than the two
+  packages are worth.
+- **Dev pins now participate in the joint resolve,** so two repos sharing a machine must
+  agree on their ruff version as well as their runtime pins. All repos pin `0.16.0`
+  today, so this is currently a no-op.
+- **Windows-only defects need a Windows run.** Both bugs fixed here, and the PowerShell
+  5.1 native-stderr bug before them, were invisible to every test run under `pwsh` on
+  Linux. Treat a Linux `pwsh` pass as a syntax check, not as validation.
+
 ## [2026-07-28] mast-clone: the venv is unconditional at `<top>/.venv`, installed in one resolve
 
 **Why:** The first cut of `tools/mast-clone.{sh,ps1}` (see the entry below) made the

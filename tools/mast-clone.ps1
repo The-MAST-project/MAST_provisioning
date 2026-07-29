@@ -270,6 +270,34 @@ foreach ($row in $rows) {
     }
 }
 
+# --- disarm the vestigial 'common' submodule ------------------------------
+#
+# control, gui, spec and unit still declare MAST_common as a submodule, so each
+# clone carries a committed gitlink and an empty <repo>\common (or
+# <repo>\src\common) mount point. It is inert here -- <Top>\common has an
+# __init__.py and so is a regular package, which beats an empty directory
+# (a mere namespace portion) wherever it appears on sys.path.
+#
+# The real hazard is someone running 'git submodule update --init' in one of
+# these clones: that materialises a SECOND common, stale the moment <Top>\common
+# moves. 'update = none' makes --init skip it. Note that
+# submodule.<name>.active = false is NOT enough -- --init overrides it.
+#
+# Local config only, so the working tree stays clean and -Update keeps working.
+# Removing the gitlink instead would leave every clone permanently dirty.
+if (-not $DryRun) {
+    foreach ($d in $cloned) {
+        if ($d -eq 'common') { continue }
+        $gm = Join-Path $topAbs "$d\.gitmodules"
+        if ((Test-Path -LiteralPath $gm) -and
+            (Select-String -LiteralPath $gm -Pattern 'submodule "common"' -Quiet)) {
+            Invoke-Native -Exe 'git' -NativeArgs @('-C', (Join-Path $topAbs $d),
+                'config', '--local', 'submodule.common.update', 'none') | Out-Null
+            Write-Info "${d}: pinned submodule.common.update=none (vestigial submodule left unpopulated)"
+        }
+    }
+}
+
 # --- sanity check: the file the whole scheme rests on ---------------------
 #
 # MAST_common's root __init__.py is what makes 'common' an importable package.
@@ -411,6 +439,15 @@ foreach ($d in $cloned) {
     }
     $reqArgs  += @('-r', $req)
     $reqNames += $d
+    # requirements-dev.txt too: it is where the fleet pins ruff (ruff==0.16.0
+    # in every repo) and pytest. Formatter output differs between ruff
+    # versions, so a missing or unpinned ruff quietly breaks the "every repo
+    # formats identically" guarantee -- see each repo's ruff.toml.
+    $dev = Join-Path $topAbs "$d\requirements-dev.txt"
+    if (Test-Path -LiteralPath $dev) {
+        $reqArgs  += @('-r', $dev)
+        $reqNames += "$d(dev)"
+    }
 }
 if ($reqNames.Count -eq 0) {
     Write-Info 'no requirements files among the cloned repos'
@@ -464,9 +501,10 @@ if ($Venv) {
 #
 # Written only when absent -- people customise these, and silently clobbering a
 # hand-edited workspace on every -Update would be its own bug.
-$ws = Join-Path $topAbs 'mast.code-workspace'
+$wsName = 'mast-' + (($selected | Sort-Object) -join '-') + '.code-workspace'
+$ws = Join-Path $topAbs $wsName
 if (Test-Path -LiteralPath $ws) {
-    Write-Info 'mast.code-workspace exists, leaving it alone'
+    Write-Info "$wsName exists, leaving it alone"
 }
 elseif ($DryRun) {
     Write-Host "       would write $ws"
@@ -478,7 +516,10 @@ else {
     # inside one, so VS Code cannot auto-discover it. This file is generated per
     # machine, so a machine-specific path here is fine. JSON needs the
     # backslashes escaped.
-    $interp = (Join-Path $Venv 'Scripts\python.exe') -replace '\\', '\\\\'
+    # JSON needs each backslash doubled. The replacement string is .NET's, where
+    # a backslash is literal (not an escape), so two backslashes here produce
+    # exactly two in the file -- four would decode back to a doubled separator.
+    $interp = (Join-Path $Venv 'Scripts\python.exe') -replace '\\', '\\'
     $lines = @(
         '{',
         '  "folders": [',
@@ -490,6 +531,9 @@ else {
         # resolve 'common' in every folder: mast.pth fixes runtime, but static
         # analysis does not reliably follow .pth files.
         '    "python.analysis.extraPaths": [".."],',
+        # The Ruff extension ships its own ruff and uses it by default, which
+        # would silently ignore the pinned ruff==0.16.0 installed above.
+        '    "ruff.importStrategy": "fromEnvironment",',
         '    "files.exclude": { ".venv": true, ".tools": true }',
         '  },',
         # Recommendations only prompt; they never install. Installing is
@@ -534,5 +578,5 @@ Write-Host ''
 if ($shadowProblems) { Write-Warn 'shadowing problems detected (see above)' }
 Write-Info ("done. {0} folder(s) under {1}" -f $cloned.Count, $topAbs)
 Write-Host ''
-Write-Host ("  Open {0} in VS Code, or activate the venv:" -f (Join-Path $topAbs 'mast.code-workspace'))
+Write-Host ("  Open {0} in VS Code, or activate the venv:" -f $ws)
 Write-Host ("    {0}" -f (Join-Path $Venv 'Scripts\Activate.ps1'))
