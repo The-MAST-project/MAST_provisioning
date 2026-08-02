@@ -160,6 +160,15 @@ with `build/build-manifest-lib.ps1` + `server/tests/build-manifest-lib.Tests.ps1
 
 Fixes the two-directional `mast` defect described above.
 
+> **Sequencing — do `docs/mast-clone-adoption-plan.md` first.** That change
+> retires the `mast` provider's own clone/venv code in favor of
+> `tools/mast-clone.ps1 -Role unit`, and **deletes `mast-repos.txt`**, which this
+> stage is written against. After it lands, 1b resolves refs from
+> `tools/mast-repos.tsv` (rows whose `roles` include `unit`) and folds the
+> manifest's `#!uv-version` directive into the hash as a further determinant.
+> The unpinned-`pip` gap noted below also disappears there — mast-clone uses
+> pinned uv with one joint resolve. Implementing 1b first means writing it twice.
+
 - At manifest time, `git ls-remote` each `mast-repos.txt` entry to a concrete
   commit SHA and record it in `module_state.mast` as `repos: { <repo>: <sha> }`.
   A repo pinned to a SHA in `mast-repos.txt` resolves to itself; a branch ref
