@@ -237,7 +237,12 @@ This is the only path operators run by hand. Everything else is autonomous.
 > driver is validated on a real run. Once landed, run it with
 > `python server/check_and_provision.py [--only-hosts ...] [--dry-run]`
 > (`pip install -r server/requirements.txt` first); pure-logic tests live in
-> `server/prov/tests/`. The **supervised loop** is `--loop` (`--interval-seconds`,
+> `server/prov/tests/`, run with `python -m pytest server/prov/tests` (`pytest` is
+> a dev-only extra, not in `server/requirements.txt`; the runtime deps must still
+> be installed, since `prov.transport` imports `pywinrm`/`paramiko` at module
+> level and four test modules fail at *collection* without them). The PowerShell
+> suites under `server/tests/` need Windows PowerShell 5.1 + Pester 3.x:
+> `Invoke-Pester -Path server\tests`. The **supervised loop** is `--loop` (`--interval-seconds`,
 > `--max-cycles`); run it as a service per **[server/deploy/README.md](server/deploy/README.md)**
 > (systemd unit / NSSM). See DECISIONS.md 2026-07-12.
 
