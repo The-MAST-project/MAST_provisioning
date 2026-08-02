@@ -17,6 +17,13 @@ Set-Content -LiteralPath (Join-Path $provA 'provide-alpha.ps1')   -Value 'Write-
 Set-Content -LiteralPath (Join-Path $provA 'assets\payload.bin')  -Value ('p' * 64) -NoNewline -Encoding Ascii
 Set-Content -LiteralPath (Join-Path $provB 'provide-beta.ps1')    -Value 'Write-Host beta' -Encoding Ascii
 
+# Repo-top shared tooling, the 'repofiles' shape (tools/mast-clone.ps1 for the
+# real mast module).
+$tools = Join-Path $root 'tools'
+New-Item -ItemType Directory -Force -Path $tools | Out-Null
+Set-Content -LiteralPath (Join-Path $tools 'mast-clone.ps1') -Value 'clone v1' -Encoding Ascii
+Set-Content -LiteralPath (Join-Path $tools 'mast-repos.tsv') -Value "dir`trepo" -Encoding Ascii
+
 $alphaFiles = @('provide-alpha.ps1', 'assets/payload.bin')
 $alphaCmds  = @('powershell.exe -File ".\provide-alpha.ps1" -Site neot-smadar',
                 'powershell.exe -File ".\verify-alpha.ps1"')
@@ -88,6 +95,50 @@ Describe 'Get-PayloadHash' {
         $before = Get-PayloadHash -StagingDir $stage
         Set-Content -LiteralPath (Join-Path $stage 'sub\b.txt') -Value 'BBB' -Encoding Ascii
         Get-PayloadHash -StagingDir $stage | Should Not Be $before
+    }
+}
+
+Describe 'Get-ModuleContentHash -- repofiles (shared repo-top tooling)' {
+    # A module that runs tools/mast-clone.ps1 must drift when that script
+    # changes. Nothing under its provider dir moves, so without repofiles in the
+    # hash boundary the change is visible only in the aggregate payload_hash --
+    # "something changed", not "the mast module changed" -- and targeted updates
+    # would never select it.
+    function Get-WithRepoFiles {
+        param([string[]]$RepoFiles = @('tools/mast-clone.ps1', 'tools/mast-repos.tsv'))
+        Get-ModuleContentHash -ProviderDir $provA -CommandFiles $alphaFiles -Commands $alphaCmds `
+            -Version '1.0' -RepoTop $root -RepoFiles $RepoFiles
+    }
+
+    It 'changes the hash versus the same module with no repofiles' {
+        Get-WithRepoFiles | Should Not Be (Get-AlphaHash)
+    }
+    It 'is deterministic' {
+        Get-WithRepoFiles | Should Be (Get-WithRepoFiles)
+    }
+    It 'does not depend on declaration order' {
+        Get-WithRepoFiles -RepoFiles @('tools/mast-repos.tsv', 'tools/mast-clone.ps1') |
+            Should Be (Get-WithRepoFiles)
+    }
+    It 'changes when the shared tool changes, though the provider dir did not' {
+        $before = Get-WithRepoFiles
+        Set-Content -LiteralPath (Join-Path $tools 'mast-clone.ps1') -Value 'clone v2' -Encoding Ascii
+        Get-WithRepoFiles | Should Not Be $before
+        Set-Content -LiteralPath (Join-Path $tools 'mast-clone.ps1') -Value 'clone v1' -Encoding Ascii
+    }
+    It 'leaves a module that declares no repofiles unchanged' {
+        # Adding the parameter must not rotate every other module's hash.
+        Get-ModuleContentHash -ProviderDir $provA -CommandFiles $alphaFiles -Commands $alphaCmds `
+            -Version '1.0' -RepoTop $root -RepoFiles @() | Should Be (Get-AlphaHash)
+    }
+    It 'throws on a missing repofile rather than hashing a gap' {
+        # Unlike a commandfile, this can never be a -TestMode optional payload:
+        # the staging pass has already thrown for it.
+        { Get-WithRepoFiles -RepoFiles @('tools/not-there.ps1') } | Should Throw
+    }
+    It 'throws when repofiles are given without a repo top' {
+        { Get-ModuleContentHash -ProviderDir $provA -RepoFiles @('tools/mast-clone.ps1') } |
+            Should Throw
     }
 }
 

@@ -171,19 +171,14 @@ time would defeat the single-source-of-truth this whole change is for.
   (Resolution rule 1 in `per-module-tracking-plan.md`). Extend
   `Get-ModuleContentHash` accordingly.
 
-  **DEFERRED — open follow-up.** `Get-ModuleContentHash` and
-  `build/build-manifest-lib.ps1` are #22 Stage 1, which lives on
-  `eli/per-module-tracking` and has **not** reached `eli/provisioning-v3`, so
-  there is nothing on this branch to extend. Close this when the two branches
-  meet — whichever merges second adds the `repofile:<path>:<sha>` lines. Until
-  then a changed `mast-clone.ps1` is caught by the aggregate `payload_hash`
-  only, i.e. as "something changed", not "the `mast` module changed". Note this
-  is the reverse dependency from the one in locked decision 4: #31 must precede
-  #22 *Stage 1b*, but #22 *Stage 1* must precede this hash line item.
-- **Tests:** a `repofiles` entry stages to the staging root by leaf name; a
-  missing one throws (no silent gap); a `repofiles` path that escapes the repo
-  top is rejected. (The "a change to a `repofiles` file changes only that
-  module's hash" test lands with the deferred hash coverage above.)
+  **Closed 2026-08-02.** `Get-ModuleContentHash` gained `-RepoTop` / `-RepoFiles`
+  and emits `repofile:<path>:<sha>` lines, so a change to `tools/mast-clone.ps1`
+  drifts the `mast` module rather than only the aggregate `payload_hash`. This
+  could not be done when Stage 1 landed — `build/build-manifest-lib.ps1` was #22
+  Stage 1 and had not reached `eli/provisioning-v3`; merging v3 in after #33
+  landed unblocked it. A missing repofile throws rather than hashing a gap
+  (unlike a commandfile it can never be a `-TestMode` optional payload), and a
+  module declaring no repofiles keeps its previous hash.
 
 **Status:** landed — `build/build-staging-lib.ps1`, the staging loop in
 `build-mast.ps1`, `server/tests/build-staging-lib.Tests.ps1`, README schema

@@ -748,7 +748,8 @@ foreach (${vm} in ${Modules}) {
     ${moduleState}[${vm}] = [ordered]@{
         version = ${vstr}
         hash    = Get-ModuleContentHash -ProviderDir (Join-Path ${providersRoot} ${vm}) `
-                    -CommandFiles ${vmCmdFiles} -Commands ${vmCmds} -Version ([string]${vstr})
+                    -CommandFiles ${vmCmdFiles} -Commands ${vmCmds} -Version ([string]${vstr}) `
+                    -RepoTop ${Top} -RepoFiles (Get-MastModuleRepoFiles -Manifest ${vmf})
     }
 }
 
