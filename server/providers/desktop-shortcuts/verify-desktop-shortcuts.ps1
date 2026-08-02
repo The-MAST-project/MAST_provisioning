@@ -1,7 +1,13 @@
 #requires -Version 5.1
 [CmdletBinding()]
 param(
-    [string]${Ds9Exe} = 'C:\Program Files\SAOImageDS9\ds9.exe'
+    [string]${Ds9Exe} = 'C:\Program Files\SAOImageDS9\ds9.exe',
+    # The URL the CURRENT build would deploy. Injected from module.json's verify
+    # command, the same place the provider's -FastApiUrl comes from, so the two
+    # cannot drift apart. This is what makes the check answer "is the shortcut
+    # CURRENT?" rather than merely "does the shortcut exist?" -- see
+    # docs/per-module-tracking-plan.md, resolution rule 2.
+    [string]${FastApiUrl} = ''
 )
 
 ${ErrorActionPreference} = 'Stop'
@@ -39,6 +45,28 @@ ${required} = @(
 foreach (${r} in ${required}) {
     if (Test-Path -LiteralPath ${r}) { W ("present: {0}" -f ${r}) }
     else { ${fail} += ("shortcut missing ({0})" -f ${r}) }
+}
+
+# Content check, not presence check: a shortcut left pointing at a previous
+# build's URL passes every Test-Path in this file. Repointing the FastAPI
+# shortcut changes no commandfile byte -- the target lives in module.json's
+# command args -- so a stale target is invisible to both the payload hash and a
+# presence-only verify. Compare the deployed target to what this build expects.
+${fastApiLnk} = Join-Path ${dirOps} 'MAST Unit (FastAPI).url'
+if (${FastApiUrl} -and (Test-Path -LiteralPath ${fastApiLnk})) {
+    ${urlLine} = @(Get-Content -LiteralPath ${fastApiLnk} -ErrorAction SilentlyContinue |
+        Where-Object { $_ -match '^\s*URL\s*=' }) | Select-Object -First 1
+    ${deployed} = ''
+    if (${urlLine}) { ${deployed} = (${urlLine} -replace '^\s*URL\s*=', '').Trim() }
+    if (-not ${deployed}) {
+        ${fail} += ("FastAPI shortcut has no URL= line ({0})" -f ${fastApiLnk})
+    }
+    elseif (${deployed}.TrimEnd('/') -ne ${FastApiUrl}.TrimEnd('/')) {
+        ${fail} += ("FastAPI shortcut STALE: points at '{0}', build expects '{1}'" -f ${deployed}, ${FastApiUrl})
+    }
+    else {
+        W ("FastAPI shortcut target current: {0}" -f ${deployed})
+    }
 }
 
 # DS9 shortcut: required only when DS9 itself is installed (ds9 provider runs

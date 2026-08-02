@@ -237,7 +237,12 @@ This is the only path operators run by hand. Everything else is autonomous.
 > driver is validated on a real run. Once landed, run it with
 > `python server/check_and_provision.py [--only-hosts ...] [--dry-run]`
 > (`pip install -r server/requirements.txt` first); pure-logic tests live in
-> `server/prov/tests/`. The **supervised loop** is `--loop` (`--interval-seconds`,
+> `server/prov/tests/`, run with `python -m pytest server/prov/tests` (`pytest` is
+> a dev-only extra, not in `server/requirements.txt`; the runtime deps must still
+> be installed, since `prov.transport` imports `pywinrm`/`paramiko` at module
+> level and four test modules fail at *collection* without them). The PowerShell
+> suites under `server/tests/` need Windows PowerShell 5.1 + Pester 3.x:
+> `Invoke-Pester -Path server\tests`. The **supervised loop** is `--loop` (`--interval-seconds`,
 > `--max-cycles`); run it as a service per **[server/deploy/README.md](server/deploy/README.md)**
 > (systemd unit / NSSM). See DECISIONS.md 2026-07-12.
 
@@ -461,6 +466,15 @@ check logs), follow the convention in `vm/DEBUGGING.md`: name the script
 2. Drop scripts into `server/providers/<module>/`.
 3. Drop binary assets into `server/providers/<module>/assets/`.
 4. Add the module name to `unit-registry.json` `modules` lists (or it gets the default).
+
+**`always` (optional)** — `"always": true` marks a module that must run on **every**
+non-empty provisioning run, not only when it drifted. Set it on order-terminal
+cross-cutting providers: `reboot` (detect pending-reboot and drop the flag the
+orchestrator acts on), `mast-services-finalize` (the final operational step), and
+`proxy` (the end-of-run posture re-assert). `build-mast.ps1` collects these into
+`build-manifest.json`'s `always_modules`, and the driver's per-module drift compare
+folds them into any non-empty target set — so a targeted update that installed
+anything still closes out properly. They never *cause* a run on their own.
 
 **`repofiles` (optional)** — for a file the module runs that deliberately lives
 *outside* its provider directory, because it is shared with something else in the

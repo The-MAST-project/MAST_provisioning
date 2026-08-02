@@ -263,15 +263,30 @@ Modules with no external versioned payload use `"builtin"` (diagnostics) or `"ro
 
 #### 3. Installed / effective state (on each unit) **[PARTIAL]**
 
-`execute-mast-provisioning.ps1` writes `installed-manifest.json` after a successful run,
-copying `build-manifest.json` with an added `installed_at` timestamp. This satisfies the
-hash comparison used by `check-and-provision.ps1` for drift detection.
+`execute-mast-provisioning.ps1` writes `installed-manifest.json` **cumulatively, per
+module**: each run merges `{version, hash, provide, verify, installed_at}` for the modules
+it actually ran, and modules it did not touch keep their previous entries. A
+`-Modules <subset>` run therefore no longer erases the rest of the record. Written on
+every run, including a partial one, so the record stays truthful about which modules
+landed rather than freezing at the last fully-clean payload.
 
-**Remaining gap:** The requirements call for a preference toward **computed** manifests
-(inspecting the live filesystem and service state rather than trusting the written file).
-The static file is acceptable as an audit artifact today; the inspection-based probe is a
-Phase 1 stretch goal. The provisioning server compares `build-manifest.payload_hash` to
-the effective hash reported by the unit to decide whether an update is needed.
+`fully_provisioned` is derived (every module the build declares is present, hash-matched,
+`provide = pass`, and not `verify = fail`), and the aggregate `payload_hash` --  the fast
+path `check-and-provision.ps1` and `server/prov/driver.py` compare -- is published **only**
+when that holds. A partial run leaves it absent, so the fast path misses and the unit falls
+through to a run rather than being skipped as current. Merge semantics live in
+`client/mast-installed-manifest.ps1`; tests in
+`server/tests/mast-installed-manifest.Tests.ps1`. (#22 Stage 2.)
+
+**Legacy units:** a manifest written before this change is a whole-document copy of
+`build-manifest.json` with no `modules` map. It is read without error, contributes nothing
+to carry forward, and the modules it cannot account for classify as missing on the next
+cycle -- the documented one-time migration for mast01-04.
+
+**Remaining gap:** the requirements call for a preference toward **computed** manifests
+(inspecting live filesystem and service state rather than trusting the written file). The
+written record above is the tier-1 fast check; the computed tier-2 probe re-running each
+provider's `verify-*.ps1` is #22 Stage 4.
 
 #### 4. `check-and-provision.ps1` (prov server driver) **[PARTIAL]**
 
@@ -425,6 +440,26 @@ double-hop problem and keeps the prov server's WinRM client unprivileged.
 
 ### Version / Drift Detection **[PARTIAL]**
 
+> **Per-module tracking (#22) landed 2026-08-02.** Drift is now decided **per
+> module**, not per payload. `server/prov/drift.py` classifies each module as
+> up-to-date / needs-update / missing / extra / needs-repair by comparing the
+> unit's cumulative `installed-manifest.json` against the payload's
+> `build-manifest.json` **on the content hash** (the version string is for
+> reporting only), and the driver provisions `-Modules <the drifted set>` instead
+> of running a full cycle. The aggregate `payload_hash` remains the fast
+> "anything changed at all?" gate ahead of that comparison.
+>
+> **Two tiers.** Tier 1 is the written record (fast, every cycle). Tier 2 is
+> **computed**: `client/run-verify-only.ps1` re-runs each provider's
+> `verify-*.ps1` on the unit and writes `C:\MAST\status\validation.json`; a
+> module whose hash still matches but whose live verify fails classifies
+> **needs-repair** -- the runtime drift (stopped service, deleted file) a hash
+> cannot see. Absent tier-2 data means "not run", never "failed".
+>
+> `tools/fleet-drift-report.py` renders a per-unit x per-module **status** matrix
+> against the build (`--build-manifest`), sharing `prov.drift.classify` with the
+> driver so the report cannot disagree with what the next cycle will do.
+
 The logic is present in `check-and-provision.ps1` (hash compare at lines ~234-294)
 and verified end-to-end via `vm/run-prov-test.py`. It is exercised on every manual
 driver invocation today; it becomes a continuous fleet guarantee once the scheduled
@@ -451,6 +486,13 @@ Two levels:
    also be able to run **on itself** -- see **Unit self-validation (tiered validation
    levels the unit can answer)** in Phase 1, where the same `verify-<name>.ps1` scripts are
    the level-2 (configuration) check.
+
+**Per-module build fingerprint:** `build-manifest.json` also carries `module_state` --
+per module `{version, hash}`, where the hash covers the module's source commandfiles,
+its **resolved** `commands.json` entries (build-time injected args like `-Site` /
+`-ForceMode` included), and its resolved version (`build/build-manifest-lib.ps1`). The
+drift *compare* above is still whole-payload; per-module drift classification and
+targeted `-Modules` updates are the rest of the per-module-tracking epic (#22).
 
 ---
 
