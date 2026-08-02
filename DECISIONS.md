@@ -2,6 +2,40 @@
 
 ---
 
+## [2026-08-02] installed-manifest.json is cumulative, per-module, and written on partial runs
+
+**Why:** Execute copied `build-manifest.json` wholesale and stamped `installed_at`,
+which made the unit's record **last-payload-only**: a `-Modules <subset>` touch-up
+overwrote the document with just that subset, so the unit could no longer answer
+"am I fully provisioned". The write was also gated on `failCount -eq 0`, so a run
+where a single module failed wrote nothing at all and the record kept describing a
+payload from days earlier -- the next cycle could not tell which modules were
+actually current.
+
+**What:** `client/mast-installed-manifest.ps1` (dot-sourced by execute, staged
+beside it, unit-testable without a provisioning run) merges per-module entries
+`{version, hash, provide, verify, installed_at}` for the modules a run actually
+touched; untouched modules keep their prior entry. `provide` and `verify` are
+tracked separately because a module can install and then fail its own verify, and
+because a module with no verify command records `none` rather than a false `pass`.
+Written on **every** run, partial included. `fully_provisioned` is derived: every
+module the build declares is present, hash-matched, `provide = pass`, not
+`verify = fail`.
+
+**Implications:** the aggregate `payload_hash` -- the fast path
+`check-and-provision.ps1` and `server/prov/driver.py` compare to decide
+"already_current" -- is published **only** when `fully_provisioned`. A partial run
+leaves it absent, the fast path misses, and the unit falls through to a run instead
+of being skipped as current; absent must never read as a match, so the PS driver's
+read was made explicit rather than relying on a silent `$null` from a missing
+property. A legacy pre-`modules` manifest is read without error and simply carries
+nothing forward, which is the one-time mast01-04 migration. `tools/fleet-drift-report.py`
+still reads the now-absent `module_versions` from the installed manifest and is
+rewritten in Stage 3 to key on `modules`. Tests:
+`server/tests/mast-installed-manifest.Tests.ps1`.
+
+---
+
 ## [2026-08-02] `mast-repos.txt` clones the upstream integration branches
 
 **Why:** The repo list still pointed at the personal fork's dev branch --

@@ -438,6 +438,17 @@ if (Test-Path ${invokeChildScript}) {
     Write-Warning "mast-invoke-child.ps1 not found at ${invokeChildScript}"
 }
 
+# Dot-sourced by execute-mast-provisioning.ps1 for the cumulative per-module
+# installed-manifest merge. Unlike the two above this is a hard requirement:
+# without it execute cannot record what it installed, so a missing file must
+# fail the build rather than produce a payload that provisions and then forgets.
+${installedManifestScript} = Join-Path ${clientRoot} 'mast-installed-manifest.ps1'
+if (-not (Test-Path ${installedManifestScript})) {
+    throw "Missing mast-installed-manifest.ps1 at ${installedManifestScript}"
+}
+Copy-Item -Force ${installedManifestScript} (Join-Path ${staging} 'mast-installed-manifest.ps1')
+Write-Host " Staged mast-installed-manifest.ps1"
+
 ${clientUtilScript} = Join-Path ${clientRoot} 'mast-client-util.ps1'
 if (Test-Path ${clientUtilScript}) {
     Copy-Item -Force ${clientUtilScript} (Join-Path ${staging} 'mast-client-util.ps1')
