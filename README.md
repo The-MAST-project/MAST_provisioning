@@ -467,6 +467,15 @@ check logs), follow the convention in `vm/DEBUGGING.md`: name the script
 3. Drop binary assets into `server/providers/<module>/assets/`.
 4. Add the module name to `unit-registry.json` `modules` lists (or it gets the default).
 
+**`always` (optional)** — `"always": true` marks a module that must run on **every**
+non-empty provisioning run, not only when it drifted. Set it on order-terminal
+cross-cutting providers: `reboot` (detect pending-reboot and drop the flag the
+orchestrator acts on), `mast-services-finalize` (the final operational step), and
+`proxy` (the end-of-run posture re-assert). `build-mast.ps1` collects these into
+`build-manifest.json`'s `always_modules`, and the driver's per-module drift compare
+folds them into any non-empty target set — so a targeted update that installed
+anything still closes out properly. They never *cause* a run on their own.
+
 No edit to `execute-mast-provisioning.ps1` is required. `build-mast.ps1` copies `client/run-verify-only.ps1` into each staged `01-provisioning` folder for verify-only reruns.
 
 ---

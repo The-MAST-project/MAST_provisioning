@@ -399,6 +399,19 @@ def render(units: list[UnitRecord], reference: UnitRecord | None, cmp: dict, boo
                 cells_txt += (f"{(v or '(absent)')[:cell_w]}{mark}").ljust(cell_w + 1)
             lines.append(mod.ljust(mod_w) + "  " + cells_txt)
 
+    if "summaries" in cmp and ok_cols:
+        lines.append("")
+        lines.append("=== Tier-2 verify (computed live state) ===")
+        for u in ok_cols:
+            if u.validated_at:
+                fails = sorted(m for m, v in u.validation.items() if str(v).lower() == "fail")
+                detail = ("fail: " + ", ".join(fails)) if fails else "all pass"
+                lines.append(f"  {u.host}: checked {u.validated_at} -- {detail}")
+            else:
+                # Not a failure: run-verify-only.ps1 is operator-run, so "never"
+                # is the normal state on a unit nobody has validated yet.
+                lines.append(f"  {u.host}: never run (run-verify-only.ps1 has not written a report)")
+
     drifted = {h: mods for h, mods in cmp["drift_modules_by_host"].items() if mods}
     if drifted:
         lines.append("")

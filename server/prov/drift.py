@@ -13,7 +13,8 @@ See ``docs/per-module-tracking-plan.md`` Stage 3, issue #22.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime
 from enum import StrEnum
 
 
@@ -36,11 +37,6 @@ class ModuleState(StrEnum):
 #: module the build no longer ships cannot be provisioned, only reported.
 ACTIONABLE = frozenset({ModuleState.NEEDS_UPDATE, ModuleState.MISSING, ModuleState.NEEDS_REPAIR})
 
-#: Marker for a module whose installed entry carries no usable hash -- a legacy
-#: pre-``modules`` manifest, or an entry written before hashing existed.
-_UNKNOWN = ""
-
-
 @dataclass(frozen=True)
 class ModuleDrift:
     name: str
@@ -61,10 +57,31 @@ class ModuleDrift:
 @dataclass(frozen=True)
 class DriftReport:
     modules: tuple[ModuleDrift, ...]
+    #: Order-terminal cross-cutting modules that join any non-empty target set.
+    always: frozenset[str] = field(default_factory=frozenset)
 
     @property
     def targets(self) -> list[str]:
-        """Modules to pass to execute as ``-Modules``, in build order."""
+        """Modules to pass to execute as ``-Modules``, in build order.
+
+        Includes the ``always`` modules whenever anything else is being run.
+        ``reboot`` (detect pending-reboot, drop the flag the orchestrator acts
+        on), ``mast-services-finalize`` and the end-of-run ``proxy`` re-assert
+        exist to close out a run; a targeted update that installed anything must
+        still close with them, or e.g. an installer's pending reboot goes
+        unnoticed. Build order is preserved -- they are ordered last by their
+        module.json ``order``, and this walks ``self.modules`` in build order.
+        """
+        drifted = [m.name for m in self.modules if m.actionable]
+        if not drifted:
+            return []
+        wanted = set(drifted) | {m.name for m in self.modules
+                                 if m.name in self.always and m.state is not ModuleState.EXTRA}
+        return [m.name for m in self.modules if m.name in wanted]
+
+    @property
+    def drifted(self) -> list[str]:
+        """Modules that actually drifted, excluding the always-run tag-alongs."""
         return [m.name for m in self.modules if m.actionable]
 
     @property
@@ -80,6 +97,38 @@ class DriftReport:
         for m in self.modules:
             counts[str(m.state)] = counts.get(str(m.state), 0) + 1
         return " ".join(f"{k}={counts[k]}" for k in sorted(counts))
+
+
+_TS_FMT = "%Y-%m-%dT%H:%M:%SZ"
+
+
+def _parse_ts(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.strptime(value, _TS_FMT)
+    except ValueError:
+        return None
+
+
+def _validation_is_stale(checked_at: datetime | None, installed_at: str | None) -> bool:
+    """Was the module (re)installed after the verify report was written?
+
+    Nothing clears ``validation.json`` -- ``run-verify-only.ps1`` is its only
+    writer and is operator-run. So after the driver repairs a module, the old
+    "fail" is still sitting there, and without this check it would re-target the
+    repaired module on every subsequent payload change, forever. A report that
+    predates the module's own ``installed_at`` describes a build that no longer
+    exists on the unit; ignore it and let tier 1 stand until verify runs again.
+
+    An unparseable or absent timestamp on either side means "cannot tell", and
+    the tier-2 verdict is kept -- consistent with treating tier 2 as advisory
+    rather than manufacturing or suppressing drift on a guess.
+    """
+    installed = _parse_ts(installed_at)
+    if checked_at is None or installed is None:
+        return False
+    return installed > checked_at
 
 
 def _entry_field(entry: object, field: str) -> str | None:
@@ -106,22 +155,17 @@ def classify(installed: dict | None, build: dict, validation: dict | None = None
     means tier 2 did not run; the tier-1 verdict stands.
     """
     live = {}
+    checked_at = None
     if validation:
         live = validation.get("modules") or {}
-        if not isinstance(live, dict):
-            live = {}
+        checked_at = _parse_ts(validation.get("checked_at"))
     build_state = build.get("module_state") or {}
     build_modules = [str(m) for m in (build.get("modules") or [])]
-    # A build manifest with module_state but no modules list should still be
-    # usable; fall back to the hashed set rather than classifying nothing.
-    if not build_modules:
-        build_modules = sorted(build_state)
+    always = frozenset(str(m) for m in (build.get("always_modules") or []))
 
     installed_modules = {}
     if installed:
         installed_modules = installed.get("modules") or {}
-        if not isinstance(installed_modules, dict):
-            installed_modules = {}
 
     out: list[ModuleDrift] = []
 
@@ -149,9 +193,10 @@ def classify(installed: dict | None, build: dict, validation: dict | None = None
         # for humans (locked decision 2). An unknown installed hash cannot be
         # asserted equal to anything, so it needs an update rather than a
         # silent pass.
-        if failed or not inst_hash or inst_hash == _UNKNOWN or inst_hash != built_hash:
+        if failed or not inst_hash or inst_hash != built_hash:
             state = ModuleState.NEEDS_UPDATE
-        elif str(live.get(name, "")).lower() == "fail":
+        elif str(live.get(name, "")).lower() == "fail" and not _validation_is_stale(
+                checked_at, _entry_field(entry, "installed_at")):
             # Hash matches and the install was recorded clean, but the module is
             # not working right now. Reprovisioning is still the action, so this
             # is actionable; the distinct label is what tells an operator the
@@ -174,4 +219,4 @@ def classify(installed: dict | None, build: dict, validation: dict | None = None
                                _entry_field(entry, "provide"),
                                _entry_field(entry, "verify")))
 
-    return DriftReport(tuple(out))
+    return DriftReport(tuple(out), always)

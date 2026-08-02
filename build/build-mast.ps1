@@ -700,8 +700,20 @@ ${gitSha}      = Get-GitSha -RepoTop ${Top}
 # module_state (per-module-tracking Stage 3).
 ${moduleState}    = [ordered]@{}
 ${moduleVersions} = [ordered]@{}
+# Modules that must run on EVERY non-empty provisioning run, not only when they
+# themselves drifted. These are the order-terminal cross-cutting providers --
+# reboot (detect pending-reboot and drop the flag the orchestrator acts on),
+# mast-services-finalize (the final operational step), proxy (the end-of-run
+# posture re-assert). A targeted run that installed anything must still close
+# with them, so the driver's per-module drift compare folds them into any
+# non-empty target set. Declared per provider via module.json "always": true so
+# the fact lives with the module, not in a list the driver has to keep in step.
+${alwaysModules}  = @()
 foreach (${vm} in ${Modules}) {
     ${vmf} = Read-ModuleManifest -ModuleName ${vm}
+    if (${vmf}.PSObject.Properties.Match('always').Count -and ${vmf}.always) {
+        ${alwaysModules} += ${vm}
+    }
     if (-not ${vmf}.PSObject.Properties.Match('version').Count -or
         [string]::IsNullOrWhiteSpace(${vmf}.version)) {
         throw "module.json missing 'version' for module '${vm}'"
@@ -730,6 +742,7 @@ ${manifest}    = [pscustomobject]@{
     modules         = ${Modules}
     module_state    = ${moduleState}
     module_versions = ${moduleVersions}
+    always_modules  = @(${alwaysModules})
 }
 (${manifest} | ConvertTo-Json -Depth 4) |
     Out-File -FilePath (Join-Path ${staging} 'build-manifest.json') -Encoding UTF8

@@ -2,6 +2,48 @@
 
 ---
 
+## [2026-08-02] Drift review fixes: classify before the hash gate, always-run modules, tier-2 staleness
+
+**Supersedes** parts of the earlier 2026-08-02 entry "Per-module drift decides
+what runs; two tiers, one classifier" -- three defects found reviewing #33 before
+it merged.
+
+**Why:** (1) The tier-2 `needs-repair` verdict was **unreachable for the case it
+exists for**. The unit publishes an aggregate `payload_hash` only when it is
+fully provisioned -- every module hash-matched and clean -- which is exactly the
+state a runtime failure arises in (payload unchanged, service died). The driver
+compared that hash first and returned `already_current`, so `classify()` never
+ran and `validation.json` was never read. (2) Targeting by module name **dropped
+the order-terminal providers**: `execute-mast-provisioning.ps1` filters commands
+strictly by module, so a `-Modules zwo` run skipped `reboot` (order 9999),
+`mast-services-finalize` (9500) and the order-9000 `proxy` re-assert -- an
+installer's pending reboot would leave no flag and the orchestrator would never
+learn. (3) Nothing clears `validation.json` (`run-verify-only.ps1` is its only
+writer and is operator-run), so a pre-repair `fail` re-targeted the repaired
+module on every later payload change, indefinitely.
+
+**What:** (1) The per-module compare now runs **before** the aggregate-hash skip;
+the hash decides only whether a no-drift result means "skip" or "run the full
+set". (2) `module.json` gains `"always": true`, collected by the build into
+`build-manifest.json`'s `always_modules`; `DriftReport.targets` folds them into
+any non-empty target set in build order, and `DriftReport.drifted` still reports
+what actually drifted. They never cause a run on their own. (3) `classify`
+ignores a tier-2 entry whose report `checked_at` predates that module's
+`installed_at` -- it describes a build no longer on the unit. An unparseable
+timestamp keeps the verdict rather than silently suppressing a reported failure.
+
+**Implications:** the aggregate hash is now a *fast-skip* input rather than a
+gate, so `classify()` runs every cycle (pure logic over data already fetched).
+`fleet-drift-report.py` grew a Tier-2 section: it had parsed `validated_at` and
+never rendered it, which is what let the staleness stay invisible. Also removed
+in the same pass: a dead `inst_hash == _UNKNOWN` comparison and the unreachable
+`build_modules` fallback flagged in review. The four earlier drift flow tests
+asserted no exit code and were in fact ending at `EXIT_UNIT_FAIL` on a missing
+smoke marker; they now answer smoke for the build's modules and assert
+`EXIT_OK`, which is what made the new regression tests meaningful.
+
+---
+
 ## [2026-08-02] Per-module drift decides what runs; two tiers, one classifier
 
 **Why:** The driver compared a single `payload_hash`, so any difference meant a

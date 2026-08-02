@@ -169,3 +169,76 @@ def test_needs_update_wins_over_needs_repair():
                  validation(git="fail"))
     assert r.by_state(ModuleState.NEEDS_UPDATE) == ["git"]
     assert r.by_state(ModuleState.NEEDS_REPAIR) == []
+
+
+# --- always-run (order-terminal) modules --------------------------------------
+
+
+def build_with_always(*always: str, **hashes: str) -> dict:
+    b = build_manifest(**hashes)
+    b["always_modules"] = list(always)
+    return b
+
+
+def test_always_modules_join_a_non_empty_target_set():
+    b = build_with_always("reboot", git="h1", python="p2", reboot="r1")
+    r = classify(installed_manifest(git=entry("h1"), python=entry("p1"), reboot=entry("r1")), b)
+    assert r.targets == ["python", "reboot"]
+    assert r.drifted == ["python"]
+
+
+def test_always_modules_do_not_create_a_run_on_their_own():
+    """Nothing drifted -> nothing runs. An always-module is a tag-along, not a
+    reason to provision, or every cycle would run forever."""
+    b = build_with_always("reboot", git="h1", reboot="r1")
+    r = classify(installed_manifest(git=entry("h1"), reboot=entry("r1")), b)
+    assert r.targets == []
+    assert r.current
+
+
+def test_always_modules_keep_build_order():
+    b = {
+        "modules": ["proxy", "python", "reboot"],
+        "always_modules": ["proxy", "reboot"],
+        "module_state": {"proxy": {"version": "1", "hash": "x1"},
+                         "python": {"version": "1", "hash": "NEW"},
+                         "reboot": {"version": "1", "hash": "r1"}},
+    }
+    installed = installed_manifest(proxy=entry("x1"), python=entry("OLD"), reboot=entry("r1"))
+    # proxy runs first and reboot last, as their module.json order dictates.
+    assert classify(installed, b).targets == ["proxy", "python", "reboot"]
+
+
+def test_an_always_module_that_is_itself_drifted_is_not_duplicated():
+    b = build_with_always("reboot", git="h1", python="p2", reboot="NEW")
+    r = classify(installed_manifest(git=entry("h1"), python=entry("p1"), reboot=entry("r1")), b)
+    assert r.targets == ["python", "reboot"]
+
+
+# --- tier-2 staleness ----------------------------------------------------------
+
+
+def dated_entry(hash_: str, installed_at: str) -> dict:
+    return {"version": "1.0", "hash": hash_, "provide": "pass", "verify": "pass",
+            "installed_at": installed_at}
+
+
+def test_a_validation_report_older_than_the_install_is_ignored():
+    """Nothing clears validation.json, so without this a repaired module would be
+    re-targeted by its own pre-repair 'fail' on every later payload change."""
+    installed = installed_manifest(git=dated_entry("h1", "2026-08-02T12:00:00Z"))
+    stale = {"checked_at": "2026-07-01T00:00:00Z", "modules": {"git": "fail"}}
+    assert classify(installed, build_manifest(git="h1"), stale).current
+
+
+def test_a_validation_report_newer_than_the_install_still_counts():
+    installed = installed_manifest(git=dated_entry("h1", "2026-07-01T00:00:00Z"))
+    fresh = {"checked_at": "2026-08-02T12:00:00Z", "modules": {"git": "fail"}}
+    assert classify(installed, build_manifest(git="h1"), fresh).targets == ["git"]
+
+
+def test_an_unparseable_timestamp_keeps_the_tier_2_verdict():
+    """Cannot tell -> do not silently suppress a reported failure."""
+    installed = installed_manifest(git=dated_entry("h1", "not-a-date"))
+    report = {"checked_at": "2026-08-02T12:00:00Z", "modules": {"git": "fail"}}
+    assert classify(installed, build_manifest(git="h1"), report).targets == ["git"]

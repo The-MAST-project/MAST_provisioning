@@ -242,6 +242,18 @@ partial run cannot make the driver's fast path skip the unit. **Pester not run**
 - **Tests:** drift classification (pure logic, table-driven); targeted-module
   selection from a drift set; report rendering incl. missing/extra.
 
+**Review fixes (2026-08-02, pre-merge).** Three defects found reviewing #33:
+the tier-2 `needs-repair` verdict was unreachable (the aggregate-hash gate
+returned `already_current` before `classify()` ran, and that gate is only
+satisfied in exactly the state a repair arises in); targeting dropped the
+order-terminal providers (`reboot`, `mast-services-finalize`, the order-9000
+`proxy` re-assert), so an installer's pending reboot left no flag; and a stale
+`validation.json` re-targeted a repaired module forever, nothing being its
+writer but an operator. Fixed by classifying before the hash gate, a
+`module.json` `"always": true` flag carried to `build-manifest.json` as
+`always_modules`, and ignoring a tier-2 entry whose report predates the module's
+`installed_at`. See DECISIONS 2026-08-02.
+
 **Status:** landed (`04d4ee7`) — `server/prov/drift.py` + `test_drift.py` +
 targeted-update cases in `test_driver_flow.py`; 106 pytest pass, ruff clean.
 Decided during implementation: **targeting is applied at execute, not at build**

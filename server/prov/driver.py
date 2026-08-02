@@ -276,17 +276,19 @@ class Driver:
                 if payload_hash is None:
                     return  # BUILD_FAIL already logged
 
-                # Phase 5 -- aggregate hash compare (fast gate), then per-module.
-                if installed_hash == payload_hash and not self.cfg.force:
-                    self.log.event("UNIT_SKIP", unit=host, reason="already_current", payload_hash=payload_hash)
-                    self.log.activity(host, "SKIP", "already_current", dur(), payload_hash, git_sha)
-                    return
-                self.log.event("HASH_CHECK", unit=host, installed=installed_hash or "none",
-                               built=payload_hash, result="NEEDS_UPDATE")
-
-                # Phase 5a -- per-module drift. The aggregate hash only says
-                # SOMETHING differs; this says WHICH modules, so execute runs
-                # just those instead of a full cycle (issue #22 stage 3).
+                # Phase 5 -- decide what (if anything) to run.
+                #
+                # The per-module compare runs BEFORE the aggregate-hash skip, not
+                # after it. The aggregate payload_hash is published by the unit
+                # only when it is fully provisioned -- every module hash-matched
+                # and clean -- which is exactly the state in which a tier-2
+                # needs-repair arises (the payload is unchanged; a service died).
+                # Gating on the hash first therefore made needs-repair
+                # unreachable for the case it exists for: the unit was skipped as
+                # already_current on every cycle and the live-state report was
+                # never consulted. So: classify first, and let the aggregate hash
+                # decide only whether a no-drift result means "skip" or "run the
+                # full set".
                 #
                 # The build above is deliberately still the FULL module set:
                 # building a subset would make the payload's build-manifest
@@ -295,13 +297,26 @@ class Driver:
                 # against a partial set and read true on a one-module run.
                 # Targeting therefore happens at EXECUTE, not at build.
                 target_modules: list[str] = []
-                if not self.cfg.force:
+                if self.cfg.force:
+                    # --force means "run everything": no classification, no skip.
+                    # Still record the hash comparison, which is the audit trail
+                    # of what the unit had versus what was built.
+                    self.log.event("HASH_CHECK", unit=host, installed=installed_hash or "none",
+                                   built=payload_hash, result="FORCED")
+                else:
                     report = drift.classify(installed, self._build_manifest, validation)
+                    aggregate_matches = installed_hash == payload_hash
                     self.log.event("MODULE_DRIFT", unit=host, summary=report.summary(),
-                                   targets=",".join(report.targets) or "none")
+                                   targets=",".join(report.targets) or "none",
+                                   aggregate="match" if aggregate_matches else "differs")
+                    if report.current and aggregate_matches:
+                        self.log.event("UNIT_SKIP", unit=host, reason="already_current",
+                                       payload_hash=payload_hash)
+                        self.log.activity(host, "SKIP", "already_current", dur(), payload_hash, git_sha)
+                        return
                     if report.current:
-                        # Aggregate hash differed but no module did: the payload
-                        # changed only outside the per-module boundary (a
+                        # Aggregate differs but no module did: the payload changed
+                        # only outside the per-module boundary (a
                         # build-host-vendored asset, a client-side script). Not
                         # nothing -- fall through to a full run rather than
                         # skipping, since the aggregate is the broader check.
@@ -309,6 +324,9 @@ class Driver:
                                        note="aggregate differs but no module drifted; running full set")
                     else:
                         target_modules = report.targets
+                        self.log.event("HASH_CHECK", unit=host, installed=installed_hash or "none",
+                                       built=payload_hash,
+                                       result="NEEDS_REPAIR" if aggregate_matches else "NEEDS_UPDATE")
                 if self.cfg.dry_run:
                     self.log.event("DRYRUN_STOP", unit=host, reason="would_transfer_and_execute")
                     self.log.activity(host, "SKIP", "dry_run", dur(), payload_hash, git_sha)
