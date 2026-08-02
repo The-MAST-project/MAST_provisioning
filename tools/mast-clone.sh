@@ -98,14 +98,25 @@ command -v git >/dev/null 2>&1 || die "git is not on PATH"
 # With this set, a missing credential fails immediately and says so.
 export GIT_TERMINAL_PROMPT=0
 
+# The manifest does not always arrive LF-only: git checks it out with CRLF
+# wherever core.autocrlf is on (any Windows clone), and a Windows editor can
+# save it that way regardless. bash's 'read' does not strip the CR, so it lands
+# in the LAST field of every row -- 'branch' becomes "master<CR>" and every
+# 'git clone --branch' then fails with "Remote branch not found". Which field
+# gets hit depends on the column count, so fixing it per-variable is a trap:
+# normalize ONCE here and have every parser below read this text instead of
+# re-opening the file. (The ps1 half is immune -- Get-Content drops the line
+# terminator and each field goes through .Trim().)
+MANIFEST_TEXT="$(tr -d '\r' < "$MANIFEST")"
+
 # Pinned tool versions come from the manifest too, as '#!<key>\t<value>' lines,
 # so the sh and ps1 halves cannot drift. They start with '#', so the repo-row
 # parser below skips them.
-UV_VERSION="$(awk -F'\t' '/^#!uv-version\t/ {print $2; exit}' "$MANIFEST" | tr -d '[:space:]')"
+UV_VERSION="$(awk -F'\t' '/^#!uv-version\t/ {print $2; exit}' <<< "$MANIFEST_TEXT" | tr -d '[:space:]')"
 
 # Validate roles against the manifest so a typo fails loudly instead of
 # silently cloning nothing.
-KNOWN_ROLES="$(awk -F'\t' '!/^#/ && NF>=3 {print $3}' "$MANIFEST" \
+KNOWN_ROLES="$(awk -F'\t' '!/^#/ && NF>=3 {print $3}' <<< "$MANIFEST_TEXT" \
                | tr ',' '\n' | sort -u | tr '\n' ' ')"
 SELECTED=""
 IFS=',' read -r -a _roles <<< "$ROLES"
@@ -194,7 +205,7 @@ while IFS=$'\t' read -r dir repo roles manifest_branch; do
         info "$dir: cloning $repo (branch $branch)"
         run git clone --branch "$branch" "$url" "$dest"
     fi
-done < "$MANIFEST"
+done <<< "$MANIFEST_TEXT"
 
 # --- disarm the vestigial 'common' submodule ------------------------------
 #
