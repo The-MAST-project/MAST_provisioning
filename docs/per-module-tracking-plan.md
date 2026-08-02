@@ -222,6 +222,13 @@ Fixes the two-directional `mast` defect described above.
 - **Tests:** merge semantics (a partial run preserves other modules' entries);
   schema; verify-outcome recorded; legacy manifest handled, not crashed.
 
+**Status:** landed (`7b773d6`) — `client/mast-installed-manifest.ps1` +
+`server/tests/mast-installed-manifest.Tests.ps1`, DECISIONS 2026-08-02.
+Decided during implementation: the manifest is written on **every** run, partial
+included, and `payload_hash` is published only when `fully_provisioned` — so a
+partial run cannot make the driver's fast path skip the unit. **Pester not run**
+(developed on macOS; no PowerShell).
+
 ### Stage 3 — Precise per-module drift + targeted update (driver + fleet report)
 
 - **Driver drift check (`server/prov/driver.py`):** per module, compare
@@ -234,6 +241,13 @@ Fixes the two-directional `mast` defect described above.
   version shown for readability. This is the multi-unit management surface.
 - **Tests:** drift classification (pure logic, table-driven); targeted-module
   selection from a drift set; report rendering incl. missing/extra.
+
+**Status:** landed (`04d4ee7`) — `server/prov/drift.py` + `test_drift.py` +
+targeted-update cases in `test_driver_flow.py`; 106 pytest pass, ruff clean.
+Decided during implementation: **targeting is applied at execute, not at build**
+— building the drifted subset would make `build-manifest.json` declare only that
+subset, and Stage 2's `fully_provisioned` would then read true after a one-module
+run. The build stays full; `-Modules` is plumbed through the detached runner.
 
 ### Stage 4 — Computed tier-2 validation via `verify-*.ps1` (the repair check)
 
@@ -265,6 +279,12 @@ Fixes the two-directional `mast` defect described above.
   content-aware computed re-run (on demand / periodic).
 - **Tests:** dispatcher enumerates providers and maps verify exit codes → state;
   a content-aware verify flags a deployed shortcut whose target ≠ expected.
+
+**Status:** landed (`04d4ee7`) — no new `validate-unit.ps1`:
+`client/run-verify-only.ps1` was **already** the verify dispatcher, so it was
+extended to write `C:\MAST\status\validation.json` rather than duplicated.
+`verify-desktop-shortcuts.ps1` is content-aware for the FastAPI target (the
+worked example). Absent tier-2 data reads as "not run", never "failed".
 
 ## Documentation (per-stage, required)
 
