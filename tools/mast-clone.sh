@@ -46,6 +46,29 @@ die()  { echo "ERROR: $*" >&2; exit 1; }
 info() { echo "[mast-clone] $*"; }
 warn() { echo "[mast-clone] WARN: $*" >&2; }
 
+# Convert a path for a consumer that is a WINDOWS program rather than this
+# shell. Under Git Bash every path here is an MSYS one ('/c/Users/...'), which
+# python.exe and VS Code cannot resolve -- and both fail silently: site.py
+# skips a .pth line naming a directory that does not exist, and VS Code just
+# falls back to some other interpreter. The result is 'common' mysteriously
+# not importable and Pylance reporting every third-party import unresolved,
+# with nothing logged anywhere.
+#
+# Apply this ONLY where a path is written into generated config. Everything
+# else in this script is consumed by bash, git and uv, which all want the MSYS
+# form -- converting globally would break those.
+#
+# cygpath -m, not -w: it yields 'C:/Users/...', which Windows accepts and which
+# needs no backslash escaping when embedded in JSON. (The ps1 half uses
+# backslashes and therefore has to double them; not a trap worth copying.)
+# On Linux and macOS this is the identity function.
+winpath() {
+    case "$(uname -s)" in
+        MINGW*|MSYS*|CYGWIN*) cygpath -m -- "$1" ;;
+        *)                    printf '%s' "$1" ;;
+    esac
+}
+
 usage() {
     sed -n '3,28p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
     cat <<'EOF'
@@ -393,9 +416,11 @@ if [ -n "$VENV" ]; then
     if [ -z "$sp" ]; then
         warn "no site-packages under '$VENV' -- skipping mast.pth"
     else
-        info "writing ${sp}/mast.pth -> ${TOP_ABS}"
+        # winpath: this file is read by python.exe, not by this shell.
+        pth_top="$(winpath "$TOP_ABS")"
+        info "writing ${sp}/mast.pth -> ${pth_top}"
         if [ "$DRY_RUN" -eq 0 ]; then
-            printf '%s\n' "$TOP_ABS" > "${sp}/mast.pth"
+            printf '%s\n' "$pth_top" > "${sp}/mast.pth"
         fi
     fi
 fi
@@ -432,7 +457,11 @@ else
         # Absolute, because <top>/.venv is a sibling of the folder roots rather
         # than inside one, so VS Code cannot auto-discover it. This file is
         # generated per machine, so a machine-specific path here is fine.
-        printf '    "python.defaultInterpreterPath": "%s/bin/python",\n' "$VENV"
+        #
+        # $VPY, not "$VENV/bin/python": the layout differs by platform and was
+        # already resolved above. Hardcoding bin/ wrote an interpreter path that
+        # does not exist on Windows. winpath because VS Code reads this file.
+        printf '    "python.defaultInterpreterPath": "%s",\n' "$(winpath "$VPY")"
         # Relative to each folder root, i.e. <top>. This is what makes Pylance
         # resolve 'common' in every folder: mast.pth fixes runtime, but static
         # analysis does not reliably follow .pth files.
