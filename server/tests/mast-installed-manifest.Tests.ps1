@@ -159,7 +159,12 @@ Describe 'Merge-MastInstalledManifest -- legacy manifest migration' {
                 -Outcomes (New-Outcomes @{ 'git' = @($true, $true) }) -InstalledAt $AT
         $r.modules.git.hash  | Should Be 'h-git'
         $r.fully_provisioned | Should Be $false
-        @($r.modules.PSObject.Properties).Count | Should Be 1
+        # Count through the JSON round-trip, which is the shape every consumer
+        # actually reads. In memory 'modules' is an OrderedDictionary, whose
+        # PSObject.Properties are the dictionary's own members (Count, Keys, ...),
+        # not its entries.
+        $rt = $r | ConvertTo-Json -Depth 6 | ConvertFrom-Json
+        @($rt.modules.PSObject.Properties).Count | Should Be 1
     }
     It 'does not inherit the legacy payload_hash on a partial run' {
         # Inheriting it would tell the fast path the unit is current.
