@@ -2,6 +2,39 @@
 
 ---
 
+## [2026-08-02] The GitHub token is deleted, not re-plumbed
+
+**Why:** `provide-mast.ps1` cloned with a PAT embedded in the remote URL
+(`https://x-access-token:<tok>@github.com/...`), read from a `mast_github.txt`
+staged into the payload. That left a live secret in plaintext in every
+provisioned unit's `.git/config`, and one copy of the token file per run under
+`C:\mast-staging\<run-id>\` -- issue #17. Every repo the module clones is now
+**public** (verified 2026-08-02 across all seven The-MAST-project repos), and
+`provide-mast.ps1` was the token's only consumer, so the credential is not
+needed by anything.
+
+**What:** removed the credential rather than managing it better. Gone:
+`Get-MastGitHubHttpsCloneUrls` and the token read in `provide-mast.ps1` (clones
+are anonymous HTTPS via a plain `Get-MastGitHubCloneUrl`); the
+`vault\tokens\mast_github.txt` staging copy, the `-AllowMissingGithubToken`
+switch and its `-TestMode` optional-payload exception in `build-mast.ps1`; the
+switch at all three call sites (`check-and-provision.ps1`, `prov/driver.py`,
+`vm/run-prov-test.py`); and the setup step, vault-tree entry and requirements
+Exception #3 / row 12 in the docs. The `.gitignore` rules for the token are
+deliberately **kept** as a guard against re-introduction.
+
+**Implications:** a dev/test build no longer needs a credential to exercise the
+`mast` module, which removes the last reason `-TestMode` differed from a
+production build on secret material. This reverses only if a MAST repo goes
+private again -- and then via an org-scoped `url.<...>.insteadOf` rewrite or a
+credential helper, **never** a token baked into a remote URL. Note that expiry
+alone would not have broken the current path: GitHub ignores invalid credentials
+on a public repo (verified by `git ls-remote` with a bogus token), so the removal
+is hygiene, not an outage fix. #17 closes when the stage-6 migration deletes
+`C:\MAST\repos` from the units, taking the old tokenised `.git/config` with it.
+
+---
+
 ## [2026-08-02] Smoke gates only what ran; report and driver share one set of unit paths
 
 Second and final batch of #33 review fixes; follows the entry below.

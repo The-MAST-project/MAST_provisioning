@@ -489,7 +489,7 @@ class Driver:
         if modules:
             args += ["-Modules", ",".join(modules)]
         if self.cfg.test_mode:
-            args += ["-TestMode", "-AllowMissingNoMachineLicense", "-AllowMissingGithubToken"]
+            args += ["-TestMode", "-AllowMissingNoMachineLicense"]
         try:
             with build_log.open("wb") as fh:
                 rc = subprocess.run(args, stdout=fh, stderr=subprocess.STDOUT,

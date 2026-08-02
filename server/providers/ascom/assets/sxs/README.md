@@ -66,6 +66,6 @@ override** -- the build fails loudly if the SxS bundle isn't present.
 
 The .cab is ~70 MB and changes with each Windows servicing release. The
 asset is operator-supplied at install time, the same way the NoMachine
-`.lic` files and `vault/tokens/mast_github.txt` are. Source: official
+`.lic` files are. Source: official
 Windows IoT 11 LTSC 2024 ISO from the Microsoft Volume Licensing Service
 Center or equivalent.

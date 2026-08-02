@@ -84,21 +84,11 @@ function Write-MastProvisionEvent {
     Write-Host ("[{0}] [provide-mast] {1}" -f ${ts}, ${Message})
 }
 
-function Get-MastGitHubHttpsCloneUrls {
-    param(
-        [Parameter(Mandatory)][string]${RepoSpec},
-        [Parameter(Mandatory)][string]${Token}
-    )
-    # ${RepoSpec} example: github.com/The-MAST-project/MAST_common
-    ${plainHttps} = ("https://{0}.git" -f ${RepoSpec})
-    if (${RepoSpec} -notmatch '(?i)^github\.com/') {
-        return @{ CloneUrl = ${plainHttps}; LogUrl = ${plainHttps} }
-    }
-    ${pathOnly} = ${RepoSpec} -replace '(?i)^github\.com/', ''
-    ${encToken} = [Uri]::EscapeDataString(${Token})
-    ${authClone} = ("https://x-access-token:{0}@github.com/{1}.git" -f ${encToken}, ${pathOnly})
-    ${safeLog} = ("https://github.com/{0}.git" -f ${pathOnly})
-    return @{ CloneUrl = ${authClone}; LogUrl = ${safeLog} }
+function Get-MastGitHubCloneUrl {
+    # Anonymous HTTPS. Kept as a function so the clone call site stays readable
+    # and a future transport change has one place to land.
+    param([Parameter(Mandatory)][string]${RepoSpec})
+    return ("https://{0}.git" -f ${RepoSpec})
 }
 
 function Invoke-MastGitCloneObserved {
@@ -219,18 +209,11 @@ function Invoke-MastExePhase {
 
 ${log} = Start-ProvisionLog -Component 'provide-github'
 try {
-    ${tokenFile} = Join-Path ${PSScriptRoot} 'mast_github.txt'
-    if (-not (Test-Path ${tokenFile})) {
-        throw "Token file not found: ${tokenFile}"
-    }
-
-    ${token} = (Get-Content ${tokenFile} -ErrorAction Stop).Trim()
-    if (-not ${token}) {
-        throw "Token file is empty."
-    }
-
-    # Optionally delete immediately after reading
-    # Remove-Item ${tokenFile} -Force -ErrorAction SilentlyContinue
+    # No credential: every The-MAST-project repo is public, so the clones below
+    # are anonymous HTTPS. The GitHub PAT this script used to read from a staged
+    # mast_github.txt is gone entirely -- it was embedded in the remote URL,
+    # which left a live secret in each clone's .git/config on every unit
+    # (issue #17). See DECISIONS.md 2026-08-02.
 
     # Prepare repo root
     Confirm-Dir ${CloneRoot}
@@ -344,9 +327,8 @@ try {
             Remove-Item -LiteralPath ${targetDir} -Recurse -Force -ErrorAction SilentlyContinue
         }
 
-        ${urls} = Get-MastGitHubHttpsCloneUrls -RepoSpec ${repo}.RepoSpec -Token ${token}
-        ${cloneUrlUse} = ${urls}['CloneUrl']
-        ${logUrlUse} = ${urls}['LogUrl']
+        ${cloneUrlUse} = Get-MastGitHubCloneUrl -RepoSpec ${repo}.RepoSpec
+        ${logUrlUse} = ${cloneUrlUse}
         Remove-Item -Recurse -Force -ErrorAction SilentlyContinue ${targetDir}
         Invoke-MastGitCloneObserved -GitExe ${gitExe} -CloneUrl ${cloneUrlUse} -UrlForLog ${logUrlUse} -TargetDir ${targetDir} -RepoLabel ${repoName} -LogDir ${CloneRoot} -Ref ${repo}.Ref
 

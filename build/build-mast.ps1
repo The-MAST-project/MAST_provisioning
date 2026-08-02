@@ -20,8 +20,6 @@ param(
   [string[]]${Modules} = @(),
   # Dev/test: allow missing NoMachine license files (skip staging nomachine.lic).
   [switch]${AllowMissingNoMachineLicense},
-  # Dev/test: allow missing GitHub token file (skip staging mast_github.txt).
-  [switch]${AllowMissingGithubToken},
   # Dev/test: allow missing NetFx3 SxS source (skip staging sxs\; provider
   # falls back to online DISM with a warning). Production builds MUST have
   # the bundled SxS present -- the online DISM path depends on WU CDN
@@ -488,9 +486,7 @@ foreach (${m} in ${Modules}) {
         # Dev/test exception: some payloads are intentionally omitted (large artifacts).
         $norm = (${cmdfile} -replace '\\','/').ToLowerInvariant()
         if (${TestMode} -and (
-            ($m -eq 'cygwin' -and $norm -eq 'assets/astrometry.tgz') -or
-            # mast_github.txt is sourced from vault/ and staged separately
-            ($m -eq 'mast' -and $norm -eq 'assets/mast_github.txt')
+            ($m -eq 'cygwin' -and $norm -eq 'assets/astrometry.tgz')
         )) {
             Write-Warning "[${m}] Optional dev/test CommandFile missing: ${src} (skipping due to -TestMode)"
             continue
@@ -550,18 +546,6 @@ if (${Modules} -contains 'nomachine') {
             # stage that single .lic
             Copy-Item -Force ${free}.FullName (Join-Path ${staging} "nomachine.lic")
         }
-    }
-}
-
-if (${Modules} -contains 'mast') {
-    # deploy the github token (used by the mast module)
-    $tokenPath = Join-Path ${vault} 'tokens\mast_github.txt'
-    if (Test-Path $tokenPath) {
-        Copy-Item -Force -Path $tokenPath (Join-Path ${staging} 'mast_github.txt')
-    } elseif (${AllowMissingGithubToken}) {
-        Write-Warning "GitHub token '$tokenPath' missing; continuing due to -AllowMissingGithubToken."
-    } else {
-        throw "GitHub token '$tokenPath' missing. Create it or pass -AllowMissingGithubToken for dev/test."
     }
 }
 

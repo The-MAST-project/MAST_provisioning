@@ -9,8 +9,6 @@ This directory holds secrets and per-deployment configuration. **It is gitignore
 vault/
 ├── README.md                 # this file (only thing checked in)
 ├── creds.json                # WinRM credentials for unit VMs/machines
-├── tokens/
-│   └── mast_github.txt       # GitHub PAT (repo read scope)
 └── nomachine-licenses/
     └── *.lic                 # one .lic file per licensed unit
 ```
@@ -27,10 +25,16 @@ Single-machine bring-up uses one `unit` block:
 
 Use `creds.json.template` as a starting point.
 
-## tokens/mast_github.txt
+## tokens/ -- removed 2026-08-02
 
-A GitHub Personal Access Token with `repo` scope (read-only is sufficient).
-Used by the `mast` provisioning module to clone private MAST repos onto units.
+There is no GitHub token any more. Every The-MAST-project repo is public, so the
+`mast` provisioning module clones anonymously over HTTPS. The old PAT was
+embedded in each clone's remote URL, leaving a live secret in `.git/config` on
+every provisioned unit (issue #17); deleting it removes the secret rather than
+managing it better. If a repo ever goes private again, add an org-scoped
+`url.<...>.insteadOf` rewrite -- never a token in a remote URL. The `.gitignore`
+rule for `tokens/` is deliberately left in place to guard against
+re-introduction.
 
 ## nomachine-licenses/
 

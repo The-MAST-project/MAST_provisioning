@@ -69,7 +69,6 @@ MAST_provisioning/
 |   `-- vm-fix-winrm.ps1              # Break-glass WinRM recovery (run locally on unit)
 |-- vault/                            # Secrets, gitignored
 |   |-- creds.json                    # WinRM credentials for units
-|   |-- tokens/mast_github.txt        # GitHub PAT
 |   `-- nomachine-licenses/*.lic
 |-- staging/<host>/01-provisioning/   # Build output, gitignored
 |-- DECISIONS.md
