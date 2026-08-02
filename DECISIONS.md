@@ -2,6 +2,32 @@
 
 ---
 
+## [2026-08-02] Retire the personal fork; a single `origin` points at the integration repo
+
+**Why:** Every clone carried two remotes -- `origin` = `elibrody-weizmann/<repo>` and
+`upstream` = `The-MAST-project/<repo>` -- a layout no fresh `git clone` produces, so the
+word "origin" meant different repositories depending on which machine you typed it on. The
+fork had also stopped earning its keep: work is pushed straight to branches on the
+integration repo, and 12 of 13 open PRs already had their head branch there. Auditing the
+forks found their remaining exclusive content was either already reapplied upstream or
+obsoleted by the config-file epic.
+
+**What:** The forks' remaining branches were deleted, then in each clone `origin` (the
+fork) was removed and `upstream` renamed to `origin`. Two machines hold MAST checkouts --
+this one and the Windows provisioning box -- and both were converted in the same pass, so
+no window existed where "origin" was ambiguous between them. `MAST_scheduler` and
+`mast-claude-config` were untouched: the former has no upstream repo (the fork *is* the
+repo), the latter already pointed at The-MAST-project.
+
+**Implications:** `git fetch` / `git push` with no remote argument now reach the
+integration repo, and a fresh clone matches an existing checkout exactly. Anything written
+against the old two-remote model -- scripts, notes, agent instructions saying `git fetch
+upstream` -- is wrong and should be read as plain `git fetch`. Pushing a branch now
+publishes it on the shared repo immediately, with no fork staging step in between, so
+branch names are visible to everyone the moment they are pushed.
+
+---
+
 ## [2026-07-23] build-manifest.json carries per-module content hashes (`module_state`)
 
 **Why:** Drift detection is whole-payload: the single `payload_hash` over the
