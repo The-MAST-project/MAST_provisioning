@@ -51,10 +51,11 @@ from vm_lib import load_creds, winrm_session, upload_file_b64
 creds = load_creds()
 s = winrm_session("mast-wis-01", creds["unit"])
 
+# common is a top-level clone now (mast-clone layout), not a submodule
 src = Path("../../MAST_common/utils.py").read_text(encoding="utf-8")
 upload_file_b64(
     s,
-    remote_path=r"C:\MAST\repos\MAST_unit.2024-12-12\src\common\utils.py",
+    remote_path=r"C:\MAST\src\common\utils.py",
     content=src,
     label="utils.py",
 )

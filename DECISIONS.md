@@ -2,6 +2,55 @@
 
 ---
 
+## [2026-08-02] The mast provider delegates cloning to mast-clone; unit code lives at C:\MAST\src
+
+**Why:** `provide-mast.ps1` carried its own repo list (`mast-repos.txt` +
+`mast-repo-list.ps1`), its own clone/pull logic, its own per-repo venv creation
+and an unpinned `pip install` -- a second implementation of what
+`tools/mast-clone.ps1` already does for the control host and dev boxes, and a
+worse one: unpinned resolver, no branch-pin rationale, no `common/__init__.py`
+sanity check, and a pull path that `reset --hard`s over local work. Two
+implementations of "lay out the MAST repos" is exactly the drift these scripts
+exist to prevent (#31).
+
+**What:** the provider now invokes `mast-clone.ps1 -Top C:\MAST\src -Role unit
+-Transport https -Update` and keeps only what mast-clone does not do: ensure Git
+is present, register the `mast-unit` NSSM service, open the API port, and
+restart the service when the unit checkout actually moved (HEAD compared before
+and after, so an unchanged cycle does not bounce the service).
+`mast-repos.txt`, `mast-repo-list.ps1` and the already-unreferenced
+`pull-mast-repos.ps1` are deleted; `tools/mast-repos.tsv` is the only repo
+manifest. The scripts reach the payload as the module's `repofiles`.
+
+**The layout changes on every unit.** `C:\MAST\repos\<Repo>\` with a venv per
+repo becomes `C:\MAST\src\{common,unit,claude}` with ONE venv at
+`C:\MAST\src\.venv`, and `common` resolves via the `mast.pth` mast-clone writes
+rather than through the vestigial submodule. All three NSSM coordinates move
+(interpreter, entry point, AppDirectory); an already-registered service pointing
+at the old interpreter is **re-pointed**, since a pre-migration unit would
+otherwise keep running code from a tree stage 6 deletes. `provide-mast-validation.ps1`
+and `provide-mast-autofocus-validation.ps1` resolved the unit clone and its venv
+by scanning `C:\MAST\repos` for `MAST_unit*`; both now take `-MastTop` and read
+the shared venv.
+
+**`verify-mast.ps1` is rewritten content-aware** (#22 stage 4's resolution rule
+2, which the plan expected to be the highest-value verify in the set, and is):
+HEAD versus the tracked upstream per clone, `pip freeze` versus each repo's
+pinned `requirements.txt`, the `common/__init__.py` package check, `mast.pth`
+presence, and **a dirty working tree as a failure** -- mast-clone declines to
+fast-forward one, so without this a frozen checkout reports healthy forever. A
+surviving `C:\MAST\repos` is also a failure: that unit is unmigrated and the
+loop must refuse it rather than half-update it.
+
+**Verified on labcomp2, not just reasoned about:** a real
+`build-mast.ps1 -Modules mast` staged both repofiles flat by leaf name, and
+appending a line to `tools/mast-clone.ps1` moved `module_state.mast.hash`
+(2a0dd903 -> d3a84caa) with an unchanged `git_sha` -- the repofile content drives
+the per-module hash, which is what makes a targeted update select this module.
+Pester 87/87.
+
+---
+
 ## [2026-08-02] The GitHub token is deleted, not re-plumbed
 
 **Why:** `provide-mast.ps1` cloned with a PAT embedded in the remote URL

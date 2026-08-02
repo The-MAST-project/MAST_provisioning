@@ -259,6 +259,13 @@ clone and fetch the moment it landed.)
 - **Tests:** command construction (role, top, transport); service definition
   points at the new paths; no surviving reference to `C:\MAST\repos`.
 
+**Status:** landed 2026-08-02. Also swept: the two validation providers
+(`mast-validation`, `mast-autofocus-validation`) resolved the unit clone and its
+venv under `C:\MAST\repos`; both take `-MastTop` now. `pull-mast-repos.ps1`
+deleted -- already unreferenced, and superseded by `mast-clone -Update`. A real
+build on labcomp2 staged both repofiles and confirmed a `mast-clone.ps1` edit
+moves `module_state.mast.hash`.
+
 ### Stage 4 — Stage a pinned `uv.exe` into the payload
 
 mast-clone prefers an existing `<Top>\.tools\uv.exe` over bootstrapping one, so
@@ -288,6 +295,9 @@ the manifest's `#!uv-version` — assert it, don't assume.
   it.
 - **Tests:** a stale repo HEAD fails; a package off its pin fails; a dirty tree
   fails; an old-layout unit fails; a clean migrated unit passes.
+
+**Status:** landed 2026-08-02 alongside stage 3 -- deleting `mast-repos.txt`
+forced the rewrite, since the old verify read its repo list from it.
 
 ### Stage 6 — Migrate mast01–04 (supervised one-shot)
 

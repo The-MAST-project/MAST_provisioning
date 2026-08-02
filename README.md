@@ -442,7 +442,7 @@ check logs), follow the convention in `vm/DEBUGGING.md`: name the script
 
 - `execute-mast-provisioning.ps1` exits 0
 - `C:\Python312\python.exe --version` succeeds
-- `C:\MAST\repos\` exists and has cloned repos with virtualenvs
+- `C:\MAST\src\` holds the role's clones (`common\`, `unit\`, `claude\`) and one venv at `C:\MAST\src\.venv`
 - Every module wrote a non-empty `C:\MAST\logs\smoke\<module>-smoke.txt`
 - `C:\MAST\installed-manifest.json` exists and matches the build's
   `payload_hash`
