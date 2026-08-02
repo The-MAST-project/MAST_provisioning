@@ -2,6 +2,47 @@
 
 ---
 
+## [2026-08-02] `repofiles`: modules may stage shared tooling from the repo top
+
+**Why:** The `mast` module is handing its cloning to `tools/mast-clone.ps1`
+(#31), a script deliberately shared with the control host and dev boxes -- the
+single source of truth the adoption exists to gain. But the staging pass
+resolves a `commandfiles` entry as `Join-Path $providersRoot $module $cmdfile`
+and mirrors that relative path into staging, so the two obvious ways to get the
+script into the payload are both wrong: copying it into
+`server/providers/mast/` at build time forks the shared file, and a
+`../../tools/mast-clone.ps1` entry resolves correctly on the source side but
+writes **outside** the staging root on the destination side.
+
+**What:** `module.json` gains an optional **`repofiles`** array -- paths relative
+to the **repo top**, staged to the staging root **by leaf name** (the flattening
+`assets/*` already gets, so the module's `command` invokes them as
+`.\mast-clone.ps1`; the unit-side executor runs every command with the staging
+root as its working directory, so a nested path would not be found).
+Resolution and containment live in the new dot-sourceable
+`build/build-staging-lib.ps1` (`Resolve-MastRepoFile`,
+`Get-MastRepoFileStagingPath`, `Get-MastModuleRepoFiles`) so Pester can exercise
+them without running a build, mirroring how `build-manifest-lib.ps1` was split
+out. An entry that is absolute, contains a `..` segment, resolves outside the
+repo top, names a directory, or does not exist is a **build error** -- a build
+must not reach arbitrary paths on the build host, and a typo must break the
+build rather than silently omit a file the unit-side command then cannot find.
+Tests: `server/tests/build-staging-lib.Tests.ps1`.
+
+**Implications:** Stage 3 of #31 declares
+`"repofiles": ["tools/mast-clone.ps1", "tools/mast-repos.tsv"]` on the `mast`
+module; no module declares the key yet, so the mechanism is inert until then.
+`repofiles` are a determinant of a module's deployed output exactly as its
+`commandfiles` are, so the per-module content hash must cover them -- which
+cannot be wired here, because `Get-ModuleContentHash` /
+`build/build-manifest-lib.ps1` live on `eli/per-module-tracking` (#22 Stage 1)
+and have not reached `eli/provisioning-v3`. Tracked as an explicit follow-up in
+`docs/mast-clone-adoption-plan.md` Stage 1, to be closed when the two branches
+meet; until then a changed `mast-clone.ps1` is caught by the aggregate
+`payload_hash`, not per-module.
+
+---
+
 ## [2026-07-29] mast-clone: dev tooling in the venv, role-named workspace, submodule disarmed
 
 **Why:** Four things surfaced once `mast-clone` was actually run on a unit and on the

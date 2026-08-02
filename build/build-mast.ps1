@@ -117,6 +117,13 @@ if (-not (Test-Path ${serverLib})) { throw "Missing provisioning.psm1 at ${serve
 ${modulesLib} = Join-Path ${serverRoot} 'lib\mast-modules.psm1'
 if (-not (Test-Path ${modulesLib})) { throw "Missing mast-modules.psm1 at ${modulesLib}" }
 Import-Module ${modulesLib} -Force -DisableNameChecking
+
+# Staging helpers (repofiles resolution + containment). Dot-sourced so the same
+# implementation is what server/tests/build-staging-lib.Tests.ps1 exercises.
+${stagingLib} = Join-Path ${PSScriptRoot} 'build-staging-lib.ps1'
+if (-not (Test-Path ${stagingLib})) { throw "Missing build-staging-lib.ps1 at ${stagingLib}" }
+. ${stagingLib}
+
 [string]${LicensesRoot} = (Join-Path ${Top} 'vault\nomachine-licenses')
 ${licensesVault} = (Join-Path ${vault} 'nomachine-licenses')
 
@@ -492,6 +499,17 @@ foreach (${m} in ${Modules}) {
     Write-Host " Staging " ${cmdfile} " ..."
 
     New-LinkOrCopy -Target ${src} -LinkPath ${dst}
+  }
+
+  # Repo-top files: shared tooling a module runs that deliberately lives outside
+  # its provider dir (the 'mast' module runs tools/mast-clone.ps1, shared with
+  # the control host and dev boxes). Resolved and containment-checked by
+  # Resolve-MastRepoFile; staged to the staging root by leaf name, like assets.
+  foreach (${repofile} in (Get-MastModuleRepoFiles -Manifest ${mf})) {
+    ${rfSrc} = Resolve-MastRepoFile -RepoTop ${Top} -RelativePath ${repofile} -ModuleName ${m}
+    ${rfDst} = Get-MastRepoFileStagingPath -StagingDir ${staging} -RelativePath ${repofile}
+    Write-Host " Staging repofile " ${repofile} " ..."
+    New-LinkOrCopy -Target ${rfSrc} -LinkPath ${rfDst}
   }
 }
 

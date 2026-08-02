@@ -170,10 +170,27 @@ time would defeat the single-source-of-truth this whole change is for.
   determinant of the module's deployed output as its `commandfiles`
   (Resolution rule 1 in `per-module-tracking-plan.md`). Extend
   `Get-ModuleContentHash` accordingly.
+
+  **DEFERRED — open follow-up.** `Get-ModuleContentHash` and
+  `build/build-manifest-lib.ps1` are #22 Stage 1, which lives on
+  `eli/per-module-tracking` and has **not** reached `eli/provisioning-v3`, so
+  there is nothing on this branch to extend. Close this when the two branches
+  meet — whichever merges second adds the `repofile:<path>:<sha>` lines. Until
+  then a changed `mast-clone.ps1` is caught by the aggregate `payload_hash`
+  only, i.e. as "something changed", not "the `mast` module changed". Note this
+  is the reverse dependency from the one in locked decision 4: #31 must precede
+  #22 *Stage 1b*, but #22 *Stage 1* must precede this hash line item.
 - **Tests:** a `repofiles` entry stages to the staging root by leaf name; a
-  missing one throws (no silent gap); a change to a `repofiles` file changes
-  that module's hash and no other's; a `repofiles` path that escapes the repo
-  top is rejected.
+  missing one throws (no silent gap); a `repofiles` path that escapes the repo
+  top is rejected. (The "a change to a `repofiles` file changes only that
+  module's hash" test lands with the deferred hash coverage above.)
+
+**Status:** landed — `build/build-staging-lib.ps1`, the staging loop in
+`build-mast.ps1`, `server/tests/build-staging-lib.Tests.ps1`, README schema
+note, DECISIONS 2026-08-02. Hash coverage deferred as described. **The Pester
+suite has not been run** — this branch was developed on macOS, which has no
+PowerShell; run `Invoke-Pester -Path server\tests\build-staging-lib.Tests.ps1`
+on the Windows provisioning box before merging.
 
 ### Stage 2 — Delete the GitHub token path
 
