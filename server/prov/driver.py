@@ -35,18 +35,23 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from prov import drift
 from prov import logevents as L
 from prov import transport
+from prov.unit_paths import (
+    UNIT_AVAIL,
+    UNIT_INSTALLED,
+    UNIT_SMOKE_DIR,
+    UNIT_VALIDATION,
+)
 from prov.maintenance_window import in_maintenance_window
 from prov.proxy_assert import ProxyPosture, get_proxy_dirty_surfaces
 from prov.retention import run_retention
 from prov.staging_size import staging_payload_size
 
 # --- unit-side literal paths (Windows units; never pathlib) ------------------
-UNIT_STATUS_DIR = r"C:\MAST\status"
-UNIT_AVAIL = r"C:\MAST\status\availability.json"
-UNIT_INSTALLED = r"C:\MAST\installed-manifest.json"
-UNIT_SMOKE_DIR = r"C:\MAST\logs\smoke"
+# The shared ones live in prov.unit_paths so the read-only tooling names the same
+# files; the rest are driver-only and stay here.
 UNIT_PULL_SCRIPT = r"C:\MAST\mast-pull-staging.ps1"
 # Detached-execute (item 6): the standalone runner + the files the driver writes
 # for it (config has no secret; the SMB pass is a machine-bound DPAPI blob).
@@ -256,19 +261,67 @@ class Driver:
                     session, f"if (Test-Path '{UNIT_INSTALLED}') {{ Get-Content '{UNIT_INSTALLED}' -Raw }} else {{ '' }}",
                     "installed"))
                 installed_hash = installed.get("payload_hash") if installed else None
+                validation = _parse_json_or_none(self._ps_out(
+                    session,
+                    f"if (Test-Path '{UNIT_VALIDATION}') {{ Get-Content '{UNIT_VALIDATION}' -Raw }} else {{ '' }}",
+                    "validation"))
 
                 # Phase 4 -- build (always).
-                payload_hash, git_sha = self._build(unit, host, modules, dur)
+                payload_hash, git_sha, build_manifest = self._build(unit, host, modules, dur)
                 if payload_hash is None:
                     return  # BUILD_FAIL already logged
 
-                # Phase 5 -- hash compare / dry-run.
-                if installed_hash == payload_hash and not self.cfg.force:
-                    self.log.event("UNIT_SKIP", unit=host, reason="already_current", payload_hash=payload_hash)
-                    self.log.activity(host, "SKIP", "already_current", dur(), payload_hash, git_sha)
-                    return
-                self.log.event("HASH_CHECK", unit=host, installed=installed_hash or "none",
-                               built=payload_hash, result="NEEDS_UPDATE")
+                # Phase 5 -- decide what (if anything) to run.
+                #
+                # The per-module compare runs BEFORE the aggregate-hash skip, not
+                # after it. The aggregate payload_hash is published by the unit
+                # only when it is fully provisioned -- every module hash-matched
+                # and clean -- which is exactly the state in which a tier-2
+                # needs-repair arises (the payload is unchanged; a service died).
+                # Gating on the hash first therefore made needs-repair
+                # unreachable for the case it exists for: the unit was skipped as
+                # already_current on every cycle and the live-state report was
+                # never consulted. So: classify first, and let the aggregate hash
+                # decide only whether a no-drift result means "skip" or "run the
+                # full set".
+                #
+                # The build above is deliberately still the FULL module set:
+                # building a subset would make the payload's build-manifest
+                # declare only that subset, and the unit's fully_provisioned
+                # (client/mast-installed-manifest.ps1) would then be judged
+                # against a partial set and read true on a one-module run.
+                # Targeting therefore happens at EXECUTE, not at build.
+                target_modules: list[str] = []
+                if self.cfg.force:
+                    # --force means "run everything": no classification, no skip.
+                    # Still record the hash comparison, which is the audit trail
+                    # of what the unit had versus what was built.
+                    self.log.event("HASH_CHECK", unit=host, installed=installed_hash or "none",
+                                   built=payload_hash, result="FORCED")
+                else:
+                    report = drift.classify(installed, build_manifest, validation)
+                    aggregate_matches = installed_hash == payload_hash
+                    self.log.event("MODULE_DRIFT", unit=host, summary=report.summary(),
+                                   targets=",".join(report.targets) or "none",
+                                   aggregate="match" if aggregate_matches else "differs")
+                    if report.current and aggregate_matches:
+                        self.log.event("UNIT_SKIP", unit=host, reason="already_current",
+                                       payload_hash=payload_hash)
+                        self.log.activity(host, "SKIP", "already_current", dur(), payload_hash, git_sha)
+                        return
+                    if report.current:
+                        # Aggregate differs but no module did: the payload changed
+                        # only outside the per-module boundary (a
+                        # build-host-vendored asset, a client-side script). Not
+                        # nothing -- fall through to a full run rather than
+                        # skipping, since the aggregate is the broader check.
+                        self.log.event("MODULE_DRIFT_NONE", unit=host,
+                                       note="aggregate differs but no module drifted; running full set")
+                    else:
+                        target_modules = report.targets
+                        self.log.event("HASH_CHECK", unit=host, installed=installed_hash or "none",
+                                       built=payload_hash,
+                                       result="NEEDS_REPAIR" if aggregate_matches else "NEEDS_UPDATE")
                 if self.cfg.dry_run:
                     self.log.event("DRYRUN_STOP", unit=host, reason="would_transfer_and_execute")
                     self.log.activity(host, "SKIP", "dry_run", dur(), payload_hash, git_sha)
@@ -297,12 +350,25 @@ class Driver:
                     return  # TRANSFER_FAIL already logged
 
                 # Phase 8 -- execute (detached; may reconnect and replace session).
-                ok, session = self._execute(session, host, dur, payload_hash, git_sha)
+                ok, session = self._execute(session, host, dur, payload_hash, git_sha,
+                                            target_modules)
                 if not ok:
                     return  # EXECUTE_FAIL already logged
 
-                # Phase 9 -- smoke.
-                if not self._smoke(session, host, modules, dur, payload_hash, git_sha):
+                # Phase 9 -- smoke, over the modules this run actually executed.
+                #
+                # Checking the FULL set here was wrong once targeting landed, in
+                # both directions. Markers live in a persistent directory and are
+                # only rewritten by the module that runs, so an untargeted module
+                # "passed" on a marker from an older payload -- assurance the gate
+                # had not earned. And a module whose marker went missing (logs
+                # cleaned) failed the unit forever: drift never targets it because
+                # its hash matches, so execute never regenerates the marker and
+                # there is no path out. Absence of a marker for a module this run
+                # did not touch is not a health signal; the computed tier-2 verify
+                # is what answers that question.
+                executed = target_modules or modules
+                if not self._smoke(session, host, executed, dur, payload_hash, git_sha):
                     return  # UNIT_FAIL already logged
 
                 # Phase 9b -- proxy-posture assertion.
@@ -405,7 +471,8 @@ class Driver:
             self.log.event("AVAIL_LEASE_RECLAIM", unit=host, prior_run=owner,
                            reason=avail.get("reason"), expires=exp or "none", stale=is_stale)
 
-    def _build(self, unit: dict, host: str, modules: list[str], dur) -> tuple[str | None, str | None]:
+    def _build(self, unit: dict, host: str, modules: list[str],
+               dur) -> tuple[str | None, str | None, dict]:
         # test_mode in the event is the auditable record of whether this build
         # passed -AllowMissing* (dev/test) or ran as a production build that
         # fails loud on any missing input (item 7). Production omits --test-mode.
@@ -432,18 +499,21 @@ class Driver:
                            timeout_s=BUILD_TIMEOUT_S, log=str(build_log))
             self.log.activity(host, "BUILD_FAIL", "timeout", dur())
             self.exit_code = EXIT_UNIT_FAIL
-            return None, None
+            return None, None, {}
         if rc != 0:
             self.log.event("BUILD_FAIL", unit=host, exit_code=rc, log=str(build_log))
             self.log.activity(host, "BUILD_FAIL", "exception", dur())
             self.exit_code = EXIT_UNIT_FAIL
-            return None, None
+            return None, None, {}
         staging_dir = self.cfg.repo_top / "staging" / host / "01-provisioning"
         bm = transport.load_json_file(staging_dir / "build-manifest.json")
         payload_hash, git_sha = bm.get("payload_hash"), bm.get("git_sha")
         self.log.event("BUILD_OK", unit=host, payload_hash=payload_hash, git_sha=git_sha)
         self._staging_dir = staging_dir
-        return payload_hash, git_sha
+        # The manifest is returned rather than stashed on self: it describes the
+        # payload for ONE host (module hashes fold in -Site and other build-time
+        # args), and this object loops over every unit.
+        return payload_hash, git_sha, bm
 
     def _set_unavailable(self, session: Any, host: str, payload_hash: str) -> None:
         since = datetime.now(timezone.utc)
@@ -508,13 +578,20 @@ class Driver:
         self._unit_stage = unit_stage
         return True
 
-    def _write_detached_inputs(self, session: Any, stage: str) -> None:
+    def _write_detached_inputs(self, session: Any, stage: str,
+                               target_modules: list[str] | None = None) -> None:
         """Write the detached runner's inputs: config (no secret) + the SMB pass
         as a machine-bound DPAPI-LocalMachine blob (a network-logon session CAN
         LocalMachine-Protect; the runner decrypts it in the interactive session)."""
+        # 'modules' is the targeted subset from the per-module drift compare, or
+        # "" for the full set. The runner forwards it to execute's -Modules, so a
+        # one-module drift runs one module's commands instead of the whole
+        # payload. Empty string, not absent: a ConvertFrom-Json object missing
+        # the key would need a StrictMode-safe probe on the unit side.
         self._write_unit_json(session, UNIT_DETACHED_CFG, {
             "run_id": self.run_id, "staging_path": stage, "prov_server": self.prov_server,
             "smb_user": self.smb_user, "held_by": self.prov_server,
+            "modules": ",".join(target_modules or []),
         })
         enc = (
             "$ErrorActionPreference='Stop'; Add-Type -AssemblyName System.Security; "
@@ -525,7 +602,8 @@ class Driver:
         )
         transport.run_ps(session, enc, label="dpapi-blob", echo=False, tee_stdout=False, timeout_s=PROBE_TIMEOUT_S)
 
-    def _execute(self, session: Any, host: str, dur, payload_hash: str, git_sha: str) -> tuple[bool, Any]:
+    def _execute(self, session: Any, host: str, dur, payload_hash: str, git_sha: str,
+                 target_modules: list[str] | None = None) -> tuple[bool, Any]:
         """Detached execute (item 6): run execute-mast-provisioning.ps1 as a
         detached scheduled task (via client/mast-run-detached.ps1) and poll its
         result marker, reconnecting if the transport session drops mid-run -- so a
@@ -535,9 +613,10 @@ class Driver:
         NOTE: reboot-survival (execute's -AllowReboot dropping the unit) can't be
         validated on the VM (see reference memory); the session-drop path is the
         common case and is handled here."""
-        self.log.event("EXECUTE_START", unit=host, run_id=self.run_id, mode="detached")
+        self.log.event("EXECUTE_START", unit=host, run_id=self.run_id, mode="detached",
+                       modules=",".join(target_modules or []) or "all")
         stage = self._unit_stage
-        self._write_detached_inputs(session, stage)
+        self._write_detached_inputs(session, stage, target_modules)
         runner_src = (self.cfg.repo_top / "client" / "mast-run-detached.ps1").read_text(encoding="utf-8")
         transport.upload_file(session, UNIT_DETACHED_RUNNER, runner_src, label="detached-runner")
 

@@ -2,6 +2,265 @@
 
 ---
 
+## [2026-08-02] Smoke gates only what ran; report and driver share one set of unit paths
+
+Second and final batch of #33 review fixes; follows the entry below.
+
+**Why:** (1) Phase 9 checked smoke markers for the unit's FULL module set with no
+freshness check, which targeting made wrong in both directions. Markers live in a
+persistent directory and are only rewritten by the module that runs, so an
+untargeted module "passed" on a marker from an older payload -- assurance the gate
+had not earned. Worse, a module whose marker went missing (logs cleaned) failed
+the unit permanently: drift never targets it because its hash matches, so execute
+never regenerates the marker and there is no path out. (2) `write_csv` still read
+`module_versions` after the matrix moved to hash-keyed statuses, so one run emitted
+a text report saying STALE and a CSV showing no drift -- and this very PR's
+desktop-shortcuts change (verify command gained `-FastApiUrl`, no version bump) is
+exactly that case. (3) The unit-side `validation.json` path was spelled in both the
+driver and the tool. (4) `_build_manifest` was per-unit state on the long-lived
+`Driver`. (5) `load_reference` lost its last caller.
+
+**What:** (1) Smoke asserts over `target_modules or modules` -- what this run
+actually executed. Absence of a marker for an untouched module is not a health
+signal; the computed tier-2 verify is what answers that. (2) `write_csv` emits the
+same cells `render` does, read off `cmp["matrix"]`. (3) New dependency-free
+`server/prov/unit_paths.py` holds the shared unit-side literals; the driver and
+`tools/fleet-drift-report.py` both import it. It imports nothing on purpose --
+the report runs with no third-party deps in `--from-json` mode and must not pull
+in `prov.transport` (paramiko/pywinrm) to learn a path. (4) `_build` returns the
+manifest as a third element and the caller keeps it local, like `target_modules`.
+(5) Deleted.
+
+**Implications:** the fleet report gained its first tests
+(`server/prov/tests/test_fleet_report.py`, loaded by path since the tool is a
+hyphenated script) covering `compare_to_build`, the CSV/text agreement, both
+manifest shapes, and tier-2 parsing -- all previously uncovered. Suite is 125
+pytest, up from 106 before the review.
+
+---
+
+## [2026-08-02] Drift review fixes: classify before the hash gate, always-run modules, tier-2 staleness
+
+**Supersedes** parts of the earlier 2026-08-02 entry "Per-module drift decides
+what runs; two tiers, one classifier" -- three defects found reviewing #33 before
+it merged.
+
+**Why:** (1) The tier-2 `needs-repair` verdict was **unreachable for the case it
+exists for**. The unit publishes an aggregate `payload_hash` only when it is
+fully provisioned -- every module hash-matched and clean -- which is exactly the
+state a runtime failure arises in (payload unchanged, service died). The driver
+compared that hash first and returned `already_current`, so `classify()` never
+ran and `validation.json` was never read. (2) Targeting by module name **dropped
+the order-terminal providers**: `execute-mast-provisioning.ps1` filters commands
+strictly by module, so a `-Modules zwo` run skipped `reboot` (order 9999),
+`mast-services-finalize` (9500) and the order-9000 `proxy` re-assert -- an
+installer's pending reboot would leave no flag and the orchestrator would never
+learn. (3) Nothing clears `validation.json` (`run-verify-only.ps1` is its only
+writer and is operator-run), so a pre-repair `fail` re-targeted the repaired
+module on every later payload change, indefinitely.
+
+**What:** (1) The per-module compare now runs **before** the aggregate-hash skip;
+the hash decides only whether a no-drift result means "skip" or "run the full
+set". (2) `module.json` gains `"always": true`, collected by the build into
+`build-manifest.json`'s `always_modules`; `DriftReport.targets` folds them into
+any non-empty target set in build order, and `DriftReport.drifted` still reports
+what actually drifted. They never cause a run on their own. (3) `classify`
+ignores a tier-2 entry whose report `checked_at` predates that module's
+`installed_at` -- it describes a build no longer on the unit. An unparseable
+timestamp keeps the verdict rather than silently suppressing a reported failure.
+
+**Implications:** the aggregate hash is now a *fast-skip* input rather than a
+gate, so `classify()` runs every cycle (pure logic over data already fetched).
+`fleet-drift-report.py` grew a Tier-2 section: it had parsed `validated_at` and
+never rendered it, which is what let the staleness stay invisible. Also removed
+in the same pass: a dead `inst_hash == _UNKNOWN` comparison and the unreachable
+`build_modules` fallback flagged in review. The four earlier drift flow tests
+asserted no exit code and were in fact ending at `EXIT_UNIT_FAIL` on a missing
+smoke marker; they now answer smoke for the build's modules and assert
+`EXIT_OK`, which is what made the new regression tests meaningful.
+
+---
+
+## [2026-08-02] Per-module drift decides what runs; two tiers, one classifier
+
+**Why:** The driver compared a single `payload_hash`, so any difference meant a
+full cycle -- every module reinstalled because one changed. And the comparison
+could not distinguish "the payload changed" from "the unit broke": a stopped
+service leaves the hash matching perfectly.
+
+**What:** `server/prov/drift.py` classifies each module as up-to-date /
+needs-update / missing / extra / needs-repair from the unit's cumulative
+`installed-manifest.json` vs the payload's `build-manifest.json`, keyed on the
+**content hash** (the version string is reporting only, per the epic's locked
+decision 2). The driver runs it after the aggregate-hash gate and passes the
+drifted set to execute as `-Modules`, so a one-module drift runs one module.
+
+**Targeting happens at execute, not at build.** Building only the drifted subset
+was the obvious alternative and is wrong: the payload's `build-manifest.json`
+would then declare only that subset, and the unit's `fully_provisioned` -- judged
+against the build's module list -- would read true after a one-module run. The
+build stays full; only execution is narrowed.
+
+**Two tiers, one vocabulary.** Tier 1 is the written record. Tier 2 is computed:
+`client/run-verify-only.ps1` (already the verify dispatcher -- extended rather
+than duplicated into a new `validate-unit.ps1`) writes
+`C:\MAST\status\validation.json`, and a module whose hash matches but whose
+live verify fails classifies **needs-repair**. Absent tier-2 data means "not
+run", never "failed", so a unit that has never run verify-only is not
+manufactured into drift. `needs-update` wins over `needs-repair` when both
+apply -- the remedy differs and the payload change is the larger fact.
+
+**Content-aware verify (resolution rule 2).** `verify-desktop-shortcuts.ps1` was
+presence-only, so the epic's worked example -- repointing the FastAPI shortcut --
+passed it. It now takes `-FastApiUrl` injected from `module.json`'s verify
+command (the same place the provider's arg comes from, so the two cannot drift)
+and compares the deployed `.url` target against what this build expects. Adding
+the arg also folds it into the module's content hash, which hashes resolved
+commands.
+
+**Implications:** `tools/fleet-drift-report.py` renders a per-unit x per-module
+status matrix and imports the **same** `classify`, so the report cannot disagree
+with what the next cycle will do; its old cross-unit modal comparison remains as
+the no-`--build-manifest` fallback. `extra` (a module the unit has and the build
+no longer ships) is reported but never actioned -- removing software is out of
+scope for a drift pass. Tests: `server/prov/tests/test_drift.py` and the
+targeted-update cases in `test_driver_flow.py`.
+
+---
+
+## [2026-08-02] installed-manifest.json is cumulative, per-module, and written on partial runs
+
+**Why:** Execute copied `build-manifest.json` wholesale and stamped `installed_at`,
+which made the unit's record **last-payload-only**: a `-Modules <subset>` touch-up
+overwrote the document with just that subset, so the unit could no longer answer
+"am I fully provisioned". The write was also gated on `failCount -eq 0`, so a run
+where a single module failed wrote nothing at all and the record kept describing a
+payload from days earlier -- the next cycle could not tell which modules were
+actually current.
+
+**What:** `client/mast-installed-manifest.ps1` (dot-sourced by execute, staged
+beside it, unit-testable without a provisioning run) merges per-module entries
+`{version, hash, provide, verify, installed_at}` for the modules a run actually
+touched; untouched modules keep their prior entry. `provide` and `verify` are
+tracked separately because a module can install and then fail its own verify, and
+because a module with no verify command records `none` rather than a false `pass`.
+Written on **every** run, partial included. `fully_provisioned` is derived: every
+module the build declares is present, hash-matched, `provide = pass`, not
+`verify = fail`.
+
+**Implications:** the aggregate `payload_hash` -- the fast path
+`check-and-provision.ps1` and `server/prov/driver.py` compare to decide
+"already_current" -- is published **only** when `fully_provisioned`. A partial run
+leaves it absent, the fast path misses, and the unit falls through to a run instead
+of being skipped as current; absent must never read as a match, so the PS driver's
+read was made explicit rather than relying on a silent `$null` from a missing
+property. A legacy pre-`modules` manifest is read without error and simply carries
+nothing forward, which is the one-time mast01-04 migration. `tools/fleet-drift-report.py`
+still reads the now-absent `module_versions` from the installed manifest and is
+rewritten in Stage 3 to key on `modules`. Tests:
+`server/tests/mast-installed-manifest.Tests.ps1`.
+
+---
+
+## [2026-08-02] `mast-repos.txt` clones the upstream integration branches
+
+**Why:** The repo list still pointed at the personal fork's dev branch --
+`elibrody-weizmann/MAST_unit.2024-12-12 eli/vm-provisioning` and
+`elibrody-weizmann/MAST_common eli/vm-provisioning` -- set in May 2026 while
+bringing MAST_unit up on the provisioning VM. Retiring the fork (entry below)
+deleted the MAST_common branch, so `provide-mast.ps1` would have failed at clone
+on the next run: the module that installs MAST itself, broken by a cleanup
+elsewhere. The fork branch was stale regardless (tip 2026-06-21, and its own
+last commit was already repinning the submodule to `The-MAST-project` master),
+and it predates the upstream requirements pinning of Jul-Aug 2026.
+
+**What:** Both lines now name `The-MAST-project` with an explicit ref --
+`MAST_unit.2024-12-12 main`, `MAST_common master`. The refs are given
+explicitly, and the file says why: the two repos do not share one integration
+branch, and an omitted ref silently follows whatever the remote default happens
+to be at clone time. That pointer had in fact drifted -- MAST_common's default
+named a dead 2024 `main` -- which is what motivated the rule; the dead branch
+was deleted and the default corrected to `master` the same day
+(`MAST_common#14`), so the pointer is right today and the explicit refs are
+what keep a future drift from reaching the units. Integration branches were
+derived from merged-PR bases and branch-tip recency, not from
+`defaultBranchRef`.
+
+**Implications:** Provisioned units now receive the pinned `requirements.txt`
+from both repos, so a unit venv becomes a deterministic function of the
+checked-out commit -- the precondition that makes per-module hashing meaningful
+for the `mast` module (see `docs/per-module-tracking-plan.md`, Stage 1b). Both
+entries are still **branch** refs, so the existing-clone path continues to
+`fetch` + `reset --hard FETCH_HEAD` and the deployed content moves under a fixed
+module hash; Stages 1b/2 are what close that.
+
+---
+
+## [2026-08-02] Retire the personal fork; a single `origin` points at the integration repo
+
+**Why:** Every clone carried two remotes -- `origin` = `elibrody-weizmann/<repo>` and
+`upstream` = `The-MAST-project/<repo>` -- a layout no fresh `git clone` produces, so the
+word "origin" meant different repositories depending on which machine you typed it on. The
+fork had also stopped earning its keep: work is pushed straight to branches on the
+integration repo, and 12 of 13 open PRs already had their head branch there. Auditing the
+forks found their remaining exclusive content was either already reapplied upstream or
+obsoleted by the config-file epic.
+
+**What:** The forks' remaining branches were deleted, then in each clone `origin` (the
+fork) was removed and `upstream` renamed to `origin`. Two machines hold MAST checkouts --
+this one and the Windows provisioning box -- and both were converted in the same pass, so
+no window existed where "origin" was ambiguous between them. `MAST_scheduler` and
+`mast-claude-config` were untouched: the former has no upstream repo (the fork *is* the
+repo), the latter already pointed at The-MAST-project.
+
+**Implications:** `git fetch` / `git push` with no remote argument now reach the
+integration repo, and a fresh clone matches an existing checkout exactly. Anything written
+against the old two-remote model -- scripts, notes, agent instructions saying `git fetch
+upstream` -- is wrong and should be read as plain `git fetch`. Pushing a branch now
+publishes it on the shared repo immediately, with no fork staging step in between, so
+branch names are visible to everyone the moment they are pushed.
+
+---
+
+## [2026-07-23] build-manifest.json carries per-module content hashes (`module_state`)
+
+**Why:** Drift detection is whole-payload: the single `payload_hash` over the
+flattened staging tree can say a unit differs from the build but not *which
+module*, so any drift means a full reprovision. The per-module-tracking epic
+(#22) needs a per-module fingerprint on the build side first (Stage 1). The
+hash boundary must cover more than file bytes: a module's deployed output is
+also shaped by build-time injected command args (`-Site`, `-ForceMode`,
+`-RpiNtp`, the desktop-shortcut `-FastApiUrl` -- which lives only in
+`module.json` `command`), which no staged-file hash sees. The worked example
+that must register as drift: repointing the FastAPI shortcut URL changes no
+commandfile byte at all.
+
+**What:** `build-manifest.json` gains `module_state`: per module `{version,
+hash}`. `Get-ModuleContentHash` (in the new dot-sourceable
+`build/build-manifest-lib.ps1`, where `Get-PayloadHash` also moved so Pester
+can test both without running a build) hashes (a) the module's source
+commandfiles under `server/providers/<module>/` -- hashed at the source, since
+staging is flattened and has no per-module subtree; (b) the module's
+**resolved** `commands.json` entries (provide + verify + any finalize), i.e.
+the command strings with the injected args baked in; (c) the resolved version
+(`git` -> SHA, as in `module_versions`). File lines sorted by path, command
+lines order-preserving (execution order is behavior), category prefixes
+(`file:`/`cmd:`/`version:`) keep inputs collision-free. Missing commandfiles
+are skipped -- by hash time a gap can only be a `-TestMode` optional payload;
+production builds have already thrown in the staging pass. `module_versions`
+stays alongside as a deprecated duplicate (`tools/fleet-drift-report.py` still
+reads it; removed when the report keys on `module_state` in Stage 3). The
+aggregate `payload_hash` is unchanged as the fast "anything changed?" gate.
+Tests: `server/tests/build-manifest-lib.Tests.ps1`.
+
+**Implications:** Stage 2 can merge `{version, hash}` per executed module into
+a cumulative `installed-manifest.json`; Stage 3 gets per-module drift
+classification and targeted `-Modules` updates. Build-host-vendored payloads
+(cygwin-pkg-cache, mast-indexes, NetFx3 SxS, licenses) are *outside* the
+per-module hash boundary -- the aggregate `payload_hash` still catches their
+staged bytes; the same accepted boundary is documented in #24 for the release
+version. Plan: `docs/per-module-tracking-plan.md`.
+
 ## [2026-07-23] Astrometry cygwin installs offline from a frozen package cache
 
 **Why:** `provide-astrometry-dependencies.ps1` installed cygwin from the

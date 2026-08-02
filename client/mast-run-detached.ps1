@@ -86,12 +86,21 @@ if (${Run}) {
         # Leave smbPass empty; execute logs the Z: mapping failure and continues.
     }
 
+    # Targeted update: the driver's per-module drift compare (server/prov/drift.py)
+    # puts the drifted module names here; empty means the full set. Execute takes
+    # a comma-separated string, which is exactly what the driver writes.
+    ${modules} = ''
+    if (${cfg}.PSObject.Properties.Match('modules').Count) {
+        ${modules} = [string]${cfg}.modules
+    }
+
     ${exe} = Join-Path ${cfg}.staging_path 'execute-mast-provisioning.ps1'
     & ${exe} `
         -StagingPath ${cfg}.staging_path `
         -ProvServer  ${cfg}.prov_server `
         -SmbUser     ${cfg}.smb_user `
         -SmbPass     ${smbPass} `
+        -Modules     ${modules} `
         -RunId       ${cfg}.run_id `
         -HeldBy      ${cfg}.held_by `
         -AllowReboot

@@ -31,6 +31,15 @@ if (-not (Test-Path ${invokeDot})) {
 }
 . ${invokeDot}
 
+${installedManifestDot} = Join-Path ${PSScriptRoot} 'mast-installed-manifest.ps1'
+if (-not (Test-Path ${installedManifestDot})) {
+    ${installedManifestDot} = Join-Path ${PSScriptRoot} '..\client\mast-installed-manifest.ps1'
+}
+if (-not (Test-Path ${installedManifestDot})) {
+    throw "mast-installed-manifest.ps1 not found (expected next to this script or under client)."
+}
+. ${installedManifestDot}
+
 # When the orchestrator supplies a run id, key the unit-side session dir on it
 # (C:\MAST\logs\sessions\<run-id>) so the controller can archive this exact dir
 # back under its own per-run log tree. A manual run (no -RunId) keeps the
@@ -221,6 +230,10 @@ try {
     ${successCount} = 0
     ${failCount} = 0
     ${commandCount} = @(${commands}).Count
+    # Per-module provide/verify outcomes for the cumulative installed-manifest.
+    # Recorded for every command, pass or fail, so a partial run still says which
+    # modules landed rather than leaving the whole record stale (issue #22).
+    ${moduleOutcomes} = New-MastModuleOutcomeMap
 
     foreach (${cmd} in ${commands}) {
         Write-Log ""
@@ -248,10 +261,14 @@ try {
             if ($null -eq ${exitCode}) {
                 Write-Log "[FAIL] $($cmd.module) (missing exit code after child process)"
                 ${failCount}++
+                ${moduleOutcomes} = Add-MastModuleOutcome -Outcomes ${moduleOutcomes} `
+                    -CommandModule ${cmd}.module -Success $false
             }
             elseif (${exitCode} -eq 0) {
                 Write-Log "SUCCESS: $($cmd.module) (exit code: ${exitCode})"
                 ${successCount}++
+                ${moduleOutcomes} = Add-MastModuleOutcome -Outcomes ${moduleOutcomes} `
+                    -CommandModule ${cmd}.module -Success $true
 
                 # Fallback smoke marker: write the literal "success" only if
                 # the smoke file is missing or whitespace-only. Providers
@@ -271,6 +288,8 @@ try {
             else {
                 Write-Log "[FAIL] $($cmd.module) (exit code: ${exitCode})"
                 ${failCount}++
+                ${moduleOutcomes} = Add-MastModuleOutcome -Outcomes ${moduleOutcomes} `
+                    -CommandModule ${cmd}.module -Success $false
             }
 
             Pop-Location
@@ -278,6 +297,8 @@ try {
         catch {
             Write-Log "[FAIL] EXCEPTION in $($cmd.module): $_"
             ${failCount}++
+            ${moduleOutcomes} = Add-MastModuleOutcome -Outcomes ${moduleOutcomes} `
+                -CommandModule ${cmd}.module -Success $false
             Pop-Location
         }
     }
@@ -291,35 +312,67 @@ try {
     Write-Log "Failed: ${failCount}"
     Write-Log "=========================================="
 
+    # -------------------------------------------------------------------
+    # Record what this run installed, per module, MERGED into whatever the
+    # unit already had.
+    #
+    # Written on EVERY run, not only a clean one. The old code wrote the
+    # manifest only when failCount was 0, so a run where one module failed
+    # left the record describing a payload from days ago -- and the next
+    # cycle could not tell which modules were actually current. Merging a
+    # partial run keeps the record truthful: the modules that landed are
+    # recorded as landed, the ones that failed are recorded as failed, and
+    # the untouched ones keep their prior entry.
+    #
+    # fully_provisioned and the aggregate payload_hash are what protect the
+    # autonomous loop: payload_hash is published only when every module the
+    # build declares is present, hash-matched and clean, so a partial run
+    # cannot make the fast path report "nothing to do".
+    # See docs/per-module-tracking-plan.md Stage 2, issue #22.
+    # -------------------------------------------------------------------
+    ${buildManifest}     = Join-Path ${StagingPath} "build-manifest.json"
+    ${installedManifest} = Join-Path ${mastRoot} "installed-manifest.json"
+    if (Test-Path ${buildManifest}) {
+        try {
+            ${buildData} = Get-Content ${buildManifest} -Raw | ConvertFrom-Json
+
+            ${previous} = $null
+            if (Test-Path -LiteralPath ${installedManifest}) {
+                try {
+                    ${previous} = Get-Content ${installedManifest} -Raw | ConvertFrom-Json
+                } catch {
+                    # A corrupt prior manifest must not abort the run, but it
+                    # must not be silently treated as "no modules installed"
+                    # either -- that would read as a clean slate. Say so; the
+                    # merge then starts from this run's coverage and Stage 3
+                    # reprovisions whatever it cannot account for.
+                    Write-Log "WARNING: existing installed-manifest.json unreadable, starting coverage from this run: $_"
+                    ${previous} = $null
+                }
+            }
+
+            ${merged} = Merge-MastInstalledManifest -Previous ${previous} -BuildData ${buildData} `
+                -Outcomes ${moduleOutcomes} `
+                -InstalledAt ((Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ'))
+
+            # Atomic write: tmp then rename, so a concurrent reader never
+            # sees a partial file.
+            ${tmp} = "${installedManifest}.tmp"
+            (${merged} | ConvertTo-Json -Depth 6) | Out-File -FilePath ${tmp} -Encoding UTF8
+            Move-Item -Force ${tmp} ${installedManifest}
+            Write-Log ("Wrote installed-manifest.json (modules touched={0}, fully_provisioned={1})" -f `
+                @(${moduleOutcomes}.Keys).Count, ${merged}.fully_provisioned)
+        } catch {
+            Write-Log "WARNING: Failed to write installed-manifest.json: $_"
+        }
+    } else {
+        Write-Log "WARNING: build-manifest.json not found in staging; skipping installed-manifest.json"
+    }
+
     if (${failCount} -gt 0) {
         Write-Log "[WARN] Provisioning completed with ${failCount} failures"
         $script:exitCode = 1
     } else {
-        # ---------------------------------------------------------------
-        # Record the installed payload fingerprint so check-and-provision.ps1
-        # can detect drift on the next autonomous cycle.
-        # Only written on a fully-clean run (failCount == 0).
-        # ---------------------------------------------------------------
-        ${buildManifest}     = Join-Path ${StagingPath} "build-manifest.json"
-        ${installedManifest} = Join-Path ${mastRoot} "installed-manifest.json"
-        if (Test-Path ${buildManifest}) {
-            try {
-                ${m} = Get-Content ${buildManifest} -Raw | ConvertFrom-Json
-                ${m} | Add-Member -NotePropertyName installed_at `
-                                  -NotePropertyValue ((Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')) -Force
-                # Atomic write: tmp then rename, so a concurrent reader never
-                # sees a partial file.
-                ${tmp} = "${installedManifest}.tmp"
-                (${m} | ConvertTo-Json -Depth 4) | Out-File -FilePath ${tmp} -Encoding UTF8
-                Move-Item -Force ${tmp} ${installedManifest}
-                Write-Log "Wrote installed-manifest.json (payload_hash=$($m.payload_hash))"
-            } catch {
-                Write-Log "WARNING: Failed to write installed-manifest.json: $_"
-            }
-        } else {
-            Write-Log "WARNING: build-manifest.json not found in staging; skipping installed-manifest.json"
-        }
-
         Write-Log "MAST provisioning completed successfully!"
         $script:exitCode = 0
     }

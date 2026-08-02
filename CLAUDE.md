@@ -273,15 +273,18 @@ whenever you change how assets land in staging. Symptom to recognize: a pull tha
 copies small files but fails every binary is an ACL problem (check
 `icacls <staged-binary>`), not a network/MTU/session issue. See DECISIONS 2026-06-28.
 
-## Remotes: `upstream` is the integration repo, `origin` is the fork
+## Remotes: a single `origin`, the integration repo
 
-`upstream` = `github.com/The-MAST-project/MAST_provisioning` (integration); `origin` =
-`github.com/elibrody-weizmann/MAST_provisioning` (the working fork). "Fetch latest from
-MAST_provisioning" means `git fetch upstream`, not `origin`. The working line is
-`eli/vm-provisioning`, treated as the de facto main until the next milestone -- base new
-work on it, and when comparing to `upstream/main` use the merge-base so the diff shows only
-the real new contribution (a direct `HEAD..upstream/main` looks huge because of files we
-added, not files upstream removed).
+`origin` = `github.com/The-MAST-project/MAST_provisioning` and there is no second remote.
+"Fetch latest from MAST_provisioning" is plain `git fetch`. The `elibrody-weizmann` fork
+was retired on 2026-08-02 after its last unmerged content landed upstream; if you find a
+checkout still carrying `origin` = fork plus `upstream` = The-MAST-project, it predates
+that change -- `git remote remove origin && git remote rename upstream origin` brings it
+into line.
+
+The working line is `main` (the v1+v2 provisioning epics merged there via PR #9). Base new
+work on `origin/main` and branch per topic; there is no long-lived de facto trunk sitting
+off to the side any more.
 
 ## Proxy mode is explicit (`--proxy-mode`)
 

@@ -8,5 +8,5 @@
     "provide-desktop-shortcuts.ps1",
     "verify-desktop-shortcuts.ps1"
   ],
-  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\verify-desktop-shortcuts.ps1\""
+  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\verify-desktop-shortcuts.ps1\" -FastApiUrl \"http://localhost:8000/\""
 }
