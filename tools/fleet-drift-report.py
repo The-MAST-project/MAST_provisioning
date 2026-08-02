@@ -41,9 +41,15 @@ from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_REPO_ROOT / "vm"))  # so a lazy 'import vm_lib' resolves in the gather path
+sys.path.insert(0, str(_REPO_ROOT / "server"))  # prov.drift -- the one classifier, shared with the driver
+
+from prov.drift import ModuleState, classify  # noqa: E402
 
 MANIFEST_PATH = r"C:\MAST\installed-manifest.json"
 BOOTSTRAP_PATH = r"C:\MAST\bootstrap-manifest.json"
+# Tier-2 computed state, written by client/run-verify-only.ps1 when it last ran
+# on the unit. Optional: absent simply means tier 2 has not run there.
+VALIDATION_PATH = r"C:\MAST\status\validation.json"
 NO_MANIFEST_SENTINEL = "__MAST_NO_MANIFEST__"
 NO_BOOTSTRAP_SENTINEL = "__MAST_NO_BOOTSTRAP__"
 SPLIT = "====MAST-DRIFT-SPLIT===="
@@ -58,8 +64,16 @@ class UnitRecord:
     built_at: str | None = None
     installed_at: str | None = None
     module_versions: dict[str, str] = field(default_factory=dict)
+    # Per-module entries from the cumulative manifest (#22 stage 2). Empty on a
+    # unit still carrying a pre-stage-2 manifest -- see _manifest_from_obj.
+    modules: dict[str, dict] = field(default_factory=dict)
+    fully_provisioned: bool | None = None
     bootstrap_version: int | None = None
     bootstrapped_at: str | None = None
+    #: Tier-2 verify outcomes {module: pass|fail} from the unit's last
+    #: run-verify-only pass; empty when tier 2 has not run.
+    validation: dict[str, str] = field(default_factory=dict)
+    validated_at: str | None = None
     error: str | None = None
 
 
@@ -83,7 +97,16 @@ def read_registry_hosts(registry_path: Path) -> list[str]:
 
 
 def _manifest_from_obj(host: str, obj: dict) -> UnitRecord:
-    mv = obj.get("module_versions") or {}
+    # Two manifest shapes coexist during the rollout: the cumulative per-module
+    # 'modules' map (#22 stage 2) and the legacy whole-document copy carrying
+    # 'module_versions'. Read both so a not-yet-reprovisioned unit still renders
+    # rather than showing up empty.
+    modules = obj.get("modules") or {}
+    if not isinstance(modules, dict):
+        modules = {}
+    mv = {str(k): str(v.get("version", "")) for k, v in modules.items() if isinstance(v, dict)}
+    if not mv:
+        mv = {str(k): str(v) for k, v in (obj.get("module_versions") or {}).items()}
     return UnitRecord(
         host=host,
         status="ok",
@@ -91,8 +114,26 @@ def _manifest_from_obj(host: str, obj: dict) -> UnitRecord:
         git_sha=obj.get("git_sha"),
         built_at=obj.get("built_at"),
         installed_at=obj.get("installed_at"),
-        module_versions={str(k): str(v) for k, v in mv.items()},
+        module_versions=mv,
+        modules=modules,
+        fully_provisioned=obj.get("fully_provisioned"),
     )
+
+
+def _parse_validation(part: str) -> tuple[dict[str, str], str | None]:
+    """Tier-2 report, if the unit has one. Absent/garbled means "tier 2 unknown",
+    never "tier 2 failed" -- an unreadable report must not manufacture drift."""
+    part = (part or "").strip()
+    if not part:
+        return {}, None
+    try:
+        obj = json.loads(part)
+    except json.JSONDecodeError:
+        return {}, None
+    mods = obj.get("modules") or {}
+    if not isinstance(mods, dict):
+        return {}, None
+    return {str(k): str(v) for k, v in mods.items()}, obj.get("checked_at")
 
 
 def _parse_bootstrap(part: str) -> tuple[int | None, str | None]:
@@ -122,12 +163,17 @@ def gather_unit(host: str, cred: dict[str, str], connect_timeout_s: int) -> Unit
             f"{{ Get-Content -LiteralPath '{MANIFEST_PATH}' -Raw }} else {{ '{NO_MANIFEST_SENTINEL}' }}; "
             f"'{SPLIT}'; "
             f"if (Test-Path -LiteralPath '{BOOTSTRAP_PATH}') "
-            f"{{ Get-Content -LiteralPath '{BOOTSTRAP_PATH}' -Raw }} else {{ '{NO_BOOTSTRAP_SENTINEL}' }}"
+            f"{{ Get-Content -LiteralPath '{BOOTSTRAP_PATH}' -Raw }} else {{ '{NO_BOOTSTRAP_SENTINEL}' }}; "
+            f"'{SPLIT}'; "
+            f"if (Test-Path -LiteralPath '{VALIDATION_PATH}') "
+            f"{{ Get-Content -LiteralPath '{VALIDATION_PATH}' -Raw }}"
         )
         resp = session.run_ps(script)
         out = resp.std_out.decode("utf-8-sig", errors="replace")
-        installed_part, _, bootstrap_part = out.partition(SPLIT)
+        installed_part, _, rest = out.partition(SPLIT)
+        bootstrap_part, _, validation_part = rest.partition(SPLIT)
         bootstrap_version, bootstrapped_at = _parse_bootstrap(bootstrap_part)
+        validation, validated_at = _parse_validation(validation_part)
 
         installed_part = installed_part.strip()
         if not installed_part or NO_MANIFEST_SENTINEL in installed_part:
@@ -139,6 +185,8 @@ def gather_unit(host: str, cred: dict[str, str], connect_timeout_s: int) -> Unit
                 rec = UnitRecord(host=host, status="parse-error", error=str(exc))
         rec.bootstrap_version = bootstrap_version
         rec.bootstrapped_at = bootstrapped_at
+        rec.validation = validation
+        rec.validated_at = validated_at
         return rec
     except Exception as exc:  # noqa: BLE001
         return UnitRecord(host=host, status="error", error=str(exc))
@@ -180,8 +228,70 @@ def _baseline(values: list[str | None], reference: str | None) -> str | None:
     return max(present, key=lambda v: (counts[v], -present.index(v)))
 
 
+#: Compact status glyphs for the per-module matrix.
+_STATE_CELL = {
+    ModuleState.UP_TO_DATE: "ok",
+    ModuleState.NEEDS_UPDATE: "STALE",
+    ModuleState.MISSING: "MISSING",
+    ModuleState.EXTRA: "extra",
+    ModuleState.NEEDS_REPAIR: "REPAIR",
+}
+
+
+def compare_to_build(units: list[UnitRecord], build: dict) -> dict:
+    """Per-unit x per-module STATUS against the build -- the authoritative view.
+
+    Keyed on the content hash, exactly as the driver decides what to run
+    (prov.drift.classify is literally the same function), so the report can never
+    disagree with what the next cycle will do. Versions are still carried for
+    readability, but they do not decide anything.
+    """
+    ok_units = [u for u in units if u.status == "ok"]
+    reports = {u.host: classify({"modules": u.modules} if u.modules else None, build,
+                                {"modules": u.validation} if u.validation else None)
+               for u in ok_units}
+
+    modules = [str(m) for m in (build.get("modules") or [])]
+    extras = sorted({m.name for r in reports.values() for m in r.modules
+                     if m.state is ModuleState.EXTRA})
+    all_modules = modules + [m for m in extras if m not in modules]
+
+    matrix = []
+    for mod in all_modules:
+        cells, differs = {}, {}
+        for u in ok_units:
+            entry = next((m for m in reports[u.host].modules if m.name == mod), None)
+            state = entry.state if entry else None
+            cells[u.host] = _STATE_CELL.get(state, "-") if state else "-"
+            differs[u.host] = bool(entry and entry.state is not ModuleState.UP_TO_DATE)
+        matrix.append({"module": mod, "baseline": "ok", "cells": cells, "differs": differs})
+
+    drift_by_host = {h: r.targets for h, r in reports.items()}
+    verdicts = {}
+    for u in units:
+        if u.status != "ok":
+            verdicts[u.host] = u.status.upper()
+        else:
+            verdicts[u.host] = "IN SYNC" if reports[u.host].current else "DRIFT"
+
+    return {
+        "baseline_hash": build.get("payload_hash"),
+        "modules": all_modules,
+        "matrix": matrix,
+        "drift_modules_by_host": drift_by_host,
+        "verdicts": verdicts,
+        "summaries": {h: r.summary() for h, r in reports.items()},
+    }
+
+
 def compare(units: list[UnitRecord], reference: UnitRecord | None) -> dict:
-    """Build the matrix + per-unit drift verdict against a baseline."""
+    """Cross-unit comparison against a modal baseline.
+
+    The fallback for when no build manifest is supplied: units are compared to
+    each other on version strings, which answers "are the units consistent?" but
+    not "are they current?". Prefer --build-manifest, which routes to
+    compare_to_build and keys on the content hash.
+    """
     ok_units = [u for u in units if u.status == "ok"]
     ref_mv = reference.module_versions if reference else {}
     all_modules = sorted({m for u in ok_units for m in u.module_versions} | set(ref_mv))
@@ -268,7 +378,12 @@ def render(units: list[UnitRecord], reference: UnitRecord | None, cmp: dict, boo
     ok_cols = [u for u in cols if u.status == "ok"]
     if cmp["modules"] and ok_cols:
         lines.append("")
-        lines.append("=== Module versions ('*' = differs from baseline) ===")
+        # 'summaries' is only present in the hash-keyed mode, where each cell is
+        # a status against the build rather than a version compared to the fleet.
+        if "summaries" in cmp:
+            lines.append("=== Module status vs build (ok / STALE / MISSING / extra) ===")
+        else:
+            lines.append("=== Module versions ('*' = differs from baseline) ===")
         mod_w = max([len(m) for m in cmp["modules"]] + [len("module")])
         cell_w = 22
         header = "module".ljust(mod_w) + "  " + "".join(u.host[:cell_w].ljust(cell_w + 1) for u in ok_cols)
@@ -351,9 +466,11 @@ def main() -> int:
     args = ap.parse_args()
 
     reference: UnitRecord | None = None
+    build_doc: dict | None = None
     if args.build_manifest:
         try:
-            reference = load_reference(Path(args.build_manifest))
+            build_doc = _load_json(Path(args.build_manifest))
+            reference = _manifest_from_obj("BUILD (reference)", build_doc)
         except Exception as exc:  # noqa: BLE001
             print(f"ERROR: could not load --build-manifest: {exc}", file=sys.stderr)
             return 1
@@ -391,7 +508,14 @@ def main() -> int:
     if args.json_out:
         Path(args.json_out).write_text(json.dumps([asdict(u) for u in units], indent=2), encoding="utf-8")
 
-    cmp = compare(units, reference)
+    # A build manifest carrying module_state lets every cell be a hash-keyed
+    # STATUS rather than a version string compared to the fleet's modal value --
+    # "is this unit current?" instead of "do the units agree?". Without one (or
+    # against a pre-module_state build) fall back to the cross-unit comparison.
+    if build_doc and build_doc.get("module_state"):
+        cmp = compare_to_build(units, build_doc)
+    else:
+        cmp = compare(units, reference)
     elements_doc = load_bootstrap_elements(_REPO_ROOT)
     boot = bootstrap_gaps(units, elements_doc)
 

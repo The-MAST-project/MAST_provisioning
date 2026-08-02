@@ -440,6 +440,26 @@ double-hop problem and keeps the prov server's WinRM client unprivileged.
 
 ### Version / Drift Detection **[PARTIAL]**
 
+> **Per-module tracking (#22) landed 2026-08-02.** Drift is now decided **per
+> module**, not per payload. `server/prov/drift.py` classifies each module as
+> up-to-date / needs-update / missing / extra / needs-repair by comparing the
+> unit's cumulative `installed-manifest.json` against the payload's
+> `build-manifest.json` **on the content hash** (the version string is for
+> reporting only), and the driver provisions `-Modules <the drifted set>` instead
+> of running a full cycle. The aggregate `payload_hash` remains the fast
+> "anything changed at all?" gate ahead of that comparison.
+>
+> **Two tiers.** Tier 1 is the written record (fast, every cycle). Tier 2 is
+> **computed**: `client/run-verify-only.ps1` re-runs each provider's
+> `verify-*.ps1` on the unit and writes `C:\MAST\status\validation.json`; a
+> module whose hash still matches but whose live verify fails classifies
+> **needs-repair** -- the runtime drift (stopped service, deleted file) a hash
+> cannot see. Absent tier-2 data means "not run", never "failed".
+>
+> `tools/fleet-drift-report.py` renders a per-unit x per-module **status** matrix
+> against the build (`--build-manifest`), sharing `prov.drift.classify` with the
+> driver so the report cannot disagree with what the next cycle will do.
+
 The logic is present in `check-and-provision.ps1` (hash compare at lines ~234-294)
 and verified end-to-end via `vm/run-prov-test.py`. It is exercised on every manual
 driver invocation today; it becomes a continuous fleet guarantee once the scheduled

@@ -2,6 +2,53 @@
 
 ---
 
+## [2026-08-02] Per-module drift decides what runs; two tiers, one classifier
+
+**Why:** The driver compared a single `payload_hash`, so any difference meant a
+full cycle -- every module reinstalled because one changed. And the comparison
+could not distinguish "the payload changed" from "the unit broke": a stopped
+service leaves the hash matching perfectly.
+
+**What:** `server/prov/drift.py` classifies each module as up-to-date /
+needs-update / missing / extra / needs-repair from the unit's cumulative
+`installed-manifest.json` vs the payload's `build-manifest.json`, keyed on the
+**content hash** (the version string is reporting only, per the epic's locked
+decision 2). The driver runs it after the aggregate-hash gate and passes the
+drifted set to execute as `-Modules`, so a one-module drift runs one module.
+
+**Targeting happens at execute, not at build.** Building only the drifted subset
+was the obvious alternative and is wrong: the payload's `build-manifest.json`
+would then declare only that subset, and the unit's `fully_provisioned` -- judged
+against the build's module list -- would read true after a one-module run. The
+build stays full; only execution is narrowed.
+
+**Two tiers, one vocabulary.** Tier 1 is the written record. Tier 2 is computed:
+`client/run-verify-only.ps1` (already the verify dispatcher -- extended rather
+than duplicated into a new `validate-unit.ps1`) writes
+`C:\MAST\status\validation.json`, and a module whose hash matches but whose
+live verify fails classifies **needs-repair**. Absent tier-2 data means "not
+run", never "failed", so a unit that has never run verify-only is not
+manufactured into drift. `needs-update` wins over `needs-repair` when both
+apply -- the remedy differs and the payload change is the larger fact.
+
+**Content-aware verify (resolution rule 2).** `verify-desktop-shortcuts.ps1` was
+presence-only, so the epic's worked example -- repointing the FastAPI shortcut --
+passed it. It now takes `-FastApiUrl` injected from `module.json`'s verify
+command (the same place the provider's arg comes from, so the two cannot drift)
+and compares the deployed `.url` target against what this build expects. Adding
+the arg also folds it into the module's content hash, which hashes resolved
+commands.
+
+**Implications:** `tools/fleet-drift-report.py` renders a per-unit x per-module
+status matrix and imports the **same** `classify`, so the report cannot disagree
+with what the next cycle will do; its old cross-unit modal comparison remains as
+the no-`--build-manifest` fallback. `extra` (a module the unit has and the build
+no longer ships) is reported but never actioned -- removing software is out of
+scope for a drift pass. Tests: `server/prov/tests/test_drift.py` and the
+targeted-update cases in `test_driver_flow.py`.
+
+---
+
 ## [2026-08-02] installed-manifest.json is cumulative, per-module, and written on partial runs
 
 **Why:** Execute copied `build-manifest.json` wholesale and stamped `installed_at`,
