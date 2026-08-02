@@ -38,19 +38,20 @@ from typing import Any
 from prov import drift
 from prov import logevents as L
 from prov import transport
+from prov.unit_paths import (
+    UNIT_AVAIL,
+    UNIT_INSTALLED,
+    UNIT_SMOKE_DIR,
+    UNIT_VALIDATION,
+)
 from prov.maintenance_window import in_maintenance_window
 from prov.proxy_assert import ProxyPosture, get_proxy_dirty_surfaces
 from prov.retention import run_retention
 from prov.staging_size import staging_payload_size
 
 # --- unit-side literal paths (Windows units; never pathlib) ------------------
-UNIT_STATUS_DIR = r"C:\MAST\status"
-UNIT_AVAIL = r"C:\MAST\status\availability.json"
-UNIT_INSTALLED = r"C:\MAST\installed-manifest.json"
-UNIT_SMOKE_DIR = r"C:\MAST\logs\smoke"
-# Tier-2 computed state from the unit's last run-verify-only pass. Optional:
-# absent means tier 2 has not run there, not that anything failed.
-UNIT_VALIDATION = r"C:\MAST\status\validation.json"
+# The shared ones live in prov.unit_paths so the read-only tooling names the same
+# files; the rest are driver-only and stay here.
 UNIT_PULL_SCRIPT = r"C:\MAST\mast-pull-staging.ps1"
 # Detached-execute (item 6): the standalone runner + the files the driver writes
 # for it (config has no secret; the SMB pass is a machine-bound DPAPI blob).
@@ -138,12 +139,6 @@ class Driver:
         self.exit_code = EXIT_OK
         self.units_checked = 0
         self.prov_server = os.environ.get("COMPUTERNAME") or socket.gethostname()
-        # Parsed build-manifest.json of the payload built for the unit currently
-        # being processed, set by _build and read by the per-module drift compare.
-        # Empty until the first build: classify() then finds no modules, which
-        # reports "no module drifted" and falls through to a full run -- the safe
-        # direction when the per-module view is unavailable.
-        self._build_manifest: dict = {}
 
     # -- top-level ----------------------------------------------------------
     def run(self) -> int:
@@ -272,7 +267,7 @@ class Driver:
                     "validation"))
 
                 # Phase 4 -- build (always).
-                payload_hash, git_sha = self._build(unit, host, modules, dur)
+                payload_hash, git_sha, build_manifest = self._build(unit, host, modules, dur)
                 if payload_hash is None:
                     return  # BUILD_FAIL already logged
 
@@ -304,7 +299,7 @@ class Driver:
                     self.log.event("HASH_CHECK", unit=host, installed=installed_hash or "none",
                                    built=payload_hash, result="FORCED")
                 else:
-                    report = drift.classify(installed, self._build_manifest, validation)
+                    report = drift.classify(installed, build_manifest, validation)
                     aggregate_matches = installed_hash == payload_hash
                     self.log.event("MODULE_DRIFT", unit=host, summary=report.summary(),
                                    targets=",".join(report.targets) or "none",
@@ -360,8 +355,20 @@ class Driver:
                 if not ok:
                     return  # EXECUTE_FAIL already logged
 
-                # Phase 9 -- smoke.
-                if not self._smoke(session, host, modules, dur, payload_hash, git_sha):
+                # Phase 9 -- smoke, over the modules this run actually executed.
+                #
+                # Checking the FULL set here was wrong once targeting landed, in
+                # both directions. Markers live in a persistent directory and are
+                # only rewritten by the module that runs, so an untargeted module
+                # "passed" on a marker from an older payload -- assurance the gate
+                # had not earned. And a module whose marker went missing (logs
+                # cleaned) failed the unit forever: drift never targets it because
+                # its hash matches, so execute never regenerates the marker and
+                # there is no path out. Absence of a marker for a module this run
+                # did not touch is not a health signal; the computed tier-2 verify
+                # is what answers that question.
+                executed = target_modules or modules
+                if not self._smoke(session, host, executed, dur, payload_hash, git_sha):
                     return  # UNIT_FAIL already logged
 
                 # Phase 9b -- proxy-posture assertion.
@@ -464,7 +471,8 @@ class Driver:
             self.log.event("AVAIL_LEASE_RECLAIM", unit=host, prior_run=owner,
                            reason=avail.get("reason"), expires=exp or "none", stale=is_stale)
 
-    def _build(self, unit: dict, host: str, modules: list[str], dur) -> tuple[str | None, str | None]:
+    def _build(self, unit: dict, host: str, modules: list[str],
+               dur) -> tuple[str | None, str | None, dict]:
         # test_mode in the event is the auditable record of whether this build
         # passed -AllowMissing* (dev/test) or ran as a production build that
         # fails loud on any missing input (item 7). Production omits --test-mode.
@@ -491,21 +499,21 @@ class Driver:
                            timeout_s=BUILD_TIMEOUT_S, log=str(build_log))
             self.log.activity(host, "BUILD_FAIL", "timeout", dur())
             self.exit_code = EXIT_UNIT_FAIL
-            return None, None
+            return None, None, {}
         if rc != 0:
             self.log.event("BUILD_FAIL", unit=host, exit_code=rc, log=str(build_log))
             self.log.activity(host, "BUILD_FAIL", "exception", dur())
             self.exit_code = EXIT_UNIT_FAIL
-            return None, None
+            return None, None, {}
         staging_dir = self.cfg.repo_top / "staging" / host / "01-provisioning"
         bm = transport.load_json_file(staging_dir / "build-manifest.json")
-        # Kept for the per-module drift compare in phase 5a; the aggregate hash
-        # alone cannot say WHICH module changed.
-        self._build_manifest = bm
         payload_hash, git_sha = bm.get("payload_hash"), bm.get("git_sha")
         self.log.event("BUILD_OK", unit=host, payload_hash=payload_hash, git_sha=git_sha)
         self._staging_dir = staging_dir
-        return payload_hash, git_sha
+        # The manifest is returned rather than stashed on self: it describes the
+        # payload for ONE host (module hashes fold in -Site and other build-time
+        # args), and this object loops over every unit.
+        return payload_hash, git_sha, bm
 
     def _set_unavailable(self, session: Any, host: str, payload_hash: str) -> None:
         since = datetime.now(timezone.utc)

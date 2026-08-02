@@ -113,7 +113,7 @@ def _make_driver(root, monkeypatch, responder, unit=UNIT):
     def fake_build(self, unit, host, modules, dur):  # skip subprocess/PS build
         self._staging_dir = repo / "staging"
         self.log.event("BUILD_OK", unit=host, payload_hash="hash123", git_sha="sha")
-        return "hash123", "sha"
+        return "hash123", "sha", {}
 
     monkeypatch.setattr(D.Driver, "_build", fake_build)
     monkeypatch.setattr(D, "staging_payload_size",
@@ -244,9 +244,8 @@ def _drift_make(root, monkeypatch, responder, build: dict):
 
     def fake_build(self, unit, host, modules, dur):
         self._staging_dir = root / "repo" / "staging"
-        self._build_manifest = build
         self.log.event("BUILD_OK", unit=host, payload_hash=build["payload_hash"], git_sha="sha")
-        return build["payload_hash"], "sha"
+        return build["payload_hash"], "sha", build
 
     monkeypatch.setattr(D.Driver, "_build", fake_build)
     return drv, sess

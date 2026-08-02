@@ -41,15 +41,16 @@ from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_REPO_ROOT / "vm"))  # so a lazy 'import vm_lib' resolves in the gather path
-sys.path.insert(0, str(_REPO_ROOT / "server"))  # prov.drift -- the one classifier, shared with the driver
+sys.path.insert(0, str(_REPO_ROOT / "server"))  # prov.* -- shared with the driver
 
 from prov.drift import ModuleState, classify  # noqa: E402
+from prov.unit_paths import UNIT_INSTALLED, UNIT_VALIDATION  # noqa: E402
 
-MANIFEST_PATH = r"C:\MAST\installed-manifest.json"
+# The unit-side paths come from prov.unit_paths so this tool and the driver
+# cannot disagree about where a unit keeps its state.
+MANIFEST_PATH = UNIT_INSTALLED
+VALIDATION_PATH = UNIT_VALIDATION
 BOOTSTRAP_PATH = r"C:\MAST\bootstrap-manifest.json"
-# Tier-2 computed state, written by client/run-verify-only.ps1 when it last ran
-# on the unit. Optional: absent simply means tier 2 has not run there.
-VALIDATION_PATH = r"C:\MAST\status\validation.json"
 NO_MANIFEST_SENTINEL = "__MAST_NO_MANIFEST__"
 NO_BOOTSTRAP_SENTINEL = "__MAST_NO_BOOTSTRAP__"
 SPLIT = "====MAST-DRIFT-SPLIT===="
@@ -192,10 +193,6 @@ def gather_unit(host: str, cred: dict[str, str], connect_timeout_s: int) -> Unit
         return UnitRecord(host=host, status="error", error=str(exc))
     finally:
         session.close()
-
-
-def load_reference(path: Path) -> UnitRecord:
-    return _manifest_from_obj("BUILD (reference)", _load_json(path))
 
 
 def load_bootstrap_elements(repo_root: Path) -> dict:
@@ -452,7 +449,13 @@ def render(units: list[UnitRecord], reference: UnitRecord | None, cmp: dict, boo
 
 
 def write_csv(path: Path, units: list[UnitRecord], cmp: dict, boot: dict) -> None:
+    # Emit the SAME cells the rendered matrix shows. Reading them off
+    # module_versions instead was wrong in hash-keyed mode: a module can drift
+    # with an unchanged version string (the desktop-shortcuts verify gaining
+    # -FastApiUrl is exactly that), so the text report said STALE while the CSV
+    # showed a uniform version and no drift at all.
     modules = cmp["modules"]
+    cells_by_module = {row["module"]: row["cells"] for row in cmp["matrix"]}
     with path.open("w", newline="", encoding="utf-8") as fh:
         w = csv.writer(fh)
         w.writerow(["host", "status", "verdict", "payload_hash", "git_sha", "installed_at",
@@ -463,7 +466,7 @@ def write_csv(path: Path, units: list[UnitRecord], cmp: dict, boot: dict) -> Non
                 [u.host, u.status, cmp["verdicts"].get(u.host, "?"), u.payload_hash or "", u.git_sha or "",
                  u.installed_at or "", u.bootstrap_version if u.bootstrap_version is not None else "",
                  g.get("state", ""), " ".join(g.get("missing", []))]
-                + [u.module_versions.get(m, "") for m in modules]
+                + [str(cells_by_module.get(m, {}).get(u.host, "")) for m in modules]
             )
 
 
