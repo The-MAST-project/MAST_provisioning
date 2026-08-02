@@ -2,6 +2,40 @@
 
 ---
 
+## [2026-08-02] `mast-repos.txt` clones the upstream integration branches
+
+**Why:** The repo list still pointed at the personal fork's dev branch --
+`elibrody-weizmann/MAST_unit.2024-12-12 eli/vm-provisioning` and
+`elibrody-weizmann/MAST_common eli/vm-provisioning` -- set in May 2026 while
+bringing MAST_unit up on the provisioning VM. Retiring the fork (entry below)
+deleted the MAST_common branch, so `provide-mast.ps1` would have failed at clone
+on the next run: the module that installs MAST itself, broken by a cleanup
+elsewhere. The fork branch was stale regardless (tip 2026-06-21, and its own
+last commit was already repinning the submodule to `The-MAST-project` master),
+and it predates the upstream requirements pinning of Jul-Aug 2026.
+
+**What:** Both lines now name `The-MAST-project` with an explicit ref --
+`MAST_unit.2024-12-12 main`, `MAST_common master`. The refs are given
+explicitly, and the file says why: the two repos do not share one integration
+branch, and an omitted ref silently follows whatever the remote default happens
+to be at clone time. That pointer had in fact drifted -- MAST_common's default
+named a dead 2024 `main` -- which is what motivated the rule; the dead branch
+was deleted and the default corrected to `master` the same day
+(`MAST_common#14`), so the pointer is right today and the explicit refs are
+what keep a future drift from reaching the units. Integration branches were
+derived from merged-PR bases and branch-tip recency, not from
+`defaultBranchRef`.
+
+**Implications:** Provisioned units now receive the pinned `requirements.txt`
+from both repos, so a unit venv becomes a deterministic function of the
+checked-out commit -- the precondition that makes per-module hashing meaningful
+for the `mast` module (see `docs/per-module-tracking-plan.md`, Stage 1b). Both
+entries are still **branch** refs, so the existing-clone path continues to
+`fetch` + `reset --hard FETCH_HEAD` and the deployed content moves under a fixed
+module hash; Stages 1b/2 are what close that.
+
+---
+
 ## [2026-08-02] Retire the personal fork; a single `origin` points at the integration repo
 
 **Why:** Every clone carried two remotes -- `origin` = `elibrody-weizmann/<repo>` and

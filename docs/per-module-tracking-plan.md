@@ -89,6 +89,45 @@ written to meet it, and any provider whose output is generated or arg/config-
 driven (shortcuts, config-bootstrap, first-logon `.reg` imports, instrument
 profiles) is audited against both rules.
 
+## The `mast` module — a source-tracked special case (amended 2026-08-02)
+
+The `mast` provider is the one module whose deployed output is not a function of
+this repo at all: `provide-mast.ps1` clones the repos listed in `mast-repos.txt`
+and builds a per-repo `.venv` from each repo's `requirements.txt`. Its
+determinants are therefore the **upstream commits** and the **resolved Python
+dependency set** — neither of which lives under `server/providers/mast/`.
+
+**Upstream pinned its dependencies (Jul–Aug 2026)**, which changes what is
+achievable here. `MAST_unit.2024-12-12` ("Pin requirements to the live
+environment", then "Prune dev-only linters…"), `MAST_control` + `MAST_gui`
+(pinned jointly, exact `==` including transitives), `MAST_spec`, and
+`MAST_common` (shared `ruff.toml`, `ruff==0.16.0`) are now all pinned. Before
+that, the same inputs produced a *different* venv on different days as PyPI
+moved, so no hash over repo-tracked inputs could ever have described the `mast`
+module's output — Resolution rule 1 was unsatisfiable for it. With exact pins
+the deployed venv becomes a deterministic function of the checked-out commit,
+and the rule is reachable.
+
+Stage 1 as landed does **not** yet reach it, and fails in both directions:
+
+- **Blind to real drift.** `module_state.mast.hash` folds in `version`, and
+  `version: "git"` resolves to *this* repo's SHA (`Get-GitSha -RepoTop $Top`).
+  Every upstream commit — including the pin commits above — changes what a unit
+  receives and changes the hash by nothing.
+- **Noisy with false drift.** Conversely, any unrelated commit to
+  MAST_provisioning rotates that SHA and so rotates `mast`'s hash. Stage 3 would
+  then re-run the heaviest module (clone, venv, pip, service restart) on
+  essentially every build — the exact outcome targeted updates exist to avoid.
+
+Compounding both: `mast-repos.txt` pins **branch refs**, and the existing-clone
+path does `fetch` + `reset --hard FETCH_HEAD`, so the deployed content moves
+under a fixed hash by design.
+
+**Amendment:** for source-tracked modules the hash folds in the **resolved
+upstream commit SHAs**, not this repo's SHA. `version` keeps reporting the
+provisioning SHA (locked decision 2 already separates hash-as-truth from
+version-as-reporting). Per-stage consequences are in the stages below.
+
 ## Stages
 
 ### Stage 1 — Per-module content hash in `build-manifest.json` (build side)
@@ -104,8 +143,8 @@ profiles) is audited against both rules.
     only in `command`);
   - **plus the `version`** and any build parameter that shapes the module's
     output (e.g. `-Site`, which selects the weather URL default).
-  Source-tracked `mast` (version `rolling`) folds the git SHA in, consistent with
-  today's `module_versions`.
+  Source-tracked `mast` (version `git`) folds the git SHA in, consistent with
+  today's `module_versions` — **superseded for `mast` by Stage 1b below.**
 - Extend `build-manifest.json` with a `modules` map: `{ <module>: { version,
   hash } }` (fold the existing `module_versions` into it, or add alongside and
   deprecate). **Keep the aggregate `payload_hash`** as the fast top-level
@@ -113,6 +152,40 @@ profiles) is audited against both rules.
 - **Tests:** per-module hash determinism; a changed file in one module changes
   only that module's hash; schema; `-TestMode` optional-payload skips don't
   crash the per-module hash.
+
+**Status:** landed as `module_state` (commit `890fa22`, DECISIONS 2026-07-23),
+with `build/build-manifest-lib.ps1` + `server/tests/build-manifest-lib.Tests.ps1`.
+
+### Stage 1b — Resolve upstream refs for source-tracked modules (added 2026-08-02)
+
+Fixes the two-directional `mast` defect described above.
+
+- At manifest time, `git ls-remote` each `mast-repos.txt` entry to a concrete
+  commit SHA and record it in `module_state.mast` as `repos: { <repo>: <sha> }`.
+  A repo pinned to a SHA in `mast-repos.txt` resolves to itself; a branch ref
+  resolves to that branch's current tip.
+- Fold **those SHAs** into `Get-ModuleContentHash` in place of the
+  provisioning-repo SHA for source-tracked modules. `MAST_common` is a submodule
+  of `MAST_unit.2024-12-12`, so the parent SHA transitively covers the pinned
+  common commit; the separate `MAST_common` clone still resolves on its own line.
+- `version` continues to report the provisioning SHA — human-readable, not the
+  drift signal.
+- **Cost / alternative:** this needs network at build time. The build host
+  already has it (the clones are token-authenticated over HTTPS), but if that
+  dependency is unacceptable, the fallback is to **exclude `version` from
+  `mast`'s hash** — this kills the false drift but leaves the blindness, pushing
+  all upstream-currency detection into Stage 4.
+- **One determinant still outside the boundary:** `provide-mast.ps1` runs an
+  unpinned `pip install --upgrade pip` and installs with plain `pip` (no
+  `--no-deps`, no `--require-hashes`), while the control side builds its venv
+  with `uv venv` + `uv pip install` — which is why MAST_control deliberately
+  *dropped* its own `pip` pin. With transitives pinned the resolved sets should
+  agree, but the installer is now the last unpinned input to the module's
+  output. Decide it explicitly rather than by omission.
+- **Tests:** ref resolution (branch → tip, SHA → itself); an upstream SHA change
+  changes only `mast`'s hash; an unrelated provisioning commit does **not**
+  change it; `ls-remote` failure fails the build loudly rather than emitting a
+  manifest with a silent gap.
 
 ### Stage 2 — Cumulative per-module `installed-manifest.json` (install side)
 
@@ -124,6 +197,14 @@ profiles) is audited against both rules.
   the record. This fixes the last-payload-only gap.
 - Derive `fully_provisioned` (installed set ⊇ the build's module set, all hashes
   matching) and keep an aggregate `payload_hash` for the existing fast path.
+- **Record observed, not declared, state for `mast`** (added 2026-08-02). The
+  build manifest can only say what it *intended* to deploy; a branch ref may have
+  moved between manifest time and clone time, and the pull path
+  (`fetch` + `reset --hard FETCH_HEAD`) will happily land on a different commit.
+  `provide-mast.ps1` already runs `git rev-parse HEAD` per repo and logs it —
+  capture those actual SHAs into the installed entry (`repos: { <repo>: <sha> }`)
+  instead of copying the build's value. This is what makes the moved-branch case
+  detectable at all.
 - **Legacy/migration:** already-provisioned units (mast01–04) carry the old
   whole-document manifest with no `modules` map. On the first per-module cycle,
   treat a missing `modules` map as "state unknown" → recompute (Stage 4) or
@@ -160,6 +241,16 @@ profiles) is audited against both rules.
   `.reg` imports, instrument profiles). This is the detection path for
   determinants the fleet-uniform build hash can't see per-unit (e.g. a
   site-derived weather URL) and for post-install edits.
+- **`verify-mast.ps1` is the highest-value content-aware verify in the set**
+  (added 2026-08-02), and upstream pinning is what makes it writable. Today it is
+  presence-only: repo dir exists, `.git` exists, `.venv\Scripts\python.exe`
+  exists, `mast-unit` service running — a venv resolved months ago against
+  different package versions passes cleanly. Against `>=` constraints there was
+  no single correct answer to compare to; with exact `==` pins there is. Upgrade
+  it to compare (a) `git rev-parse HEAD` per repo against the recorded SHA and
+  (b) `pip freeze` in each venv against that repo's `requirements.txt`. This
+  catches more real breakage than the desktop-shortcut case that motivated
+  Resolution rule 2.
 - Reuses the existing per-provider `verify-*.ps1` framing (no new per-module
   dispatch logic). The two tiers: fast written-hash compare (routine loop) +
   content-aware computed re-run (on demand / periodic).
@@ -178,3 +269,11 @@ profiles) is audited against both rules.
 
 - **#20** — astrometry `cygwin` pin: lands on v3 **separately** (its own branch).
 - Provisioning-version **pinning + rollback** (#8): separate, later.
+
+## Open: overlap with #14 (raised 2026-08-02)
+
+**#14** ("Differential per-module provisioning: per-module hashing, version
+pinning + holds, continuous verify") overlaps this epic on all three of its
+axes, and upstream has now delivered part of its "version pinning" from the
+other side. Two open issues describing one epic is worth collapsing before
+Stage 3 starts.
