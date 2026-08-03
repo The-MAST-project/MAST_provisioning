@@ -119,15 +119,42 @@ foreach (${d} in ${expected}) {
 
 # Dependency currency: every pinned requirement installed at its pin. This is
 # the check a presence-only verify could not make.
-if (Test-Path -LiteralPath ${venvPython}) {
-    ${frozen} = @{}
-    foreach (${line} in (& ${venvPython} -m pip freeze 2>$null)) {
-        if (${line} -match '^([^=<>!~ ]+)==(.+)$') {
-            ${frozen}[${Matches}[1].Trim().ToLowerInvariant()] = ${Matches}[2].Trim()
+#
+# Enumerated with UV, not 'python -m pip freeze'. The venv is built by uv, and
+# pip freeze does not faithfully report it: on the first real VM cycle
+# (2026-08-03) freeze listed 76 packages and omitted docstring-parser, while
+# 'uv pip list' showed 80 including it and site-packages\docstring_parser was
+# on disk -- i.e. the check produced a phantom "not installed" failure. Ask the
+# environment with the tool that built it. pip freeze remains the fallback for a
+# unit where the vendored uv is absent, which is better than no check at all.
+function Get-InstalledPins {
+    param([string]$UvExe, [string]$VenvPython)
+    $out = $null
+    if ($UvExe -and (Test-Path -LiteralPath $UvExe)) {
+        $out = & $UvExe pip freeze --python $VenvPython 2>$null
+    }
+    if (-not $out) { $out = & $VenvPython -m pip freeze 2>$null }
+    $map = @{}
+    foreach ($line in $out) {
+        if ($line -match '^([^=<>!~ ]+)==(.+)$') {
+            $map[(Get-NormalizedDistName $Matches[1])] = $Matches[2].Trim()
         }
     }
+    return $map
+}
+
+# PEP 503: distribution names are case-insensitive and '-', '_' and '.' are
+# equivalent, so docstring-parser and docstring_parser are the same package.
+# Compare normalized on both sides or a spelling difference reads as missing.
+function Get-NormalizedDistName {
+    param([string]$Name)
+    return ((${Name}.Trim().ToLowerInvariant()) -replace '[-_.]+', '-')
+}
+
+if (Test-Path -LiteralPath ${venvPython}) {
+    ${frozen} = Get-InstalledPins -UvExe (Join-Path ${Top} '.tools\uv.exe') -VenvPython ${venvPython}
     if (${frozen}.Count -eq 0) {
-        [void]${issues}.Add('pip freeze returned nothing -- venv unusable?')
+        [void]${issues}.Add('neither uv nor pip could enumerate the venv -- unusable?')
     } else {
         foreach (${d} in ${expected}) {
             ${req} = Join-Path (Join-Path ${Top} ${d}) 'requirements.txt'
@@ -138,7 +165,7 @@ if (Test-Path -LiteralPath ${venvPython}) {
                 # Only '==' pins are checkable; anything looser has no single
                 # correct answer and is skipped rather than guessed at.
                 if (${t} -notmatch '^([A-Za-z0-9._-]+)==([^;#\s]+)') { continue }
-                ${name} = ${Matches}[1].ToLowerInvariant()
+                ${name} = Get-NormalizedDistName ${Matches}[1]
                 ${want} = ${Matches}[2].Trim()
                 if (-not ${frozen}.ContainsKey(${name})) {
                     [void]${issues}.Add(("{0}: {1}=={2} not installed" -f ${d}, ${name}, ${want}))
