@@ -638,7 +638,7 @@ foreach ($unit in $units) {
                 }
                 if ($modules) { $buildArgList += @('-Modules', ($modules -join ',')) }
                 if ($TestMode) {
-                    $buildArgList += @('-TestMode', '-AllowMissingNoMachineLicense', '-AllowMissingGithubToken')
+                    $buildArgList += @('-TestMode', '-AllowMissingNoMachineLicense')
                 }
                 & powershell.exe @buildArgList *>&1 | Out-File -FilePath $buildLog -Encoding UTF8
                 if ($LASTEXITCODE -ne 0) {

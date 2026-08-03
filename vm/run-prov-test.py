@@ -458,7 +458,6 @@ def phase_build(hostname: str, modules: list[str], proxy_mode: str) -> None:
             # Dev/test: allow missing large optional assets and license/token material.
             "-TestMode",
             "-AllowMissingNoMachineLicense",
-            "-AllowMissingGithubToken",
             "-AllowMissingNetFx3Sxs",
             "-ProxyMode", proxy_mode,
             # The dev VM has 8 GB RAM; the production 32 GB -t vm mount cannot

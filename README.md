@@ -69,7 +69,6 @@ MAST_provisioning/
 |   `-- vm-fix-winrm.ps1              # Break-glass WinRM recovery (run locally on unit)
 |-- vault/                            # Secrets, gitignored
 |   |-- creds.json                    # WinRM credentials for units
-|   |-- tokens/mast_github.txt        # GitHub PAT
 |   `-- nomachine-licenses/*.lic
 |-- staging/<host>/01-provisioning/   # Build output, gitignored
 |-- DECISIONS.md
@@ -443,7 +442,7 @@ check logs), follow the convention in `vm/DEBUGGING.md`: name the script
 
 - `execute-mast-provisioning.ps1` exits 0
 - `C:\Python312\python.exe --version` succeeds
-- `C:\MAST\repos\` exists and has cloned repos with virtualenvs
+- `C:\MAST\src\` holds the role's clones (`common\`, `unit\`, `claude\`) and one venv at `C:\MAST\src\.venv`
 - Every module wrote a non-empty `C:\MAST\logs\smoke\<module>-smoke.txt`
 - `C:\MAST\installed-manifest.json` exists and matches the build's
   `payload_hash`
@@ -475,6 +474,22 @@ orchestrator acts on), `mast-services-finalize` (the final operational step), an
 `build-manifest.json`'s `always_modules`, and the driver's per-module drift compare
 folds them into any non-empty target set — so a targeted update that installed
 anything still closes out properly. They never *cause* a run on their own.
+
+**`repofiles` (optional)** — for a file the module runs that deliberately lives
+*outside* its provider directory, because it is shared with something else in the
+repo:
+
+```json
+"repofiles": ["tools/mast-clone.ps1", "tools/mast-repos.tsv"]
+```
+
+Paths are relative to the **repo top** and are staged to the staging root **by
+leaf name** (the same flattening `assets/*` gets), so the module's `command`
+invokes them as `.\mast-clone.ps1`. Use this instead of copying the file into the
+provider directory (which forks the shared source of truth) or writing
+`../../tools/...` in `commandfiles` (which resolves on the source side but writes
+outside the staging root). Absolute paths, `..` segments, and missing files are
+build errors — see `build/build-staging-lib.ps1`.
 
 No edit to `execute-mast-provisioning.ps1` is required. `build-mast.ps1` copies `client/run-verify-only.ps1` into each staged `01-provisioning` folder for verify-only reruns.
 

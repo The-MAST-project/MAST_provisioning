@@ -39,8 +39,16 @@
   Roles union, so -Role unit,spec is valid.
 
 .PARAMETER Transport
-  'ssh' (default) or 'https'. SSH suits dev boxes with keys loaded; HTTPS suits
-  provisioning-time on a fresh unit that has no key material.
+  'https' (default) or 'ssh'. HTTPS needs no key material and works on a freshly
+  provisioned unit. SSH needs a key AND, on the Weizmann network, an ssh config
+  tunnelling github.com to ssh.github.com:443, because port 22 is blocked -- a
+  fresh unit has neither, which is why HTTPS is the default.
+
+
+.PARAMETER DirectHttp
+  Reach the internet directly, with no proxy. For networks that do not go
+  through the Weizmann bcproxy (off-campus, home, open egress). Without it,
+  outbound HTTPS goes via an exported HTTPS_PROXY if there is one, else bcproxy.
 
 .PARAMETER Branch
   Hashtable overriding the manifest branch for a folder, e.g.
@@ -57,10 +65,14 @@
   Print what would happen; change nothing.
 
 .EXAMPLE
-  .\mast-clone.ps1 -Top C:\MAST\src -Role unit -Transport https
+  .\mast-clone.ps1 -Top C:\MAST\src -Role unit -Transport ssh
 
 .EXAMPLE
   .\mast-clone.ps1 -Top D:\dev\mast -Role all -Update
+
+.EXAMPLE
+  # On a network that does not go through the Weizmann proxy:
+  .\mast-clone.ps1 -Top C:\MAST\src -Role unit -DirectHttp
 
 .NOTES
   Companion: tools/mast-clone.sh (same manifest, same layout, for Linux).
@@ -75,9 +87,11 @@ param(
     [string[]] $Role,
 
     [ValidateSet('ssh', 'https')]
-    [string] $Transport = 'ssh',
+    [string] $Transport = 'https',
 
     [hashtable] $Branch = @{},
+
+    [switch] $DirectHttp,
 
     [switch] $Update,
 
@@ -144,6 +158,58 @@ if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
 # open a tty, and only then reports a confusing "could not read Username".
 # With this set, a missing credential fails immediately and says so.
 $env:GIT_TERMINAL_PROMPT = '0'
+
+# Everything this script fetches is external: github.com for the clones and for
+# the uv bootstrap download, PyPI for the venv. Direct egress from the Weizmann
+# network TIMES OUT rather than being refused, so without a proxy the first
+# clone hangs for a couple of minutes before failing -- a slow, confusing
+# failure that reads as a hung script rather than a network policy.
+#
+# Environment variables, NOT 'git config http.proxy': one setting covers all
+# three consumers (git, the uv download, and uv itself), and nothing is left
+# behind in a repo config or the user's global gitconfig afterwards.
+#
+# Set regardless of -Transport. Even when the clones go over SSH -- which
+# ignores the http proxy -- the uv download and 'uv pip install' are still
+# HTTPS and still need it.
+#
+# -DirectHttp is for networks with no proxy at all -- off-campus, home, or a
+# site whose egress is open. Otherwise an already-exported HTTPS_PROXY wins
+# (point somewhere else without touching the script), and failing that the
+# Weizmann bcproxy is used.
+$DefaultProxy   = 'http://bcproxy.weizmann.ac.il:8080'
+# Fleet-internal destinations must NOT be sent to the proxy; it cannot reach
+# 10.23.x and the request dies there rather than going direct.
+$DefaultNoProxy = 'localhost,127.0.0.1,10.23.0.0/16'
+
+if ($DirectHttp) {
+    # Clear, do not merely skip. An HTTPS_PROXY inherited from the caller's
+    # environment (a machine-wide setting, a scheduled task, an outer script)
+    # would otherwise still be honoured by git and uv, and -DirectHttp would
+    # quietly do nothing -- on a network where that proxy is unreachable, that
+    # is a hang.
+    $env:HTTP_PROXY  = $null
+    $env:HTTPS_PROXY = $null
+    $env:http_proxy  = $null
+    $env:https_proxy = $null
+    $EffectiveProxy = 'direct (-DirectHttp)'
+}
+else {
+    $EffectiveProxy = $DefaultProxy
+    if (-not [string]::IsNullOrWhiteSpace($env:HTTPS_PROXY)) { $EffectiveProxy = $env:HTTPS_PROXY }
+
+    $env:HTTP_PROXY  = $EffectiveProxy
+    $env:HTTPS_PROXY = $EffectiveProxy
+    $env:http_proxy  = $EffectiveProxy
+    $env:https_proxy = $EffectiveProxy
+
+    # Keep an operator-supplied NO_PROXY if there is one.
+    if ([string]::IsNullOrWhiteSpace($env:NO_PROXY)) {
+        $env:NO_PROXY = $DefaultNoProxy
+        $env:no_proxy = $DefaultNoProxy
+    }
+}
+
 if (-not (Test-Path -LiteralPath $Manifest)) {
     throw "manifest not found: $Manifest"
 }
@@ -193,6 +259,7 @@ $wantsAll = ($selected -contains 'all')
 Write-Info ("top       : {0}" -f $Top)
 Write-Info ("roles     : {0}" -f ($selected -join ' '))
 Write-Info ("transport : {0}" -f $Transport)
+Write-Info ("proxy     : {0}" -f $EffectiveProxy)
 if ($DryRun) { Write-Info 'DRY RUN -- nothing will be modified' }
 
 if (-not $DryRun) {
@@ -372,27 +439,62 @@ function Install-PinnedUv {
 $Venv = Join-Path $topAbs '.venv'
 
 # uv is acquired, never optional: the venv is always built, so a missing uv
-# would simply mean a broken run. If it is not on PATH we fetch the pinned
-# version into <Top>\.tools -- checksum-verified, never "latest", never a
+# would simply mean a broken run. If the PINNED version is not already present
+# we fetch it into <Top>\.tools -- checksum-verified, never "latest", never a
 # remote script piped into a shell.
+#
+# The version is checked, not just the presence of a binary. The whole point of
+# pinning uv in the manifest is that the resolver decides which dependency
+# versions land in the venv, so accepting whatever uv happens to be on PATH
+# would let two machines provisioned from the same manifest resolve differently
+# -- exactly the drift the pin exists to prevent. A developer box with its own
+# newer uv is the normal case, not an edge one. The same check covers
+# <Top>\.tools\uv.exe, which may be left over from a run made before the
+# manifest bumped the pin.
+function Get-UvVersion {
+    param([string] $Path)
+    try {
+        $out = & $Path --version 2>$null
+        if ($LASTEXITCODE -ne 0) { return '' }
+        # "uv 0.11.33 (abc1234 2026-01-01)" -> "0.11.33"
+        $parts = ($out | Select-Object -First 1) -split '\s+'
+        if ($parts.Count -ge 2) { return $parts[1] }
+        return ''
+    } catch {
+        return ''
+    }
+}
+
 $uvExe   = ''
 $localUv = Join-Path $topAbs '.tools\uv.exe'
-$onPath  = Get-Command uv -ErrorAction SilentlyContinue
-if ($null -ne $onPath) {
-    $uvExe = $onPath.Source
+
+$uvCandidates = @()
+$onPath = Get-Command uv -ErrorAction SilentlyContinue
+if ($null -ne $onPath) { $uvCandidates += $onPath.Source }
+$uvCandidates += $localUv
+
+foreach ($cand in $uvCandidates) {
+    if (-not (Test-Path -LiteralPath $cand)) { continue }
+    $candVer = Get-UvVersion -Path $cand
+    if ($candVer -eq $UvVersion) {
+        $uvExe = $cand
+        Write-Info ("uv        : {0} ({1}, pinned)" -f $uvExe, $UvVersion)
+        break
+    }
+    $shown = $candVer
+    if ([string]::IsNullOrWhiteSpace($shown)) { $shown = 'unknown' }
+    Write-Info ("uv        : ignoring {0} ({1}), manifest pins {2}" -f $cand, $shown, $UvVersion)
 }
-elseif (Test-Path -LiteralPath $localUv) {
+
+if ([string]::IsNullOrWhiteSpace($uvExe)) {
+    if ($DryRun) {
+        Write-Host ("       would bootstrap uv {0} into {1}" -f $UvVersion, (Join-Path $topAbs '.tools'))
+    }
+    else {
+        Install-PinnedUv -Version $UvVersion -Dest (Join-Path $topAbs '.tools')
+    }
     $uvExe = $localUv
 }
-elseif ($DryRun) {
-    Write-Host ("       would bootstrap uv {0} into {1}" -f $UvVersion, (Join-Path $topAbs '.tools'))
-    $uvExe = $localUv
-}
-else {
-    Install-PinnedUv -Version $UvVersion -Dest (Join-Path $topAbs '.tools')
-    $uvExe = $localUv
-}
-Write-Info "uv: $uvExe"
 
 if (-not (Test-Path -LiteralPath $Venv)) {
     Write-Info "creating venv $Venv"

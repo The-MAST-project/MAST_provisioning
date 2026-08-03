@@ -42,13 +42,22 @@ function Get-PayloadHash {
 # A missing commandfile is skipped: production builds have already thrown in
 # the staging pass for non-optional files, so by the time hashes are computed
 # a gap can only be a -TestMode optional payload (e.g. cygwin astrometry.tgz).
-# Category prefixes (file:/cmd:/version:) keep the input lines collision-free.
+# Category prefixes (file:/repofile:/cmd:/version:) keep the input lines
+# collision-free.
+#   - RepoFiles are the module's 'repofiles' entries: shared tooling it runs from
+#     the repo top (tools/mast-clone.ps1 for the mast module). They determine the
+#     module's deployed output exactly as its commandfiles do, so they are inside
+#     the hash boundary; a change to mast-clone.ps1 must drift the mast module,
+#     not merely the aggregate payload_hash. Hashed under their repo-relative
+#     path, from -RepoTop.
 function Get-ModuleContentHash {
     param(
         [Parameter(Mandatory)][string]$ProviderDir,
         [string[]]$CommandFiles = @(),
         [string[]]$Commands = @(),
-        [string]$Version = ''
+        [string]$Version = '',
+        [string]$RepoTop = '',
+        [string[]]$RepoFiles = @()
     )
     $sha = [System.Security.Cryptography.SHA256]::Create()
     $bytes = [System.IO.MemoryStream]::new()
@@ -59,6 +68,19 @@ function Get-ModuleContentHash {
         if (-not (Test-Path -LiteralPath $path)) { continue }
         $fileHash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
         $lines += "file:$norm`:$fileHash"
+    }
+    foreach ($rf in (@($RepoFiles) | Where-Object { $_ } | Sort-Object)) {
+        $norm = ($rf -replace '\\','/')
+        if (-not $RepoTop) { throw "Get-ModuleContentHash: -RepoFiles given without -RepoTop" }
+        $path = Join-Path $RepoTop $rf
+        # Unlike a commandfile, a missing repofile is never a -TestMode optional
+        # payload -- the staging pass has already thrown for it. Reaching here
+        # with one absent means the manifest and the tree disagree; say so.
+        if (-not (Test-Path -LiteralPath $path)) {
+            throw "Get-ModuleContentHash: repofile not found: $rf (looked in $RepoTop)"
+        }
+        $fileHash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+        $lines += "repofile:$norm`:$fileHash"
     }
     # Commands keep their caller order (commands.json order), NOT sorted:
     # execution order is part of the deployed behavior.

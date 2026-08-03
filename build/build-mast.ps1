@@ -20,8 +20,6 @@ param(
   [string[]]${Modules} = @(),
   # Dev/test: allow missing NoMachine license files (skip staging nomachine.lic).
   [switch]${AllowMissingNoMachineLicense},
-  # Dev/test: allow missing GitHub token file (skip staging mast_github.txt).
-  [switch]${AllowMissingGithubToken},
   # Dev/test: allow missing NetFx3 SxS source (skip staging sxs\; provider
   # falls back to online DISM with a warning). Production builds MUST have
   # the bundled SxS present -- the online DISM path depends on WU CDN
@@ -117,6 +115,13 @@ if (-not (Test-Path ${serverLib})) { throw "Missing provisioning.psm1 at ${serve
 ${modulesLib} = Join-Path ${serverRoot} 'lib\mast-modules.psm1'
 if (-not (Test-Path ${modulesLib})) { throw "Missing mast-modules.psm1 at ${modulesLib}" }
 Import-Module ${modulesLib} -Force -DisableNameChecking
+
+# Staging helpers (repofiles resolution + containment). Dot-sourced so the same
+# implementation is what server/tests/build-staging-lib.Tests.ps1 exercises.
+${stagingLib} = Join-Path ${PSScriptRoot} 'build-staging-lib.ps1'
+if (-not (Test-Path ${stagingLib})) { throw "Missing build-staging-lib.ps1 at ${stagingLib}" }
+. ${stagingLib}
+
 [string]${LicensesRoot} = (Join-Path ${Top} 'vault\nomachine-licenses')
 ${licensesVault} = (Join-Path ${vault} 'nomachine-licenses')
 
@@ -303,6 +308,20 @@ function Generate-Commands([string[]]${Mods}) {
       'proxy' {
         ${cmd} = ${cmd} + (" -ForceMode {0}" -f ${proxyForceMode})
       }
+      'mast' {
+        # tools/mast-clone.ps1 routes ALL its outbound HTTPS (clones, the uv
+        # download, PyPI) through the Weizmann bcproxy by default, regardless of
+        # -Transport. On a machine that cannot reach bcproxy -- the dev VM, or a
+        # site with open egress -- that proxy does not refuse, it TIMES OUT, so
+        # the failure looks like a hung script for minutes. mast-clone's
+        # -DirectHttp clears the proxy variables (rather than merely skipping
+        # them, so an inherited https_proxy cannot make the flag a no-op), which
+        # is exactly what a 'direct' build means. Same channel as the proxy
+        # provider above: baked into commands.json, not signalled at runtime.
+        if (${ProxyMode} -ne 'weizmann') {
+          ${cmd} = ${cmd} + ' -DirectHttp'
+        }
+      }
       'imdisk' {
         if (${ImdiskMountType} -ne 'vm') {
           ${cmd} = ${cmd} + (" -MountType {0}" -f ${ImdiskMountType})
@@ -482,8 +501,10 @@ foreach (${m} in ${Modules}) {
         $norm = (${cmdfile} -replace '\\','/').ToLowerInvariant()
         if (${TestMode} -and (
             ($m -eq 'cygwin' -and $norm -eq 'assets/astrometry.tgz') -or
-            # mast_github.txt is sourced from vault/ and staged separately
-            ($m -eq 'mast' -and $norm -eq 'assets/mast_github.txt')
+            # Vendored uv (18 MB): absent in a lean dev checkout. mast-clone
+            # falls back to bootstrapping it from the GitHub CDN, which works
+            # but is the network dependency the vendoring removes.
+            ($m -eq 'mast' -and $norm -like 'assets/uv-*')
         )) {
             Write-Warning "[${m}] Optional dev/test CommandFile missing: ${src} (skipping due to -TestMode)"
             continue
@@ -503,6 +524,17 @@ foreach (${m} in ${Modules}) {
     Write-Host " Staging " ${cmdfile} " ..."
 
     New-LinkOrCopy -Target ${src} -LinkPath ${dst}
+  }
+
+  # Repo-top files: shared tooling a module runs that deliberately lives outside
+  # its provider dir (the 'mast' module runs tools/mast-clone.ps1, shared with
+  # the control host and dev boxes). Resolved and containment-checked by
+  # Resolve-MastRepoFile; staged to the staging root by leaf name, like assets.
+  foreach (${repofile} in (Get-MastModuleRepoFiles -Manifest ${mf})) {
+    ${rfSrc} = Resolve-MastRepoFile -RepoTop ${Top} -RelativePath ${repofile} -ModuleName ${m}
+    ${rfDst} = Get-MastRepoFileStagingPath -StagingDir ${staging} -RelativePath ${repofile}
+    Write-Host " Staging repofile " ${repofile} " ..."
+    New-LinkOrCopy -Target ${rfSrc} -LinkPath ${rfDst}
   }
 }
 
@@ -532,18 +564,6 @@ if (${Modules} -contains 'nomachine') {
             # stage that single .lic
             Copy-Item -Force ${free}.FullName (Join-Path ${staging} "nomachine.lic")
         }
-    }
-}
-
-if (${Modules} -contains 'mast') {
-    # deploy the github token (used by the mast module)
-    $tokenPath = Join-Path ${vault} 'tokens\mast_github.txt'
-    if (Test-Path $tokenPath) {
-        Copy-Item -Force -Path $tokenPath (Join-Path ${staging} 'mast_github.txt')
-    } elseif (${AllowMissingGithubToken}) {
-        Write-Warning "GitHub token '$tokenPath' missing; continuing due to -AllowMissingGithubToken."
-    } else {
-        throw "GitHub token '$tokenPath' missing. Create it or pass -AllowMissingGithubToken for dev/test."
     }
 }
 
@@ -730,7 +750,8 @@ foreach (${vm} in ${Modules}) {
     ${moduleState}[${vm}] = [ordered]@{
         version = ${vstr}
         hash    = Get-ModuleContentHash -ProviderDir (Join-Path ${providersRoot} ${vm}) `
-                    -CommandFiles ${vmCmdFiles} -Commands ${vmCmds} -Version ([string]${vstr})
+                    -CommandFiles ${vmCmdFiles} -Commands ${vmCmds} -Version ([string]${vstr}) `
+                    -RepoTop ${Top} -RepoFiles (Get-MastModuleRepoFiles -Manifest ${vmf})
     }
 }
 

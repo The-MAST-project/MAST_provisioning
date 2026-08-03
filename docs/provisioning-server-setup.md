@@ -116,20 +116,6 @@ the password set by `client\bootstrap-winrm.ps1` during unit onboarding
 provisioning server. Units authenticate as `mast-transfer` to pull their
 staging payload. Choose a strong password; you will not type it interactively.
 
-### 2b. tokens/mast_github.txt
-
-Create the directory and file:
-
-```powershell
-New-Item -ItemType Directory -Force vault\tokens | Out-Null
-# Paste your GitHub Personal Access Token (repo read scope) into this file:
-notepad vault\tokens\mast_github.txt
-```
-
-The `mast` provisioning module uses this token to clone private MAST repos onto
-units. If the `mast` module is not in your unit's module list you can skip this
-for now, but autonomous runs will fail if `mast` is listed and the file is absent.
-
 ### 2c. NoMachine license files
 
 Copy one `.lic` file per unit into `vault\nomachine-licenses\`. The build script
