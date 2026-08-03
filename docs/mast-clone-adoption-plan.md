@@ -277,6 +277,15 @@ the resolver version a build-side fact rather than a download. Same precedent as
 the frozen cygwin package cache (#20). The staged binary's version must match
 the manifest's `#!uv-version` — assert it, don't assume.
 
+**Status:** landed 2026-08-03. The **zip plus the publisher's `.sha256`** is
+vendored rather than the extracted `uv.exe` — 18 MB against 46 MB in git and in
+every payload, and the checksum keeps the integrity check mast-clone's own
+bootstrap performs. `build/fetch-uv.ps1` refreshes it and reads the version from
+`tools/mast-repos.tsv`, so the artifact and the pin cannot be bumped
+independently. Verified on labcomp2: a production build stages both files, and
+checksum + extract + `uv --version` yields 0.11.33 matching the pin, at the path
+mast-clone probes.
+
 ### Stage 5 — Rewrite `verify-mast.ps1` for the new layout
 
 - Presence checks move to the new layout: `<Top>\.venv`, `<Top>\common`,

@@ -2,6 +2,40 @@
 
 ---
 
+## [2026-08-03] The pinned uv is vendored into the payload, as a zip plus its checksum
+
+**Why:** `mast-clone.ps1` builds the role venv with uv, and left to itself it
+downloads the pinned release from the GitHub releases CDN **at provisioning
+time**. That puts every unit's run at the mercy of GitHub reachability and
+throughput from the observatory -- the same class of dependency the frozen
+Cygwin package cache removed for astrometry (issue #20), and the same reason
+the astrometry index seed is build-host-vendored.
+
+**What:** `server/providers/mast/assets/uv-x86_64-pc-windows-msvc.zip` plus the
+publisher's `.sha256` is committed via git-LFS and staged as a commandfile.
+`provide-mast.ps1` verifies the checksum, extracts `uv.exe` to
+`<Top>\.tools\uv.exe`, then asserts `uv --version` equals the `#!uv-version`
+pin in the staged `mast-repos.tsv`. **No change to mast-clone was needed:** it
+already prefers an existing `<Top>\.tools\uv.exe` over bootstrapping, so
+vendoring is a drop-in.
+
+**The zip is vendored, not the extracted exe** -- 18 MB against 46 MB in git and
+in every payload, and shipping the `.sha256` beside it keeps the integrity check
+mast-clone's own bootstrap performs rather than trusting a loose binary in the
+tree. `build/fetch-uv.ps1` refreshes it and **reads the version from
+`tools/mast-repos.tsv`** rather than taking it as a parameter, so the vendored
+artifact and the version the scripts expect cannot be bumped independently; the
+runtime assertion is what catches a mixed tree.
+
+**Implications:** a production build now requires the asset and fails loudly
+without it; `-TestMode` skips it (like `cygwin/assets/astrometry.tgz`) and
+mast-clone falls back to the CDN, which still works. Verified end to end on
+labcomp2: a production `build-mast.ps1 -Modules mast` staged the zip and its
+checksum, and the checksum + extract + version-assert sequence produced
+`uv 0.11.33` matching the pin, at the path mast-clone probes.
+
+---
+
 ## [2026-08-02] The mast provider delegates cloning to mast-clone; unit code lives at C:\MAST\src
 
 **Why:** `provide-mast.ps1` carried its own repo list (`mast-repos.txt` +
