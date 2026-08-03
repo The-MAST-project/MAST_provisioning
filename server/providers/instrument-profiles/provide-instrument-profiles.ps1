@@ -7,7 +7,7 @@
 # profile (Documents dir + HKCU hive) is not materialized at provisioning time.
 #
 # Stage 1 (provisioning, pre-hardware) lays down TEMPLATES ONLY:
-#   - PWI4.cfg Latitude/Longitude/HeightMeters <- C:\WIS\unit.toml [location].
+#   - PWI4.cfg Latitude/Longitude/HeightMeters <- C:\WIS\config.toml [location].
 #   - Fleet-constant cfg values (CountsPerMicron, mount ConnectionMethod=usb,
 #     internal IPs, equatorial) ship verbatim from MAST02 in the bundle.
 # Per-unit device->COM binding (EFA, PWBus) is NOT done here: instruments are
@@ -22,7 +22,7 @@ param(
     # the live profile staging.
     [string]${ProfilesRoot} = 'C:\ProgramData\MAST\instrument-profiles',
     # Bootstrap config the site location is read from (deployed by config-bootstrap).
-    [string]${UnitToml} = 'C:\WIS\unit.toml',
+    [string]${UnitToml} = 'C:\WIS\config.toml',
     # Skip the AtLogon apply-task registration (non-destructive synthesis tests).
     [switch]${SkipTask}
 )
@@ -73,7 +73,7 @@ function Set-CfgField {
 }
 
 function Get-TomlValue {
-    # Light single-key reader for the flat / single-section unit.toml. No tomllib
+    # Light single-key reader for the config.toml [location] section. No tomllib
     # dependency (mirrors verify-config-bootstrap's regex approach).
     param([Parameter(Mandatory)][string]${Content}, [Parameter(Mandatory)][string]${Key})
     ${m} = [regex]::Match(${Content}, ('(?m)^\s*{0}\s*=\s*(.+?)\s*$' -f [regex]::Escape(${Key})))

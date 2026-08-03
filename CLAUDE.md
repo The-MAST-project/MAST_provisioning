@@ -187,12 +187,14 @@ sees the flag with nothing after it. Omit the flag entirely when the value is em
 the param a default (`[string]${X} = ''`) instead; add the flag back only with a non-empty
 value. (Hit while wiring the optional `-WeatherUrl` in the `desktop-shortcuts` provider.)
 
-## Unit config: `C:\WIS\<role>.toml` + `MAST_PROJECT` (external-config epic)
+## Unit config: `C:\WIS\config.toml` + `machine_role` (external-config epic)
 
-The apps read a per-machine TOML bootstrap file at `C:\WIS\<role>.toml` (role = `MAST_PROJECT`,
-e.g. `unit`) for machine identity + how to reach the config DB, and fail fast if it is missing.
-The `config-bootstrap` provider (order 150) lays this down from `sites/<site>.toml` and sets
-`MAST_PROJECT` machine-wide. **Site is selected explicitly via `build-mast.ps1 -Site`, never
+The apps read a per-machine TOML bootstrap file at the fixed path `C:\WIS\config.toml` for
+machine identity + how to reach the config DB, and fail fast if it is missing. The machine's
+role is the required `machine_role` field inside the file (`unit`/`spec`/`control`) -- there is
+no `MAST_PROJECT` environment variable. The `config-bootstrap` provider (order 150) writes the
+file from `sites/<site>.toml` with `machine_role` injected as a top-level key. **Site is selected
+explicitly via `build-mast.ps1 -Site`, never
 derived from the hostname** -- do not reintroduce hostname->site parsing in providers. Per-site
 profiles must match the controller's MongoDB `sites` doc (the app cross-checks them at startup).
 The operator picks the site at bootstrap (`bootstrap-winrm.ps1`, default `ns`); it is persisted and
@@ -202,7 +204,7 @@ The operator picks the site at bootstrap (`bootstrap-winrm.ps1`, default `ns`); 
 ## Instrument profiles: PWI4 `.cfg` + PHD2 `.reg` (two stages)
 
 **Stage 1 -- `instrument-profiles` provider (order 1850, after planewave/phd2/zwo):** lays down
-TEMPLATES only. It injects the site location into `PWI4.cfg` from the **deployed `C:\WIS\unit.toml`
+TEMPLATES only. It injects the site location into `PWI4.cfg` from the **deployed `C:\WIS\config.toml`
 `[location]`** (written by config-bootstrap) -- not from `-Site` or the hostname -- and ships the
 fleet-constant values verbatim (focuser `CountsPerMicron`, mount `ConnectionMethod=usb`, internal
 IPs, equatorial). Because the per-user `mast` profile is not materialized at provisioning time,
