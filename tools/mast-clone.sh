@@ -56,6 +56,14 @@ DEFAULT_PROXY="http://bcproxy.weizmann.ac.il:8080"
 DEFAULT_NO_PROXY="localhost,127.0.0.1,10.23.0.0/16"
 VENV=""      # always <top>/.venv; derived once TOP_ABS is known
 UV=""
+# Name of the uv executable on this platform. Under Git Bash/MSYS/Cygwin the
+# shell is POSIX but the binary is a Windows .exe, and the difference matters in
+# two places: what to look for inside the release archive, and what path to hand
+# to 'uv venv' afterwards.
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) UV_BIN="uv.exe" ;;
+    *)                    UV_BIN="uv" ;;
+esac
 declare -A BRANCH_OVERRIDE=()
 
 die()  { echo "ERROR: $*" >&2; exit 1; }
@@ -364,10 +372,18 @@ bootstrap_uv() {
     #     different resolvers and the fleet drifts.
     # We fetch the release artifact GitHub hosts, verify it against the .sha256
     # published beside it, and unpack a single static binary.
-    local ver="$1" dest="$2" asset url tmpd sum_expected sum_actual
+    local ver="$1" dest="$2" asset url tmpd sum_expected sum_actual found
     case "$(uname -s)" in
         Linux)  asset="uv-x86_64-unknown-linux-gnu.tar.gz" ;;
         Darwin) asset="uv-aarch64-apple-darwin.tar.gz" ;;
+        # Git Bash / MSYS2 / Cygwin: a POSIX shell on a WINDOWS platform, so the
+        # right artifact is the .zip holding uv.exe, not a linux tarball. This
+        # arm is what lets the script finish on a unit -- uname -s there is
+        # 'MINGW64_NT-10.0-19044', which fell through to the die below and
+        # stopped the run right after the clones, with no venv. --dry-run does
+        # not catch it: that path prints "would bootstrap" without ever calling
+        # this function.
+        MINGW*|MSYS*|CYGWIN*) asset="uv-x86_64-pc-windows-msvc.zip" ;;
         *)      die "cannot bootstrap uv on this platform: $(uname -s); install uv yourself" ;;
     esac
     url="https://github.com/astral-sh/uv/releases/download/${ver}/${asset}"
@@ -385,11 +401,22 @@ bootstrap_uv() {
     fi
     info "uv checksum verified (sha256 ${sum_actual})"
     mkdir -p "$dest"
-    tar -xzf "${tmpd}/${asset}" -C "$tmpd" || die "extract failed"
-    # Archive layout is <name>/uv; take the binary wherever it landed.
-    find "$tmpd" -type f -name uv -perm -u+x -exec cp {} "${dest}/uv" \; || die "uv binary not found in archive"
+    case "$asset" in
+        *.zip)    command -v unzip >/dev/null 2>&1 || die "unzip is needed to unpack ${asset} but is not on PATH"
+                  unzip -q -o "${tmpd}/${asset}" -d "$tmpd" || die "extract failed (unzip)" ;;
+        *.tar.gz) tar -xzf "${tmpd}/${asset}" -C "$tmpd"    || die "extract failed (tar)" ;;
+        *)        die "no extractor for ${asset}" ;;
+    esac
+    # Archive layout differs per platform (<name>/uv in the tarballs, uv.exe at
+    # the root of the zip), so take the binary wherever it landed. No -perm test:
+    # the zip carries no POSIX mode bits, so uv.exe arrives non-executable under
+    # MSYS and a -u+x filter would silently match nothing; chmod below fixes it.
+    found="$(find "$tmpd" -type f -name "$UV_BIN" | head -1)"
+    [ -n "$found" ] || die "uv binary ('$UV_BIN') not found in ${asset}"
+    cp "$found" "${dest}/${UV_BIN}" || die "could not install uv into ${dest}"
+    chmod +x "${dest}/${UV_BIN}" 2>/dev/null || true
     rm -rf "$tmpd"
-    [ -x "${dest}/uv" ] || die "uv not executable after bootstrap"
+    [ -x "${dest}/${UV_BIN}" ] || die "uv not executable after bootstrap"
 }
 
 uv_version_of() {  # $1 = a uv binary; echoes its bare version ("0.11.33") or nothing
@@ -411,7 +438,7 @@ if [ -n "$VENV" ]; then
     # one. The same check covers <top>/.tools/uv, which may be left over from a
     # run made before the manifest bumped the pin.
     UV=""
-    for _cand in "$(command -v uv 2>/dev/null || true)" "${TOP_ABS}/.tools/uv"; do
+    for _cand in "$(command -v uv 2>/dev/null || true)" "${TOP_ABS}/.tools/${UV_BIN}"; do
         [ -n "$_cand" ] && [ -x "$_cand" ] || continue
         _cand_ver="$(uv_version_of "$_cand")"
         if [ "$_cand_ver" = "$UV_VERSION" ]; then
@@ -427,7 +454,7 @@ if [ -n "$VENV" ]; then
         else
             bootstrap_uv "$UV_VERSION" "${TOP_ABS}/.tools"
         fi
-        UV="${TOP_ABS}/.tools/uv"
+        UV="${TOP_ABS}/.tools/${UV_BIN}"
     fi
     if [ ! -d "$VENV" ]; then
         info "creating venv ${VENV}"
