@@ -65,6 +65,18 @@ catch {
     throw "Failed to import provisioning.psm1: $($_.Exception.Message)"
 }
 
+# Errors here must be loud. This script reported SUCCESS while doing nothing on
+# the first real VM cycle (2026-08-03); two PowerShell 5.1 behaviours combined:
+#   1. $LASTEXITCODE is NOT set by invoking a .ps1 -- it is a native-process
+#      concept -- so any "did mast-clone succeed?" test based on it is dead code.
+#   2. A PARAMETER-BINDING failure in a called .ps1, inside try{}/finally{} with
+#      no catch, aborts the try block (skipping every post-condition below it)
+#      AND still exits 0. Measured: a plain 'throw' does exit nonzero, so it is
+#      this specific shape that goes silent, not terminating errors in general.
+# Hence: -Stop so such failures are catchable, and the explicit catch at the
+# bottom, which turns them into a nonzero exit. See issue #38.
+${ErrorActionPreference} = 'Stop'
+
 # Staged flat into the payload root as a 'repofiles' entry of this module, so it
 # sits beside this script at run time (see build/build-staging-lib.ps1).
 ${MastCloneScript} = Join-Path ${PSScriptRoot} 'mast-clone.ps1'
@@ -235,17 +247,25 @@ try {
     # -Update: fast-forward existing clones. mast-clone refuses to merge over a
     #   dirty tree rather than discarding local work; verify-mast.ps1 reports such
     #   a unit as failed, so a silently-frozen checkout cannot pass unnoticed.
-    ${cloneArgs} = @('-Top', ${Top}, '-Role', ${MastRole}, '-Transport', 'https', '-Update')
-    if (${DirectHttp}) { ${cloneArgs} += '-DirectHttp' }
+    # HASHTABLE splat, not an array. An array splat binds POSITIONALLY: '-Top'
+    # consumed its value, then the literal '-Role' landed in the next positional
+    # parameter (Transport) and failed its ValidateSet -- so mast-clone never ran
+    # (caught on the first real VM cycle, 2026-08-03).
+    ${cloneParams} = @{
+        Top       = ${Top}
+        Role      = ${MastRole}
+        Transport = 'https'
+        Update    = $true
+    }
+    if (${DirectHttp}) { ${cloneParams}['DirectHttp'] = $true }
     Write-MastProvisionEvent ("mast-clone BEGIN top={0} role={1} directHttp={2}" -f ${Top}, ${MastRole}, [bool]${DirectHttp})
     ${sw} = [System.Diagnostics.Stopwatch]::StartNew()
-    & ${MastCloneScript} @cloneArgs
-    ${rc} = $LASTEXITCODE
+    # Called in-process, so mast-clone's own 'throw' propagates here and is caught
+    # below. Its exit code is deliberately NOT consulted: $LASTEXITCODE is not set
+    # by a .ps1 invocation, and the post-conditions after this are the real proof.
+    & ${MastCloneScript} @cloneParams
     ${sw}.Stop()
-    Write-MastProvisionEvent ("mast-clone END elapsedSec={0:N1} exitCode={1}" -f ${sw}.Elapsed.TotalSeconds, ${rc})
-    if ($null -ne ${rc} -and ${rc} -ne 0) {
-        throw ("mast-clone.ps1 failed with exit code {0}" -f ${rc})
-    }
+    Write-MastProvisionEvent ("mast-clone END elapsedSec={0:N1}" -f ${sw}.Elapsed.TotalSeconds)
 
     ${venvPython} = Join-Path ${Top} '.venv\Scripts\python.exe'
     if (-not (Test-Path -LiteralPath ${venvPython})) {
@@ -319,6 +339,15 @@ try {
     }
 
     Write-MastProvisionEvent ("MAST source tree ready at {0}" -f ${Top})
+}
+catch {
+    # Explicit, because an unhandled terminating error would leave
+    # powershell.exe -File exiting 0 and execute-mast-provisioning.ps1 recording
+    # this module as SUCCESS.
+    Write-MastProvisionEvent ("FAILED: {0}" -f $_.Exception.Message)
+    Write-Error ($_ | Out-String)
+    # No Stop-ProvisionLog here: the finally below still runs on 'exit'.
+    exit 1
 }
 finally {
     Stop-ProvisionLog
