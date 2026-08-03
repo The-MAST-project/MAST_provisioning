@@ -9,5 +9,10 @@
     "smb": {
         "user": "mast-transfer",
         "pass": "CHANGE ME"
+    },
+    "_comment_shared": "Account the OPERATIONAL share accepts (Samba 'valid users' on <controller_host>:/Storage/mast-share). Units mount it as Z: via the mast-shared-mount provider. Distinct from 'smb', which is the provisioning server's transfer account.",
+    "shared": {
+        "user": "mast",
+        "pass": "CHANGE ME"
     }
 }

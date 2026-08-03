@@ -872,21 +872,18 @@ foreach ($unit in $units) {
             $execWarn = $null
             try {
                 $execResult = Invoke-Command -Session $session -ScriptBlock {
-                    param($stagePath, $provSrv, $smbUsr, $smbPwd, $runId, $heldBy)
+                    param($stagePath, $runId, $heldBy)
                     Set-ExecutionPolicy Bypass -Scope Process -Force
                     # Suppress script output so the WinRM return value is just the exit code.
                     # -AllowReboot: autonomous orchestrator runs are allowed to schedule a
                     # post-run restart when the reboot provider flag is set.
                     $null = & (Join-Path $stagePath 'execute-mast-provisioning.ps1') `
                         -StagingPath $stagePath `
-                        -ProvServer   $provSrv `
-                        -SmbUser      $smbUsr `
-                        -SmbPass      $smbPwd `
                         -RunId        $runId `
                         -HeldBy       $heldBy `
                         -AllowReboot
                     return [int]$LASTEXITCODE
-                } -ArgumentList $unitStage, $provServer, $smbUser, $smbPass, $RunId, $provServer `
+                } -ArgumentList $unitStage, $RunId, $provServer `
                     -WarningVariable execWarn -WarningAction SilentlyContinue
             } finally {
                 Stop-UnitProgressTimer

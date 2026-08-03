@@ -80,8 +80,10 @@ try {
 } catch {}
 
 # --- Discover the provisioning server (its NTP server) for the one-time sync ---
-# The unit holds an SMB connection to the prov server (the mast-staging pull and
-# the Z: -> \\<ProvServer>\mast-shared mapping done before any module runs).
+# The unit holds an SMB connection to the prov server from the mast-staging pull,
+# which runs before any module. There is deliberately no Z:-drive fallback here:
+# Z: is the OPERATIONAL share on the site controller, not the provisioning server
+# (issue #25), so reading a server name off it would point tier 3 at the wrong host.
 if (-not ${ProvServer}) {
     try {
         ${conn} = Get-SmbConnection -ErrorAction SilentlyContinue |
@@ -89,10 +91,6 @@ if (-not ${ProvServer}) {
             Select-Object -First 1
         if (${conn}) { ${ProvServer} = ${conn}.ServerName }
     } catch {}
-}
-if (-not ${ProvServer}) {
-    ${z} = Get-PSDrive -Name Z -ErrorAction SilentlyContinue
-    if (${z} -and ${z}.DisplayRoot -match '^\\\\([^\\]+)\\') { ${ProvServer} = ${Matches}[1] }
 }
 
 # --- Build the ordered priority tiers (skip blanks) ---------------------------
@@ -102,7 +100,7 @@ if (${WeizmannNtp}) { ${tiers} += [pscustomobject]@{ Name = 'weizmann'; Peers = 
 if (${ProvServer})  { ${tiers} += [pscustomobject]@{ Name = 'prov';     Peers = ("{0},0x8" -f ${ProvServer}) } }
 if (${WindowsNtp})  { ${tiers} += [pscustomobject]@{ Name = 'windows';  Peers = ${WindowsNtp} } }
 if (-not ${ProvServer}) {
-    Write-TLog '[WARN] could not determine the provisioning server (no mast SMB connection / Z: mapping); skipping tier 3.'
+    Write-TLog '[WARN] could not determine the provisioning server (no mast SMB connection); skipping tier 3.'
 }
 ${tierDesc} = (${tiers} | ForEach-Object { ${_}.Name + '=' + ${_}.Peers }) -join ' | '
 Write-TLog ("Ordered NTP tiers: {0}" -f ${tierDesc})

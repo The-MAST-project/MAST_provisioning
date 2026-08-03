@@ -573,8 +573,6 @@ def phase_execute(
     unit_cred: dict[str, str],
     staging_path: str,
     modules: list[str] | None = None,
-    smb_user: str = "",
-    smb_pass: str = "",
 ) -> Any:
     with timed("EXECUTE PHASE"):
         log("Starting execute-mast-provisioning.ps1 on unit (up to 90 min)...")
@@ -583,18 +581,17 @@ def phase_execute(
             f"from unit every {EXECUTE_POLL_INTERVAL_S}s..."
         )
 
-        smb_pass_ps = _ps_escape(smb_pass)
         step_timer: list[float] = [time.monotonic()]
         poller = ExecuteLogPoller(host_unit, unit_cred, step_timer=step_timer)
         poller.start()
         try:
+            # No SMB credential: execute maps no drive (issue #25). The VM harness
+            # does not plant the operational-share blob either, so mast-shared-mount
+            # installs its mechanism and reports a warn smoke -- expected off-site.
             execute_cmd = (
                 "Set-ExecutionPolicy Bypass -Scope Process -Force; "
                 f"& '{staging_path}\\execute-mast-provisioning.ps1' "
-                f"-StagingPath '{staging_path}' "
-                f"-ProvServer '{PROV_SERVER}' "
-                f"-SmbUser '{smb_user}' "
-                f"-SmbPass '{smb_pass_ps}'"
+                f"-StagingPath '{staging_path}'"
             )
             if modules and sorted(modules) != sorted(all_modules()):
                 execute_cmd += f" -Modules '{','.join(modules)}'"
@@ -1263,8 +1260,6 @@ def main() -> None:
                         run_response = phase_execute(
                             unit_session, args.host_unit, creds["unit"], unit_stage,
                             modules=modules,
-                            smb_user=creds["smb"]["user"],
-                            smb_pass=creds["smb"]["pass"],
                         )
                         run_rc = run_response.status_code
                     elif "verify-run" in phases:

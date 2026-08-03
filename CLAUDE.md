@@ -178,6 +178,27 @@ net use Z: \\server\share /persistent:no <password> /user:<user>
 The canonical reference implementation is `client/mast-pull-staging.ps1`. Any new `net use`
 call must match that argument order.
 
+## `Z:` is the unit's operational drive -- provisioning does not claim it
+
+`Z:` means exactly one thing on a MAST unit: the site controller's share,
+`\\<controller_host>\mast-share`. MAST_common's `Filer` roots its "shared" area on
+`Z:\MAST\<hostname>\`, the ram-to-shared mover writes every exposure there, and when the
+letter is missing `Filer` **silently** substitutes `C:\MAST`. Provisioning must never map
+`Z:` to anything of its own; reach the provisioning server's `mast-shared` by **UNC**.
+
+Two rules follow for any code that touches a network drive on a unit:
+
+- **Map in the session that will use it.** Drive letters are per-logon-session. The MAST
+  services run as **LocalSystem** (nssm, no `ObjectName`), so a mapping made by
+  provisioning (the autologon `mast` user) is invisible to them. The single place that
+  establishes `Z:` is the `mast-shared-mount` provider, via a SYSTEM scheduled task plus
+  an nssm `Start/Pre` hook on `mast-unit`.
+- **Do not infer a host from a drive mapping.** `Z:` points at the controller, not the
+  provisioning server -- deriving one from the other lands on the wrong machine (this
+  was a real fallback in the timesync provider).
+
+See `DECISIONS.md` 2026-08-03 and issue #25.
+
 ## Empty-string args are dropped from `module.json` `-File` commands
 
 A `module.json` `command` / `verify` that passes an empty-string argument to a `-File`

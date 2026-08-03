@@ -23,6 +23,17 @@ Single-machine bring-up uses one `unit` block:
 }
 ```
 
+The autonomous driver additionally needs two SMB accounts, which are **not** the same
+thing:
+
+- `smb` -- the read-only transfer account on the **provisioning server**, used by
+  `client/mast-pull-staging.ps1` to pull the staging payload.
+- `shared` -- the account the **operational share** accepts (Samba `valid users` on
+  `<controller_host>:/Storage/mast-share`). The driver plants it on the unit as a
+  machine-bound DPAPI-LocalMachine blob and the `mast-shared-mount` provider uses it
+  to map `Z:` in the SYSTEM session. Without it the unit silently writes exposures to
+  `C:\MAST` -- see issue #25.
+
 Use `creds.json.template` as a starting point.
 
 ## tokens/ -- removed 2026-08-02

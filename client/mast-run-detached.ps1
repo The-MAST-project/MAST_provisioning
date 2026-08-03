@@ -13,13 +13,15 @@ Two modes:
               immediately. The task is triggerless -- it only runs when Started
               -- so it never re-fires on its own at a later logon.
   -Run      : (invoked by the task, in the interactive session) read the config,
-              decrypt the SMB password from the DPAPI-LocalMachine blob, run
-              execute-mast-provisioning.ps1, and write execute-result.json
+              run execute-mast-provisioning.ps1, and write execute-result.json
               ('running' at start, then 'done' + exit_code).
 
 Inputs the driver writes to <SystemDrive>\MAST\status\ before -Register:
-  detached-run.json  { run_id, staging_path, prov_server, smb_user, held_by }
-  smb-cred.dpapi     LocalMachine-DPAPI blob of the SMB password (machine-bound)
+  detached-run.json  { run_id, staging_path, held_by, modules }
+
+The SMB password no longer travels this path: execute stopped mapping Z: (issue
+#25), and the operational share credential is a separate DPAPI-LocalMachine blob
+(shared-cred.dpapi) consumed by the mast-shared-mount provider's SYSTEM task.
 
 Output the driver polls:
   execute-result.json { run_id, status: running|done, exit_code, started_utc, ended_utc }
@@ -36,7 +38,6 @@ ${ErrorActionPreference} = 'Continue'
 
 ${statusDir}  = Join-Path ${env:SystemDrive} 'MAST\status'
 ${cfgPath}    = Join-Path ${statusDir} 'detached-run.json'
-${blobPath}   = Join-Path ${statusDir} 'smb-cred.dpapi'
 ${resultPath} = Join-Path ${statusDir} 'execute-result.json'
 ${taskName}   = 'MAST-Execute-Detached'
 ${selfPath}   = ${MyInvocation}.MyCommand.Path
@@ -73,19 +74,6 @@ if (${Run}) {
         started_utc = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
     }
 
-    # Decrypt the SMB password from the machine-bound DPAPI blob (never plaintext
-    # on disk). LocalMachine scope: any session on this machine can decrypt.
-    Add-Type -AssemblyName System.Security
-    ${smbPass} = ''
-    try {
-        ${enc} = [System.IO.File]::ReadAllBytes(${blobPath})
-        ${dec} = [System.Security.Cryptography.ProtectedData]::Unprotect(
-            ${enc}, $null, [System.Security.Cryptography.DataProtectionScope]::LocalMachine)
-        ${smbPass} = [System.Text.Encoding]::UTF8.GetString(${dec})
-    } catch {
-        # Leave smbPass empty; execute logs the Z: mapping failure and continues.
-    }
-
     # Targeted update: the driver's per-module drift compare (server/prov/drift.py)
     # puts the drifted module names here; empty means the full set. Execute takes
     # a comma-separated string, which is exactly what the driver writes.
@@ -97,9 +85,6 @@ if (${Run}) {
     ${exe} = Join-Path ${cfg}.staging_path 'execute-mast-provisioning.ps1'
     & ${exe} `
         -StagingPath ${cfg}.staging_path `
-        -ProvServer  ${cfg}.prov_server `
-        -SmbUser     ${cfg}.smb_user `
-        -SmbPass     ${smbPass} `
         -Modules     ${modules} `
         -RunId       ${cfg}.run_id `
         -HeldBy      ${cfg}.held_by `

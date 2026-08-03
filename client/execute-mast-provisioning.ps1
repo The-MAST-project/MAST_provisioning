@@ -1,9 +1,6 @@
 [CmdletBinding()]
 param(
     [string]${StagingPath}       = ".",
-    [string]${ProvServer}        = "",
-    [string]${SmbUser}           = "",
-    [string]${SmbPass}           = "",
     [string]${Modules}           = "",  # comma-separated; empty = all modules
     [string]${RunId}             = "",  # autonomous: server passes its run id; manual: auto-generated
     [string]${HeldBy}            = "",  # hostname of orchestrator; defaults to local computer
@@ -155,43 +152,11 @@ try {
     Write-Log "Hostname: ${env:COMPUTERNAME}"
     Write-Log "LEASE_ACQUIRE run_id=${RunId} held_by=${HeldBy} pid=$PID ttl_s=${LeaseTtlSeconds} expires=$(${leaseObj}.expires_utc)"
 
-    # ---------------------------------------------------------------
-    # Map Z: -> \\<ProvServer>\mast-shared (writable shared directory)
-    # Persistent so the mapping survives reboots.
-    # Skip if ProvServer was not passed or if Z: is already in use.
-    # ---------------------------------------------------------------
-    if (-not [string]::IsNullOrWhiteSpace(${ProvServer})) {
-        ${sharedUNC} = "\\${ProvServer}\mast-shared"
-        ${zDrive} = Get-PSDrive -Name 'Z' -ErrorAction SilentlyContinue
-        if (${zDrive}) {
-            Write-Log "Z: drive already mapped (root: $($zDrive.Root)) -- skipping mast-shared mapping."
-        } else {
-            Write-Log "Mapping Z: -> ${sharedUNC} (persistent)"
-            ${netArgs} = @('use', 'Z:', ${sharedUNC})
-            if (-not [string]::IsNullOrWhiteSpace(${SmbUser})) {
-                ${netArgs} += ${SmbPass}
-                ${netArgs} += "/user:${SmbUser}"
-            }
-            ${netArgs} += '/persistent:yes'
-            ${netOut} = & net @netArgs 2>&1
-            ${netRc}  = $LASTEXITCODE
-            if (${netRc} -eq 0) {
-                Write-Log "Z: mapped OK (persistent)."
-
-                # Verify the share is writable.
-                ${testFile} = "Z:\mast-write-test-${env:COMPUTERNAME}.tmp"
-                try {
-                    [System.IO.File]::WriteAllText(${testFile}, "write-test")
-                    Remove-Item -Force ${testFile} -ErrorAction SilentlyContinue
-                    Write-Log "Z: write verification: OK"
-                } catch {
-                    Write-Log "[WARN] Z: write verification failed: $($_.Exception.Message)"
-                }
-            } else {
-                Write-Log "[WARN] Z: mapping failed (rc=${netRc}): $(($netOut | Out-String).Trim()) -- continuing without shared drive."
-            }
-        }
-    }
+    # Execute does NOT map Z:. It used to map Z: -> \\<ProvServer>\mast-shared
+    # persistently, which claimed a letter that belongs to the operational store
+    # (\\<controller_host>\mast-share) and did so in a session the LocalSystem MAST
+    # services cannot see. The mapping now belongs to the mast-shared-mount provider,
+    # which establishes it in the SYSTEM session. See issue #25.
 
     # Verify staging path exists
     if (-not (Test-Path ${StagingPath})) {

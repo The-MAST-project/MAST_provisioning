@@ -101,6 +101,7 @@ def _make_driver(root, monkeypatch, responder, unit=UNIT):
     creds.write_text(json.dumps({
         "unit": {"user": ".\\mast", "pass": "x"},
         "smb": {"user": "prov", "pass": "y"},
+        "shared": {"user": "mast", "pass": "z"},
     }))
     cfg = D.Config(repo_top=repo, unit_registry=reg, vault_creds=creds)
     drv = D.Driver(cfg)
@@ -413,3 +414,41 @@ def test_a_targeted_run_still_includes_the_always_modules(root, monkeypatch):
     assert code == D.EXIT_OK, drv.log.run_log_path.read_text()
     # Build order, not alphabetical: reboot is order-terminal and must come last.
     assert _detached_cfg(sess)["modules"] == "python,reboot"
+
+
+# --- issue #25: the operational-share credential -----------------------------
+def test_missing_shared_creds_is_fatal(root, monkeypatch):
+    """Without shared.user/pass the mast-shared-mount provider cannot map Z:, and the
+    unit silently writes exposures to C:. Fail the run rather than provision a unit
+    whose operational store is wrong."""
+    drv, sess = _make_driver(root, monkeypatch, make_responder())
+    creds = json.loads(drv.cfg.vault_creds.read_text())
+    del creds["shared"]
+    drv.cfg.vault_creds.write_text(json.dumps(creds))
+    assert drv.run() == D.EXIT_FATAL
+    assert "creds_shared_missing" in drv.log.run_log_path.read_text()
+
+
+def test_shared_cred_is_planted_as_a_blob_never_on_a_command_line(root, monkeypatch):
+    """The password reaches the unit as an uploaded file that is then DPAPI-protected
+    in place; it must never appear as a command-line argument."""
+    drv, sess = _make_driver(root, monkeypatch, make_responder())
+    assert drv.run() == D.EXIT_OK, drv.log.run_log_path.read_text()
+
+    protect = [s for s in sess.scripts if "shared-cred.dpapi" in s]
+    assert protect, "no shared-cred blob write seen"
+    assert "ProtectedData" in protect[0] and "LocalMachine" in protect[0]
+    # The temp plaintext is overwritten and removed by the same script.
+    assert "Remove-Item" in protect[0] and "shared-cred.tmp" in protect[0]
+    assert not any("z" == tok for s in sess.scripts for tok in s.split("'")), \
+        "the shared password appears in a script argument"
+
+
+def test_execute_no_longer_carries_an_smb_credential(root, monkeypatch):
+    """execute maps no drive now, so the detached config holds no credential and no
+    prov-server hint for it to map one with."""
+    drv, sess = _make_driver(root, monkeypatch, make_responder())
+    assert drv.run() == D.EXIT_OK, drv.log.run_log_path.read_text()
+    cfg = _detached_cfg(sess)
+    assert "smb_user" not in cfg and "prov_server" not in cfg, cfg
+    assert not any("smb-cred.dpapi" in s for s in sess.scripts)

@@ -53,12 +53,18 @@ from prov.staging_size import staging_payload_size
 # The shared ones live in prov.unit_paths so the read-only tooling names the same
 # files; the rest are driver-only and stay here.
 UNIT_PULL_SCRIPT = r"C:\MAST\mast-pull-staging.ps1"
-# Detached-execute (item 6): the standalone runner + the files the driver writes
-# for it (config has no secret; the SMB pass is a machine-bound DPAPI blob).
+# Detached-execute (item 6): the standalone runner + the config the driver writes
+# for it (no secret in it).
 UNIT_DETACHED_RUNNER = r"C:\MAST\mast-run-detached.ps1"
 UNIT_DETACHED_CFG = r"C:\MAST\status\detached-run.json"
-UNIT_SMB_BLOB = r"C:\MAST\status\smb-cred.dpapi"
 UNIT_EXECUTE_RESULT = r"C:\MAST\status\execute-result.json"
+# Credential for the OPERATIONAL share (\\<controller_host>\mast-share), consumed by
+# the mast-shared-mount provider's SYSTEM task. Machine-bound DPAPI-LocalMachine blob;
+# the plaintext is uploaded to a temp file and shredded rather than passed on a
+# command line. See issue #25.
+UNIT_SHARED_BLOB = r"C:\MAST\status\shared-cred.dpapi"
+UNIT_SHARED_PLAIN = r"C:\MAST\status\shared-cred.tmp"
+UNIT_SHARED_CFG = r"C:\MAST\status\shared-cred.json"
 DETACHED_TASK = "MAST-Execute-Detached"
 EXECUTE_POLL_INTERVAL_S = 15
 
@@ -162,12 +168,22 @@ class Driver:
         if not (smb.get("user") and smb.get("pass")):
             self.log.event("FATAL", reason="creds_smb_missing", hint="vault/creds.json needs smb.user/pass")
             return EXIT_FATAL
+        # Distinct from `smb`: that is the read-only transfer account on the
+        # provisioning server; this is the account the OPERATIONAL share on the site
+        # controller accepts (Samba `valid users`), which units mount as Z:.
+        shared = creds.get("shared") or {}
+        if not (shared.get("user") and shared.get("pass")):
+            self.log.event("FATAL", reason="creds_shared_missing",
+                           hint="vault/creds.json needs shared.user/pass (the mast-share account)")
+            return EXIT_FATAL
 
         # Basic auth wants the bare local username (strip a leading '.\').
         raw_user = creds["unit"]["user"]
         self.unit_cred = {"user": raw_user, "pass": creds["unit"]["pass"]}
         self.smb_user = smb["user"]
         self.smb_pass = smb["pass"]
+        self.shared_user = shared["user"]
+        self.shared_pass = shared["pass"]
 
         self._preflight_smb()
 
@@ -580,27 +596,42 @@ class Driver:
 
     def _write_detached_inputs(self, session: Any, stage: str,
                                target_modules: list[str] | None = None) -> None:
-        """Write the detached runner's inputs: config (no secret) + the SMB pass
-        as a machine-bound DPAPI-LocalMachine blob (a network-logon session CAN
-        LocalMachine-Protect; the runner decrypts it in the interactive session)."""
+        """Write the detached runner's inputs. No secret travels here: execute no
+        longer maps any drive (issue #25), so it needs no SMB credential."""
         # 'modules' is the targeted subset from the per-module drift compare, or
         # "" for the full set. The runner forwards it to execute's -Modules, so a
         # one-module drift runs one module's commands instead of the whole
         # payload. Empty string, not absent: a ConvertFrom-Json object missing
         # the key would need a StrictMode-safe probe on the unit side.
         self._write_unit_json(session, UNIT_DETACHED_CFG, {
-            "run_id": self.run_id, "staging_path": stage, "prov_server": self.prov_server,
-            "smb_user": self.smb_user, "held_by": self.prov_server,
+            "run_id": self.run_id, "staging_path": stage, "held_by": self.prov_server,
             "modules": ",".join(target_modules or []),
         })
+
+    def _write_shared_cred(self, session: Any) -> None:
+        """Plant the operational-share credential the mast-shared-mount provider needs,
+        as a machine-bound DPAPI-LocalMachine blob.
+
+        LocalMachine scope is what makes this work across accounts: this session is a
+        network logon (which CAN Protect at LocalMachine), while the consumer is the
+        SYSTEM scheduled task that maps Z: for the LocalSystem services.
+
+        The plaintext goes over the wire as a file, not as a command-line argument, and
+        is overwritten and deleted on the unit as soon as it is protected."""
+        self._write_unit_json(session, UNIT_SHARED_CFG, {"user": self.shared_user})
+        transport.upload_file(session, UNIT_SHARED_PLAIN, self.shared_pass, label="shared-cred")
         enc = (
             "$ErrorActionPreference='Stop'; Add-Type -AssemblyName System.Security; "
-            f"$b=[Text.Encoding]::UTF8.GetBytes({_ps_lit(self.smb_pass)}); "
+            f"$p={_ps_lit(UNIT_SHARED_PLAIN)}; "
+            "$b=[IO.File]::ReadAllBytes($p); "
             "$e=[Security.Cryptography.ProtectedData]::Protect($b,$null,"
             "[Security.Cryptography.DataProtectionScope]::LocalMachine); "
-            f"[IO.File]::WriteAllBytes({_ps_lit(UNIT_SMB_BLOB)},$e)"
+            f"[IO.File]::WriteAllBytes({_ps_lit(UNIT_SHARED_BLOB)},$e); "
+            "[IO.File]::WriteAllBytes($p,(New-Object byte[] $b.Length)); "
+            "Remove-Item -LiteralPath $p -Force"
         )
-        transport.run_ps(session, enc, label="dpapi-blob", echo=False, tee_stdout=False, timeout_s=PROBE_TIMEOUT_S)
+        transport.run_ps(session, enc, label="shared-dpapi-blob", echo=False,
+                         tee_stdout=False, timeout_s=PROBE_TIMEOUT_S)
 
     def _execute(self, session: Any, host: str, dur, payload_hash: str, git_sha: str,
                  target_modules: list[str] | None = None) -> tuple[bool, Any]:
@@ -617,6 +648,7 @@ class Driver:
                        modules=",".join(target_modules or []) or "all")
         stage = self._unit_stage
         self._write_detached_inputs(session, stage, target_modules)
+        self._write_shared_cred(session)
         runner_src = (self.cfg.repo_top / "client" / "mast-run-detached.ps1").read_text(encoding="utf-8")
         transport.upload_file(session, UNIT_DETACHED_RUNNER, runner_src, label="detached-runner")
 
