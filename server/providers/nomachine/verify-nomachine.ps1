@@ -20,6 +20,10 @@ ${REQUIRED_CFG} = [ordered]@{
   SessionHistory  = '0'
   UpdateFrequency = '0'
 }
+# nxserver reports e.g. 'Thu Jul 01 15:47:19 CEST 2027'. The leading weekday and
+# the timezone abbreviation are both stripped before parsing: 'ddd' would make
+# ParseExact reject any date whose weekday disagrees, silently skipping the check.
+${EXPIRY_FORMAT} = 'MMM dd HH:mm:ss yyyy'
 
 ${report}   = New-Object System.Collections.Generic.List[string]
 ${failures} = New-Object System.Collections.Generic.List[string]
@@ -70,12 +74,34 @@ if (-not (Test-Path -LiteralPath ${cfgPath})) {
     }
 }
 
-${licPath} = Join-Path ${InstallDir} 'etc\server.lic'
-if (Test-Path -LiteralPath ${licPath}) {
-    ${expiry} = (Select-String -Path ${licPath} -Pattern '^\s*Expiry:' -ErrorAction SilentlyContinue | Select-Object -First 1).Line
-    ${report}.Add(("server.lic present. $(${expiry})").Trim())
-} else {
-    ${report}.Add("server.lic not present at ${licPath}.")
+# Ask the server what it actually loaded rather than reading etc\server.lic: a
+# certificate that is expired or rejected still leaves the file sitting on disk.
+if (Test-Path -LiteralPath ${nxExe}) {
+    ${sub} = & ${nxExe} --subscription 2>&1
+    ${expiryMatch} = ${sub} | Select-String -Pattern 'Subscription expiry:\s*(.+?)\.?\s*$' | Select-Object -First 1
+    if (-not ${expiryMatch}) {
+        ${failures}.Add('nxserver --subscription reports no subscription expiry: no valid license is loaded.')
+        ${report}.Add('nxserver --subscription:')
+        ${sub} | ForEach-Object { ${report}.Add("  $PSItem") }
+    } else {
+        ${expiryRaw} = ${expiryMatch}.Matches[0].Groups[1].Value.Trim()
+        ${report}.Add("subscription expiry: ${expiryRaw}")
+        # Drop the leading weekday and the timezone abbreviation (.NET parses
+        # neither usefully here), then compare. An unparseable date is reported
+        # verbatim rather than failed, so a formatting quirk cannot fail a unit.
+        ${stripped} = [regex]::Replace(${expiryRaw}, '^(Mon|Tue|Wed|Thu|Fri|Sat|Sun)[a-z]*\s+', '')
+        ${stripped} = [regex]::Replace(${stripped}, '\s+[A-Z]{2,5}\s+(\d{4})$', ' $1')
+        ${parsedExpiry} = [datetime]::MinValue
+        if ([datetime]::TryParseExact(${stripped}, ${EXPIRY_FORMAT},
+                [Globalization.CultureInfo]::InvariantCulture,
+                [Globalization.DateTimeStyles]::None, [ref]${parsedExpiry})) {
+            if (${parsedExpiry} -lt (Get-Date)) {
+                ${failures}.Add("NoMachine subscription expired on ${expiryRaw}.")
+            }
+        } else {
+            ${report}.Add('  (expiry not parsed for comparison; reported verbatim)')
+        }
+    }
 }
 
 if (${failures}.Count -gt 0) {

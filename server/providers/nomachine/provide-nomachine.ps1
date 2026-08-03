@@ -10,7 +10,8 @@
     incoming NoMachine sessions. The Client is intentionally NOT installed.
   - Installs silently (multiple flag attempts).
   - Allocates a license based on ${env:COMPUTERNAME} if not already allocated.
-  - Installs the license file into the NoMachine licenses directory.
+  - Installs the license file as ${InstallDir}\etc\server.lic, which is the only
+    license location these units use (there is no ProgramData\NoMachine\licenses).
   - Enforces the server.cfg keys in ${SERVER_CFG_KEYS} (SessionHistory 0 avoids the
     9.0.188 history-cleaner crash that disables the server; UpdateFrequency 0 stops
     update checks), then restarts nxservice so they are picked up.
