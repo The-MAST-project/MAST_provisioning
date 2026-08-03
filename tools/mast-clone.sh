@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 #
-# mast-clone.sh -- populate a top folder with the MAST repos for a given role.
+# --- help-start ---  (everything to help-end is printed by --help; @SELF@ is
+#                      substituted with the name the script was invoked as)
+# @SELF@ -- populate a top folder with the MAST repos for a given role.
 #
 # Creates a flat hierarchy under <top>:
 #
@@ -21,12 +23,13 @@
 # for the submodule. The venv at <top>/.venv is how sys.path gets set at runtime.
 #
 # Usage:
-#   mast-clone.sh --top ~/mast --role unit
-#   mast-clone.sh --top /opt/mast --role control --ssh
-#   mast-clone.sh --top ~/mast --role all --update
-#   mast-clone.sh --top ~/mast --role unit --direct-http   # network with no proxy
+#   @SELF@ --top ~/mast --role unit
+#   @SELF@ --top /opt/mast --role control --ssh
+#   @SELF@ --top ~/mast --role all --update
+#   @SELF@ --top ~/mast --role unit --direct-http   # network with no proxy
 #
 # Companion: tools/mast-clone.ps1 (same manifest, same layout, for Windows).
+# --- help-end ---
 
 set -euo pipefail
 
@@ -60,10 +63,20 @@ info() { echo "[mast-clone] $*"; }
 warn() { echo "[mast-clone] WARN: $*" >&2; }
 
 usage() {
-    # Range must cover the whole header block above, down to the 'Companion:'
-    # line -- adding a usage example without extending it silently truncates
-    # the help.
-    sed -n '3,29p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    # The header comment block doubles as the help text, so the two cannot
+    # drift. Delimited by sentinels rather than a line range: the range version
+    # ('3,28p') silently dropped the trailing 'Companion:' line the first time
+    # a usage example was added above it, and nothing tests --help output.
+    #
+    # BASH_SOURCE[0], not $0: under 'source' $0 is the parent shell ('bash'),
+    # and sed would read that binary instead of this script. basename gives the
+    # name actually invoked, so a symlinked or renamed copy prints its own name
+    # rather than a hardcoded 'mast-clone.sh'.
+    local self
+    self="$(basename -- "${BASH_SOURCE[0]}")"
+    sed -n '/^# --- help-start/,/^# --- help-end/p' "${BASH_SOURCE[0]}" \
+        | sed -e '/^# --- help-start/,+1d' -e '/^# --- help-end/d' \
+              -e 's/^# \{0,1\}//' -e "s|@SELF@|${self}|g"
     cat <<'EOF'
 
 Options:
