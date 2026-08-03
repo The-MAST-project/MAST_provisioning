@@ -128,7 +128,7 @@ renumbering.
 |  1050 | `usbpcap` | USBPcap USB capture driver + tools |
 |  1100 | `wireshark` | Wireshark 4.6.0 network analyzer |
 |  1200 | `nssm` | NSSM (Non-Sucking Service Manager) + PATH |
-|  1300 | `nomachine` | NoMachine Enterprise Desktop (server) + license |
+|  1300 | `nomachine` | NoMachine Enterprise Desktop (server) + license. Pins `SessionHistory 0` (the 9.0.188 history cleaner crashes the server, see `DECISIONS.md` 2026-08-03) and `UpdateFrequency 0`, then leaves `nxd` accepting NX connections on 4000 — re-running repairs a unit a past crash loop had disabled |
 |  1400 | `phd2` | PHD2 telescope autoguiding |
 |  1450 | `phd2-log-viewer` | PHDLogView offline PHD2 guide-log analyzer |
 |  1500 | `vcredist2013` | Visual C++ 2013 (MSVC120) x64 + x86 redistributables (for XILabs) |
