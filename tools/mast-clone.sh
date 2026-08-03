@@ -22,7 +22,7 @@
 #
 # Usage:
 #   mast-clone.sh --top ~/mast --role unit
-#   mast-clone.sh --top /opt/mast --role control --https
+#   mast-clone.sh --top /opt/mast --role control --ssh
 #   mast-clone.sh --top ~/mast --role all --update
 #
 # Companion: tools/mast-clone.ps1 (same manifest, same layout, for Windows).
@@ -33,11 +33,22 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 MANIFEST="${SCRIPT_DIR}/mast-repos.tsv"
 ORG="The-MAST-project"
 
+# HTTPS is the default transport. SSH needs a key on the machine and reaches
+# github.com on port 22, which is blocked on the Weizmann network -- working
+# around that takes a per-user ~/.ssh/config tunnelling github.com to
+# ssh.github.com:443 through bcproxy. A freshly provisioned unit has neither the
+# key nor that config, so SSH-by-default made the common case the broken one.
+# HTTPS needs no key and rides the proxy set up below. --ssh opts back in for
+# dev boxes that do have keys.
 TOP=""
 ROLES=""
-TRANSPORT="ssh"
+TRANSPORT="https"
 UPDATE=0
 DRY_RUN=0
+DEFAULT_PROXY="http://bcproxy.weizmann.ac.il:8080"
+# Fleet-internal destinations must NOT be sent to the proxy; it cannot reach
+# 10.23.x and the request dies there rather than going direct.
+DEFAULT_NO_PROXY="localhost,127.0.0.1,10.23.0.0/16"
 VENV=""      # always <top>/.venv; derived once TOP_ABS is known
 UV=""
 declare -A BRANCH_OVERRIDE=()
@@ -53,8 +64,11 @@ usage() {
 Options:
   --top <dir>            Top folder to populate. Created if missing. Required.
   --role <r[,r...]>      One or more of: unit, control, spec, all. Required.
-  --ssh                  Clone over SSH (default). Suits dev boxes with keys.
-  --https                Clone over HTTPS. Suits provisioning-time on a unit.
+  --https                Clone over HTTPS (default). Needs no key; works on a
+                         freshly provisioned unit.
+  --ssh                  Clone over SSH. Needs a key, and on the Weizmann
+                         network also an ~/.ssh/config tunnelling github.com
+                         to ssh.github.com:443 (port 22 is blocked).
   --branch <dir>=<ref>   Override the manifest branch for one folder, e.g.
                          --branch unit=acquisition_tuning. Repeatable.
                          Default comes from the manifest, NOT from the remote's
@@ -97,6 +111,32 @@ command -v git >/dev/null 2>&1 || die "git is not on PATH"
 # "could not read Username" after a detour through the credential helper.
 # With this set, a missing credential fails immediately and says so.
 export GIT_TERMINAL_PROMPT=0
+
+# Everything this script fetches is external: github.com for the clones and for
+# the uv bootstrap download, PyPI for the venv. Direct egress from the Weizmann
+# network TIMES OUT rather than being refused, so without a proxy the first
+# clone hangs for a couple of minutes before failing -- a slow, confusing
+# failure that looks like a hung script rather than a network policy.
+#
+# Environment variables, NOT 'git config http.proxy': one setting covers all
+# three consumers (git, the curl that downloads uv, and uv itself), and nothing
+# is left behind in a repo config or the user's ~/.gitconfig afterwards.
+#
+# Set regardless of --ssh/--https. Even when the clones go over SSH -- which
+# ignores http_proxy -- the uv download and 'uv pip install' are still HTTPS and
+# still need it.
+#
+# An https_proxy already exported wins: that is the one escape hatch, and it is
+# what an off-campus run needs, since bcproxy is unreachable from outside the
+# Weizmann network. There is deliberately no flag for this -- the environment is
+# the knob.
+PROXY="${https_proxy:-${HTTPS_PROXY:-$DEFAULT_PROXY}}"
+export http_proxy="$PROXY"  https_proxy="$PROXY"
+export HTTP_PROXY="$PROXY"  HTTPS_PROXY="$PROXY"
+# Keep an operator-supplied no_proxy if there is one; otherwise exempt the
+# fleet-internal ranges, which the proxy cannot reach.
+export no_proxy="${no_proxy:-$DEFAULT_NO_PROXY}"
+export NO_PROXY="$no_proxy"
 
 # The manifest does not always arrive LF-only: git checks it out with CRLF
 # wherever core.autocrlf is on (any Windows clone), and a Windows editor can
@@ -157,6 +197,7 @@ run() {  # echo-and-execute, honouring --dry-run
 info "top       : $TOP"
 info "roles     : ${SELECTED# }"
 info "transport : $TRANSPORT"
+info "proxy     : $PROXY"
 [ "$DRY_RUN" -eq 1 ] && info "DRY RUN -- nothing will be modified"
 
 if [ "$DRY_RUN" -eq 0 ]; then
@@ -295,20 +336,41 @@ bootstrap_uv() {
     [ -x "${dest}/uv" ] || die "uv not executable after bootstrap"
 }
 
+uv_version_of() {  # $1 = a uv binary; echoes its bare version ("0.11.33") or nothing
+    "$1" --version 2>/dev/null | awk '{print $2}'
+}
+
 if [ -n "$VENV" ]; then
     # uv is acquired, never optional: the venv is always built, so a missing uv
-    # would simply mean a broken run. If it is not on PATH we fetch the pinned
-    # version into <top>/.tools -- checksum-verified, never "latest", never a
-    # remote script piped into a shell.
-    if command -v uv >/dev/null 2>&1; then
-        UV="$(command -v uv)"
-    elif [ -x "${TOP_ABS}/.tools/uv" ]; then
-        UV="${TOP_ABS}/.tools/uv"
-    elif [ "$DRY_RUN" -eq 1 ]; then
-        echo "       would bootstrap uv ${UV_VERSION} into ${TOP_ABS}/.tools"
-        UV="${TOP_ABS}/.tools/uv"
-    else
-        bootstrap_uv "$UV_VERSION" "${TOP_ABS}/.tools"
+    # would simply mean a broken run. If the PINNED version is not already
+    # present we fetch it into <top>/.tools -- checksum-verified, never
+    # "latest", never a remote script piped into a shell.
+    #
+    # The version is checked, not just the presence of a binary. The whole point
+    # of pinning uv in the manifest is that the resolver is what decides which
+    # dependency versions land in the venv, so accepting whatever uv happens to
+    # be on PATH would let two machines provisioned from the same manifest
+    # resolve differently -- exactly the drift the pin exists to prevent. A
+    # developer box with its own newer uv is the normal case here, not an edge
+    # one. The same check covers <top>/.tools/uv, which may be left over from a
+    # run made before the manifest bumped the pin.
+    UV=""
+    for _cand in "$(command -v uv 2>/dev/null || true)" "${TOP_ABS}/.tools/uv"; do
+        [ -n "$_cand" ] && [ -x "$_cand" ] || continue
+        _cand_ver="$(uv_version_of "$_cand")"
+        if [ "$_cand_ver" = "$UV_VERSION" ]; then
+            UV="$_cand"
+            info "uv        : $UV (${UV_VERSION}, pinned)"
+            break
+        fi
+        info "uv        : ignoring $_cand (${_cand_ver:-unknown}), manifest pins ${UV_VERSION}"
+    done
+    if [ -z "$UV" ]; then
+        if [ "$DRY_RUN" -eq 1 ]; then
+            echo "       would bootstrap uv ${UV_VERSION} into ${TOP_ABS}/.tools"
+        else
+            bootstrap_uv "$UV_VERSION" "${TOP_ABS}/.tools"
+        fi
         UV="${TOP_ABS}/.tools/uv"
     fi
     if [ ! -d "$VENV" ]; then
