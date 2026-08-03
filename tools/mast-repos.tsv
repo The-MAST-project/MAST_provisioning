@@ -1,0 +1,46 @@
+# MAST repo manifest -- single source of truth for mast-clone.sh and mast-clone.ps1.
+#
+# Columns (tab-separated):
+#   dir     Folder name created under <Top>. This name is load-bearing: the
+#           'common' folder MUST be named exactly 'common', because MAST_common's
+#           repo root IS the 'common' package (it has a root __init__.py). With
+#           <Top> on sys.path, 'from common.X import ...' then resolves with no
+#           source changes. Naming it 'MAST_common' breaks every import.
+#   repo    GitHub repository name under the The-MAST-project org.
+#   roles   Comma-separated roles that pull this repo. 'all' pulls every row.
+#   branch  Branch to check out. MUST be explicit -- see below.
+#
+# WHY BRANCH IS PINNED AND NOT LEFT TO THE REMOTE DEFAULT:
+# Two repos have a GitHub default branch that is an abandoned stub:
+#   MAST_common   default HEAD = main (2 commits, last 2024-12-28); real work is
+#                 on master (721 commits). The .gitmodules in control/gui/spec/unit
+#                 all pin 'branch = master', corroborating this.
+#   MAST_control  default HEAD = main (2 commits, last 2024-04-26); real work is
+#                 on master (148 commits).
+# A plain 'git clone' of either lands on the stub and silently produces a nearly
+# empty checkout -- for common that means no __init__.py, so every
+# 'from common.X import ...' in the fleet fails with ModuleNotFoundError.
+# Fix the GitHub default branches and this column can relax; until then it is
+# the only thing standing between a provisioning run and a broken unit.
+#
+# Adding a repo: add a row here only. Neither script hardcodes a repo list.
+#
+# PINNED TOOL VERSIONS
+# Directive lines start with '#!' and are parsed by both scripts. They are
+# comments to anything else that reads this file.
+#
+# uv-version: the uv release used by --bootstrap-uv / -BootstrapUv. Pinned for
+# the same reason the branches are: an unpinned bootstrap installs whatever is
+# current that day, so two machines provisioned a month apart get different
+# resolvers and the fleet drifts -- which is what these scripts exist to stop.
+# Bump this line to move the fleet; the download is checksum-verified against
+# the .sha256 GitHub publishes beside each artifact.
+#!uv-version	0.11.33
+#
+# dir	repo	roles	branch
+common	MAST_common	unit,control,spec	master
+unit	MAST_unit.2024-12-12	unit	main
+control	MAST_control	control	master
+gui	MAST_gui	control	main
+spec	MAST_spec	spec	master
+claude	mast-claude-config	unit,control,spec	main
