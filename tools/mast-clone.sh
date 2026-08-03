@@ -24,6 +24,7 @@
 #   mast-clone.sh --top ~/mast --role unit
 #   mast-clone.sh --top /opt/mast --role control --ssh
 #   mast-clone.sh --top ~/mast --role all --update
+#   mast-clone.sh --top ~/mast --role unit --direct-http   # network with no proxy
 #
 # Companion: tools/mast-clone.ps1 (same manifest, same layout, for Windows).
 
@@ -45,6 +46,7 @@ ROLES=""
 TRANSPORT="https"
 UPDATE=0
 DRY_RUN=0
+DIRECT_HTTP=0
 DEFAULT_PROXY="http://bcproxy.weizmann.ac.il:8080"
 # Fleet-internal destinations must NOT be sent to the proxy; it cannot reach
 # 10.23.x and the request dies there rather than going direct.
@@ -58,7 +60,10 @@ info() { echo "[mast-clone] $*"; }
 warn() { echo "[mast-clone] WARN: $*" >&2; }
 
 usage() {
-    sed -n '3,28p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    # Range must cover the whole header block above, down to the 'Companion:'
+    # line -- adding a usage example without extending it silently truncates
+    # the help.
+    sed -n '3,29p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
     cat <<'EOF'
 
 Options:
@@ -69,6 +74,10 @@ Options:
   --ssh                  Clone over SSH. Needs a key, and on the Weizmann
                          network also an ~/.ssh/config tunnelling github.com
                          to ssh.github.com:443 (port 22 is blocked).
+  --direct-http          Reach the internet directly, with no proxy. For
+                         networks that do not go through the Weizmann bcproxy
+                         (off-campus, home, open egress). Without it, HTTPS
+                         goes via $https_proxy if exported, else bcproxy.
   --branch <dir>=<ref>   Override the manifest branch for one folder, e.g.
                          --branch unit=acquisition_tuning. Repeatable.
                          Default comes from the manifest, NOT from the remote's
@@ -86,6 +95,7 @@ while [ $# -gt 0 ]; do
         --role)    ROLES="${2:-}"; shift 2 ;;
         --ssh)     TRANSPORT="ssh"; shift ;;
         --https)   TRANSPORT="https"; shift ;;
+        --direct-http) DIRECT_HTTP=1; shift ;;
         --update)  UPDATE=1; shift ;;
         --dry-run) DRY_RUN=1; shift ;;
         --branch)
@@ -126,17 +136,27 @@ export GIT_TERMINAL_PROMPT=0
 # ignores http_proxy -- the uv download and 'uv pip install' are still HTTPS and
 # still need it.
 #
-# An https_proxy already exported wins: that is the one escape hatch, and it is
-# what an off-campus run needs, since bcproxy is unreachable from outside the
-# Weizmann network. There is deliberately no flag for this -- the environment is
-# the knob.
-PROXY="${https_proxy:-${HTTPS_PROXY:-$DEFAULT_PROXY}}"
-export http_proxy="$PROXY"  https_proxy="$PROXY"
-export HTTP_PROXY="$PROXY"  HTTPS_PROXY="$PROXY"
-# Keep an operator-supplied no_proxy if there is one; otherwise exempt the
-# fleet-internal ranges, which the proxy cannot reach.
-export no_proxy="${no_proxy:-$DEFAULT_NO_PROXY}"
-export NO_PROXY="$no_proxy"
+# --direct-http is for networks with no proxy at all -- off-campus, home, or a
+# site whose egress is open. Otherwise an already-exported https_proxy wins
+# (point somewhere else without touching the script), and failing that the
+# Weizmann bcproxy is used.
+if [ "$DIRECT_HTTP" -eq 1 ]; then
+    # Unset, do not merely skip. An https_proxy inherited from the caller's
+    # environment (a profile, a CI job, an outer script) would otherwise still
+    # be honoured by git, curl and uv, and --direct-http would quietly do
+    # nothing -- on a network where that proxy is unreachable, that is a hang.
+    unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY
+    PROXY_DESC="direct (--direct-http)"
+else
+    PROXY="${https_proxy:-${HTTPS_PROXY:-$DEFAULT_PROXY}}"
+    export http_proxy="$PROXY"  https_proxy="$PROXY"
+    export HTTP_PROXY="$PROXY"  HTTPS_PROXY="$PROXY"
+    # Keep an operator-supplied no_proxy if there is one; otherwise exempt the
+    # fleet-internal ranges, which the proxy cannot reach.
+    export no_proxy="${no_proxy:-$DEFAULT_NO_PROXY}"
+    export NO_PROXY="$no_proxy"
+    PROXY_DESC="$PROXY"
+fi
 
 # The manifest does not always arrive LF-only: git checks it out with CRLF
 # wherever core.autocrlf is on (any Windows clone), and a Windows editor can
@@ -197,7 +217,7 @@ run() {  # echo-and-execute, honouring --dry-run
 info "top       : $TOP"
 info "roles     : ${SELECTED# }"
 info "transport : $TRANSPORT"
-info "proxy     : $PROXY"
+info "proxy     : $PROXY_DESC"
 [ "$DRY_RUN" -eq 1 ] && info "DRY RUN -- nothing will be modified"
 
 if [ "$DRY_RUN" -eq 0 ]; then

@@ -45,6 +45,11 @@
   fresh unit has neither, which is why HTTPS is the default.
 
 
+.PARAMETER DirectHttp
+  Reach the internet directly, with no proxy. For networks that do not go
+  through the Weizmann bcproxy (off-campus, home, open egress). Without it,
+  outbound HTTPS goes via an exported HTTPS_PROXY if there is one, else bcproxy.
+
 .PARAMETER Branch
   Hashtable overriding the manifest branch for a folder, e.g.
   -Branch @{ unit = 'acquisition_tuning' }. The default comes from
@@ -65,6 +70,10 @@
 .EXAMPLE
   .\mast-clone.ps1 -Top D:\dev\mast -Role all -Update
 
+.EXAMPLE
+  # On a network that does not go through the Weizmann proxy:
+  .\mast-clone.ps1 -Top C:\MAST\src -Role unit -DirectHttp
+
 .NOTES
   Companion: tools/mast-clone.sh (same manifest, same layout, for Linux).
   ASCII-only and Windows PowerShell 5.1 compatible per repo CLAUDE.md.
@@ -81,6 +90,8 @@ param(
     [string] $Transport = 'https',
 
     [hashtable] $Branch = @{},
+
+    [switch] $DirectHttp,
 
     [switch] $Update,
 
@@ -162,27 +173,41 @@ $env:GIT_TERMINAL_PROMPT = '0'
 # ignores the http proxy -- the uv download and 'uv pip install' are still
 # HTTPS and still need it.
 #
-# An HTTPS_PROXY already in the environment wins: that is the one escape hatch,
-# and it is what an off-campus run needs, since bcproxy is unreachable from
-# outside the Weizmann network. There is deliberately no parameter for this --
-# the environment is the knob.
+# -DirectHttp is for networks with no proxy at all -- off-campus, home, or a
+# site whose egress is open. Otherwise an already-exported HTTPS_PROXY wins
+# (point somewhere else without touching the script), and failing that the
+# Weizmann bcproxy is used.
 $DefaultProxy   = 'http://bcproxy.weizmann.ac.il:8080'
 # Fleet-internal destinations must NOT be sent to the proxy; it cannot reach
 # 10.23.x and the request dies there rather than going direct.
 $DefaultNoProxy = 'localhost,127.0.0.1,10.23.0.0/16'
 
-$EffectiveProxy = $DefaultProxy
-if (-not [string]::IsNullOrWhiteSpace($env:HTTPS_PROXY)) { $EffectiveProxy = $env:HTTPS_PROXY }
+if ($DirectHttp) {
+    # Clear, do not merely skip. An HTTPS_PROXY inherited from the caller's
+    # environment (a machine-wide setting, a scheduled task, an outer script)
+    # would otherwise still be honoured by git and uv, and -DirectHttp would
+    # quietly do nothing -- on a network where that proxy is unreachable, that
+    # is a hang.
+    $env:HTTP_PROXY  = $null
+    $env:HTTPS_PROXY = $null
+    $env:http_proxy  = $null
+    $env:https_proxy = $null
+    $EffectiveProxy = 'direct (-DirectHttp)'
+}
+else {
+    $EffectiveProxy = $DefaultProxy
+    if (-not [string]::IsNullOrWhiteSpace($env:HTTPS_PROXY)) { $EffectiveProxy = $env:HTTPS_PROXY }
 
-$env:HTTP_PROXY  = $EffectiveProxy
-$env:HTTPS_PROXY = $EffectiveProxy
-$env:http_proxy  = $EffectiveProxy
-$env:https_proxy = $EffectiveProxy
+    $env:HTTP_PROXY  = $EffectiveProxy
+    $env:HTTPS_PROXY = $EffectiveProxy
+    $env:http_proxy  = $EffectiveProxy
+    $env:https_proxy = $EffectiveProxy
 
-# Keep an operator-supplied NO_PROXY if there is one.
-if ([string]::IsNullOrWhiteSpace($env:NO_PROXY)) {
-    $env:NO_PROXY = $DefaultNoProxy
-    $env:no_proxy = $DefaultNoProxy
+    # Keep an operator-supplied NO_PROXY if there is one.
+    if ([string]::IsNullOrWhiteSpace($env:NO_PROXY)) {
+        $env:NO_PROXY = $DefaultNoProxy
+        $env:no_proxy = $DefaultNoProxy
+    }
 }
 
 if (-not (Test-Path -LiteralPath $Manifest)) {
