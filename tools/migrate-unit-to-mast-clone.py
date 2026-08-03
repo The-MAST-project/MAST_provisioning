@@ -63,10 +63,15 @@ def _bool(session, ps: str) -> bool:
 
 def probe_unit(session, host: str, top: str) -> UnitProbe:
     venv_python = rf"{top}\.venv\Scripts\python.exe"
-    entries = _out(
+    legacy_dirs = _out(
         session,
-        f"if (Test-Path '{LEGACY_ROOT}') {{ Get-ChildItem '{LEGACY_ROOT}' -Force "
+        f"if (Test-Path '{LEGACY_ROOT}') {{ Get-ChildItem '{LEGACY_ROOT}' -Force -Directory "
         "| ForEach-Object { $_.Name } }",
+    )
+    legacy_files = _out(
+        session,
+        f"if (Test-Path '{LEGACY_ROOT}') {{ (Get-ChildItem '{LEGACY_ROOT}' -Force -File "
+        "| Measure-Object).Count } else { 0 }",
     )
     present = _out(
         session,
@@ -86,8 +91,9 @@ def probe_unit(session, host: str, top: str) -> UnitProbe:
         app = app.replace("\x00", "").strip()
     return UnitProbe(
         host=host,
-        legacy_present=bool(entries) or _bool(session, f"Test-Path '{LEGACY_ROOT}'"),
-        legacy_entries=tuple(e for e in entries.splitlines() if e.strip()),
+        legacy_present=_bool(session, f"Test-Path '{LEGACY_ROOT}'"),
+        legacy_dirs=tuple(d for d in legacy_dirs.splitlines() if d.strip()),
+        legacy_file_count=int(legacy_files.splitlines()[-1] or 0) if legacy_files.strip() else 0,
         venv_python=_bool(session, f"Test-Path '{venv_python}'"),
         mast_pth=_bool(session, rf"Test-Path '{top}\.venv\Lib\site-packages\mast.pth'"),
         common_init=_bool(session, rf"Test-Path '{top}\common\__init__.py'"),

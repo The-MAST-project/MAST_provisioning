@@ -39,11 +39,15 @@ class UnitProbe:
 
     host: str
     legacy_present: bool
-    #: Names directly under the legacy root. Recorded because it is NOT always
-    #: the two standard clones -- mast02 also carries mast-claude-config and a
-    #: PlaneWave_PlateSolve3_Catalog directory, and a migration that assumed the
-    #: standard pair would delete them without saying so.
-    legacy_entries: tuple[str, ...] = ()
+    #: DIRECTORIES directly under the legacy root. Recorded because it is NOT
+    #: always the two standard clones -- mast02 also carries mast-claude-config
+    #: and a PlaneWave_PlateSolve3_Catalog directory, and a migration that
+    #: assumed the standard pair would delete them without saying so.
+    legacy_dirs: tuple[str, ...] = ()
+    #: Count of loose files beside them -- the provisioning sidecar logs
+    #: (<repo>.git-trace.log and friends). Counted, not listed: there are ~26 on
+    #: a provisioned unit and naming them all buries the warning that matters.
+    legacy_file_count: int = 0
     venv_python: bool = False
     mast_pth: bool = False
     common_init: bool = False
@@ -110,17 +114,22 @@ def plan_migration(probe: UnitProbe) -> MigrationPlan:
     elif probe.service_registered and not probe.service_app:
         notes.append("could not read the service's interpreter (nssm absent?); not asserting it")
 
-    if probe.legacy_entries:
-        notes.append("legacy tree contains: " + ", ".join(sorted(probe.legacy_entries)))
+    if probe.legacy_dirs or probe.legacy_file_count:
+        notes.append(
+            "legacy tree: "
+            + (", ".join(sorted(probe.legacy_dirs)) or "no subdirectories")
+            + f" (+{probe.legacy_file_count} loose file(s), the provisioning sidecar logs)"
+        )
+        # Directories only. The sidecar logs are always there and always go; a
+        # non-standard DIRECTORY is content somebody may care about, and the
+        # operator should see it before it is retired, not after.
         extras = [
-            e
-            for e in probe.legacy_entries
-            if not e.lower().startswith("mast_unit") and e.lower() != "mast_common"
+            d
+            for d in probe.legacy_dirs
+            if not d.lower().startswith("mast_unit") and d.lower() != "mast_common"
         ]
         if extras:
-            # Surfaced loudly: these are not the standard clones and go with the
-            # tree. An operator should see them before, not after.
-            notes.append("NON-STANDARD entries will also be retired: " + ", ".join(sorted(extras)))
+            notes.append("NON-STANDARD directories will also be retired: " + ", ".join(sorted(extras)))
 
     if blockers:
         return MigrationPlan(MigrationState.BLOCKED, tuple(blockers), tuple(notes))

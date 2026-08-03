@@ -15,7 +15,8 @@ def probe(**kw) -> UnitProbe:
     base = dict(
         host="mast01",
         legacy_present=True,
-        legacy_entries=("MAST_unit.2024-12-12", "MAST_common"),
+        legacy_dirs=("MAST_unit.2024-12-12", "MAST_common"),
+        legacy_file_count=26,
         venv_python=True,
         mast_pth=True,
         common_init=True,
@@ -34,7 +35,7 @@ def test_a_fully_migrated_new_layout_is_ready():
 
 
 def test_absent_legacy_tree_is_already_migrated():
-    p = plan_migration(probe(legacy_present=False, legacy_entries=()))
+    p = plan_migration(probe(legacy_present=False, legacy_dirs=(), legacy_file_count=0))
     assert p.state is MigrationState.ALREADY_MIGRATED
     assert not p.may_proceed
 
@@ -95,8 +96,8 @@ def test_non_standard_legacy_entries_are_surfaced():
     """mast02 carries mast-claude-config and PlaneWave_PlateSolve3_Catalog under
     the legacy root. They go with the tree; the operator must see that first."""
     p = plan_migration(
-        probe(legacy_entries=("MAST_unit.2024-12-12", "MAST_common",
-                              "mast-claude-config", "PlaneWave_PlateSolve3_Catalog"))
+        probe(legacy_dirs=("MAST_unit.2024-12-12", "MAST_common",
+                           "mast-claude-config", "PlaneWave_PlateSolve3_Catalog"))
     )
     assert p.state is MigrationState.READY
     surfaced = " ".join(p.notes)
@@ -106,8 +107,11 @@ def test_non_standard_legacy_entries_are_surfaced():
 
 
 def test_standard_clones_alone_produce_no_non_standard_warning():
+    """The sidecar logs are always present and must not trip the warning -- there
+    are ~26 of them and naming them buries the entries that matter."""
     p = plan_migration(probe())
     assert "NON-STANDARD" not in " ".join(p.notes)
+    assert "26 loose file" in " ".join(p.notes)
 
 
 def test_multiple_blockers_are_all_reported():
