@@ -198,8 +198,16 @@ if ($null -eq ${svc}) {
     W ("mast-unit service: Status={0} StartType={1} (run state owned by mast-services-finalize)" -f ${svc}.Status, ${svc}.StartType)
     ${nssmExe} = 'C:\Program Files\nssm\nssm.exe'
     if (Test-Path -LiteralPath ${nssmExe}) {
-        ${svcApp} = ((& ${nssmExe} get mast-unit Application) -join '').Trim([char]0, ' ', "`r", "`n")
-        if (${svcApp} -and ${svcApp} -ne ${venvPython}) {
+        # nssm writes UTF-16LE, which arrives through the pipe as every character
+        # followed by a NUL. Those NULs must be stripped, not trimmed: Trim only
+        # touches the ends. And the comparison must be ORDINAL -- PowerShell's
+        # default '-ne' is culture-sensitive and treats NUL as a zero-weight
+        # character, so a NUL-laden path compares EQUAL to a clean one. This
+        # check therefore used to pass by accident, and "fixing" it to ordinal
+        # without stripping would have failed every unit instead (measured
+        # 2026-08-03). Strip, then compare ordinally.
+        ${svcApp} = (((& ${nssmExe} get mast-unit Application) -join '') -replace "`0", '').Trim()
+        if (${svcApp} -and -not [string]::Equals(${svcApp}, ${venvPython}, [System.StringComparison]::OrdinalIgnoreCase)) {
             [void]${issues}.Add(("mast-unit runs {0}, expected {1} -- service not re-pointed at the mast-clone venv" -f ${svcApp}, ${venvPython}))
         } else {
             W ("mast-unit interpreter: {0}" -f ${svcApp})

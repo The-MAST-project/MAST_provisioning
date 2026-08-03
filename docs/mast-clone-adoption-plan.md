@@ -330,6 +330,13 @@ construction and `C:\MAST\repos` goes away with it.
   unit; it refuses to delete `C:\MAST\repos` before the new layout verifies
   clean (never leave a unit with neither tree working).
 
+**Status:** landed 2026-08-03 as `tools/migrate-unit-to-mast-clone.py` +
+`server/prov/migration.py` + 13 tests. Dry-run by default; **renames** to
+`repos.retired-<stamp>` rather than deleting (reversible on a production unit),
+with `--purge` for an outright delete. Rehearsed end-to-end on the dev VM: dry
+run `ready`, `--apply` migrated cleanly, and the following provisioning cycle
+gave the first fully clean `mast` verify. mast01-04 not yet migrated.
+
 ## Interaction with #22 (per-module tracking)
 
 - **Stage 1b of `per-module-tracking-plan.md` must be re-specified** against
