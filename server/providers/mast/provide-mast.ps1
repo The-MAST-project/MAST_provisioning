@@ -162,6 +162,28 @@ try {
     }
     Write-MastProvisionEvent ("Using Git at: {0}" -f ${gitExe})
 
+    # mast-clone runs its own `Get-Command git` check and throws 'git is not on
+    # PATH' if it fails. That reads the PROCESS PATH, which is stale here: the git
+    # module (order 700) installed Git during THIS provisioning run, after this
+    # process started, so the inherited $env:Path predates it. Resolve-MastGitExe
+    # above finds git by absolute candidate path and returns early without
+    # refreshing, so a bare install got as far as invoking mast-clone and then
+    # failed on a git that was demonstrably present (caught on the first full
+    # from-scratch VM run, 2026-08-03 -- every earlier test ran on a machine that
+    # already had Git on the inherited PATH, which is why it never surfaced).
+    # mast-clone is invoked in-process, so fixing $env:Path here is what it sees.
+    if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+        Update-MastProcessPathFromRegistry
+    }
+    if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+        ${gitDir} = Split-Path -Parent ${gitExe}
+        ${env:Path} = ${gitDir} + ';' + ${env:Path}
+        Write-MastProvisionEvent ("Prepended {0} to the process PATH so mast-clone can see git" -f ${gitDir})
+    }
+    if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+        throw ("git resolved to {0} but is still not discoverable on PATH; mast-clone would fail." -f ${gitExe})
+    }
+
     ${unitDir} = Join-Path ${Top} ${UnitDirName}
 
     # --- Force: rebuild the tree from scratch ------------------------------
