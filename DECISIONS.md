@@ -222,6 +222,229 @@ branch names are visible to everyone the moment they are pushed.
 
 ---
 
+## [2026-07-29] mast-clone: dev tooling in the venv, role-named workspace, submodule disarmed
+
+**Why:** Four things surfaced once `mast-clone` was actually run on a unit and on the
+control host rather than only under `pwsh` on Linux.
+
+The generated workspace carried a **doubled** interpreter path
+(`C:\\temp\\...\\python.exe` after JSON decoding). The `.ps1` escaped backslashes with a
+four-backslash replacement, but .NET replacement strings treat a backslash as literal
+rather than as an escape, so each separator was doubled twice. Invisible on Linux, where
+`Join-Path` produces forward slashes and there is nothing to escape.
+
+The venv had **no ruff**. Every repo pins `ruff==0.16.0`, but in `requirements-dev.txt`,
+which the scripts never installed -- and the pin is deliberate policy, not incidental:
+each `ruff.toml` says outright that config alone is not enough because formatter output
+differs between ruff versions.
+
+`control` and `gui` clones showed an **empty `common` folder marked as a submodule**. The
+consumers still carry a committed gitlink, so a clone without `--recurse-submodules`
+leaves the mount point empty. Harmless for imports -- `<top>/common` has an `__init__.py`
+and so is a regular package, which beats an empty directory (a namespace portion)
+wherever it sits on `sys.path`, verified with `<top>/<repo>` deliberately first -- but a
+stray `git submodule update --init` would materialise a SECOND `common`, stale from the
+moment `<top>/common` moves.
+
+Finally, `mast.code-workspace` was a fixed name, so a machine with two top folders for
+different roles would have two files called the same thing.
+
+**What:**
+
+- `.ps1` backslash escaping fixed: the replacement is now two backslashes, which is what
+  JSON needs. Verified by round-tripping the generated file through a JSON decoder rather
+  than by reading the code.
+- The workspace is named `mast-<role>.code-workspace`; multiple roles sort and join, so
+  `--role unit,spec` yields `mast-spec-unit.code-workspace`.
+- Each repo's `requirements-dev.txt` joins the same single `uv pip install`, bringing
+  `ruff==0.16.0` and `pytest`. The workspace also sets `"ruff.importStrategy":
+  "fromEnvironment"`, without which the Ruff extension uses its own bundled binary and
+  the pin is decorative.
+- After cloning, each consumer that still declares the submodule gets
+  `submodule.common.update = none` in its **local** config, so `git submodule update
+  --init` reports `Skipping submodule 'common'`. Note `submodule.<name>.active = false`
+  is NOT sufficient: `--init` overrides it and clones anyway.
+
+**Implications:**
+
+- **The submodule is disarmed, not removed.** `.gitmodules` still declares it and the
+  gitlink is still committed, so anyone cloning outside these scripts gets the old
+  behaviour, and the empty folder still shows in VS Code. Local config was the only lever
+  that leaves the working tree clean: `git rm --cached common` or removing the directory
+  both leave every clone permanently dirty, which would break `--update` (fast-forward
+  only, clean tree). Retiring the submodules properly remains one small PR per consumer.
+- **Dev dependencies are installed on units too.** `ruff` and `pytest` are unnecessary
+  there but harmless, and gating dev deps by role costs more complexity than the two
+  packages are worth.
+- **Dev pins now participate in the joint resolve,** so two repos sharing a machine must
+  agree on their ruff version as well as their runtime pins. All repos pin `0.16.0`
+  today, so this is currently a no-op.
+- **Windows-only defects need a Windows run.** Both bugs fixed here, and the PowerShell
+  5.1 native-stderr bug before them, were invisible to every test run under `pwsh` on
+  Linux. Treat a Linux `pwsh` pass as a syntax check, not as validation.
+
+## [2026-07-28] mast-clone: the venv is unconditional at `<top>/.venv`, installed in one resolve
+
+**Why:** The first cut of `tools/mast-clone.{sh,ps1}` (see the entry below) made the
+virtual environment optional and caller-placed: `--venv <path>` / `-Venv <path>`, with
+`--no-install` and `--no-seed` to opt out of parts of it. Three problems followed. A
+caller could point `--venv` at one directory while `--top` pointed at another, so the
+`mast.pth` written inside the venv referenced a *different* source tree than the one just
+cloned -- silently. The optionality meant "clone succeeded" and "the machine can run the
+code" were separate outcomes with no obvious link between them. And installing each
+repo's `requirements.txt` in its own `uv pip install` let a compound role clobber itself.
+
+That last one was not hypothetical. The `control` role selects `control` *and* `gui`,
+which share one machine and therefore one venv. Their requirements files had been pinned
+from their own local venvs, built eleven months apart, and disagreed on five shared
+packages (`astropy`, `httpx`, `pydantic`, `pymongo`, `rich`). Installed one after the
+other, the last file simply won, and the control service would have run versions it was
+never tested against, with nothing reported.
+
+**What:** The venv is now unconditional and derived, never passed in. It is always
+`<top>/.venv`, always created with `uv venv --seed` (so `pip` exists in it -- uv omits pip
+otherwise, which breaks anything shelling out to it), always populated, and always given
+a `mast.pth`. `--venv`, `--no-venv`, `--no-install`, `--no-seed`, `--python` and
+`--bootstrap-uv` are all gone, along with their PowerShell equivalents. Deriving the path
+from `--top` makes the mismatched-`mast.pth` case unrepresentable rather than merely
+discouraged.
+
+Requirements are installed in **one** `uv pip install` invocation carrying every selected
+repo's `-r`, rather than one call per repo. uv then resolves them together and fails
+loudly on a contradiction. Reconciling the pins is the caller's job, and the failure text
+says so.
+
+`uv` is acquired rather than requested: since the venv is always built, a missing `uv`
+would only ever mean a broken run, so the pinned `#!uv-version` is fetched into
+`<top>/.tools` automatically when uv is absent -- still checksum-verified against the
+`.sha256` GitHub publishes, still never `curl | sh`, still never "latest". The
+interpreter *version* remains deliberately unpinned: which Python a machine has is
+provisioning's concern, not this script's.
+
+Both scripts also generate `<top>/mast.code-workspace`, a VS Code multi-root workspace
+listing the folders actually cloned. Opening `<top>` as a plain folder would make VS Code
+read only `<top>/.vscode` and ignore the per-repo `.vscode` directories that `control`,
+`spec`, `gui` and `unit` each ship (all tracked); a multi-root workspace is the one
+arrangement where each repo keeps its own folder-scoped `settings.json` and its
+`launch.json` entries, with nothing copied or merged. It is written only when absent, so
+a hand-edited workspace survives `--update`.
+
+**Implications:**
+
+- **There is no clone-only mode any more.** Every run builds and populates the venv, so
+  every run needs network and takes install time. `--update` refreshes the checkouts
+  *and* re-resolves. That is the price of "a successful run means a runnable machine".
+- **Repos that share a machine must agree on shared pins.** This is now enforced rather
+  than hoped for. `MAST_control` and `MAST_gui` were re-pinned jointly against PyPI to
+  satisfy it; any future pair sharing a role inherits the same constraint.
+- **The generated workspace sets `python.analysis.extraPaths` to `[".."]`,** which is what
+  makes Pylance resolve `common` from each folder -- `mast.pth` fixes runtime, but static
+  analysis does not reliably follow `.pth` files. A folder-scoped `extraPaths` *replaces*
+  the workspace value rather than merging with it, so `MAST_unit` -- the only consumer
+  that sets `extraPaths` itself, for the Standa ximc wrapper -- had to prepend `".."` to
+  its own list. Any repo that later adds `extraPaths` must do the same.
+- **`python.defaultInterpreterPath` in the generated workspace is an absolute path.**
+  `<top>/.venv` is a sibling of the folder roots rather than inside one, so VS Code cannot
+  auto-discover it. The file is generated per machine, so a machine-specific path in it is
+  acceptable; it is not something to commit anywhere.
+- Extension entries in the workspace are **recommendations only** -- VS Code prompts, it
+  never installs. Installing them (`code --install-extension`) is provisioning's job; a
+  unit may have no editor at all.
+
+## [2026-07-28] Role-driven flat source layout: `mast-clone.{sh,ps1}` + a single `common` clone
+
+**Why:** `MAST_common` was vendored into four consumers as a git submodule (`common/` in
+control, gui, spec; `src/common/` in unit). That costs a `chore/bump-common-gitlink` PR in
+every consumer for each common change -- three of the four had one as their most recent
+commit -- and it means four working copies of the same code on a dev box. Separately, there
+was no single command to lay down "the repos this machine needs", either at provisioning
+time or when cloning a dev environment.
+
+**What:** `tools/mast-clone.sh` and `tools/mast-clone.ps1` populate a top folder with a flat
+hierarchy whose folder names are fixed: `common`, `unit`, `control`, `gui`, `spec`, `claude`.
+A `-Role` / `--role` parameter (`unit`, `control`, `spec`, `all`) selects the subset; roles
+union and de-duplicate, so `all` needs no special case. `gui` is deliberately *not* a role --
+it ships as part of `control`. `claude` (mast-claude-config) comes with every role.
+
+Both scripts read one manifest, `tools/mast-repos.tsv` (dir / repo / roles / branch); neither
+hardcodes a repo list, per the repo's DRY rule. Adding a repo is a one-line manifest change.
+
+The `common` folder name is load-bearing rather than cosmetic. `MAST_common`'s repo root
+carries an `__init__.py`, so the repo root *is* the `common` package. Cloning it into a folder
+named exactly `common` and putting `<top>` on `sys.path` makes all ~982 existing
+`from common.X import ...` statements resolve unchanged -- no source edits, no submodule.
+Cloning it as `MAST_common` (the old habit) cannot work, which is precisely why each vendored
+copy carries a `common/tests/conftest.py` that fabricates a module alias via
+`importlib.util.spec_from_file_location`; that shim and the five ad-hoc `sys.path.insert`
+sites in MAST_gui become deletable.
+
+`sys.path` is wired with a `mast.pth` written into a venv's `site-packages` (`--venv` /
+`-Venv`), not by exporting `PYTHONPATH`. The MAST code runs as NSSM services on units and
+systemd on Linux hosts, neither of which inherits a shell environment; a `.pth` is per-venv
+and additionally works for pytest and IDE test runners. `PYTHONPATH` remains a documented
+convenience for interactive shells only.
+
+`--venv` / `-Venv` does not merely write that `.pth`: it creates the venv and installs each
+cloned repo's `requirements.txt` into it, so one command takes a bare machine to a runnable
+one. Provisioning no longer owns venv population. **One venv per machine**, not per repo --
+the `.pth` puts every cloned repo on `sys.path` at once, so a second venv would isolate
+nothing; on the control host that means the control and gui services share it.
+
+`uv` does both jobs (`uv venv`, `uv pip install`) and is **required**, not preferred. A
+fallback to `python -m venv` + `pip` would resolve a different dependency set than uv locks
+onto, so a fleet provisioned by two different paths would drift -- the exact failure this
+layout exists to prevent. `--bootstrap-uv` / `-BootstrapUv` fetches the version pinned by the
+`#!uv-version` directive in the manifest, verifies it against the `.sha256` GitHub publishes
+beside the release artifact, and unpacks the single static binary into `<top>/.tools`. It is
+deliberately not `curl ... | sh` / `irm ... | iex`: a pipe executes whatever the URL serves at
+that moment, unreviewed, and installs "latest", which reintroduces per-machine drift. The venv
+is seeded (`uv venv --seed`) so `pip` exists in it, since uv otherwise omits it and anything
+shelling out to `pip` breaks; `--no-seed` opts out.
+
+**Implications:**
+
+- **Branches are pinned in the manifest, never taken from the remote's default HEAD.**
+  `MAST_common`'s GitHub default branch is `main` with 2 commits (last 2024-12-28) while all
+  721 commits of real work are on `master`; `MAST_control` has the same trap (`main`, 2
+  commits, 2024-04-26, vs 148 on `master`). A plain `git clone` lands on the stub and yields a
+  `common/` with no `__init__.py`, breaking every import on the unit. The consumers'
+  `.gitmodules` already pinned `branch = master`, corroborating this. Both scripts therefore
+  hard-fail if `common/__init__.py` is absent after cloning. Fixing the two GitHub default
+  branches would remove the trap; until then the manifest column is the only guard.
+- **Sibling folders become importable top-level names,** and three collide with real modules:
+  `spec/spec.py`, `unit/src/unit.py`, `control/control/`. This resolves correctly *only*
+  because those repo roots have no `__init__.py` -- a directory without one is merely a
+  namespace portion, and a real module found anywhere on `sys.path` beats it regardless of
+  path order (verified against the real repo trees with `<top>` deliberately first). Adding an
+  `__init__.py` to any consumer repo root would silently shadow that repo's own module, so
+  both scripts warn when they see one.
+- **The scripts are safe to adopt before de-submoduling.** A clone without
+  `--recurse-submodules` leaves `<repo>/common/` empty; an empty directory loses to
+  `<top>/common/__init__.py` under the same namespace rule. Removing the submodules from the
+  four consumers is therefore an independent follow-up, not a flag day.
+- Re-running is idempotent: existing clones are fetched, never merged, unless `--update` is
+  given, and even then only fast-forward and only on a clean tree.
+- **`GIT_TERMINAL_PROMPT=0` is set in both scripts.** Provisioning is unattended, so git must
+  never stop to ask for credentials. Without it, a private repo (`MAST_unit.2024-12-12` is the
+  only one) sends git through Git Credential Manager, which cannot persist to `wincredman` in
+  a non-interactive session, then tries to open a tty, and only then reports a confusing
+  "could not read Username". With it set, the clone simply succeeds where a usable credential
+  exists and fails immediately and legibly where it does not.
+- **Windows PowerShell 5.1 turns a successful `git clone` into a fatal error.** With
+  `$ErrorActionPreference = 'Stop'`, 5.1 wraps every stderr line of a native command
+  redirected via `2>&1` into an ErrorRecord and throws on the first one -- and git writes
+  ordinary progress ("Cloning into '...'") to stderr. PowerShell 7 does not, so this is
+  invisible to any test run under `pwsh` and only bites on the 5.1 target, which is where
+  provisioning runs. `Invoke-Native` drops the preference to `Continue` for the duration of
+  each native call and reports success from `$LASTEXITCODE` instead. Any future native
+  invocation in this script must go through it.
+- This is the first `.sh` in a repo that was until now 100% PowerShell. The bash half exists
+  because the control and gui hosts are Linux; the two scripts must be kept in step, with
+  `mast-repos.tsv` as the shared source of truth.
+
+---
+
+
 ## [2026-07-23] build-manifest.json carries per-module content hashes (`module_state`)
 
 **Why:** Drift detection is whole-payload: the single `payload_hash` over the
