@@ -308,6 +308,20 @@ function Generate-Commands([string[]]${Mods}) {
       'proxy' {
         ${cmd} = ${cmd} + (" -ForceMode {0}" -f ${proxyForceMode})
       }
+      'mast' {
+        # tools/mast-clone.ps1 routes ALL its outbound HTTPS (clones, the uv
+        # download, PyPI) through the Weizmann bcproxy by default, regardless of
+        # -Transport. On a machine that cannot reach bcproxy -- the dev VM, or a
+        # site with open egress -- that proxy does not refuse, it TIMES OUT, so
+        # the failure looks like a hung script for minutes. mast-clone's
+        # -DirectHttp clears the proxy variables (rather than merely skipping
+        # them, so an inherited https_proxy cannot make the flag a no-op), which
+        # is exactly what a 'direct' build means. Same channel as the proxy
+        # provider above: baked into commands.json, not signalled at runtime.
+        if (${ProxyMode} -ne 'weizmann') {
+          ${cmd} = ${cmd} + ' -DirectHttp'
+        }
+      }
       'imdisk' {
         if (${ImdiskMountType} -ne 'vm') {
           ${cmd} = ${cmd} + (" -MountType {0}" -f ${ImdiskMountType})

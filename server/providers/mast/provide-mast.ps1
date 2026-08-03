@@ -41,6 +41,11 @@
 param(
     [string]${AssetsRoot} = ${PSScriptRoot},
     [string]${Top}        = 'C:\MAST\src',
+    # Forwarded to mast-clone as -DirectHttp. Injected by build-mast.ps1 from the
+    # build's -ProxyMode: absent for 'weizmann' (mast-clone's bcproxy default is
+    # right on the fleet network), present for 'direct' (a machine that cannot
+    # reach bcproxy, where the proxy times out rather than refusing).
+    [switch]${DirectHttp},
     [switch]${Force}
 )
 
@@ -230,9 +235,11 @@ try {
     # -Update: fast-forward existing clones. mast-clone refuses to merge over a
     #   dirty tree rather than discarding local work; verify-mast.ps1 reports such
     #   a unit as failed, so a silently-frozen checkout cannot pass unnoticed.
-    Write-MastProvisionEvent ("mast-clone BEGIN top={0} role={1}" -f ${Top}, ${MastRole})
+    ${cloneArgs} = @('-Top', ${Top}, '-Role', ${MastRole}, '-Transport', 'https', '-Update')
+    if (${DirectHttp}) { ${cloneArgs} += '-DirectHttp' }
+    Write-MastProvisionEvent ("mast-clone BEGIN top={0} role={1} directHttp={2}" -f ${Top}, ${MastRole}, [bool]${DirectHttp})
     ${sw} = [System.Diagnostics.Stopwatch]::StartNew()
-    & ${MastCloneScript} -Top ${Top} -Role ${MastRole} -Transport https -Update
+    & ${MastCloneScript} @cloneArgs
     ${rc} = $LASTEXITCODE
     ${sw}.Stop()
     Write-MastProvisionEvent ("mast-clone END elapsedSec={0:N1} exitCode={1}" -f ${sw}.Elapsed.TotalSeconds, ${rc})
