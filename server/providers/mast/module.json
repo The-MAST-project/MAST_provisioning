@@ -6,7 +6,9 @@
   "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-mast.ps1\" -AssetsRoot \".\" -Top \"C:\\MAST\\src\"",
   "commandfiles": [
     "provide-mast.ps1",
-    "verify-mast.ps1"
+    "verify-mast.ps1",
+    "assets/uv-x86_64-pc-windows-msvc.zip",
+    "assets/uv-x86_64-pc-windows-msvc.zip.sha256"
   ],
   "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\verify-mast.ps1\" -Top \"C:\\MAST\\src\" -Expect \"common,unit,claude\"",
   "repofiles": [

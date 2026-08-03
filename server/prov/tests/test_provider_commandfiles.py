@@ -39,7 +39,11 @@ _MODULE_JSONS = sorted(PROVIDERS.glob("*/module.json"))
 
 # Payloads deliberately absent from a dev checkout; build-mast skips them only
 # under -TestMode and throws otherwise (build-mast.ps1 staging loop).
-_OPTIONAL_COMMANDFILES = {("cygwin", "assets/astrometry.tgz")}
+_OPTIONAL_COMMANDFILES = {
+    ("cygwin", "assets/astrometry.tgz"),
+    ("mast", "assets/uv-x86_64-pc-windows-msvc.zip"),
+    ("mast", "assets/uv-x86_64-pc-windows-msvc.zip.sha256"),
+}
 
 
 def _entries(module_json: Path, key: str) -> list[str]:

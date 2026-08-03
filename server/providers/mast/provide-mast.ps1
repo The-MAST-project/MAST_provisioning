@@ -158,6 +158,70 @@ try {
         Remove-Item -LiteralPath ${Top} -Recurse -Force -ErrorAction SilentlyContinue
     }
 
+    # --- Vendored uv (removes the provision-time GitHub CDN dependency) ----
+    # mast-clone prefers an existing <Top>\.tools\uv.exe over bootstrapping the
+    # pinned release from the GitHub releases CDN, so dropping it there is all
+    # that is needed -- no change to mast-clone itself. The publisher's .sha256
+    # ships beside the zip and is checked here, so vendoring does not cost the
+    # integrity guarantee mast-clone's own bootstrap provides.
+    ${uvZip}    = Join-Path ${AssetsRoot} 'uv-x86_64-pc-windows-msvc.zip'
+    ${uvSha}    = "${uvZip}.sha256"
+    ${toolsDir} = Join-Path ${Top} '.tools'
+    ${uvExe}    = Join-Path ${toolsDir} 'uv.exe'
+    if (Test-Path -LiteralPath ${uvExe}) {
+        Write-MastProvisionEvent ("uv already present at {0}" -f ${uvExe})
+    } elseif (-not (Test-Path -LiteralPath ${uvZip})) {
+        # Dev/test payloads may omit it (-TestMode); mast-clone then bootstraps
+        # from the CDN, which still works but is what this vendoring avoids.
+        Write-Warning ("Vendored uv not staged at {0}; mast-clone will bootstrap it from the network." -f ${uvZip})
+    } else {
+        if (Test-Path -LiteralPath ${uvSha}) {
+            ${expected} = ((Get-Content -LiteralPath ${uvSha} -Raw).Trim() -split '\s+')[0]
+            ${actual}   = (Get-FileHash -LiteralPath ${uvZip} -Algorithm SHA256).Hash
+            if (${expected}.ToLowerInvariant() -ne ${actual}.ToLowerInvariant()) {
+                throw ("Vendored uv checksum MISMATCH: expected {0}, got {1}" -f ${expected}, ${actual})
+            }
+            Write-MastProvisionEvent ("vendored uv checksum verified ({0})" -f ${actual}.ToLowerInvariant())
+        } else {
+            Write-Warning ("No .sha256 beside {0}; extracting unverified." -f ${uvZip})
+        }
+        Confirm-Dir ${toolsDir}
+        ${uvTmp} = Join-Path ${env:TEMP} ("mast-uv-" + [guid]::NewGuid().ToString('N'))
+        ${null} = New-Item -ItemType Directory -Path ${uvTmp} -Force
+        try {
+            Expand-Archive -LiteralPath ${uvZip} -DestinationPath ${uvTmp} -Force
+            ${found} = Get-ChildItem -Path ${uvTmp} -Recurse -Filter 'uv.exe' | Select-Object -First 1
+            if ($null -eq ${found}) { throw "uv.exe not found inside ${uvZip}" }
+            Copy-Item -LiteralPath ${found}.FullName -Destination ${uvExe} -Force
+            Write-MastProvisionEvent ("staged vendored uv -> {0}" -f ${uvExe})
+        }
+        finally {
+            Remove-Item -LiteralPath ${uvTmp} -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    # The vendored binary and the version mast-clone pins must agree. They are
+    # committed together (build/fetch-uv.ps1 reads the pin), so a mismatch means
+    # the payload was assembled from a mixed tree -- fail rather than silently
+    # building the fleet's venvs with an unintended resolver.
+    ${stagedTsv} = Join-Path ${AssetsRoot} 'mast-repos.tsv'
+    if ((Test-Path -LiteralPath ${uvExe}) -and (Test-Path -LiteralPath ${stagedTsv})) {
+        ${wantUv} = ''
+        foreach (${line} in (Get-Content -LiteralPath ${stagedTsv})) {
+            if (${line} -match '^#!uv-version\s+(\S+)') { ${wantUv} = ${Matches}[1]; break }
+        }
+        if (${wantUv}) {
+            ${uvOut} = (& ${uvExe} --version 2>$null | Select-Object -First 1)
+            if (${uvOut} -match '(\d+\.\d+\.\d+)') {
+                ${gotUv} = ${Matches}[1]
+                if (${gotUv} -ne ${wantUv}) {
+                    throw ("Vendored uv is {0} but mast-repos.tsv pins {1}. Re-run build/fetch-uv.ps1 and commit both." -f ${gotUv}, ${wantUv})
+                }
+                Write-MastProvisionEvent ("uv version {0} matches the manifest pin" -f ${gotUv})
+            }
+        }
+    }
+
     ${headBefore} = Get-MastRepoHead -GitExe ${gitExe} -RepoDir ${unitDir}
 
     # --- Delegate clone + venv + dependency install ------------------------

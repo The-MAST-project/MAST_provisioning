@@ -486,7 +486,11 @@ foreach (${m} in ${Modules}) {
         # Dev/test exception: some payloads are intentionally omitted (large artifacts).
         $norm = (${cmdfile} -replace '\\','/').ToLowerInvariant()
         if (${TestMode} -and (
-            ($m -eq 'cygwin' -and $norm -eq 'assets/astrometry.tgz')
+            ($m -eq 'cygwin' -and $norm -eq 'assets/astrometry.tgz') -or
+            # Vendored uv (18 MB): absent in a lean dev checkout. mast-clone
+            # falls back to bootstrapping it from the GitHub CDN, which works
+            # but is the network dependency the vendoring removes.
+            ($m -eq 'mast' -and $norm -like 'assets/uv-*')
         )) {
             Write-Warning "[${m}] Optional dev/test CommandFile missing: ${src} (skipping due to -TestMode)"
             continue
