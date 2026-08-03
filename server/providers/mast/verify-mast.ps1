@@ -177,11 +177,34 @@ if (Test-Path -LiteralPath ${venvPython}) {
     }
 }
 
+# The service must be REGISTERED and pointed at this layout's interpreter. Its
+# run state deliberately is NOT checked here.
+#
+# mast-services-finalize (order 9500) sets every MAST service to Manual and
+# STOPS it -- a deliberate current-development-stage measure so a provisioned
+# unit does not auto-start telescope services on boot. The mast provider
+# registers auto-start and starts the service so the per-provider verify steps
+# run while it is alive; finalize then flips it. So on a fully-provisioned unit
+# at rest mast-unit is Stopped BY DESIGN, and asserting 'Running' here would
+# fail every correct unit -- and would put two providers in charge of one fact.
+# finalize owns run state and has its own verify for Manual+Stopped.
+#
+# What IS this module's business is the interpreter the service runs, since that
+# is exactly what the move to the mast-clone layout changes.
 ${svc} = Get-Service -Name 'mast-unit' -ErrorAction SilentlyContinue
 if ($null -eq ${svc}) {
     [void]${issues}.Add('mast-unit service not registered')
-} elseif (${svc}.Status -ne 'Running') {
-    [void]${issues}.Add(("mast-unit service registered but not running (status={0})" -f ${svc}.Status))
+} else {
+    W ("mast-unit service: Status={0} StartType={1} (run state owned by mast-services-finalize)" -f ${svc}.Status, ${svc}.StartType)
+    ${nssmExe} = 'C:\Program Files\nssm\nssm.exe'
+    if (Test-Path -LiteralPath ${nssmExe}) {
+        ${svcApp} = ((& ${nssmExe} get mast-unit Application) -join '').Trim([char]0, ' ', "`r", "`n")
+        if (${svcApp} -and ${svcApp} -ne ${venvPython}) {
+            [void]${issues}.Add(("mast-unit runs {0}, expected {1} -- service not re-pointed at the mast-clone venv" -f ${svcApp}, ${venvPython}))
+        } else {
+            W ("mast-unit interpreter: {0}" -f ${svcApp})
+        }
+    }
 }
 
 if (${issues}.Count -gt 0) {
