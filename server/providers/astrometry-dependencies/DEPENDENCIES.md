@@ -13,11 +13,29 @@ The list was derived on 2026-05-25 by:
    basename to its owning Cygwin package via `setup.ini` (the `install:`
    line that ships that DLL under `usr/bin/`).
 
-Versions below are the ones the build was validated against. Cygwin
-maintains ABI compatibility within a minor release; you do not need to
-pin to these exact patch levels at install time, but `setup-x86_64.exe`
-will of course always pull the current upstream version unless you point
-it at a frozen mirror snapshot.
+Versions below are the ones the build was validated against.
+
+## Offline install from the frozen package cache (issue #20)
+
+Since 2026-07, `provide-astrometry-dependencies.ps1` installs **fully
+offline** (`setup-x86_64.exe --local-install`) from a frozen package cache
+staged into the payload by `build-mast.ps1`. The cache is
+**build-host-vendored** at `C:\MAST\cygwin-pkg-cache` (like the astrometry
+index seed) and populated once per build host with
+`build/harvest-cygwin-cache.ps1`, which harvests a working unit's own
+`C:\cygwin64\var\cache\setup` (~174 MB on mast01) -- the exact package set
+the validated fleet installed.
+
+Why frozen rather than the live mirror: the bundled fitsio wheel is
+version-pinned in its filename tag (`cygwin_3_6_9`), pip derives the
+platform tag from the *running* cygwin, and the itefix mirror is rolling --
+when it moved 3.6.9 -> 3.6.10 a fresh provision installed 3.6.10 and pip
+rejected the wheel ("not a supported wheel on this platform").
+
+**LOCKED COUPLING:** the frozen cygwin version in the cache (`3.6.9-1`) and
+the bundled fitsio wheel tag move together. Refreshing the cache to a newer
+cygwin REQUIRES rebuilding the wheel in the same change (see "Building the
+fitsio wheel" below), and vice versa.
 
 ## Direct dependencies (linked by the astrometry binaries themselves)
 
@@ -153,11 +171,16 @@ itself is too. Of the 42 distinct packages above, 9 are already in
 
 ## One-line setup-x86_64.exe invocation
 
+This is the offline form the provider runs (`--site` selects the matching
+URL-encoded subfolder inside the cache; nothing is downloaded under
+`--local-install`):
+
 ```cmd
 setup-x86_64.exe ^
   --root C:\cygwin64 ^
+  --local-install ^
+  --local-package-dir <staged payload>\cygwin-pkg-cache ^
   --site https://cygwin.itefix.net ^
-  --proxy bcproxy.weizmann.ac.il:8080 ^
   --no-shortcuts --no-desktop --no-startmenu --no-write-registry ^
   --quiet-mode ^
   --packages cygwin,libcfitsio10,libwcs4,libnetpbm10,libcairo2,libpng16,libjpeg8,python39,libcurl4,libnghttp2_14,libssh2_1,libssl3,libssl1.1,libgssapi_krb5_2,libkrb5_3,libkrb5support0,libk5crypto3,libcom_err2,libopenldap2,libsasl2_3,libidn2_0,libpsl5,libunistring5,libbrotlicommon1,libbrotlidec1,libpixman1_0,libfreetype6,libfontconfig1,libexpat1,libX11_6,libXau6,libXdmcp6,libXext6,libXrender1,libxcb1,libxcb-render0,libxcb-shm0,libbz2_1,zlib0,libzstd1,libiconv2,libintl8,libgcc1

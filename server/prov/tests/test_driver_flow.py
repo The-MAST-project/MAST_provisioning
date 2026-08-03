@@ -26,7 +26,7 @@ class FakeSession(T.SshSession):
         self._responder = responder
         self.scripts: list[str] = []
 
-    def run_ps(self, script: str) -> T._SshResponse:
+    def run_ps(self, script: str, timeout_s: float | None = None) -> T._SshResponse:
         self.scripts.append(script)
         rc, out = self._responder(script)
         return T._SshResponse(rc, out.encode("utf-8"), b"")
@@ -113,7 +113,7 @@ def _make_driver(root, monkeypatch, responder, unit=UNIT):
     def fake_build(self, unit, host, modules, dur):  # skip subprocess/PS build
         self._staging_dir = repo / "staging"
         self.log.event("BUILD_OK", unit=host, payload_hash="hash123", git_sha="sha")
-        return "hash123", "sha"
+        return "hash123", "sha", {}
 
     monkeypatch.setattr(D.Driver, "_build", fake_build)
     monkeypatch.setattr(D, "staging_payload_size",
@@ -208,3 +208,208 @@ def test_unreachable_unit_fails_without_session(root, monkeypatch):
     log = drv.log.run_log_path.read_text()
     assert code == D.EXIT_UNIT_FAIL, log
     assert "UNIT_UNREACHABLE" in log, log
+
+
+# --- per-module targeted update (issue #22 stage 3) --------------------------
+
+
+def _drift_driver(root, monkeypatch, installed: dict | None, build: dict,
+                  validation: dict | None = None):
+    """Driver whose unit reports ``installed`` (+ optional tier-2 ``validation``)
+    and whose build yields ``build``.
+
+    The manifest reads and the build are stubbed, so the test exercises the real
+    phase-5 comparison and the real cfg written for the detached runner. Smoke
+    answers OK for every module the build declares, so the run reaches its
+    natural end and the exit code is meaningful -- otherwise phase 9 fails the
+    unit on a missing marker and masks everything downstream.
+    """
+    smoke = "SMOKE " + json.dumps({m: "ok" for m in build.get("modules", [])})
+    responder = make_responder(smoke=smoke)
+
+    def with_manifests(script: str) -> tuple[int, str]:
+        if "installed-manifest.json" in script:
+            return (0, json.dumps(installed) if installed is not None else "")
+        if "validation.json" in script:
+            return (0, json.dumps(validation) if validation is not None else "")
+        return responder(script)
+
+    drv, sess = _drift_make(root, monkeypatch, with_manifests, build)
+    return drv, sess
+
+
+def _drift_make(root, monkeypatch, responder, build: dict):
+    drv, sess = _make_driver(root, monkeypatch, responder,
+                             unit={**UNIT, "modules": list(build.get("modules", []))})
+
+    def fake_build(self, unit, host, modules, dur):
+        self._staging_dir = root / "repo" / "staging"
+        self.log.event("BUILD_OK", unit=host, payload_hash=build["payload_hash"], git_sha="sha")
+        return build["payload_hash"], "sha", build
+
+    monkeypatch.setattr(D.Driver, "_build", fake_build)
+    return drv, sess
+
+
+def _detached_cfg(sess) -> dict:
+    """The detached-run.json the driver wrote, parsed out of the fake session."""
+    for script in reversed(sess.scripts):
+        if "detached-run.json" in script and "{" in script:
+            start = script.index("{")
+            end = script.rindex("}") + 1
+            return json.loads(script[start:end].replace("''", "'"))
+    raise AssertionError("no detached-run.json write seen")
+
+
+BUILD_TWO = {
+    "payload_hash": "agg-new",
+    "modules": ["git", "python"],
+    "module_state": {"git": {"version": "1", "hash": "h-git"},
+                     "python": {"version": "1", "hash": "h-py-NEW"}},
+}
+
+
+def test_only_the_drifted_module_is_sent_to_execute(root, monkeypatch):
+    """One module changed -> execute gets -Modules python, not the full payload."""
+    installed = {
+        "payload_hash": "agg-old",
+        "modules": {
+            "git": {"version": "1", "hash": "h-git", "provide": "pass", "verify": "pass"},
+            "python": {"version": "1", "hash": "h-py-OLD", "provide": "pass", "verify": "pass"},
+        },
+    }
+    drv, sess = _drift_driver(root, monkeypatch, installed, BUILD_TWO)
+    code = drv.run()
+    log = drv.log.run_log_path.read_text()
+    assert code == D.EXIT_OK, log
+    assert "MODULE_DRIFT" in log, log
+    assert "targets=python" in log, log
+    assert _detached_cfg(sess)["modules"] == "python"
+
+
+def test_legacy_unit_runs_the_full_set(root, monkeypatch):
+    """A pre-modules manifest is state-unknown: every module is a target."""
+    legacy = {"payload_hash": "agg-old", "git_sha": "abc"}
+    drv, sess = _drift_driver(root, monkeypatch, legacy, BUILD_TWO)
+    code = drv.run()
+    assert code == D.EXIT_OK, drv.log.run_log_path.read_text()
+    assert _detached_cfg(sess)["modules"] == "git,python"
+
+
+def test_aggregate_drift_with_no_module_drift_runs_the_full_set(root, monkeypatch):
+    """The payload changed outside the per-module boundary (a vendored asset).
+
+    Not nothing -- fall through to a full run rather than skipping, since the
+    aggregate hash is the broader check.
+    """
+    installed = {
+        "payload_hash": "agg-old",
+        "modules": {
+            "git": {"version": "1", "hash": "h-git", "provide": "pass", "verify": "pass"},
+            "python": {"version": "1", "hash": "h-py-NEW", "provide": "pass", "verify": "pass"},
+        },
+    }
+    drv, sess = _drift_driver(root, monkeypatch, installed, BUILD_TWO)
+    code = drv.run()
+    log = drv.log.run_log_path.read_text()
+    assert code == D.EXIT_OK, log
+    assert "MODULE_DRIFT_NONE" in log, log
+    assert _detached_cfg(sess)["modules"] == ""
+
+
+def test_force_bypasses_the_per_module_compare(root, monkeypatch):
+    """--force means "run everything", so no targeting is applied."""
+    installed = {
+        "payload_hash": "agg-old",
+        "modules": {"git": {"version": "1", "hash": "h-git", "provide": "pass", "verify": "pass"},
+                    "python": {"version": "1", "hash": "h-py-OLD", "provide": "pass", "verify": "pass"}},
+    }
+    drv, sess = _drift_driver(root, monkeypatch, installed, BUILD_TWO)
+    drv.cfg.force = True
+    code = drv.run()
+    assert code == D.EXIT_OK, drv.log.run_log_path.read_text()
+    assert _detached_cfg(sess)["modules"] == ""
+
+
+CURRENT_INSTALLED = {
+    "payload_hash": "agg-new",
+    "fully_provisioned": True,
+    "modules": {
+        "git": {"version": "1", "hash": "h-git", "provide": "pass", "verify": "pass",
+                "installed_at": "2026-08-01T00:00:00Z"},
+        "python": {"version": "1", "hash": "h-py-NEW", "provide": "pass", "verify": "pass",
+                   "installed_at": "2026-08-01T00:00:00Z"},
+    },
+}
+
+
+def test_a_fully_current_unit_is_skipped(root, monkeypatch):
+    drv, sess = _drift_driver(root, monkeypatch, CURRENT_INSTALLED, BUILD_TWO)
+    code = drv.run()
+    log = drv.log.run_log_path.read_text()
+    assert code == D.EXIT_OK, log
+    assert "already_current" in log, log
+
+
+def test_tier2_failure_breaks_the_already_current_skip(root, monkeypatch):
+    """Runtime drift on an otherwise-current unit must NOT be skipped.
+
+    The unit is fully provisioned, so it publishes an aggregate payload_hash that
+    matches the build -- which is exactly the state a needs-repair arises in (the
+    payload did not change; a service died). Gating on that hash before
+    classifying made needs-repair unreachable for its own motivating case.
+    """
+    validation = {"checked_at": "2026-08-02T00:00:00Z",
+                  "failures": 1,
+                  "modules": {"git": "pass", "python": "fail"}}
+    drv, sess = _drift_driver(root, monkeypatch, CURRENT_INSTALLED, BUILD_TWO, validation)
+    code = drv.run()
+    log = drv.log.run_log_path.read_text()
+    assert code == D.EXIT_OK, log
+    assert "already_current" not in log, log
+    assert "NEEDS_REPAIR" in log, log
+    assert _detached_cfg(sess)["modules"] == "python"
+
+
+def test_a_validation_report_older_than_the_repair_is_ignored(root, monkeypatch):
+    """Nothing clears validation.json, so a stale 'fail' must not re-target forever.
+
+    The report predates the module's installed_at, i.e. it describes a build no
+    longer on the unit.
+    """
+    validation = {"checked_at": "2026-07-01T00:00:00Z",   # before installed_at
+                  "failures": 1,
+                  "modules": {"python": "fail"}}
+    drv, sess = _drift_driver(root, monkeypatch, CURRENT_INSTALLED, BUILD_TWO, validation)
+    code = drv.run()
+    log = drv.log.run_log_path.read_text()
+    assert code == D.EXIT_OK, log
+    assert "already_current" in log, log
+
+
+BUILD_WITH_ALWAYS = {
+    "payload_hash": "agg-new",
+    "modules": ["git", "python", "reboot"],
+    "always_modules": ["reboot"],
+    "module_state": {"git": {"version": "1", "hash": "h-git"},
+                     "python": {"version": "1", "hash": "h-py-NEW"},
+                     "reboot": {"version": "1", "hash": "h-reboot"}},
+}
+
+
+def test_a_targeted_run_still_includes_the_always_modules(root, monkeypatch):
+    """reboot must close every run that installed anything, or a pending reboot
+    left by an installer is never detected and no flag is dropped."""
+    installed = {
+        "payload_hash": "agg-old",
+        "modules": {
+            "git": {"version": "1", "hash": "h-git", "provide": "pass", "verify": "pass"},
+            "python": {"version": "1", "hash": "h-py-OLD", "provide": "pass", "verify": "pass"},
+            "reboot": {"version": "1", "hash": "h-reboot", "provide": "pass", "verify": "pass"},
+        },
+    }
+    drv, sess = _drift_driver(root, monkeypatch, installed, BUILD_WITH_ALWAYS)
+    code = drv.run()
+    assert code == D.EXIT_OK, drv.log.run_log_path.read_text()
+    # Build order, not alphabetical: reboot is order-terminal and must come last.
+    assert _detached_cfg(sess)["modules"] == "python,reboot"

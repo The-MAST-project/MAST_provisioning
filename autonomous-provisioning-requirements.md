@@ -263,15 +263,30 @@ Modules with no external versioned payload use `"builtin"` (diagnostics) or `"ro
 
 #### 3. Installed / effective state (on each unit) **[PARTIAL]**
 
-`execute-mast-provisioning.ps1` writes `installed-manifest.json` after a successful run,
-copying `build-manifest.json` with an added `installed_at` timestamp. This satisfies the
-hash comparison used by `check-and-provision.ps1` for drift detection.
+`execute-mast-provisioning.ps1` writes `installed-manifest.json` **cumulatively, per
+module**: each run merges `{version, hash, provide, verify, installed_at}` for the modules
+it actually ran, and modules it did not touch keep their previous entries. A
+`-Modules <subset>` run therefore no longer erases the rest of the record. Written on
+every run, including a partial one, so the record stays truthful about which modules
+landed rather than freezing at the last fully-clean payload.
 
-**Remaining gap:** The requirements call for a preference toward **computed** manifests
-(inspecting the live filesystem and service state rather than trusting the written file).
-The static file is acceptable as an audit artifact today; the inspection-based probe is a
-Phase 1 stretch goal. The provisioning server compares `build-manifest.payload_hash` to
-the effective hash reported by the unit to decide whether an update is needed.
+`fully_provisioned` is derived (every module the build declares is present, hash-matched,
+`provide = pass`, and not `verify = fail`), and the aggregate `payload_hash` --  the fast
+path `check-and-provision.ps1` and `server/prov/driver.py` compare -- is published **only**
+when that holds. A partial run leaves it absent, so the fast path misses and the unit falls
+through to a run rather than being skipped as current. Merge semantics live in
+`client/mast-installed-manifest.ps1`; tests in
+`server/tests/mast-installed-manifest.Tests.ps1`. (#22 Stage 2.)
+
+**Legacy units:** a manifest written before this change is a whole-document copy of
+`build-manifest.json` with no `modules` map. It is read without error, contributes nothing
+to carry forward, and the modules it cannot account for classify as missing on the next
+cycle -- the documented one-time migration for mast01-04.
+
+**Remaining gap:** the requirements call for a preference toward **computed** manifests
+(inspecting live filesystem and service state rather than trusting the written file). The
+written record above is the tier-1 fast check; the computed tier-2 probe re-running each
+provider's `verify-*.ps1` is #22 Stage 4.
 
 #### 4. `check-and-provision.ps1` (prov server driver) **[PARTIAL]**
 
@@ -425,6 +440,26 @@ double-hop problem and keeps the prov server's WinRM client unprivileged.
 
 ### Version / Drift Detection **[PARTIAL]**
 
+> **Per-module tracking (#22) landed 2026-08-02.** Drift is now decided **per
+> module**, not per payload. `server/prov/drift.py` classifies each module as
+> up-to-date / needs-update / missing / extra / needs-repair by comparing the
+> unit's cumulative `installed-manifest.json` against the payload's
+> `build-manifest.json` **on the content hash** (the version string is for
+> reporting only), and the driver provisions `-Modules <the drifted set>` instead
+> of running a full cycle. The aggregate `payload_hash` remains the fast
+> "anything changed at all?" gate ahead of that comparison.
+>
+> **Two tiers.** Tier 1 is the written record (fast, every cycle). Tier 2 is
+> **computed**: `client/run-verify-only.ps1` re-runs each provider's
+> `verify-*.ps1` on the unit and writes `C:\MAST\status\validation.json`; a
+> module whose hash still matches but whose live verify fails classifies
+> **needs-repair** -- the runtime drift (stopped service, deleted file) a hash
+> cannot see. Absent tier-2 data means "not run", never "failed".
+>
+> `tools/fleet-drift-report.py` renders a per-unit x per-module **status** matrix
+> against the build (`--build-manifest`), sharing `prov.drift.classify` with the
+> driver so the report cannot disagree with what the next cycle will do.
+
 The logic is present in `check-and-provision.ps1` (hash compare at lines ~234-294)
 and verified end-to-end via `vm/run-prov-test.py`. It is exercised on every manual
 driver invocation today; it becomes a continuous fleet guarantee once the scheduled
@@ -451,6 +486,13 @@ Two levels:
    also be able to run **on itself** -- see **Unit self-validation (tiered validation
    levels the unit can answer)** in Phase 1, where the same `verify-<name>.ps1` scripts are
    the level-2 (configuration) check.
+
+**Per-module build fingerprint:** `build-manifest.json` also carries `module_state` --
+per module `{version, hash}`, where the hash covers the module's source commandfiles,
+its **resolved** `commands.json` entries (build-time injected args like `-Site` /
+`-ForceMode` included), and its resolved version (`build/build-manifest-lib.ps1`). The
+drift *compare* above is still whole-payload; per-module drift classification and
+targeted `-Modules` updates are the rest of the per-module-tracking epic (#22).
 
 ---
 
@@ -979,7 +1021,7 @@ scenario in `vm/test-suite.py` and reference it from the row.
 | 3 | GitHub token (`mast_github.txt`)             | `-AllowMissingGithubToken`; `mast` module fetch skipped or unauthenticated                                  | Authenticated via Credential Manager / deploy key on prov server                                                             | blocker (Exception #3)    | needs scenario                                      |
 | 4 | Astrometry payload (`astrometry.tgz` + .img) | `-TestMode`; optional, sometimes absent; smoke degrades to skip                                             | Payload mandatory and version-verified; failure to fetch blocks the run                                                      | blocker (Exception #4)    | scenario `full-provision` (when payload present)    |
 | 5 | Bootstrap security posture                   | WinRM HTTP (5985) + Basic + AllowUnencrypted=true                                                           | HTTPS (5986) + cert-validated transport; HTTP only for first-boot onboarding                                                 | blocker (Exception #5)    | needs scenario                                      |
-| 6 | Proxy mode end-to-end                        | `--proxy-mode direct` (dev VM on home network can't reach bcproxy)                                          | `--proxy-mode weizmann` (default); cygwin setup.exe + WinINet + WinHTTP all route through `bcproxy.weizmann.ac.il:8080`      | blocker (Exception #6)    | STUB `proxy-weizmann-on-campus`                     |
+| 6 | Proxy mode end-to-end                        | `--proxy-mode direct` (dev VM on home network can't reach bcproxy)                                          | `--proxy-mode weizmann` (default); WinINet + WinHTTP route through `bcproxy.weizmann.ac.il:8080` (cygwin setup.exe no longer downloads: astrometry-dependencies installs offline from the frozen staged cache, issue #20) | blocker (Exception #6)    | STUB `proxy-weizmann-on-campus`                     |
 | 7 | Reboot orchestration                         | `provide-reboot.ps1` detects pending reboot and writes `C:\MAST\state\reboot-requested.flag`; harness ignores it and resets the VM to snapshot at end of cycle | `check-and-provision.ps1` consumes the flag, schedules the reboot inside the maintenance window, waits for WinRM to return, re-verifies smoke state | blocker (Exception #7)    | STUB `reboot-occurs-and-unit-recovers`              |
 | 8 | Cycle isolation                              | VM snapshot reset between cycles -- every cycle starts from `post-prepare`                                  | No rollback; unit state persists across runs. Idempotency is load-bearing.                                                   | covered indirectly        | scenarios `idempotent-after-manifest-wipe`, `idempotent-reprovision` (STUB) |
 | 9 | Maintenance window enforcement               | Harness runs whenever invoked; windows not honored                                                          | `check-and-provision.ps1` honors per-unit `maintenance_window`; outside the window units get `outcome=SKIP_MAINTENANCE`      | **DONE** in prod driver   | not exercisable in harness (driver-only)            |
@@ -1050,10 +1092,11 @@ but the code path is correct. This exception is resolved.
 - **Current exception:** the dev VirtualBox VM lives on the host's NAT-ed home network and
   cannot reach `bcproxy.weizmann.ac.il:8080`, so the only proxy mode regularly exercised by
   `vm/run-prov-test.py` is `--proxy-mode direct`. The `weizmann` code paths
-  (`provide-proxy.ps1 -ForceMode use`, `provide-astrometry-dependencies.ps1 -ProxyMode use`
-  pre-writing `setup.rc` with `net-method=Proxy`, `netsh winhttp set proxy bcproxy:8080`,
+  (`provide-proxy.ps1 -ForceMode use`, `netsh winhttp set proxy bcproxy:8080`,
   WinINet `ProxyEnable=1`) are unit-test-grade -- they run on every build through the
   argument-plumbing path but their actual network effect against a live proxy is unverified.
+  (cygwin setup.exe is no longer a proxy consumer: astrometry-dependencies installs
+  offline from the frozen staged cache -- issue #20.)
 - **Why it's a blocker:** production units inside the campus are 100% reliant on the
   `weizmann` path. A regression there would not surface in `direct`-mode dev runs and
   could ship undetected. The risk is concrete: this exact scenario (env vars cleared but
@@ -1065,12 +1108,9 @@ but the code path is correct. This exception is resolved.
   1. Provisions with `--proxy-mode weizmann`.
   2. Asserts `verify-proxy.ps1` exits 0 with smoke body `mode=use ie_enable=1
      ie_server='bcproxy.weizmann.ac.il:8080'`.
-  3. Asserts `astrometry-dependencies` succeeds (real download through bcproxy completes).
-  4. Asserts a fresh `setup-x86_64.exe` log line says `net: Proxy` and the package fetch
-     URLs resolve through the proxy (no 12007s).
-  5. Asserts `netsh winhttp show proxy` reports `Proxy Server(s) :
+  3. Asserts `netsh winhttp show proxy` reports `Proxy Server(s) :
      bcproxy.weizmann.ac.il:8080`.
-  6. Asserts HKCU `Internet Settings\ProxyEnable=1`, `ProxyServer=bcproxy.weizmann.ac.il:8080`.
+  4. Asserts HKCU `Internet Settings\ProxyEnable=1`, `ProxyServer=bcproxy.weizmann.ac.il:8080`.
 
   Tracked as STUB scenario `proxy-weizmann-on-campus` in `vm/test-suite.py`; promote to
   ACTIVE once it has been run successfully against a Weizmann-reachable unit at least once

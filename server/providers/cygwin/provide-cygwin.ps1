@@ -93,9 +93,11 @@ try {
     }
 
     # Execute any pending /etc/postinstall/*.sh (rename to .done after success).
-    # Avoid temp scripts and CRLF/encoding issues by running inline.
+    # Run inline, but strip CR first: if this .ps1 is checked out CRLF (Windows
+    # core.autocrlf), the here-string carries \r into bash and fails with
+    # "syntax error near $'do\r'". Normalizing to LF makes it EOL-immune.
     Write-Host "Running Cygwin postinstall scripts ..."
-    & ${bashExe} -lc @'
+    ${postinstallSh} = @'
 set -e
 shopt -s nullglob
 for f in /etc/postinstall/*.sh; do
@@ -104,6 +106,7 @@ for f in /etc/postinstall/*.sh; do
 done
 exit 0
 '@
+    & ${bashExe} -lc (${postinstallSh} -replace "`r", "")
 
     # --- Verification: print versions and a simple command ---
     Write-Host "Verifying Cygwin ..."

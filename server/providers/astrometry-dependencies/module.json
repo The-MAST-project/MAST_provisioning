@@ -1,7 +1,7 @@
 ﻿{
   "name": "astrometry-dependencies",
-  "version": "0.97-deps",
-  "description": "Install Cygwin packages required by astrometry.net (cfitsio, wcslib, netpbm, cairo, python39, and their transitive deps) via setup-x86_64.exe; add C:\\cygwin64\\lib\\lapack to machine PATH; pip-install the bundled fitsio wheel.",
+  "version": "0.97-deps-2",
+  "description": "Install Cygwin packages required by astrometry.net (cfitsio, wcslib, netpbm, cairo, python39, and their transitive deps) via setup-x86_64.exe --local-install from the staged frozen package cache (fully offline, pinned cygwin 3.6.9 to match the bundled fitsio wheel); add C:\\cygwin64\\lib\\lapack to machine PATH; pip-install the bundled fitsio wheel.",
   "order": 400,
   "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-astrometry-dependencies.ps1\" -AssetsRoot \".\" -CygwinRoot \"C:\\cygwin64\"",
   "commandfiles": [

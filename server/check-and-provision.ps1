@@ -595,7 +595,15 @@ foreach ($unit in $units) {
                 $p = 'C:\MAST\installed-manifest.json'
                 if (Test-Path $p) { Get-Content $p -Raw | ConvertFrom-Json } else { $null }
             }
-            $installedHash = if ($installed) { $installed.payload_hash } else { $null }
+            # payload_hash is ABSENT on a unit whose last run was partial: execute
+            # publishes it only when every module the build declares is present,
+            # hash-matched and clean (client/mast-installed-manifest.ps1). Absent
+            # therefore means "not current" and must fall through to a run --
+            # never be mistaken for a match.
+            $installedHash = $null
+            if ($installed -and $installed.PSObject.Properties.Match('payload_hash').Count) {
+                $installedHash = $installed.payload_hash
+            }
 
             # ---------------------------------------------------------------
             # 4. Build payload (always -- cheap when binaries are cached)
