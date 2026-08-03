@@ -114,7 +114,7 @@ renumbering.
 | Order | Module | Description |
 |------:|--------|-------------|
 |   100 | `proxy` | Soft proxy: set (on-campus) or clear (home) machine/WinHTTP/WinINet proxy settings |
-|   150 | `config-bootstrap` | Lay down `C:\WIS\unit.toml` (machine identity + config-DB connection) and set `MAST_PROJECT=unit`; site chosen by build `-Site` |
+|   150 | `config-bootstrap` | Lay down `C:\WIS\config.toml` (machine identity + config-DB connection) with the `machine_role` field injected; site chosen by build `-Site` |
 |   200 | `openssh-server` | Drift check for OpenSSH Server (install/config owned by `bootstrap-winrm.ps1`) |
 |   250 | `imdisk` | ImDisk driver; mount D: from the astrometry index image, persist across reboots |
 |   300 | `cygwin` | Cygwin environment from a prebuilt tgz (postinstall, PATH) |
@@ -136,7 +136,7 @@ renumbering.
 |  1600 | `stage` | Optical stage / mount control software |
 |  1700 | `planewave` | PlaneWave PWI4 + PWShutter + PS3 CLI + PlateSolve3 catalog + PWTools utility bundle |
 |  1800 | `zwo` | ZWO camera drivers, ASI Studio, ASCOM driver |
-|  1850 | `instrument-profiles` | Lay down PWI4 `.cfg` + PHD2 `.reg` **templates** (site location from `C:\WIS\unit.toml`; fleet constants verbatim) and apply into the `mast` profile on first logon. Per-unit device->COM binding is the post-hardware `tools/calibrate-instruments.ps1` step, not this provider. |
+|  1850 | `instrument-profiles` | Lay down PWI4 `.cfg` + PHD2 `.reg` **templates** (site location from `C:\WIS\config.toml`; fleet constants verbatim) and apply into the `mast` profile on first logon. Per-unit device->COM binding is the post-hardware `tools/calibrate-instruments.ps1` step, not this provider. |
 |  1900 | `vscode` | Visual Studio Code + bundled Python extensions (`ms-python.python`, `ms-python.debugpy`) installed offline from staged `.vsix` |
 |  2000 | `sysinternals` | Sysinternals Suite |
 |  2050 | `jupyter` | Jupyter Notebook + scientific stack (astropy, numpy, scipy, matplotlib, pandas, astroquery, photutils) in a contained venv under `C:\MAST\jupyter` (state kept there; launcher + desktop shortcut) |
@@ -177,7 +177,7 @@ domain/`[location]`). To add a site, drop `sites/<code>.toml` **and** add `<code
 chosen site to `C:\ProgramData\MAST\site.txt` -> `onboard-mast-unit.ps1` reads it and writes
 it into the unit's `unit-registry.json` entry -> `check-and-provision.ps1` passes it to
 `build-mast.ps1 -Site <code>`, which stages `sites/<code>.toml` for the `config-bootstrap`
-provider to deploy as `C:\WIS\unit.toml`.
+provider to deploy as `C:\WIS\config.toml`.
 
 **Two site lists, kept in sync automatically:** `bootstrap-winrm.ps1` runs offline before
 the prov server is reachable, so it cannot read `sites/` and embeds a `$knownSites` list for
@@ -190,9 +190,9 @@ drifts from `sites/*.toml`. The shared enumerator is `Get-ConfiguredSites` in
 
 | Value | Source | Site-driven? |
 |-------|--------|--------------|
-| Machine identity + config-DB connection + `[location]` | `sites/<site>.toml` -> `C:\WIS\unit.toml` (`config-bootstrap`) | yes |
+| Machine identity + config-DB connection + `[location]` | `sites/<site>.toml` -> `C:\WIS\config.toml` (`config-bootstrap`) | yes |
 | RPi NTP time peer (tier 1) | `build-mast.ps1 -Site` injects `-RpiNtp` per site | yes |
-| Instrument-profile PWI4 site location | read from deployed `C:\WIS\unit.toml [location]` | yes |
+| Instrument-profile PWI4 site location | read from deployed `C:\WIS\config.toml [location]` | yes |
 | Web proxy (Weizmann `bcproxy`) + `no_proxy` bypass | global default in the `proxy` provider | no -- both sites use the same Weizmann proxy; the per-run `weizmann`/`direct` axis is operator-chosen reachability, not site (see DECISIONS 2026-07-01) |
 
 ---

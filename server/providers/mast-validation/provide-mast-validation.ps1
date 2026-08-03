@@ -76,8 +76,8 @@ ${env:PATH} = 'C:\cygwin64\bin' + ';' + ${env:PATH}
 ${stdoutLog} = Join-Path ${logRoot} 'verify\mast-validation.stdout.log'
 Remove-Item -LiteralPath ${stdoutLog} -Force -ErrorAction SilentlyContinue
 
-# Pass MAST_PROJECT=unit so any Config touch resolves the unit profile.
-${env:MAST_PROJECT} = 'unit'
+# No role env var: any Config touch resolves identity from C:\WIS\config.toml
+# (machine_role), laid down by config-bootstrap earlier in the run.
 
 ${argList} = @(
     ${validatePy},

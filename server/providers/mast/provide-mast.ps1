@@ -429,11 +429,8 @@ try {
                     Confirm-Dir ${svcLogDir}
                     & ${nssmExe} install ${serviceName} ${venvPythonSvc} ${unitEntryPoint}
                     & ${nssmExe} set ${serviceName} AppDirectory ${targetDir}
-                    # MAST_PROJECT selects the role-based bootstrap config C:\WIS\<role>.toml
-                    # (MAST_common load_local_config). config-bootstrap (order 150) also sets it
-                    # machine-wide, which the service inherits on start; set it explicitly here
-                    # too so the service env is correct even on a re-provision of an existing box.
-                    & ${nssmExe} set ${serviceName} AppEnvironmentExtra 'MAST_PROJECT=unit'
+                    # No role env var: the service reads its role from C:\WIS\config.toml
+                    # (machine_role), laid down by config-bootstrap (order 150).
                     & ${nssmExe} set ${serviceName} Start SERVICE_AUTO_START
                     & ${nssmExe} set ${serviceName} AppDependencies mast-pwi4
                     & ${nssmExe} set ${serviceName} AppStdout (Join-Path ${svcLogDir} 'stdout.log')
