@@ -139,8 +139,12 @@ EXECUTE_POLL_INTERVAL_S = 20
 VERIFY_ONLY_TIMEOUT_S = 30 * 60
 
 EXPECTED_PYTHON = "C:\\Python312\\python.exe"
-EXPECTED_REPOS_ROOT = "C:\\MAST\\repos"
-CLONE_ROOT = EXPECTED_REPOS_ROOT
+# The mast-clone layout (#31): one venv at <Top>\.venv with the role's clones
+# beside it. The old per-repo C:\MAST\repos tree is what the migration RETIRES,
+# so its presence is now a failure signal rather than the expected state.
+EXPECTED_SRC_ROOT = "C:\\MAST\\src"
+LEGACY_REPOS_ROOT = "C:\\MAST\\repos"
+CLONE_ROOT = EXPECTED_SRC_ROOT
 PULL_REPOS_SCRIPT = REPO_ROOT / "server" / "providers" / "mast" / "pull-mast-repos.ps1"
 MAST_LOGS_BASE = "C:\\MAST\\logs"
 SMOKE_LOG_DIR = f"{MAST_LOGS_BASE}\\smoke"
@@ -735,7 +739,7 @@ def phase_verify(
             results["python_version"] = "(not tested - python module not selected)"
 
         if check_repos:
-            r = run_ps(unit, f'Test-Path "{EXPECTED_REPOS_ROOT}"', label="repos-root")
+            r = run_ps(unit, f'Test-Path "{EXPECTED_SRC_ROOT}"', label="src-root")
             results["repos_root_ok"] = "True" in r.std_out.decode(errors="replace")
             results["repos_root_checked"] = True
         else:
@@ -794,7 +798,7 @@ def print_results(results: dict[str, Any], cycle: int) -> bool:
             f" ({python_ver})"
         )
     if results.get("repos_root_checked", True):
-        log(f"  repos root        : {'OK' if results['repos_root_ok'] else 'FAIL'}")
+        log(f"  src root          : {'OK' if results['repos_root_ok'] else 'FAIL'}")
     unit_health_detail = results.get("unit_health_detail", "")
     if "(not checked)" not in unit_health_detail and "(skipped" not in unit_health_detail:
         log(
