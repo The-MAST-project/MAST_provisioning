@@ -47,6 +47,8 @@ if (-not (Test-Path -LiteralPath ${unitDir})) {
 }
 Write-VLog ("MAST_unit clone: {0}" -f ${unitDir})
 
+${unitSrc} = Join-Path ${unitDir} 'src'
+
 ${venvPython} = Join-Path ${MastTop} '.venv\Scripts\python.exe'
 if (-not (Test-Path -LiteralPath ${venvPython})) {
     Write-VLog ("FAIL: venv python missing at {0}" -f ${venvPython})
