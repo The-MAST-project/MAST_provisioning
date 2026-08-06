@@ -72,6 +72,18 @@ def test_legacy_manifest_without_modules_map_targets_everything():
     assert all(m.state is ModuleState.MISSING for m in r.modules)
 
 
+def test_legacy_manifest_with_a_modules_LIST_targets_everything():
+    """The shape mast01-04 actually carry: 'modules' present, but the pre-module_state
+    LIST of names rather than a map. Same meaning as the no-key case above -- state
+    unknown -- and it must not be walked as if it were a map."""
+    legacy = {"payload_hash": "old", "git_sha": "abc", "hostname": "mast01",
+              "modules": ["proxy"], "module_versions": {"proxy": "1.1"},
+              "installed_at": "2026-07-08T09:40:59Z"}
+    r = classify(legacy, build_manifest(git="h1", python="p1"))
+    assert r.targets == ["git", "python"]
+    assert all(m.state is ModuleState.MISSING for m in r.modules)
+
+
 def test_recorded_provide_failure_needs_update_even_when_hash_matches():
     """The hash says what the payload WOULD install, not that installing worked."""
     r = classify(installed_manifest(git=entry("h1", provide="fail")), build_manifest(git="h1"))

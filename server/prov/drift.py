@@ -165,7 +165,11 @@ def classify(installed: dict | None, build: dict, validation: dict | None = None
 
     installed_modules = {}
     if installed:
-        installed_modules = installed.get("modules") or {}
+        # Only a MAP records per-module state. A legacy manifest carries 'modules'
+        # as a list of names -- the shape mast01-04 were left with -- and that is
+        # the same "state unknown" as the key being absent, not something to walk.
+        recorded = installed.get("modules")
+        installed_modules = recorded if isinstance(recorded, dict) else {}
 
     out: list[ModuleDrift] = []
 
