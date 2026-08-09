@@ -32,11 +32,19 @@
 
 .PARAMETER Modules
   Comma-separated module names to verify (e.g. 'git,python'). Empty = all verify commands.
+
+.PARAMETER ReportPath
+  Where to write the machine-readable per-module result. This is the tier-2
+  COMPUTED state for per-module tracking (#22 stage 4): the written
+  installed-manifest says what was installed, this says what is actually working
+  right now, so a module whose hash still matches but whose service has stopped
+  classifies as needs-repair instead of up-to-date. Pass '' to skip the write.
 #>
 [CmdletBinding()]
 param(
     [string]${StagingPath} = '.',
-    [string]${Modules}     = ''  # comma-separated; empty = all verify commands
+    [string]${Modules}     = '',  # comma-separated; empty = all verify commands
+    [string]${ReportPath}  = ''   # default resolved below, once mast-log.ps1 is loaded
 )
 
 ${ErrorActionPreference} = 'Stop'
@@ -62,6 +70,12 @@ if (-not (Test-Path -LiteralPath ${invokeDot})) {
 ${logDir} = Get-MastLogSessionDir
 ${null} = New-Item -ItemType Directory -Path ${logDir} -Force -ErrorAction SilentlyContinue
 ${logFile} = Join-Path ${logDir} 'provisioning-verify-only.log'
+
+# Default beside the other unit state (installed-manifest.json, status\).
+if ($null -eq ${ReportPath}) { ${ReportPath} = '' }
+if (${ReportPath} -eq '') {
+    ${ReportPath} = Join-Path (Join-Path ${env:SystemDrive} 'MAST') 'status\validation.json'
+}
 
 function Write-VerifyLog {
     param([string]${Message})
@@ -112,7 +126,10 @@ if (-not [string]::IsNullOrWhiteSpace(${Modules})) {
 Write-VerifyLog ("Found {0} verify command(s)." -f ${verifyCmds}.Count)
 
 ${failCount} = 0
+# module -> 'pass' | 'fail'. Ordered so the report reads in execution order.
+${moduleResults} = [ordered]@{}
 foreach (${cmd} in ${verifyCmds}) {
+    ${moduleName} = ${cmd}.module -replace '-verify$', ''
     Write-VerifyLog ''
     Write-VerifyLog "=========================================="
     Write-VerifyLog ("[Order: {0}] {1}" -f ${cmd}.order, ${cmd}.desc)
@@ -129,21 +146,49 @@ foreach (${cmd} in ${verifyCmds}) {
         if ($null -eq ${exitCode}) {
             Write-VerifyLog ("[FAIL] {0} (missing exit code after child process)" -f ${cmd}.module)
             ${failCount}++
+            ${moduleResults}[${moduleName}] = 'fail'
         }
         elseif (${exitCode} -eq 0) {
             Write-VerifyLog ("SUCCESS: {0} (exit code: 0)" -f ${cmd}.module)
+            if (-not ${moduleResults}.Contains(${moduleName})) { ${moduleResults}[${moduleName}] = 'pass' }
         }
         else {
             Write-VerifyLog ("[FAIL] {0} (exit code: {1})" -f ${cmd}.module, ${exitCode})
             ${failCount}++
+            ${moduleResults}[${moduleName}] = 'fail'
         }
     }
     catch {
         Write-VerifyLog ("[FAIL] EXCEPTION in {0}: {1}" -f ${cmd}.module, $_.Exception.Message)
         ${failCount}++
+        ${moduleResults}[${moduleName}] = 'fail'
     }
     finally {
         Pop-Location
+    }
+}
+
+# Machine-readable result for the driver / fleet report. Atomic write (tmp then
+# rename) for the same reason installed-manifest.json uses one: a reader must
+# never see half a document.
+if (${ReportPath}) {
+    try {
+        ${reportDir} = Split-Path -Parent ${ReportPath}
+        if (${reportDir}) { ${null} = New-Item -ItemType Directory -Path ${reportDir} -Force -ErrorAction SilentlyContinue }
+        ${report} = [pscustomobject][ordered]@{
+            checked_at = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+            failures   = ${failCount}
+            modules    = ${moduleResults}
+        }
+        ${reportTmp} = "${ReportPath}.tmp"
+        (${report} | ConvertTo-Json -Depth 4) | Out-File -FilePath ${reportTmp} -Encoding UTF8
+        Move-Item -Force ${reportTmp} ${ReportPath}
+        Write-VerifyLog ("Wrote validation report: {0}" -f ${ReportPath})
+    }
+    catch {
+        # A missing report degrades tier-2 to "unknown" (the driver then trusts
+        # the written manifest); it must not fail the verify run itself.
+        Write-VerifyLog ("WARNING: could not write validation report: {0}" -f $_.Exception.Message)
     }
 }
 

@@ -116,20 +116,6 @@ the password set by `client\bootstrap-winrm.ps1` during unit onboarding
 provisioning server. Units authenticate as `mast-transfer` to pull their
 staging payload. Choose a strong password; you will not type it interactively.
 
-### 2b. tokens/mast_github.txt
-
-Create the directory and file:
-
-```powershell
-New-Item -ItemType Directory -Force vault\tokens | Out-Null
-# Paste your GitHub Personal Access Token (repo read scope) into this file:
-notepad vault\tokens\mast_github.txt
-```
-
-The `mast` provisioning module uses this token to clone private MAST repos onto
-units. If the `mast` module is not in your unit's module list you can skip this
-for now, but autonomous runs will fail if `mast` is listed and the file is absent.
-
 ### 2c. NoMachine license files
 
 Copy one `.lic` file per unit into `vault\nomachine-licenses\`. The build script
@@ -157,7 +143,7 @@ Edit the file to describe each unit you want to manage. Minimum entry:
 [
   {
     "hostname": "mast01",
-    "timezone": "Israel Standard Time",
+    "timezone": "Asia/Jerusalem",
     "maintenance_window": { "start_hour": 10, "end_hour": 16 }
   }
 ]
@@ -172,7 +158,7 @@ used.
 [
   {
     "hostname": "mast-debug-01",
-    "timezone": "Israel Standard Time",
+    "timezone": "Asia/Jerusalem",
     "maintenance_window": { "start_hour": 0, "end_hour": 24 },
     "modules": ["cygwin", "astrometry-dependencies", "astrometry"]
   }
@@ -182,7 +168,14 @@ used.
 Notes:
 - `hostname` must be the DNS-resolvable Windows computer name (`mast01` -
   `mast20`). Do not use IP addresses.
-- `timezone` must be a Windows timezone name (run `tzutil /l` for the list).
+- `timezone` should be an **IANA** timezone id (e.g. `Asia/Jerusalem`; full
+  list at the [IANA tz database](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones)).
+  IANA ids keep the registry portable (a future Linux prov server resolves them
+  natively). The driver maps the fleet's IANA ids to Windows ids for the
+  Windows PowerShell 5.1 (.NET Framework) `TimeZoneInfo`, which does not know
+  IANA ids natively -- see `server/lib/mast-timezone.ps1`. A raw Windows name
+  (from `tzutil /l`) also resolves, but IANA is the canonical form; add a new
+  IANA id to the map in `mast-timezone.ps1` if the fleet grows into a new zone.
 - `maintenance_window` hours are in the unit's local time. Set `start_hour: 0,
   end_hour: 24` to allow provisioning at any time (useful while setting up).
 - `modules` (optional) controls which providers `build-mast.ps1` stages.

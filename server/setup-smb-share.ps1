@@ -197,7 +197,10 @@ Ensure-MastSmbShare `
     -EveryoneSid $everyoneSid
 
 # ---------------------------------------------------------------------------
-# mast-shared: writable share for unit machines to save files back to the server
+# mast-shared: writable share for unit machines to save files back to the server.
+# Reached by UNC. It is NOT the unit's operational store -- that is
+# \\<controller_host>\mast-share, which units mount as Z: (see the mast-shared-mount
+# provider and issue #25).
 # ---------------------------------------------------------------------------
 $sharedRoot = Join-Path $Top 'shared'
 Ensure-MastSmbShare `
@@ -259,7 +262,9 @@ Write-Host ""
 Write-Host "Shared (writable) share ready:"
 Write-Host "  UNC:              \\$($env:COMPUTERNAME)\mast-shared"
 Write-Host "  Local path:       $sharedRoot"
-Write-Host "  Unit maps as:     Z: -> \\$($env:COMPUTERNAME)\mast-shared"
+Write-Host "  Units reach it:   by UNC only -- provisioning maps NO drive letter."
+Write-Host "                    Z: belongs to the operational share on the site"
+Write-Host "                    controller (\\<controller_host>\mast-share); see issue #25."
 Write-Host "=========================================="
 Write-Host "Setup complete. Run install-scheduled-task.ps1 to activate the autonomous loop."
 Write-Host "=========================================="

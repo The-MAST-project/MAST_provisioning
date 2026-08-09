@@ -69,10 +69,11 @@ MAST_provisioning/
 |   `-- vm-fix-winrm.ps1              # Break-glass WinRM recovery (run locally on unit)
 |-- vault/                            # Secrets, gitignored
 |   |-- creds.json                    # WinRM credentials for units
-|   |-- tokens/mast_github.txt        # GitHub PAT
 |   `-- nomachine-licenses/*.lic
 |-- staging/<host>/01-provisioning/   # Build output, gitignored
-|-- DECISIONS.md
+|-- docs/
+|   |-- decisions/                    # Design rationale: one file per decision + the frozen archive
+|   `-- *.md                          # Plans and analyses
 |-- autonomous-provisioning-requirements.md
 `-- README.md
 ```
@@ -114,11 +115,11 @@ renumbering.
 | Order | Module | Description |
 |------:|--------|-------------|
 |   100 | `proxy` | Soft proxy: set (on-campus) or clear (home) machine/WinHTTP/WinINet proxy settings |
-|   150 | `config-bootstrap` | Lay down `C:\WIS\unit.toml` (machine identity + config-DB connection) and set `MAST_PROJECT=unit`; site chosen by build `-Site` |
+|   150 | `config-bootstrap` | Lay down `C:\WIS\config.toml` (machine identity + config-DB connection) with the `machine_role` field injected; site chosen by build `-Site` |
 |   200 | `openssh-server` | Drift check for OpenSSH Server (install/config owned by `bootstrap-winrm.ps1`) |
 |   250 | `imdisk` | ImDisk driver; mount D: from the astrometry index image, persist across reboots |
 |   300 | `cygwin` | Cygwin environment from a prebuilt tgz (postinstall, PATH) |
-|   400 | `astrometry-dependencies` | Cygwin packages for astrometry.net + bundled `fitsio` wheel |
+|   400 | `astrometry-dependencies` | Cygwin packages for astrometry.net (offline, from the frozen build-host cache `C:\MAST\cygwin-pkg-cache`) + bundled `fitsio` wheel |
 |   500 | `astrometry` | Prebuilt astrometry.net 0.97 tree into `C:\cygwin64\usr\local\astrometry` |
 |   600 | `python` | Python 3.12.2 + virtualenv |
 |   700 | `git` | Git for Windows (silent) + PATH |
@@ -129,19 +130,20 @@ renumbering.
 |  1050 | `usbpcap` | USBPcap USB capture driver + tools |
 |  1100 | `wireshark` | Wireshark 4.6.0 network analyzer |
 |  1200 | `nssm` | NSSM (Non-Sucking Service Manager) + PATH |
-|  1300 | `nomachine` | NoMachine Enterprise Desktop (server) + license |
+|  1300 | `nomachine` | NoMachine Enterprise Desktop (server) + license. Pins `SessionHistory 0` (the 9.0.188 history cleaner crashes the server, see `docs/decisions/2026-08-03-nomachine-pins-server-cfg-and-verifies-serving.md`) and `UpdateFrequency 0`, then leaves `nxd` accepting NX connections on 4000 — re-running repairs a unit a past crash loop had disabled |
 |  1400 | `phd2` | PHD2 telescope autoguiding |
 |  1450 | `phd2-log-viewer` | PHDLogView offline PHD2 guide-log analyzer |
 |  1500 | `vcredist2013` | Visual C++ 2013 (MSVC120) x64 + x86 redistributables (for XILabs) |
 |  1600 | `stage` | Optical stage / mount control software |
 |  1700 | `planewave` | PlaneWave PWI4 + PWShutter + PS3 CLI + PlateSolve3 catalog + PWTools utility bundle |
 |  1800 | `zwo` | ZWO camera drivers, ASI Studio, ASCOM driver |
-|  1850 | `instrument-profiles` | Lay down PWI4 `.cfg` + PHD2 `.reg` **templates** (site location from `C:\WIS\unit.toml`; fleet constants verbatim) and apply into the `mast` profile on first logon. Per-unit device->COM binding is the post-hardware `tools/calibrate-instruments.ps1` step, not this provider. |
+|  1850 | `instrument-profiles` | Lay down PWI4 `.cfg` + PHD2 `.reg` **templates** (site location from `C:\WIS\config.toml`; fleet constants verbatim) and apply into the `mast` profile on first logon. Per-unit device->COM binding is the post-hardware `tools/calibrate-instruments.ps1` step, not this provider. |
 |  1900 | `vscode` | Visual Studio Code + bundled Python extensions (`ms-python.python`, `ms-python.debugpy`) installed offline from staged `.vsix` |
 |  2000 | `sysinternals` | Sysinternals Suite |
 |  2050 | `jupyter` | Jupyter Notebook + scientific stack (astropy, numpy, scipy, matplotlib, pandas, astroquery, photutils) in a contained venv under `C:\MAST\jupyter` (state kept there; launcher + desktop shortcut) |
 |  2100 | `chrome` | Google Chrome (offline Enterprise MSI) |
 |  2200 | `mast` | Clone MAST repos, create per-repo virtualenvs, install requirements |
+|  2210 | `mast-shared-mount` | Map `Z:` to the operational share `\\<controller_host>\mast-share` **in the LocalSystem session** (SYSTEM at-startup task + nssm `Start/Pre` hook on `mast-unit`), where the services that use it can see it; clear stale per-user mappings |
 |  2350 | `windows-update-lockdown` | Keep auto Windows Updates disabled: daily + at-startup SYSTEM task re-asserts the policy/services (Windows self-heals, so it must be re-applied) |
 |  2400 | `windows-exporter-monitoring` | Prometheus windows_exporter service (TCP 9182) |
 |  2500 | `diagnostics` | Post-smoke runtime checks (ASCOM, app launch, PHD2 RPC, heartbeat) |
@@ -177,7 +179,7 @@ domain/`[location]`). To add a site, drop `sites/<code>.toml` **and** add `<code
 chosen site to `C:\ProgramData\MAST\site.txt` -> `onboard-mast-unit.ps1` reads it and writes
 it into the unit's `unit-registry.json` entry -> `check-and-provision.ps1` passes it to
 `build-mast.ps1 -Site <code>`, which stages `sites/<code>.toml` for the `config-bootstrap`
-provider to deploy as `C:\WIS\unit.toml`.
+provider to deploy as `C:\WIS\config.toml`.
 
 **Two site lists, kept in sync automatically:** `bootstrap-winrm.ps1` runs offline before
 the prov server is reachable, so it cannot read `sites/` and embeds a `$knownSites` list for
@@ -190,9 +192,9 @@ drifts from `sites/*.toml`. The shared enumerator is `Get-ConfiguredSites` in
 
 | Value | Source | Site-driven? |
 |-------|--------|--------------|
-| Machine identity + config-DB connection + `[location]` | `sites/<site>.toml` -> `C:\WIS\unit.toml` (`config-bootstrap`) | yes |
+| Machine identity + config-DB connection + `[location]` | `sites/<site>.toml` -> `C:\WIS\config.toml` (`config-bootstrap`) | yes |
 | RPi NTP time peer (tier 1) | `build-mast.ps1 -Site` injects `-RpiNtp` per site | yes |
-| Instrument-profile PWI4 site location | read from deployed `C:\WIS\unit.toml [location]` | yes |
+| Instrument-profile PWI4 site location | read from deployed `C:\WIS\config.toml [location]` | yes |
 | Web proxy (Weizmann `bcproxy`) + `no_proxy` bypass | global default in the `proxy` provider | no -- both sites use the same Weizmann proxy; the per-run `weizmann`/`direct` axis is operator-chosen reachability, not site (see DECISIONS 2026-07-01) |
 
 ---
@@ -228,6 +230,23 @@ This is the only path operators run by hand. Everything else is autonomous.
 ---
 
 ## Autonomous loop on the prov server
+
+> **Python port in progress (MAST_provisioning#10 item 9).** The server
+> orchestration is being ported to a platform-agnostic Python driver
+> (`server/check_and_provision.py` + the `server/prov/` package) so the prov
+> server can run on any OS while units stay Windows. The PowerShell
+> `check-and-provision.ps1` below **remains authoritative** until the Python
+> driver is validated on a real run. Once landed, run it with
+> `python server/check_and_provision.py [--only-hosts ...] [--dry-run]`
+> (`pip install -r server/requirements.txt` first); pure-logic tests live in
+> `server/prov/tests/`, run with `python -m pytest server/prov/tests` (`pytest` is
+> a dev-only extra, not in `server/requirements.txt`; the runtime deps must still
+> be installed, since `prov.transport` imports `pywinrm`/`paramiko` at module
+> level and four test modules fail at *collection* without them). The PowerShell
+> suites under `server/tests/` need Windows PowerShell 5.1 + Pester 3.x:
+> `Invoke-Pester -Path server\tests`. The **supervised loop** is `--loop` (`--interval-seconds`,
+> `--max-cycles`); run it as a service per **[server/deploy/README.md](server/deploy/README.md)**
+> (systemd unit / NSSM). See `docs/decisions/2026-07-12-loop-mode-is-a-long-lived-service.md`.
 
 For complete step-by-step instructions starting from a bare Windows machine,
 see **[docs/provisioning-server-setup.md](docs/provisioning-server-setup.md)**.
@@ -426,7 +445,7 @@ check logs), follow the convention in `vm/DEBUGGING.md`: name the script
 
 - `execute-mast-provisioning.ps1` exits 0
 - `C:\Python312\python.exe --version` succeeds
-- `C:\MAST\repos\` exists and has cloned repos with virtualenvs
+- `C:\MAST\src\` holds the role's clones (`common\`, `unit\`, `claude\`) and one venv at `C:\MAST\src\.venv`
 - Every module wrote a non-empty `C:\MAST\logs\smoke\<module>-smoke.txt`
 - `C:\MAST\installed-manifest.json` exists and matches the build's
   `payload_hash`
@@ -450,6 +469,31 @@ check logs), follow the convention in `vm/DEBUGGING.md`: name the script
 3. Drop binary assets into `server/providers/<module>/assets/`.
 4. Add the module name to `unit-registry.json` `modules` lists (or it gets the default).
 
+**`always` (optional)** — `"always": true` marks a module that must run on **every**
+non-empty provisioning run, not only when it drifted. Set it on order-terminal
+cross-cutting providers: `reboot` (detect pending-reboot and drop the flag the
+orchestrator acts on), `mast-services-finalize` (the final operational step), and
+`proxy` (the end-of-run posture re-assert). `build-mast.ps1` collects these into
+`build-manifest.json`'s `always_modules`, and the driver's per-module drift compare
+folds them into any non-empty target set — so a targeted update that installed
+anything still closes out properly. They never *cause* a run on their own.
+
+**`repofiles` (optional)** — for a file the module runs that deliberately lives
+*outside* its provider directory, because it is shared with something else in the
+repo:
+
+```json
+"repofiles": ["tools/mast-clone.ps1", "tools/mast-repos.tsv"]
+```
+
+Paths are relative to the **repo top** and are staged to the staging root **by
+leaf name** (the same flattening `assets/*` gets), so the module's `command`
+invokes them as `.\mast-clone.ps1`. Use this instead of copying the file into the
+provider directory (which forks the shared source of truth) or writing
+`../../tools/...` in `commandfiles` (which resolves on the source side but writes
+outside the staging root). Absolute paths, `..` segments, and missing files are
+build errors — see `build/build-staging-lib.ps1`.
+
 No edit to `execute-mast-provisioning.ps1` is required. `build-mast.ps1` copies `client/run-verify-only.ps1` into each staged `01-provisioning` folder for verify-only reruns.
 
 ---
@@ -464,6 +508,7 @@ Never commit secrets, tokens, or `.lic` files.
 ## See also
 
 - [docs/provisioning-server-setup.md](docs/provisioning-server-setup.md) - full installation guide (bare Windows -> running autonomous loop)
-- [DECISIONS.md](DECISIONS.md) - architecture decisions, in reverse-chronological order
+- [docs/decisions/](docs/decisions/) - design rationale, one file per decision ([format](docs/decisions/README.md)); where new decisions are recorded
+- [docs/decisions/archive-2026-05-04-to-2026-08-03.md](docs/decisions/archive-2026-05-04-to-2026-08-03.md) - the frozen former `DECISIONS.md`: 91 decisions taken 2026-05-04 to 2026-07-29, reverse-chronological (the 27 later entries, written on `eli/provisioning-v3` and unmerged, are individual records)
 - [autonomous-provisioning-requirements.md](autonomous-provisioning-requirements.md) - design of the autonomous loop
 - [unit-config-open-questions.md](unit-config-open-questions.md) - open questions on per-unit MongoDB `UnitConfig` fields

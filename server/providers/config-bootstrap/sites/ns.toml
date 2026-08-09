@@ -1,10 +1,11 @@
 # MAST per-machine bootstrap configuration -- site: ns (Neot Smadar production).
-# Deployed verbatim by the config-bootstrap provisioning provider as
-# C:\WIS\unit.toml. Read by MAST_common load_local_config(); the app also
+# Deployed by the config-bootstrap provisioning provider as C:\WIS\config.toml
+# (with the machine_role field prepended). Read by MAST_common load_local_config(); the app also
 # cross-checks site/project/controller_host/location against the DB 'sites'
 # document at startup, so these MUST agree with that doc.
 #
-# location matches the DB 'sites' doc for ns (read 2026-06-29).
+# location matches the mast-ns-control DB 'sites' doc for ns (read 2026-07-20;
+# the prior 2026-06-29 lat/long were wrong -- likely read from labcomp's local dev DB).
 site = "ns"
 project = "mast"
 controller_host = "mast-ns-control"
@@ -13,6 +14,6 @@ domain = "weizmann.ac.il"
 # mongo_port = 27017
 
 [location]
-latitude = 30.0533026
-longitude = 35.0386461
+latitude = 30.05301166519461
+longitude = 35.04079611164462
 elevation = 400

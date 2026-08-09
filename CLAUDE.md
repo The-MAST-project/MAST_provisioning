@@ -38,35 +38,110 @@ Unit and host provisioning is executed under **`powershell.exe` (Desktop edition
 - Do **not** use `if` as an inline expression inside bare parentheses `(if (...) {...} else {...})`. In 5.1, `if` inside `()` is parsed as a command name and throws `"The term 'if' is not recognized as the name of a cmdlet"`. Use the subexpression operator instead: `$(if (...) {...} else {...})`. This applies anywhere `if` appears inside a `-f` format string argument, a function call argument, or any other expression context.
 - Do **not** use `Register-ObjectEvent ... -Action { ... }` (or `Register-EngineEvent -Action`) in scripts that run under WinRM. The action creates a PSEventJob bound to the engine event queue, and `powershell.exe` waits for all event subscribers to drain before returning to the WinRM caller. If an event is mid-flight at exit (or `Unregister-Event` races a running action), the process hangs indefinitely with no timeout -- the WinRM call never returns, and only the outer Python heartbeat reveals the stall. This bit `execute-mast-provisioning.ps1` once: a `System.Timers.Timer` + `Register-ObjectEvent` lease renewer hung every clean-exit run (see 2026-05-16 DECISIONS entry). If you need periodic work alongside a long-running script, run the renewer as a child process (`Start-Process powershell.exe -PassThru` + `Stop-Process` in finally) so its lifetime is decoupled from the parent runspace. Pick a TTL long enough to cover the worst-case run before reaching for periodic renewal at all. **Note:** symptoms that *look* like this bug (unit-side script finishes, but the host's `run_ps` keeps ticking) can also come from the host-side WinRM transport hanging on a single oversized WSMan Receive on a half-dead TCP socket -- that one lives in `vm/vm_lib.py` and is addressed by the 2026-05-17 resilient Receive loop, not by anything on the unit. Verify which side is stuck before reaching for renewer-style fixes; the unit-side teardown breadcrumbs at the bottom of `execute-mast-provisioning.ps1` exist for exactly that triage.
 
-## DECISIONS.md
+## Decision records (`docs/decisions/`)
 
-`DECISIONS.md` is a reverse-chronological log of architectural and design decisions.
+Design rationale lives in **`docs/decisions/YYYY-MM-DD-slug.md`, one file per decision**.
+The full format spec is `docs/decisions/README.md` -- read it before writing a record.
 
-**When to add an entry:**
-- Any architectural or design decision: transfer mechanism, credential model, script
-  decomposition, protocol choice, directory layout, security posture, etc.
-- Do NOT add entries for debugging spikes, transient experiments, or bug fixes that
-  don't reflect a deliberate design choice.
+**The merged pre-2026-08-07 log is a FROZEN archive, kept whole**, at
+`docs/decisions/archive-2026-05-04-to-2026-08-03.md` (91 entries, ending 2026-07-29). Do not
+append to it and do not edit it. It stays authoritative for what it covers and is the
+**only** place that rationale exists, so **search it alongside** the individual records.
 
-**Format:** Each entry is a dated H2 heading followed by three sections -- **Why**
-(the problem or motivation), **What** (the change made), **Implications** (consequences,
-constraints, or follow-on work). Match the style of existing entries.
+**Its filename names its provenance, not its span.** As `DECISIONS.md` it ran to 2026-08-03;
+the 27 entries written on `eli/provisioning-v3` and never merged to `main` were rewritten as
+individual records on 2026-08-09, before that branch landed. The filename is unchanged so the
+legacy citation mapping below keeps working. Why:
+`docs/decisions/2026-08-09-unmerged-decisions-ship-in-the-current-format.md`.
 
-**Date:** Always generate the date with a system command -- run `date /t` (cmd) or
-`(Get-Date).ToString('yyyy-MM-dd')` (PowerShell) and use the result. Never guess or
-hardcode a date.
+**Legacy citations:** this file used to be `DECISIONS.md` at the repo root. About 30
+comments and docs still say `see DECISIONS.md 2026-05-26` or `see the 2026-05-25 DECISIONS
+entry` -- those all mean the archive above; the path in them is stale, the date is good.
+They were deliberately not rewritten (a doc move is not worth touching 25 provider scripts).
+Note that 19 of the archive's dates carry more than one entry (`2026-05-16` has eight), so a
+bare date citation may be ambiguous -- read the surrounding entries, don't assume the first
+match. A dated citation **after 2026-07-29** points at one of the extracted records, not at
+the archive: list `docs/decisions/2026-0[78]-*.md` and match on the subject.
 
-**Order:** Prepend new entries at the top (below the H1 and first `---`). The file
-reads newest-first.
+### Retrieval -- do this before changing unfamiliar code
 
-**Amending vs. appending:** If your understanding of the decision evolves while the
-same change is still staged (i.e., before the relevant git commit), edit the pending
-entry in place to reflect the decision more accurately. Only append a new entry once
-the prior decision is committed and you are recording something genuinely new.
+When the question is *"why is this written this way?"* and the code does not answer it, the
+rationale is very likely recorded. Look for it before assuming the shape is accidental:
 
-**Immutability after commit:** Once an entry is committed, do not edit it -- even if
-later work makes it stale. Later decisions that supersede an earlier one get their own
-new entry at the top.
+```bash
+git grep -il '<symbol, script, or path>' docs/decisions/   # covers records AND the archive
+git log -1 --format=%s -- <path>          # then read the PR body the commit came from
+ls docs/decisions/2*.md                   # filenames are descriptive slugs; this is the index
+```
+
+Do this in particular before "simplifying" something that looks redundant, removing a
+workaround, widening a permission, or changing an ordering constant. Several such shapes in
+this repo are deliberate and the reason is only in the record (`/persistent:no` on the `Z:`
+mapping, the interactive Npcap install, the order-9000 proxy finalize).
+
+**Report what you find, and treat it as history rather than law.** A record states what was
+believed when the decision was made -- cite it with its date ("a 2026-08-03 decision chose
+X because Y") and check whether the reason still holds, rather than treating it as a
+standing prohibition. Standing prohibitions are in this file, not there.
+
+### Writing a record
+
+**When:** any change that embodied a judgment call -- a mechanism chosen over an
+alternative, a constraint accepted, a compromise taken knowingly, an ordering with a
+reason, or a bug whose *diagnosis* was surprising. The bar is deliberately low; the reader
+is an agent, so volume is cheap and a missing record is expensive. Skip records only for
+typos, mechanical renames, and refactors with no rationale.
+
+**Anchor it in the prose.** Name the concrete file paths, script names, provider
+directories, and symbol names **in the body**, spelled as they appear in the code -- that is
+the only thing making a record findable from the code it explains. Keep identifiers out of
+frontmatter: in a sentence about what was done on a date a stale path reads as history, but
+in a metadata field it reads as a claim about the present. Frontmatter carries `areas:`
+instead: 2-4 subject tags at any level of the system, **reused from
+`docs/decisions/AREAS.md`** where one fits and **coined and added there** where none does.
+Block list form only -- the inline `[a, b]` form drops out of that file's inventory command.
+
+**Record the doubt.** The `Rejected` and `Unsettled` sections are the point -- alternatives
+not taken (specifically enough to be recognized later), plus what was not known, knowingly
+left broken, or assumed without verification. Do not write invariants or predictions about
+what future contributors might do; if a decision produces a standing rule, add the rule to
+this file and have it cite the record.
+
+**Date:** always from a system command -- `date /t` (cmd) or
+`(Get-Date).ToString('yyyy-MM-dd')` (PowerShell). Never guess. `decided:` is when the call
+was made, not when the PR merges; git records the latter.
+
+**Immutability:** the body of a record is never edited **once its decision has reached
+`main`**. To reverse or refine such a record, write a new one with `supersedes:` set and
+flip the old one's `status:` to `superseded` with `superseded_by:` filled (an archive entry
+has no slug, so name it in prose instead). From that point exactly three frontmatter keys
+may be edited -- `status:`, `superseded_by:`, `areas:` (the last so synonyms can be merged
+during `AREAS.md` curation). The freeze protects the historical claim, not the navigation
+metadata.
+
+**Before `main`, rewrite in place -- do not supersede.** A record on an open branch is
+freely editable, body included. If the decision changes mid-review, the record is rewritten
+to state where it ended up: one record, no correction file, no `superseded` status. The
+argument about how it moved lives on the PR. An approach tried and abandoned during review
+usually belongs as a `Rejected` entry in the rewritten record. See
+`docs/decisions/2026-08-09-unmerged-decisions-ship-in-the-current-format.md`.
+
+## Every PR body states why, not just what
+
+A PR body must contain a **Why** paragraph: the problem, what was tried or rejected, and
+anything knowingly left undone. The *what* is already in the diff and the commit subjects;
+the *why* exists nowhere else and is the thing that is impossible to recover three weeks
+later when fixing a one-liner.
+
+This is the second retrieval path: `git blame` -> commit -> PR -> rationale. It works from
+any line of code and needs no index, which is why it is required on **every** PR, while a
+`docs/decisions/` record is reserved for rationale that should outlive its diff.
+
+Link the ticket (`Closes MAST_provisioning#NN`) and, when the change enacts one, the
+decision record. The ticket carries the discussion; the PR carries the ratified reason.
+
+> Provisional here, pending promotion to `mast-claude-config` -- PR conventions are
+> genuinely cross-repo, and this is being proven on one repo first.
 
 ## Single source of truth / DRY
 
@@ -124,13 +199,40 @@ Scripts that need to run standalone (e.g. bootstrap on a USB drive) must use the
 variant (no `throw`) and keep a local fallback only for functions the lib may not be present
 to supply.
 
-### Python shared helpers (`vm/run-prov-test.py`)
+### Python shared helpers (`server/prov/transport.py`)
+
+The WinRM/SSH transport is the canonical `server/prov/transport.py` (lifted out of
+`vm/vm_lib.py`, which now re-exports it and keeps only VBox test helpers). Import from
+`prov.transport` in new server code; `vm/` scripts keep importing `vm_lib`.
 
 | Helper | Purpose |
 |--------|---------|
 | `_ps_escape(s)` | Escape a string for embedding in a PS single-quoted string (`'` -> `''`). Never inline `.replace("'", "''")`. |
-| `_find_unit_log_path(session, log_filename)` | Locate the newest session log on the unit. Never duplicate the embedded PS snippet. |
+| `connect_unit(host, cred)` | WinRM-preferred, SSH-fallback session to a unit. Prefer over `winrm_session` for real work. |
+| `run_ps(session, script, ...)` | Run PS on a unit with heartbeat + hard timeout + resilient retry. |
 | `winrm_session(host, cred, read_timeout_s, op_timeout_s)` | Construct a `winrm.Session`. Never instantiate `winrm.Session` directly outside this factory. |
+
+### The server orchestration is being ported to Python (platform-agnostic)
+
+The server-side control plane is moving from `server/check-and-provision.ps1` to the Python
+package **`server/prov/`** (`MAST_provisioning#10` item 9 / PR #13; rationale in
+`docs/decisions/2026-07-12-port-server-orchestration-to-python.md`). **Standing requirement: the provisioning server must be platform-agnostic — all
+paths and mechanisms run end-to-end against the Windows units with no per-platform patching or
+extra code.** Consequences for any new server code:
+
+- **Remote/unit paths are literal strings** (`C:\MAST\...`, `\\server\share`), never `pathlib.Path`
+  (Path mangles them on a non-Windows server). Only local server paths use `Path`/`os`.
+- **Transfer is SMB for all platforms** (unit pulls via `net use`+robocopy; Samba serves the share
+  on Linux). Don't add a non-SMB transfer path.
+- **Read PS-written JSON BOM-tolerantly** (`transport.load_json_file` / `parse_json_text`); write
+  plain UTF-8 + LF and rename atomically (`os.replace`).
+- Resolve the PowerShell exe portably (`pwsh` on Linux, `powershell.exe` on Windows).
+- On Windows, `zoneinfo` needs the `tzdata` pip package (else IANA tz ids fall back to server-local).
+- The steps the driver *drives* stay PowerShell (`build-mast.ps1`, `mast-pull-staging.ps1`,
+  `execute-mast-provisioning.ps1`, providers) — invoke them, don't rewrite them.
+
+Test the package with `.venv/bin/python -m pytest server/prov/tests`. Directional (not yet
+committed): SSH-first transport (see #6) and a UTF-8-no-BOM JSON standard.
 
 ## `net use` argument order
 
@@ -151,6 +253,27 @@ net use Z: \\server\share /persistent:no <password> /user:<user>
 The canonical reference implementation is `client/mast-pull-staging.ps1`. Any new `net use`
 call must match that argument order.
 
+## `Z:` is the unit's operational drive -- provisioning does not claim it
+
+`Z:` means exactly one thing on a MAST unit: the site controller's share,
+`\\<controller_host>\mast-share`. MAST_common's `Filer` roots its "shared" area on
+`Z:\MAST\<hostname>\`, the ram-to-shared mover writes every exposure there, and when the
+letter is missing `Filer` **silently** substitutes `C:\MAST`. Provisioning must never map
+`Z:` to anything of its own; reach the provisioning server's `mast-shared` by **UNC**.
+
+Two rules follow for any code that touches a network drive on a unit:
+
+- **Map in the session that will use it.** Drive letters are per-logon-session. The MAST
+  services run as **LocalSystem** (nssm, no `ObjectName`), so a mapping made by
+  provisioning (the autologon `mast` user) is invisible to them. The single place that
+  establishes `Z:` is the `mast-shared-mount` provider, via a SYSTEM scheduled task plus
+  an nssm `Start/Pre` hook on `mast-unit`.
+- **Do not infer a host from a drive mapping.** `Z:` points at the controller, not the
+  provisioning server -- deriving one from the other lands on the wrong machine (this
+  was a real fallback in the timesync provider).
+
+See `docs/decisions/2026-08-03-z-belongs-to-the-operational-share.md` and issue #25.
+
 ## Empty-string args are dropped from `module.json` `-File` commands
 
 A `module.json` `command` / `verify` that passes an empty-string argument to a `-File`
@@ -160,12 +283,14 @@ sees the flag with nothing after it. Omit the flag entirely when the value is em
 the param a default (`[string]${X} = ''`) instead; add the flag back only with a non-empty
 value. (Hit while wiring the optional `-WeatherUrl` in the `desktop-shortcuts` provider.)
 
-## Unit config: `C:\WIS\<role>.toml` + `MAST_PROJECT` (external-config epic)
+## Unit config: `C:\WIS\config.toml` + `machine_role` (external-config epic)
 
-The apps read a per-machine TOML bootstrap file at `C:\WIS\<role>.toml` (role = `MAST_PROJECT`,
-e.g. `unit`) for machine identity + how to reach the config DB, and fail fast if it is missing.
-The `config-bootstrap` provider (order 150) lays this down from `sites/<site>.toml` and sets
-`MAST_PROJECT` machine-wide. **Site is selected explicitly via `build-mast.ps1 -Site`, never
+The apps read a per-machine TOML bootstrap file at the fixed path `C:\WIS\config.toml` for
+machine identity + how to reach the config DB, and fail fast if it is missing. The machine's
+role is the required `machine_role` field inside the file (`unit`/`spec`/`control`) -- there is
+no `MAST_PROJECT` environment variable. The `config-bootstrap` provider (order 150) writes the
+file from `sites/<site>.toml` with `machine_role` injected as a top-level key. **Site is selected
+explicitly via `build-mast.ps1 -Site`, never
 derived from the hostname** -- do not reintroduce hostname->site parsing in providers. Per-site
 profiles must match the controller's MongoDB `sites` doc (the app cross-checks them at startup).
 The operator picks the site at bootstrap (`bootstrap-winrm.ps1`, default `ns`); it is persisted and
@@ -175,7 +300,7 @@ The operator picks the site at bootstrap (`bootstrap-winrm.ps1`, default `ns`); 
 ## Instrument profiles: PWI4 `.cfg` + PHD2 `.reg` (two stages)
 
 **Stage 1 -- `instrument-profiles` provider (order 1850, after planewave/phd2/zwo):** lays down
-TEMPLATES only. It injects the site location into `PWI4.cfg` from the **deployed `C:\WIS\unit.toml`
+TEMPLATES only. It injects the site location into `PWI4.cfg` from the **deployed `C:\WIS\config.toml`
 `[location]`** (written by config-bootstrap) -- not from `-Site` or the hostname -- and ships the
 fleet-constant values verbatim (focuser `CountsPerMicron`, mount `ConnectionMethod=usb`, internal
 IPs, equatorial). Because the per-user `mast` profile is not materialized at provisioning time,
@@ -246,15 +371,18 @@ whenever you change how assets land in staging. Symptom to recognize: a pull tha
 copies small files but fails every binary is an ACL problem (check
 `icacls <staged-binary>`), not a network/MTU/session issue. See DECISIONS 2026-06-28.
 
-## Remotes: `upstream` is the integration repo, `origin` is the fork
+## Remotes: a single `origin`, the integration repo
 
-`upstream` = `github.com/The-MAST-project/MAST_provisioning` (integration); `origin` =
-`github.com/elibrody-weizmann/MAST_provisioning` (the working fork). "Fetch latest from
-MAST_provisioning" means `git fetch upstream`, not `origin`. The working line is
-`eli/vm-provisioning`, treated as the de facto main until the next milestone -- base new
-work on it, and when comparing to `upstream/main` use the merge-base so the diff shows only
-the real new contribution (a direct `HEAD..upstream/main` looks huge because of files we
-added, not files upstream removed).
+`origin` = `github.com/The-MAST-project/MAST_provisioning` and there is no second remote.
+"Fetch latest from MAST_provisioning" is plain `git fetch`. The `elibrody-weizmann` fork
+was retired on 2026-08-02 after its last unmerged content landed upstream; if you find a
+checkout still carrying `origin` = fork plus `upstream` = The-MAST-project, it predates
+that change -- `git remote remove origin && git remote rename upstream origin` brings it
+into line.
+
+The working line is `main` (the v1+v2 provisioning epics merged there via PR #9). Base new
+work on `origin/main` and branch per topic; there is no long-lived de facto trunk sitting
+off to the side any more.
 
 ## Proxy mode is explicit (`--proxy-mode`)
 

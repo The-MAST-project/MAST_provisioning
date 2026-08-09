@@ -1,0 +1,10 @@
+# Runtime dependencies for the platform-agnostic Python provisioning server
+# (server/prov/ + server/check_and_provision.py). Install with:
+#     python -m pip install -r server/requirements.txt
+pywinrm            # WinRM transport (fallback; SSH-first is the adopted default)
+paramiko           # SSH transport (prov.transport.SshSession)
+# zoneinfo has no bundled tz database on Windows, so IANA maintenance-window
+# timezones (e.g. Asia/Jerusalem) only resolve there with tzdata installed;
+# without it the driver falls back to server-local time + MAINT_TZ_WARN. Not
+# needed on Linux/macOS (system tz db is used).
+tzdata; platform_system == "Windows"

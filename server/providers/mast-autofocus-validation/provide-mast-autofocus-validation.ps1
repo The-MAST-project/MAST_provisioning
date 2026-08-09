@@ -1,7 +1,7 @@
 #requires -Version 5.1
 [CmdletBinding()]
 param(
-    [string]${ReposRoot}              = 'C:\MAST\repos',
+    [string]${MastTop}                = 'C:\MAST\src',
     [int]   ${Port}                   = 8998,
     [int]   ${PerSeriesTimeoutSeconds} = 90
 )
@@ -37,25 +37,19 @@ Set-Content -LiteralPath ${runLog} -Encoding UTF8 `
     -Value ("[{0}] provide-mast-autofocus-validation.ps1 started" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))
 
 # --- Locate the MAST_unit clone (name may carry a date suffix) -------------
-${unitDir} = $null
-if (Test-Path -LiteralPath ${ReposRoot}) {
-    ${match} = Get-ChildItem -LiteralPath ${ReposRoot} -Directory -ErrorAction SilentlyContinue `
-        | Where-Object { ${_}.Name -like 'MAST_unit*' } `
-        | Select-Object -First 1
-    if (${match}) { ${unitDir} = ${match}.FullName }
-}
-if (-not ${unitDir}) {
-    Write-VLog ("FAIL: no MAST_unit* clone under {0}" -f ${ReposRoot})
+# mast-clone layout: one venv for the role at <MastTop>\.venv, the unit checkout
+# at <MastTop>\unit. Superseded the old per-repo C:\MAST\repos\MAST_unit*\.venv
+# arrangement -- see docs/mast-clone-adoption-plan.md (#31).
+${unitDir} = Join-Path ${MastTop} 'unit'
+if (-not (Test-Path -LiteralPath ${unitDir})) {
+    Write-VLog ("FAIL: no unit checkout at {0}" -f ${unitDir})
     exit 1
 }
 Write-VLog ("MAST_unit clone: {0}" -f ${unitDir})
 
 ${unitSrc} = Join-Path ${unitDir} 'src'
-if (-not (Test-Path -LiteralPath ${unitSrc})) {
-    Write-VLog ("FAIL: MAST_unit src not found at {0}" -f ${unitSrc})
-    exit 1
-}
-${venvPython} = Join-Path ${unitDir} '.venv\Scripts\python.exe'
+
+${venvPython} = Join-Path ${MastTop} '.venv\Scripts\python.exe'
 if (-not (Test-Path -LiteralPath ${venvPython})) {
     Write-VLog ("FAIL: venv python missing at {0}" -f ${venvPython})
     exit 1

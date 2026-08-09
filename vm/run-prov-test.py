@@ -56,13 +56,14 @@ Credentials read from vault/creds.json (gitignored):
     }
 
 Dependencies:
-    pip install pywinrm
+    pip install paramiko
 """
 
 from __future__ import annotations
 
 import argparse
 import base64
+import ctypes
 import json
 import os
 import re
@@ -79,11 +80,11 @@ from pathlib import Path
 from typing import Any, Generator, TextIO
 
 try:
-    import winrm  # type: ignore[import]
+    import paramiko  # type: ignore[import]  # noqa: F401 -- SSH transport (transport.SshSession)
 except ImportError:
     sys.exit(
-        "ERROR: pywinrm is required.\n"
-        "Install it with:  pip install pywinrm\n"
+        "ERROR: paramiko is required for the SSH transport.\n"
+        "Install it with:  pip install paramiko\n"
         "Then re-run this script."
     )
 
@@ -112,17 +113,16 @@ from vm_lib import (
     _minify_ps,
     _ps_escape,
     check_rc,
-    connect_unit,
     load_creds,
     reset_to_clean_snapshot,
     run_ps,
+    ssh_session,
     unit_reset_to_snapshot,
     unit_start,
     unit_stop,
     vbox,
     vm_state,
-    wait_for_winrm,
-    winrm_session,
+    wait_for_ssh,
 )
 
 # ---------------------------------------------------------------------------
@@ -139,12 +139,47 @@ EXECUTE_POLL_INTERVAL_S = 20
 VERIFY_ONLY_TIMEOUT_S = 30 * 60
 
 EXPECTED_PYTHON = "C:\\Python312\\python.exe"
-EXPECTED_REPOS_ROOT = "C:\\MAST\\repos"
-CLONE_ROOT = EXPECTED_REPOS_ROOT
+# The mast-clone layout (#31): one venv at <Top>\.venv with the role's clones
+# beside it. The old per-repo C:\MAST\repos tree is what the migration RETIRES,
+# so its presence is now a failure signal rather than the expected state.
+EXPECTED_SRC_ROOT = "C:\\MAST\\src"
+LEGACY_REPOS_ROOT = "C:\\MAST\\repos"
+CLONE_ROOT = EXPECTED_SRC_ROOT
 PULL_REPOS_SCRIPT = REPO_ROOT / "server" / "providers" / "mast" / "pull-mast-repos.ps1"
 MAST_LOGS_BASE = "C:\\MAST\\logs"
 SMOKE_LOG_DIR = f"{MAST_LOGS_BASE}\\smoke"
 VERIFY_LOG_DIR = f"{MAST_LOGS_BASE}\\verify"
+
+# Keep the host (labcomp2) awake for the whole run. labcomp2 is set to never
+# sleep on AC, but if it is unplugged its battery idle-sleep timer still fires --
+# on 2026-07-22 it slept mid-execute and the run failed (a powered-down host
+# outlasts any reconnect window). SetThreadExecutionState is process-scoped
+# (auto-released on exit/crash) and does NOT change global power settings;
+# ES_SYSTEM_REQUIRED keeps the system awake (the display may still sleep).
+_ES_CONTINUOUS = 0x80000000
+_ES_SYSTEM_REQUIRED = 0x00000001
+
+
+@contextmanager
+def _keep_awake() -> Generator[None, None, None]:
+    set_state = None
+    if sys.platform == "win32":
+        try:
+            set_state = ctypes.windll.kernel32.SetThreadExecutionState
+            set_state(_ES_CONTINUOUS | _ES_SYSTEM_REQUIRED)
+            log("[keep-awake] holding the host awake (no-sleep) for the run")
+        except Exception as e:  # a power hint must never break a run
+            log(f"[keep-awake] could not set no-sleep (continuing): {e}")
+            set_state = None
+    try:
+        yield
+    finally:
+        if set_state is not None:
+            try:
+                set_state(_ES_CONTINUOUS)  # clear the request -> restore normal sleep policy
+            except Exception:
+                pass
+
 
 def _discover_all_modules() -> list[str]:
     """Return module names in execution order by calling the PowerShell helper
@@ -291,7 +326,7 @@ def timed(label: str) -> Generator[None, None, None]:
 # Unit log path helper
 # ---------------------------------------------------------------------------
 
-def _find_unit_log_path(session: winrm.Session, log_filename: str) -> str:
+def _find_unit_log_path(session: Any, log_filename: str) -> str:
     """Return the full path of log_filename inside the newest sessions/ subdir, or ''."""
     r = session.run_ps(
         "$b = Join-Path $env:SystemDrive 'MAST\\logs\\sessions'; "
@@ -346,11 +381,14 @@ class ExecuteLogPoller:
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._lines_seen = 0
 
-    def _new_session(self) -> winrm.Session:
-        return winrm_session(
+    def _new_session(self) -> Any:
+        # SSH-only: the poller streams the execute log over its own SSH session
+        # (a second paramiko connection, parallel to the main execute channel).
+        # This replaces the WinRM session whose Basic-auth reconnect storm locked
+        # the account out mid-run ("credentials rejected by the server").
+        return ssh_session(
             self._host, self._cred,
-            read_timeout_s=self._CALL_TIMEOUT_S + 10,
-            op_timeout_s=self._CALL_TIMEOUT_S,
+            connect_timeout_s=self._CALL_TIMEOUT_S,
         )
 
     def start(self) -> None:
@@ -424,7 +462,6 @@ def phase_build(hostname: str, modules: list[str], proxy_mode: str) -> None:
             # Dev/test: allow missing large optional assets and license/token material.
             "-TestMode",
             "-AllowMissingNoMachineLicense",
-            "-AllowMissingGithubToken",
             "-AllowMissingNetFx3Sxs",
             "-ProxyMode", proxy_mode,
             # The dev VM has 8 GB RAM; the production 32 GB -t vm mount cannot
@@ -446,7 +483,7 @@ def phase_build(hostname: str, modules: list[str], proxy_mode: str) -> None:
 
 
 def phase_transfer(
-    unit: winrm.Session,
+    unit: Any,
     hostname: str,
     run_id: str,
     smb_user: str,
@@ -531,14 +568,12 @@ def phase_transfer(
 
 
 def phase_execute(
-    unit: winrm.Session,
+    unit: Any,
     host_unit: str,
     unit_cred: dict[str, str],
     staging_path: str,
     modules: list[str] | None = None,
-    smb_user: str = "",
-    smb_pass: str = "",
-) -> winrm.Response:
+) -> Any:
     with timed("EXECUTE PHASE"):
         log("Starting execute-mast-provisioning.ps1 on unit (up to 90 min)...")
         log(
@@ -546,18 +581,17 @@ def phase_execute(
             f"from unit every {EXECUTE_POLL_INTERVAL_S}s..."
         )
 
-        smb_pass_ps = _ps_escape(smb_pass)
         step_timer: list[float] = [time.monotonic()]
         poller = ExecuteLogPoller(host_unit, unit_cred, step_timer=step_timer)
         poller.start()
         try:
+            # No SMB credential: execute maps no drive (issue #25). The VM harness
+            # does not plant the operational-share blob either, so mast-shared-mount
+            # installs its mechanism and reports a warn smoke -- expected off-site.
             execute_cmd = (
                 "Set-ExecutionPolicy Bypass -Scope Process -Force; "
                 f"& '{staging_path}\\execute-mast-provisioning.ps1' "
-                f"-StagingPath '{staging_path}' "
-                f"-ProvServer '{PROV_SERVER}' "
-                f"-SmbUser '{smb_user}' "
-                f"-SmbPass '{smb_pass_ps}'"
+                f"-StagingPath '{staging_path}'"
             )
             if modules and sorted(modules) != sorted(all_modules()):
                 execute_cmd += f" -Modules '{','.join(modules)}'"
@@ -573,12 +607,12 @@ def phase_execute(
 
 
 def phase_run_verify_only(
-    unit: winrm.Session,
+    unit: Any,
     host_unit: str,
     unit_cred: dict[str, str],
     staging_path: str,
     modules: list[str] | None = None,
-) -> winrm.Response:
+) -> Any:
     """Run run-verify-only.ps1 on the unit using the given staging path."""
     with timed("VERIFY-RUN PHASE"):
         log("Starting run-verify-only.ps1 on unit (no execute-mast-provisioning.ps1)...")
@@ -615,7 +649,7 @@ def phase_run_verify_only(
         return r
 
 
-def _fetch_session_log_tail(unit: winrm.Session, log_filename: str, lines: int = 40) -> None:
+def _fetch_session_log_tail(unit: Any, log_filename: str, lines: int = 40) -> None:
     try:
         path = _find_unit_log_path(unit, log_filename)
         if not path:
@@ -633,11 +667,11 @@ def _fetch_session_log_tail(unit: winrm.Session, log_filename: str, lines: int =
         log(f"Could not fetch {log_filename}: {e}")
 
 
-def _fetch_execute_log_tail(unit: winrm.Session, lines: int = 40) -> None:
+def _fetch_execute_log_tail(unit: Any, lines: int = 40) -> None:
     _fetch_session_log_tail(unit, "provisioning-execute.log", lines)
 
 
-def _fetch_diagnostics(unit: winrm.Session) -> None:
+def _fetch_diagnostics(unit: Any) -> None:
     """On failure, collect key diagnostic info from the unit."""
     log("--- Diagnostics ---")
     try:
@@ -663,7 +697,7 @@ def _fetch_diagnostics(unit: winrm.Session) -> None:
 
 
 def phase_verify(
-    unit: winrm.Session,
+    unit: Any,
     modules: list[str],
     run_rc: int,
     *,
@@ -702,7 +736,7 @@ def phase_verify(
             results["python_version"] = "(not tested - python module not selected)"
 
         if check_repos:
-            r = run_ps(unit, f'Test-Path "{EXPECTED_REPOS_ROOT}"', label="repos-root")
+            r = run_ps(unit, f'Test-Path "{EXPECTED_SRC_ROOT}"', label="src-root")
             results["repos_root_ok"] = "True" in r.std_out.decode(errors="replace")
             results["repos_root_checked"] = True
         else:
@@ -761,7 +795,7 @@ def print_results(results: dict[str, Any], cycle: int) -> bool:
             f" ({python_ver})"
         )
     if results.get("repos_root_checked", True):
-        log(f"  repos root        : {'OK' if results['repos_root_ok'] else 'FAIL'}")
+        log(f"  src root          : {'OK' if results['repos_root_ok'] else 'FAIL'}")
     unit_health_detail = results.get("unit_health_detail", "")
     if "(not checked)" not in unit_health_detail and "(skipped" not in unit_health_detail:
         log(
@@ -792,16 +826,16 @@ def phase_reset(
     host_unit: str,
     unit_cred: dict[str, str],
     winrm_wait_s: int = WINRM_BOOT_TIMEOUT_S,
-) -> winrm.Session:
+) -> Any:
     with timed("RESET PHASE"):
         reset_to_clean_snapshot(
             vbox_vm, snapshot, host_unit, unit_cred,
             winrm_wait_s=winrm_wait_s,
         )
-        return winrm_session(host_unit, unit_cred)
+        return wait_for_ssh(host_unit, unit_cred, timeout=winrm_wait_s)
 
 
-def phase_pull_repos(unit: winrm.Session) -> None:
+def phase_pull_repos(unit: Any) -> None:
     """Pull all repos (+ submodules) on the unit in-place. No build or transfer needed."""
     with timed("PULL-REPOS PHASE"):
         if not PULL_REPOS_SCRIPT.exists():
@@ -823,7 +857,7 @@ MAST_UNIT_STATUS_PATH = "/mast/api/v1/unit/status"
 MAST_UNIT_BOOT_TIMEOUT_S = 120
 
 
-def phase_clear_unit_logs(unit: winrm.Session) -> None:
+def phase_clear_unit_logs(unit: Any) -> None:
     """Stop MAST_unit and delete its NSSM stdout/stderr logs so the next run starts clean."""
     with timed("CLEAR UNIT LOGS PHASE"):
         ps = (
@@ -845,7 +879,7 @@ def phase_clear_unit_logs(unit: winrm.Session) -> None:
             log(f"WARNING: clear-unit-logs returned exit code {r.status_code}")
 
 
-def phase_start_mast_unit(unit: winrm.Session) -> None:
+def phase_start_mast_unit(unit: Any) -> None:
     """Start the MAST_unit service after a pull or rebuild."""
     log("[start-mast-unit] Starting MAST_unit service...")
     r = run_ps(
@@ -886,7 +920,7 @@ def phase_wait_for_unit_health(host: str, timeout_s: int = MAST_UNIT_BOOT_TIMEOU
 
 
 
-def phase_run_rebuild_repos(unit: winrm.Session, staging_path: str) -> winrm.Response:
+def phase_run_rebuild_repos(unit: Any, staging_path: str) -> Any:
     """Force-reclone all repos: runs provide-mast.ps1 -Force from the transferred staging dir."""
     with timed("REBUILD-REPOS PHASE"):
         log(
@@ -1095,25 +1129,25 @@ def main() -> None:
     run_log = LOG_ROOT / f"{run_ts}-run.log"
     run_started = time.monotonic()
 
-    with log_to_file(run_log):
+    with log_to_file(run_log), _keep_awake():
         log(f"Run log: {run_log}")
         log(f"Modules: {', '.join(modules)}")
         if phases is not None:
             log(f"Phases:  {', '.join(sorted(phases))}")
         log(f"Cycles:  {args.repeat}")
         log(f"VM:      {args.vbox_vm}  (snapshot: {args.snapshot})")
-        log(f"Unit WinRM target: {args.host_unit}")
-        log(f"WinRM wait: {args.winrm_wait_seconds}s")
+        log(f"Unit SSH target: {args.host_unit}")
+        log(f"SSH wait: {args.winrm_wait_seconds}s")
 
         cycle_results: list[bool] = []
-        unit_session: winrm.Session | None = None
+        unit_session: Any | None = None
 
         # --- one-shot special modes: --pull-repos and --rebuild-repos ---
         if args.pull_repos or args.rebuild_repos:
             try:
                 with timed("CONNECT UNIT"):
-                    unit_session = connect_unit(
-                        args.host_unit, creds["unit"], winrm_wait_s=args.winrm_wait_seconds
+                    unit_session = wait_for_ssh(
+                        args.host_unit, creds["unit"], timeout=args.winrm_wait_seconds
                     )
                 run_id = "run-" + datetime.now().strftime("%Y%m%d-%H%M%S")
                 log_dir = setup_log_dir(1)
@@ -1183,8 +1217,8 @@ def main() -> None:
                     non_build = phases - {"build"}
                     if non_build and unit_session is None:
                         with timed("CONNECT UNIT"):
-                            unit_session = connect_unit(
-                                args.host_unit, creds["unit"], winrm_wait_s=args.winrm_wait_seconds
+                            unit_session = wait_for_ssh(
+                                args.host_unit, creds["unit"], timeout=args.winrm_wait_seconds
                             )
 
                     if not non_build:
@@ -1226,8 +1260,6 @@ def main() -> None:
                         run_response = phase_execute(
                             unit_session, args.host_unit, creds["unit"], unit_stage,
                             modules=modules,
-                            smb_user=creds["smb"]["user"],
-                            smb_pass=creds["smb"]["pass"],
                         )
                         run_rc = run_response.status_code
                     elif "verify-run" in phases:

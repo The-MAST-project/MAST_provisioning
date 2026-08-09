@@ -157,6 +157,17 @@ New-MastLnkShortcut -Path ${calibPath} -Target ${psExe} -Arguments ${calibArgs} 
 if (Test-Path -LiteralPath ${CalibToolPath}) { Write-ShortcutLog ("Calibration shortcut -> {0}" -f ${CalibToolPath}) }
 else { Write-ShortcutLog ("[WARN] Calibration tool not yet at {0} (instrument-profiles not run?); shortcut created, works once it is." -f ${CalibToolPath}) }
 
+# 5b) MAST Proxy toggle tool (deployed by the proxy provider to
+# C:\ProgramData\MAST\proxy\set-proxy.ps1). Lets an on-site operator view and
+# toggle the unit's proxy posture (Weizmann / direct) across all three surfaces
+# with no controller / WinRM / staging. Self-elevates when a change is made.
+${proxyToolPath} = 'C:\ProgramData\MAST\proxy\set-proxy.ps1'
+${proxyLnkPath}  = Join-Path ${dirOps} 'MAST Proxy.lnk'
+${proxyArgs} = ('-NoExit -ExecutionPolicy Bypass -NoProfile -File "{0}" -Interactive' -f ${proxyToolPath})
+New-MastLnkShortcut -Path ${proxyLnkPath} -Target ${psExe} -Arguments ${proxyArgs} -WorkDir 'C:\ProgramData\MAST\proxy' -Desc 'View and toggle the unit proxy (Weizmann / direct) across all surfaces'
+if (Test-Path -LiteralPath ${proxyToolPath}) { Write-ShortcutLog ("Proxy tool shortcut -> {0}" -f ${proxyToolPath}) }
+else { Write-ShortcutLog ("[WARN] Proxy tool not yet at {0} (proxy provider not run?); shortcut created, works once it is." -f ${proxyToolPath}) }
+
 # 6) Jupyter Notebook launcher (deployed by the jupyter provider, order 2050 < this
 # one). The launcher keeps all Jupyter state under C:\MAST\jupyter so it does not
 # litter the profile; the shortcut opens the notebook server + browser.

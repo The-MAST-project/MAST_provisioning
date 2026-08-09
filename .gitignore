@@ -28,3 +28,8 @@ vm/autounattend-mast.iso
 # shared/ is the mast-shared SMB share backing dir (created by setup-smb-share.ps1).
 # It holds runtime artifacts staged for units (bootstrap files, etc.), not repo content.
 shared/
+
+# The mast GitHub token has exactly ONE home: vault/tokens/mast_github.txt
+# (build-mast.ps1 stages it from there onto the unit). Guard against a stray
+# copy under the provider tree ever being committed as a secret.
+server/providers/**/mast_github.txt

@@ -77,7 +77,11 @@ param(
     [switch]   $WinRMUseSSL,
     [switch]   $TestMode,
     [int]      $MaintenanceWindowStart = -1,
-    [int]      $MaintenanceWindowEnd   = -1
+    [int]      $MaintenanceWindowEnd   = -1,
+    # Retention: how many most-recent per-run log dirs to keep under
+    # C:\MAST\logs\prov\sessions. Older dirs are pruned at end of run so a
+    # host up for weeks-to-years does not grow logs without bound.
+    [int]      $RetainRuns = 60
 )
 
 $ErrorActionPreference = 'Stop'
@@ -98,6 +102,11 @@ if (-not $UnitRegistry) { $UnitRegistry = Join-Path $RepoTop 'server\unit-regist
 if (-not $VaultCreds)   { $VaultCreds   = Join-Path $RepoTop 'vault\creds.json' }
 
 . (Join-Path $RepoTop 'server\lib\mast-log.ps1')
+. (Join-Path $RepoTop 'server\lib\mast-timezone.ps1')
+. (Join-Path $RepoTop 'server\lib\mast-proxy-assert.ps1')
+. (Join-Path $RepoTop 'server\lib\mast-staging-size.ps1')
+. (Join-Path $RepoTop 'server\lib\mast-winrm-warn.ps1')
+. (Join-Path $RepoTop 'server\lib\mast-log-archive.ps1')
 Import-Module (Join-Path $RepoTop 'server\lib\mast-modules.psm1') -Force -DisableNameChecking
 
 # Cached "all modules discovered on disk" list. Used as the fall-back when
@@ -249,13 +258,18 @@ function Test-InMaintenanceWindow {
     $nowUtc = [DateTime]::UtcNow
     try {
         if ($tz) {
-            $zone = [System.TimeZoneInfo]::FindSystemTimeZoneById($tz)
+            # Resolve-TimeZoneInfo (server\lib\mast-timezone.ps1) accepts IANA
+            # ids (as stored in unit-registry.json) as well as Windows ids, so
+            # the 5.1 driver no longer silently falls back to server-local time
+            # on an IANA id it cannot natively resolve.
+            $zone = Resolve-TimeZoneInfo -Id $tz
             $local = [System.TimeZoneInfo]::ConvertTimeFromUtc($nowUtc, $zone)
         } else {
             $local = $nowUtc.ToLocalTime()
         }
     } catch {
-        # Bad timezone id -- fall back to server local time but flag it.
+        # Genuinely unresolvable timezone id -- fall back to server local time
+        # but flag it loudly so the mis-timed window is visible.
         $local = $nowUtc.ToLocalTime()
         Log-Event 'MAINT_TZ_WARN' @{ unit=$Unit.hostname; tz=$tz; err=$_.Exception.Message }
     }
@@ -365,6 +379,11 @@ foreach ($unit in $units) {
     }
     $payloadHash = ''
     $gitSha      = ''
+    # Set true once this run writes the unavailable availability lease (step 6);
+    # reset to false after the happy-path "mark available" (step 10). The per-unit
+    # finally uses it to release the lease on any early/failed exit so a re-run is
+    # not blocked until the TTL.
+    $leaseHeld = $false
 
     $resolved = $null
     try {
@@ -551,13 +570,20 @@ foreach ($unit in $units) {
                 $isOurs  = ($owner -eq $RunId)
                 if ($isOurs) {
                     Log-Event 'AVAIL_LEASE_SELF' @{ unit=$hostname; owner=$owner; reason=$avail.reason }
-                } elseif (-not $isStale) {
-                    Log-Event 'AVAIL_LEASE_LIVE' @{ unit=$hostname; owner=$owner; reason=$avail.reason; expires=$(if ($expUtc) { $expUtc.ToString('yyyy-MM-ddTHH:mm:ssZ') } else { 'unknown' }) }
-                    Log-Activity -Unit $hostname -Outcome 'SKIP' -Reason 'avail_lease_live' `
-                                 -DurationS ([int]((Get-Date) - $unitStart).TotalSeconds)
-                    continue
                 } else {
-                    Log-Event 'AVAIL_STALE_RECOVER' @{ unit=$hostname; prior_run=$owner; reason=$avail.reason; expired_utc=$expUtc.ToString('yyyy-MM-ddTHH:mm:ssZ') }
+                    # Reclaim a lease held by any OTHER run. check-and-provision is
+                    # the sole writer of availability.json and the unit-side
+                    # execute-lease.json is the real mutual-exclusion guard (an
+                    # overlapping cycle would still SKIP at execute), so a
+                    # non-current owner means a prior run that has ended -- or a
+                    # hard-killed one that could not release. Reclaiming lets an
+                    # immediate re-run proceed instead of no-op'ing until the ~2 h
+                    # TTL, which stranded same-unit re-runs (mast03 2026-07-08).
+                    # $isStale is reported (not gated on) so the TTL-expiry signal
+                    # survives in the logs; this replaces the former
+                    # AVAIL_LEASE_LIVE (SKIP) and AVAIL_STALE_RECOVER events.
+                    $expStr = if ($null -ne $expUtc) { $expUtc.ToString('yyyy-MM-ddTHH:mm:ssZ') } else { 'none' }
+                    Log-Event 'AVAIL_LEASE_RECLAIM' @{ unit=$hostname; prior_run=$owner; reason=$avail.reason; expires=$expStr; stale=$isStale }
                     # Fall through; the cycle will write a fresh availability+lease shortly.
                 }
             }
@@ -569,7 +595,15 @@ foreach ($unit in $units) {
                 $p = 'C:\MAST\installed-manifest.json'
                 if (Test-Path $p) { Get-Content $p -Raw | ConvertFrom-Json } else { $null }
             }
-            $installedHash = if ($installed) { $installed.payload_hash } else { $null }
+            # payload_hash is ABSENT on a unit whose last run was partial: execute
+            # publishes it only when every module the build declares is present,
+            # hash-matched and clean (client/mast-installed-manifest.ps1). Absent
+            # therefore means "not current" and must fall through to a run --
+            # never be mistaken for a match.
+            $installedHash = $null
+            if ($installed -and $installed.PSObject.Properties.Match('payload_hash').Count) {
+                $installedHash = $installed.payload_hash
+            }
 
             # ---------------------------------------------------------------
             # 4. Build payload (always -- cheap when binaries are cached)
@@ -604,7 +638,7 @@ foreach ($unit in $units) {
                 }
                 if ($modules) { $buildArgList += @('-Modules', ($modules -join ',')) }
                 if ($TestMode) {
-                    $buildArgList += @('-TestMode', '-AllowMissingNoMachineLicense', '-AllowMissingGithubToken')
+                    $buildArgList += @('-TestMode', '-AllowMissingNoMachineLicense')
                 }
                 & powershell.exe @buildArgList *>&1 | Out-File -FilePath $buildLog -Encoding UTF8
                 if ($LASTEXITCODE -ne 0) {
@@ -689,20 +723,23 @@ foreach ($unit in $units) {
                             $expectedUtc.ToString('yyyy-MM-ddTHH:mm:ssZ'), `
                             $RunId
             Log-Event 'AVAIL_SET' @{ unit=$hostname; available='false'; reason='provisioning'; expected_return_utc=$expectedUtc.ToString('yyyy-MM-ddTHH:mm:ssZ'); lease_owner=$RunId }
+            $leaseHeld = $true
 
             # ---------------------------------------------------------------
             # 7. Transfer staging payload via SMB pull (robocopy on unit)
             # ---------------------------------------------------------------
             $unitStage  = "C:\mast-staging\$RunId"
             $srcUNC     = "\\$provServer\mast-staging\$hostname\01-provisioning"
-            # Recurse: the payload has subdirectories (sxs\, module asset dirs);
-            # a top-level count understated bytes_total and sent the
-            # TRANSFER_PROGRESS percentage past 100.
-            $files      = Get-ChildItem -Path $stagingDir -File -Recurse
-            $totalBytes = ($files | Measure-Object -Sum Length).Sum
+            # Payload size AS ROBOCOPY COPIES IT -- Get-StagingPayloadSize
+            # (server\lib\mast-staging-size.ps1) descends through directory
+            # junctions (e.g. mast-indexes -> C:\MAST\mast-indexes), which a
+            # plain Get-ChildItem -Recurse does not, so bytes_total no longer
+            # undercounts and TRANSFER_PROGRESS no longer runs past 100%.
+            $stageSize  = Get-StagingPayloadSize -Path $stagingDir
+            $totalBytes = [long]$stageSize.Bytes
             Log-Event 'TRANSFER_START' @{
                 unit      = $hostname
-                files     = $files.Count
+                files     = $stageSize.Files
                 bytes     = $totalBytes
                 src_unc   = $srcUNC
                 dst_local = $unitStage
@@ -736,10 +773,14 @@ foreach ($unit in $units) {
                         $elapsedS = [Math]::Max(1, ((Get-Date) - $tStart).TotalSeconds)
                         $winRate  = [Math]::Max(0, ($done - $lastBytes) / $pollIntervalS)
                         $avgRate  = $done / $elapsedS
+                        # eta_s = -1 means "unknown" (no rate yet). Clamp the
+                        # computed value at 0 and pct at 100 so a transient
+                        # done>total (robocopy retry / metadata) cannot resurface
+                        # the negative-ETA / pct>100 noise this item fixes.
                         $etaS = -1
-                        if ($avgRate -gt 0) { $etaS = [int](($totalBytes - $done) / $avgRate) }
+                        if ($avgRate -gt 0) { $etaS = [Math]::Max(0, [int](($totalBytes - $done) / $avgRate)) }
                         $pct = 0.0
-                        if ($totalBytes -gt 0) { $pct = [Math]::Round(100.0 * $done / $totalBytes, 1) }
+                        if ($totalBytes -gt 0) { $pct = [Math]::Min(100.0, [Math]::Round(100.0 * $done / $totalBytes, 1)) }
                         if ($done -le $lastBytes) { $stallPolls++ } else { $stallPolls = 0 }
                         Log-Event 'TRANSFER_PROGRESS' @{
                             unit        = $hostname
@@ -760,7 +801,15 @@ foreach ($unit in $units) {
                     } catch {}
                 }
                 $xferResult = Receive-Job $xferJob
+                # Capture any PSRP link-flap warnings the transfer job accrued so
+                # they become one WINRM_LINK_FLAP summary, not raw noise.
+                $xferWarn = @()
+                try { $xferWarn = @($xferJob.ChildJobs | ForEach-Object { $_.Warning } | Where-Object { $_ } | ForEach-Object { [string]$_.Message }) } catch {}
                 Remove-Job $xferJob -Force -ErrorAction SilentlyContinue
+                if ($xferWarn.Count -gt 0) {
+                    $tflap = Measure-WinRmFlap -Messages $xferWarn
+                    Log-Event 'WINRM_LINK_FLAP' @{ unit=$hostname; phase='transfer'; interrupted=$tflap.Interrupted; restored=$tflap.Restored; other=$tflap.Other; sample=$tflap.OtherSample }
+                }
             } finally {
                 Stop-UnitProgressTimer
                 if ($pollSession) { Remove-PSSession $pollSession -ErrorAction SilentlyContinue }
@@ -820,25 +869,30 @@ foreach ($unit in $units) {
             Log-Event 'EXECUTE_START' @{ unit=$hostname; run_id=$RunId }
             $eStart = Get-Date
             Start-UnitProgressTimer -Unit $hostname -Phase 'execute' -StartUtc $eStart.ToUniversalTime()
+            $execWarn = $null
             try {
                 $execResult = Invoke-Command -Session $session -ScriptBlock {
-                    param($stagePath, $provSrv, $smbUsr, $smbPwd, $runId, $heldBy)
+                    param($stagePath, $runId, $heldBy)
                     Set-ExecutionPolicy Bypass -Scope Process -Force
                     # Suppress script output so the WinRM return value is just the exit code.
                     # -AllowReboot: autonomous orchestrator runs are allowed to schedule a
                     # post-run restart when the reboot provider flag is set.
                     $null = & (Join-Path $stagePath 'execute-mast-provisioning.ps1') `
                         -StagingPath $stagePath `
-                        -ProvServer   $provSrv `
-                        -SmbUser      $smbUsr `
-                        -SmbPass      $smbPwd `
                         -RunId        $runId `
                         -HeldBy       $heldBy `
                         -AllowReboot
                     return [int]$LASTEXITCODE
-                } -ArgumentList $unitStage, $provServer, $smbUser, $smbPass, $RunId, $provServer
+                } -ArgumentList $unitStage, $RunId, $provServer `
+                    -WarningVariable execWarn -WarningAction SilentlyContinue
             } finally {
                 Stop-UnitProgressTimer
+            }
+            # Rate-limit the PSRP robust-connection "interrupted/restored" warning
+            # flood into ONE timestamped summary instead of hundreds of raw lines.
+            if ($execWarn -and @($execWarn).Count -gt 0) {
+                $flap = Measure-WinRmFlap -Messages (@($execWarn) | ForEach-Object { [string]$_ })
+                Log-Event 'WINRM_LINK_FLAP' @{ unit=$hostname; phase='execute'; interrupted=$flap.Interrupted; restored=$flap.Restored; other=$flap.Other; sample=$flap.OtherSample }
             }
             $execRc = [int]($execResult | Select-Object -Last 1)
             $eDur   = [int]((Get-Date) - $eStart).TotalSeconds
@@ -893,6 +947,60 @@ foreach ($unit in $units) {
             }
 
             # ---------------------------------------------------------------
+            # 9b. Proxy-posture assertion (READ-ONLY; proxy state is owned by
+            # the proxy provider). Runs after the LAST module, so it catches a
+            # proxy re-introduced anywhere in the run -- e.g. the intermittent
+            # bcproxy that broke `git fetch` in the mast module on mast03
+            # 2026-07-08 despite -ProxyMode direct. A dirty machine env surface
+            # (what git reads) on a direct run is a hard failure; WinINet/WinHTTP
+            # are reported as advisory. See server\lib\mast-proxy-assert.ps1.
+            # ---------------------------------------------------------------
+            $proxyPosture = Invoke-Command -Session $session -ScriptBlock {
+                $r = @{}
+                $r.http_proxy  = [Environment]::GetEnvironmentVariable('http_proxy','Machine')
+                $r.https_proxy = [Environment]::GetEnvironmentVariable('https_proxy','Machine')
+                $ini = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings'
+                $en = 0; $srv = ''
+                try {
+                    $p = Get-ItemProperty -Path $ini -ErrorAction Stop
+                    if ($null -ne $p.ProxyEnable) { $en  = [int]$p.ProxyEnable }
+                    if ($null -ne $p.ProxyServer) { $srv = [string]$p.ProxyServer }
+                } catch {}
+                $r.wininet_enable = $en
+                $r.wininet_server = $srv
+                $wh = ''
+                try { $wh = (netsh winhttp show proxy 2>$null | Out-String) } catch {}
+                $r.winhttp = $wh
+                $r
+            }
+            $proxyDirty = Get-ProxyDirtySurfaces -Posture $proxyPosture
+            if ($ProxyMode -eq 'direct') {
+                if ($proxyDirty.Advisory.Count -gt 0) {
+                    Log-Event 'PROXY_ASSERT_WARN' @{ unit=$hostname; mode='direct'; advisory=($proxyDirty.Advisory -join '; ') }
+                }
+                if ($proxyDirty.Critical.Count -gt 0) {
+                    Log-Event 'PROXY_ASSERT_FAIL' @{ unit=$hostname; mode='direct'; dirty=($proxyDirty.Critical -join '; ') }
+                    Log-Event 'UNIT_FAIL' @{ unit=$hostname; reason='proxy_dirty_on_direct'; dirty=($proxyDirty.Critical -join '; ') }
+                    Log-Activity -Unit $hostname -Outcome 'FAIL' -Reason 'proxy_dirty_on_direct' `
+                                 -DurationS ([int]((Get-Date) - $unitStart).TotalSeconds) `
+                                 -PayloadHash $payloadHash -GitSha $gitSha
+                    $exitCode = 1
+                    continue
+                }
+                Log-Event 'PROXY_ASSERT_OK' @{ unit=$hostname; mode='direct' }
+            } else {
+                # weizmann: the unit should END on the Weizmann proxy. Warn (do
+                # not fail) if no surface is set -- the proxy provider owns
+                # making it so; this only flags a unit that slipped through as
+                # if direct.
+                if ($proxyDirty.Critical.Count -eq 0 -and $proxyDirty.Advisory.Count -eq 0) {
+                    Log-Event 'PROXY_ASSERT_WARN' @{ unit=$hostname; mode='weizmann'; note='no proxy surface set; unit should end on Weizmann proxy' }
+                } else {
+                    Log-Event 'PROXY_ASSERT_OK' @{ unit=$hostname; mode='weizmann' }
+                }
+            }
+
+            # ---------------------------------------------------------------
             # 10. Mark unit available again
             # ---------------------------------------------------------------
             Invoke-Command -Session $session -ScriptBlock {
@@ -909,6 +1017,7 @@ foreach ($unit in $units) {
                 Move-Item -Force $tmp (Join-Path $statusDir 'availability.json')
             }
             Log-Event 'AVAIL_SET' @{ unit=$hostname; available='true' }
+            $leaseHeld = $false
 
             Log-Event 'UNIT_OK' @{ unit=$hostname; payload_hash=$payloadHash }
             Log-Activity -Unit $hostname -Outcome 'OK' -Reason 'updated' `
@@ -916,6 +1025,58 @@ foreach ($unit in $units) {
                          -PayloadHash $payloadHash -GitSha $gitSha
         }
         finally {
+            # Release the availability lease on ANY exit path that left it held
+            # (smoke failure, exception, mid-run bail) so the next cycle is not
+            # blocked. Written as available:false WITHOUT a live lease (no
+            # lease_owner / expected_return_utc): the science scheduler keeps
+            # avoiding an unverified unit, but a re-run reclaims it immediately.
+            # A dead session (the network-drop case) throws here and the lease
+            # persists -- that path is covered by the reclaim-on-next-run logic
+            # at step 2a.
+            if ($leaseHeld -and $session -and $session.State -eq 'Opened') {
+                try {
+                    Invoke-Command -Session $session -ScriptBlock {
+                        $statusDir = 'C:\MAST\status'
+                        New-Item -ItemType Directory -Force -Path $statusDir | Out-Null
+                        $tmp = Join-Path $statusDir 'availability.json.tmp'
+                        $a = [ordered]@{
+                            available    = $false
+                            reason       = 'provisioning_incomplete'
+                            released_utc = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+                        }
+                        ($a | ConvertTo-Json) | Out-File -FilePath $tmp -Encoding UTF8 -NoNewline
+                        Move-Item -Force $tmp (Join-Path $statusDir 'availability.json')
+                    }
+                    Log-Event 'AVAIL_RELEASE' @{ unit=$hostname; reason='provisioning_incomplete' }
+                } catch {
+                    Log-Event 'AVAIL_RELEASE_WARN' @{ unit=$hostname; error=$_.Exception.Message }
+                }
+            }
+            # Archive the unit's own session dir back under this run's log tree
+            # (item 5). execute-mast-provisioning.ps1 keys its session dir on the
+            # run id we passed, so the path is deterministic. Every non-dead
+            # session hits this -- success, smoke-fail, proxy-fail -- which is
+            # exactly when a post-mortem needs the unit-side logs. A dead session
+            # (network drop) cannot be pulled; that evidence stays on the unit.
+            if ($session -and $session.State -eq 'Opened') {
+                try {
+                    $unitSessionDir = "C:\MAST\logs\sessions\$RunId"
+                    $unitLogsExist = Invoke-Command -Session $session -ScriptBlock {
+                        param($p) Test-Path $p
+                    } -ArgumentList $unitSessionDir
+                    if ($unitLogsExist) {
+                        $unitDest = Join-Path $LogRoot ("unit-" + $hostname)
+                        New-Item -ItemType Directory -Path $unitDest -Force | Out-Null
+                        Copy-Item -FromSession $session -Path $unitSessionDir `
+                            -Destination $unitDest -Recurse -Force -ErrorAction Stop
+                        Log-Event 'UNIT_LOGS_ARCHIVED' @{ unit=$hostname; src=$unitSessionDir; dest=$unitDest }
+                    } else {
+                        Log-Event 'UNIT_LOGS_ABSENT' @{ unit=$hostname; src=$unitSessionDir }
+                    }
+                } catch {
+                    Log-Event 'UNIT_LOGS_ARCHIVE_WARN' @{ unit=$hostname; error=$_.Exception.Message }
+                }
+            }
             if ($session) { Remove-PSSession $session -ErrorAction SilentlyContinue }
         }
     }
@@ -970,8 +1131,25 @@ try {
         exit_code     = $exitCode
     }
     Write-MastStatusFileAtomic -Path (Get-MastLastRunPath) -Object $lastRun
+    # Snapshot the run's status into its own log dir (item 5): last-run.json is
+    # latest-only and gets overwritten next cycle, so a per-run copy keeps this
+    # run's outcome pinned alongside its controller + unit logs for post-mortems.
+    Write-MastStatusFileAtomic -Path (Join-Path $LogRoot 'last-run.json') -Object $lastRun
 } catch {
     Log-Event 'HEARTBEAT_WRITE_FAIL' @{ err=$_.Exception.Message }
+}
+
+# Retention (item 5): prune per-run log dirs beyond the newest $RetainRuns so a
+# long-lived host does not accumulate them without bound. This run's dir is the
+# newest and is always kept (RetainRuns >= 1).
+try {
+    $pruned = Invoke-MastProvRetention -SessionsRoot (Join-Path $provLogsStable 'sessions') `
+        -Retain $RetainRuns -Logger { param($m) Log-Event 'RETENTION_WARN' @{ msg=$m } }
+    if (@($pruned).Count -gt 0) {
+        Log-Event 'RETENTION_PRUNED' @{ count=@($pruned).Count; retained=$RetainRuns }
+    }
+} catch {
+    Log-Event 'RETENTION_FAIL' @{ err=$_.Exception.Message }
 }
 
 Log-Event 'RUN_END' @{ exit_code=$exitCode; units_checked=$UnitsChecked; units_updated=$UnitsUpdated; units_failed=$UnitsFailed; duration_s=$DurationS }

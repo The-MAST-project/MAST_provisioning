@@ -20,8 +20,6 @@ param(
   [string[]]${Modules} = @(),
   # Dev/test: allow missing NoMachine license files (skip staging nomachine.lic).
   [switch]${AllowMissingNoMachineLicense},
-  # Dev/test: allow missing GitHub token file (skip staging mast_github.txt).
-  [switch]${AllowMissingGithubToken},
   # Dev/test: allow missing NetFx3 SxS source (skip staging sxs\; provider
   # falls back to online DISM with a warning). Production builds MUST have
   # the bundled SxS present -- the online DISM path depends on WU CDN
@@ -31,12 +29,10 @@ param(
   # Dev/test: allow missing large optional assets (skip with warning).
   [switch]${TestMode},
   # Proxy mode for this build, baked into the staged commands.json:
-  #   weizmann -> proxy provider gets -ForceMode use; astrometry-dependencies
-  #               gets -ProxyMode use (passes --proxy bcproxy:8080 to setup.exe
-  #               and writes setup.rc with net-method=Proxy).
-  #   direct   -> proxy provider gets -ForceMode direct; astrometry-dependencies
-  #               gets -ProxyMode direct (writes setup.rc with net-method=Direct
-  #               so setup.exe skips IE5/WPAD discovery).
+  #   weizmann -> proxy provider gets -ForceMode use.
+  #   direct   -> proxy provider gets -ForceMode direct.
+  # (astrometry-dependencies no longer takes a proxy mode: its cygwin install
+  # is fully offline from the staged frozen package cache -- see issue #20.)
   # Default is 'weizmann' (the common on-campus case). Runs against a unit
   # that cannot reach bcproxy MUST override to 'direct' -- regardless of
   # whether the run is dev or prod; the deciding factor is purely the
@@ -55,7 +51,7 @@ param(
   [string]${ImdiskMountType} = 'vm',
 
   # Site whose bootstrap profile (server/providers/config-bootstrap/sites/<Site>.toml)
-  # becomes the unit's C:\WIS\unit.toml via the config-bootstrap provider. Selected
+  # becomes the unit's C:\WIS\config.toml via the config-bootstrap provider. Selected
   # EXPLICITLY here, never derived from the hostname (per the config-file epic). The
   # config-bootstrap switch case below validates it against the available profiles.
   [string]${Site} = 'wis'
@@ -119,6 +115,13 @@ if (-not (Test-Path ${serverLib})) { throw "Missing provisioning.psm1 at ${serve
 ${modulesLib} = Join-Path ${serverRoot} 'lib\mast-modules.psm1'
 if (-not (Test-Path ${modulesLib})) { throw "Missing mast-modules.psm1 at ${modulesLib}" }
 Import-Module ${modulesLib} -Force -DisableNameChecking
+
+# Staging helpers (repofiles resolution + containment). Dot-sourced so the same
+# implementation is what server/tests/build-staging-lib.Tests.ps1 exercises.
+${stagingLib} = Join-Path ${PSScriptRoot} 'build-staging-lib.ps1'
+if (-not (Test-Path ${stagingLib})) { throw "Missing build-staging-lib.ps1 at ${stagingLib}" }
+. ${stagingLib}
+
 [string]${LicensesRoot} = (Join-Path ${Top} 'vault\nomachine-licenses')
 ${licensesVault} = (Join-Path ${vault} 'nomachine-licenses')
 
@@ -275,7 +278,6 @@ ${allLicFiles} = Get-ChildItem -Path ${licensesVault} -Filter '*.lic' -File -Err
 # Translate the build-level ProxyMode (weizmann|direct) into the values that
 # the individual providers expect on their own command lines.
 ${proxyForceMode}    = if (${ProxyMode} -eq 'weizmann') { 'use' } else { 'direct' }
-${astroDepProxyMode} = ${proxyForceMode}   # provide-astrometry-dependencies.ps1 uses identical naming
 # Per-site RPi NTP server (the #1 time peer); injected into the timesync command by -Site.
 # Single source of the per-site RPi value. Sites without one are simply absent (RPi tier skipped).
 ${siteRpiNtp} = @{ 'ns' = '10.23.1.222' }
@@ -286,7 +288,7 @@ ${proxyBanner} = if (${ProxyMode} -eq 'weizmann') { '*** WEIZMANN-PROXY MODE ***
 Write-Host "==================================================================="
 Write-Host ("[build-mast] {0}" -f ${proxyBanner})
 Write-Host ("[build-mast] proxy provider           -> -ForceMode {0}" -f ${proxyForceMode})
-Write-Host ("[build-mast] astrometry-dependencies  -> -ProxyMode {0}" -f ${astroDepProxyMode})
+Write-Host  "[build-mast] astrometry-dependencies  -> offline (frozen cygwin-pkg-cache; no proxy mode)"
 Write-Host "==================================================================="
 
 # Build commands list once (same for all), then tweak per host only if we add a SingleLicensePath
@@ -306,8 +308,19 @@ function Generate-Commands([string[]]${Mods}) {
       'proxy' {
         ${cmd} = ${cmd} + (" -ForceMode {0}" -f ${proxyForceMode})
       }
-      'astrometry-dependencies' {
-        ${cmd} = ${cmd} + (" -ProxyMode {0}" -f ${astroDepProxyMode})
+      'mast' {
+        # tools/mast-clone.ps1 routes ALL its outbound HTTPS (clones, the uv
+        # download, PyPI) through the Weizmann bcproxy by default, regardless of
+        # -Transport. On a machine that cannot reach bcproxy -- the dev VM, or a
+        # site with open egress -- that proxy does not refuse, it TIMES OUT, so
+        # the failure looks like a hung script for minutes. mast-clone's
+        # -DirectHttp clears the proxy variables (rather than merely skipping
+        # them, so an inherited https_proxy cannot make the flag a no-op), which
+        # is exactly what a 'direct' build means. Same channel as the proxy
+        # provider above: baked into commands.json, not signalled at runtime.
+        if (${ProxyMode} -ne 'weizmann') {
+          ${cmd} = ${cmd} + ' -DirectHttp'
+        }
       }
       'imdisk' {
         if (${ImdiskMountType} -ne 'vm') {
@@ -316,7 +329,7 @@ function Generate-Commands([string[]]${Mods}) {
       }
       'config-bootstrap' {
         # Inject the explicitly-selected -Site so the provider deploys
-        # sites/<Site>.toml as C:\WIS\unit.toml. Fail the build early with a
+        # sites/<Site>.toml as C:\WIS\config.toml. Fail the build early with a
         # helpful message if that site has no profile.
         ${siteProfile} = Join-Path ${providersRoot} ('config-bootstrap\sites\{0}.toml' -f ${Site})
         if (-not (Test-Path -LiteralPath ${siteProfile})) {
@@ -444,6 +457,17 @@ if (Test-Path ${invokeChildScript}) {
     Write-Warning "mast-invoke-child.ps1 not found at ${invokeChildScript}"
 }
 
+# Dot-sourced by execute-mast-provisioning.ps1 for the cumulative per-module
+# installed-manifest merge. Unlike the two above this is a hard requirement:
+# without it execute cannot record what it installed, so a missing file must
+# fail the build rather than produce a payload that provisions and then forgets.
+${installedManifestScript} = Join-Path ${clientRoot} 'mast-installed-manifest.ps1'
+if (-not (Test-Path ${installedManifestScript})) {
+    throw "Missing mast-installed-manifest.ps1 at ${installedManifestScript}"
+}
+Copy-Item -Force ${installedManifestScript} (Join-Path ${staging} 'mast-installed-manifest.ps1')
+Write-Host " Staged mast-installed-manifest.ps1"
+
 ${clientUtilScript} = Join-Path ${clientRoot} 'mast-client-util.ps1'
 if (Test-Path ${clientUtilScript}) {
     Copy-Item -Force ${clientUtilScript} (Join-Path ${staging} 'mast-client-util.ps1')
@@ -477,8 +501,10 @@ foreach (${m} in ${Modules}) {
         $norm = (${cmdfile} -replace '\\','/').ToLowerInvariant()
         if (${TestMode} -and (
             ($m -eq 'cygwin' -and $norm -eq 'assets/astrometry.tgz') -or
-            # mast_github.txt is sourced from vault/ and staged separately
-            ($m -eq 'mast' -and $norm -eq 'assets/mast_github.txt')
+            # Vendored uv (18 MB): absent in a lean dev checkout. mast-clone
+            # falls back to bootstrapping it from the GitHub CDN, which works
+            # but is the network dependency the vendoring removes.
+            ($m -eq 'mast' -and $norm -like 'assets/uv-*')
         )) {
             Write-Warning "[${m}] Optional dev/test CommandFile missing: ${src} (skipping due to -TestMode)"
             continue
@@ -498,6 +524,17 @@ foreach (${m} in ${Modules}) {
     Write-Host " Staging " ${cmdfile} " ..."
 
     New-LinkOrCopy -Target ${src} -LinkPath ${dst}
+  }
+
+  # Repo-top files: shared tooling a module runs that deliberately lives outside
+  # its provider dir (the 'mast' module runs tools/mast-clone.ps1, shared with
+  # the control host and dev boxes). Resolved and containment-checked by
+  # Resolve-MastRepoFile; staged to the staging root by leaf name, like assets.
+  foreach (${repofile} in (Get-MastModuleRepoFiles -Manifest ${mf})) {
+    ${rfSrc} = Resolve-MastRepoFile -RepoTop ${Top} -RelativePath ${repofile} -ModuleName ${m}
+    ${rfDst} = Get-MastRepoFileStagingPath -StagingDir ${staging} -RelativePath ${repofile}
+    Write-Host " Staging repofile " ${repofile} " ..."
+    New-LinkOrCopy -Target ${rfSrc} -LinkPath ${rfDst}
   }
 }
 
@@ -527,18 +564,6 @@ if (${Modules} -contains 'nomachine') {
             # stage that single .lic
             Copy-Item -Force ${free}.FullName (Join-Path ${staging} "nomachine.lic")
         }
-    }
-}
-
-if (${Modules} -contains 'mast') {
-    # deploy the github token (used by the mast module)
-    $tokenPath = Join-Path ${vault} 'tokens\mast_github.txt'
-    if (Test-Path $tokenPath) {
-        Copy-Item -Force -Path $tokenPath (Join-Path ${staging} 'mast_github.txt')
-    } elseif (${AllowMissingGithubToken}) {
-        Write-Warning "GitHub token '$tokenPath' missing; continuing due to -AllowMissingGithubToken."
-    } else {
-        throw "GitHub token '$tokenPath' missing. Create it or pass -AllowMissingGithubToken for dev/test."
     }
 }
 
@@ -621,6 +646,32 @@ if (${Modules} -contains 'planewave') {
     }
 }
 
+# Frozen Cygwin package cache (astrometry-dependencies). Like the astrometry
+# index seed, it is build-host-vendored (binary, ~174 MB, not in git) and
+# staged into the payload here. provide-astrometry-dependencies.ps1 installs
+# from it FULLY OFFLINE (setup-x86_64.exe --local-install) so the installed
+# cygwin is deterministic (3.6.9, matching the bundled fitsio wheel tag) and
+# has no live-mirror dependency -- the itefix mirror is rolling and moving
+# past 3.6.9 broke the pinned wheel (issue #20). Populate once per build host
+# via build/harvest-cygwin-cache.ps1 (harvests a working unit's own cache).
+${cygCacheSrc} = 'C:\MAST\cygwin-pkg-cache'
+if (${Modules} -contains 'astrometry-dependencies') {
+    ${cygCacheIni} = @()
+    if (Test-Path -LiteralPath ${cygCacheSrc}) {
+        ${cygCacheIni} = @(Get-ChildItem -LiteralPath ${cygCacheSrc} -Filter 'setup.ini' -File -Recurse -ErrorAction SilentlyContinue)
+    }
+    if (${cygCacheIni}.Count -gt 0) {
+        ${cacheFiles} = @(Get-ChildItem -LiteralPath ${cygCacheSrc} -File -Recurse -ErrorAction SilentlyContinue)
+        ${cacheMb}    = ((${cacheFiles} | Measure-Object Length -Sum).Sum / 1MB)
+        New-LinkOrCopy -Target ${cygCacheSrc} -LinkPath (Join-Path ${staging} 'cygwin-pkg-cache')
+        Write-Host (" Staged frozen cygwin package cache: cygwin-pkg-cache\ ({0} files, {1:N0} MB); astrometry-dependencies installs offline from it." -f ${cacheFiles}.Count, ${cacheMb})
+    } elseif (${TestMode}) {
+        Write-Warning ("Frozen cygwin package cache missing/invalid at {0}; run build/harvest-cygwin-cache.ps1 once to populate it. astrometry-dependencies will FAIL on the unit. Continuing due to -TestMode." -f ${cygCacheSrc})
+    } else {
+        throw ("Frozen cygwin package cache missing/invalid at {0} (need setup.ini under it). Run build/harvest-cygwin-cache.ps1 once to populate it from a working unit." -f ${cygCacheSrc})
+    }
+}
+
 # emit commands.json
 (${cmds} | Select-Object order,desc,cmd,module | ConvertTo-Json -Depth 6) | Out-File -FilePath (Join-Path ${staging} 'commands.json') -Encoding UTF8
 
@@ -629,29 +680,11 @@ if (${Modules} -contains 'planewave') {
 # Consumed by check-and-provision.ps1 to decide whether a unit needs an update,
 # and copied to C:\MAST\installed-manifest.json on the unit by
 # execute-mast-provisioning.ps1 once provisioning succeeds.
+# Hash helpers (Get-PayloadHash, Get-ModuleContentHash) live in the
+# dot-sourceable build-manifest-lib.ps1 so the Pester suite can exercise them
+# without running a build.
 # ---------------------------------------------------------------------------
-function Get-PayloadHash {
-    param([Parameter(Mandatory)][string]$StagingDir)
-
-    # Hash inputs: every regular file under the staging dir, in lexical order,
-    # combining "<relative-path>:<sha256>" into a single rolling hash.
-    # commands.json is included implicitly. build-manifest.json is excluded
-    # (we are generating it now).
-    $sha = [System.Security.Cryptography.SHA256]::Create()
-    $bytes = [System.IO.MemoryStream]::new()
-    $files = Get-ChildItem -Path $StagingDir -File -Recurse |
-                Where-Object { $_.Name -ne 'build-manifest.json' } |
-                Sort-Object FullName
-    foreach ($f in $files) {
-        $rel = $f.FullName.Substring($StagingDir.Length).TrimStart('\','/').Replace('\','/')
-        $fileHash = (Get-FileHash -Path $f.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-        $line = [System.Text.Encoding]::UTF8.GetBytes("$rel`:$fileHash`n")
-        $bytes.Write($line, 0, $line.Length)
-    }
-    $bytes.Position = 0
-    $digest = $sha.ComputeHash($bytes)
-    return ([System.BitConverter]::ToString($digest) -replace '-','').ToLowerInvariant()
-}
+. (Join-Path ${PSScriptRoot} 'build-manifest-lib.ps1')
 
 function Get-GitSha {
     param([Parameter(Mandatory)][string]$RepoTop)
@@ -673,13 +706,34 @@ function Get-GitSha {
 ${payloadHash} = Get-PayloadHash -StagingDir ${staging}
 ${gitSha}      = Get-GitSha -RepoTop ${Top}
 
-# Aggregate per-module versions from each provider's module.json. The 'version'
-# field is required; a missing one is a build error (fail loud rather than emit
-# a manifest with silent gaps). The literal string 'git' is substituted with the
-# current git SHA so source-tracked modules (e.g. mast) report a meaningful hash.
+# Per-module version + content hash from each provider's module.json. The
+# 'version' field is required; a missing one is a build error (fail loud rather
+# than emit a manifest with silent gaps). The literal string 'git' is
+# substituted with the current git SHA so source-tracked modules (e.g. mast)
+# report a meaningful hash. The content hash (Get-ModuleContentHash) covers the
+# module's source commandfiles + its RESOLVED commands.json entries (provide +
+# verify, with build-time injected args) + the resolved version -- see
+# build-manifest-lib.ps1 and docs/per-module-tracking-plan.md.
+# module_versions is kept alongside for existing consumers
+# (tools/fleet-drift-report.py) and is deprecated: it duplicates
+# module_state.<name>.version and goes away once the fleet report keys on
+# module_state (per-module-tracking Stage 3).
+${moduleState}    = [ordered]@{}
 ${moduleVersions} = [ordered]@{}
+# Modules that must run on EVERY non-empty provisioning run, not only when they
+# themselves drifted. These are the order-terminal cross-cutting providers --
+# reboot (detect pending-reboot and drop the flag the orchestrator acts on),
+# mast-services-finalize (the final operational step), proxy (the end-of-run
+# posture re-assert). A targeted run that installed anything must still close
+# with them, so the driver's per-module drift compare folds them into any
+# non-empty target set. Declared per provider via module.json "always": true so
+# the fact lives with the module, not in a list the driver has to keep in step.
+${alwaysModules}  = @()
 foreach (${vm} in ${Modules}) {
     ${vmf} = Read-ModuleManifest -ModuleName ${vm}
+    if (${vmf}.PSObject.Properties.Match('always').Count -and ${vmf}.always) {
+        ${alwaysModules} += ${vm}
+    }
     if (-not ${vmf}.PSObject.Properties.Match('version').Count -or
         [string]::IsNullOrWhiteSpace(${vmf}.version)) {
         throw "module.json missing 'version' for module '${vm}'"
@@ -687,6 +741,18 @@ foreach (${vm} in ${Modules}) {
     ${vstr} = [string]${vmf}.version
     if (${vstr} -eq 'git') { ${vstr} = ${gitSha} }
     ${moduleVersions}[${vm}] = ${vstr}
+
+    ${vmCmdFiles} = @()
+    if (${vmf}.commandfiles) { ${vmCmdFiles} = @(${vmf}.commandfiles | ForEach-Object { [string]$_ }) }
+    ${vmCmds} = @(${cmds} |
+        Where-Object { $_.module -eq ${vm} -or $_.module -eq (${vm} + '-verify') } |
+        ForEach-Object { [string]$_.cmd })
+    ${moduleState}[${vm}] = [ordered]@{
+        version = ${vstr}
+        hash    = Get-ModuleContentHash -ProviderDir (Join-Path ${providersRoot} ${vm}) `
+                    -CommandFiles ${vmCmdFiles} -Commands ${vmCmds} -Version ([string]${vstr}) `
+                    -RepoTop ${Top} -RepoFiles (Get-MastModuleRepoFiles -Manifest ${vmf})
+    }
 }
 
 ${manifest}    = [pscustomobject]@{
@@ -695,7 +761,9 @@ ${manifest}    = [pscustomobject]@{
     payload_hash    = ${payloadHash}
     hostname        = ${HostName}
     modules         = ${Modules}
+    module_state    = ${moduleState}
     module_versions = ${moduleVersions}
+    always_modules  = @(${alwaysModules})
 }
 (${manifest} | ConvertTo-Json -Depth 4) |
     Out-File -FilePath (Join-Path ${staging} 'build-manifest.json') -Encoding UTF8
