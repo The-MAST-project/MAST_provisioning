@@ -29,12 +29,12 @@ The machinery that performed it was written to run once per unit, under supervis
 
 - *Keeping the `verify-mast` legacy check as a safety net.* It was a migration gate, not an invariant. With no unit unmigrated and no tool to migrate one, it can now only fire on a stray directory somebody creates -- a false alarm on a name that no longer means anything. This is the opposite call to the `MAST_PROJECT` assertions kept in the same batch, and the difference is that those describe a state that must never return, while this one describes a transition that has ended.
 - *Deleting the adoption plan outright*, as the strict reading of "delete the one-time machinery" suggests. A plan document is not machinery; nothing executes it, and it is cited from live code.
-- *Purging the retired trees on the units in the same change.* They are renamed, not deleted, on all four units, and each still holds the expired GitHub token from #17 in its `.git/config` and `GIT_TRACE` logs. That is a deliberate separate step -- the trees are the only rollback path, and the migration is days old.
+- *Purging the retired trees on the units as part of this change.* Deleting the machinery is a code change; removing 6.16 GB from four production machines is an operational one, and binding them together would mean a code review deciding when the fleet loses its only rollback path. The purge was done the same day as a separate, supervised step (6.16 GB total: 0.90 / 2.93 / 1.44 / 0.89 GB), after checking each tree for process handles and after confirming that mast02's copy of the 1.97 GB PlateSolve 3 catalog installer was byte-identical to labcomp2's canonical `C:\MAST\ps3-catalog\` and therefore not the last copy of an asset #48 flags as unbacked.
 
 **Unsettled:**
 
 - **A unit that missed the migration can no longer be detected by provisioning.** That was the `verify-mast` check's job. The population is closed today (four production units, all migrated; mast00 and mastw are non-production and outside the gate), so the check protects nothing -- but if a unit is ever rebuilt from a pre-migration image, nothing will say so, and the failure will surface as whatever breaks first.
-- The retired trees remain on all four units, so #17 is not discharged on disk even though its code paths are gone.
+- **There is no longer a rollback path.** With the retired trees purged, a unit cannot be put back on the old layout by renaming a directory; it would have to be re-cloned. That was accepted knowingly, on the strength of all four units running verified on the new layout, and it is the reason the purge was a deliberate act rather than a side effect of this commit.
 - Whether `mast00` or `mastw` carry the old layout was not checked; neither is provisioned by this pipeline today.
 
 **Implications:** with both migrations deleted, `#41` has nothing left to track. `config-bootstrap` and `mast` are now ordinary permanent providers with no one-time code in them.
