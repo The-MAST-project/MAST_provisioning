@@ -64,6 +64,31 @@ decisions that never will.
 - Dated `see DECISIONS.md <date>` citations pointing into the extracted range were
   repointed at slugs.
 
+**A record stays editable until its decision reaches `main`, and supersession is for what
+has landed.** The spec already said an uncommitted record may be edited freely; the line
+is drawn at `main` rather than at any commit, because that is where a decision stops being
+in flight. While a branch is open, a decision that changes mid-review is **rewritten in
+place to state where it ended up** -- no second record, no `superseded` status, no
+in-branch supersession chain. A reviewer reads what the PR proposes, not an archaeology of
+how it got there; the argument belongs on the PR, which is where it happened. Supersession
+stays what it was built for: revising something already merged, which cannot be rewritten
+because other people are working against it.
+
+Two records were consolidated under this rule. `2026-08-02-drift-review-fixes.md` recorded
+three defects found reviewing #33 against
+`2026-08-02-per-module-drift-decides-what-runs.md`; the two are now one record stating the
+design that actually landed, and the three defects became `Rejected` entries -- which is
+the better home for them anyway, since each is a concrete thing that was tried and failed.
+The 2026-07-12 pair (`...port-server-orchestration-to-python` and
+`...ssh-first-transport-and-utf8-no-bom`) stay separate, because they are two decisions
+about different layers taken the same day, not one decision revised; what was dropped is
+the "directional, not yet committed" framing, which described a moment rather than a
+position.
+
+Prose supersession of a **frozen** archive entry is unaffected and stays: the 2026-07-20
+`config.toml` record supersedes the archived 2026-06-29 `config-bootstrap` entry, and says
+so in prose because archive entries have no slug for `supersedes:` to name.
+
 **Rejected:**
 
 - **Leaving the 27 in the archive and writing nothing.** The status quo, and it freezes
@@ -86,24 +111,34 @@ decisions that never will.
   contents, and rejected: the body of the committed 2026-08-07 record names the current
   path and may not be edited, so a rename would strand it, and `CLAUDE.md` maps ~30 code
   citations onto that path.
+- **Superseding within the branch** -- keeping a record and adding a second one that
+  corrects it, with `status: superseded` on the first. Tried and reverted: it produced a
+  reader who has to hold two records in their head to learn one current position, in a
+  branch where the position is simply what the PR proposes. It also forced a choice
+  between two wrong frontmatter states, since a record whose design still stands but whose
+  details changed is neither `accepted` nor `superseded`.
+- **Adding a `refines:` frontmatter field** for the partial case, once superseding proved
+  too blunt. Rejected as solving the wrong problem: the partial case only arises from
+  keeping in-flight history that should be rewritten instead. With the editing rule above,
+  no record in this batch needs it.
 
 **Unsettled:**
 
-- **The format has no way to express partial supersession.** This record refines one
-  `Rejected` item in the 2026-08-07 record without overturning it, and
-  `2026-08-02-drift-review-fixes.md` corrects three defects in
-  `2026-08-02-per-module-drift-decides-what-runs.md` while leaving its design standing. In
-  both cases flipping the older record's `status:` to `superseded` would tell a reader
-  something false, so the relationship is stated in prose and the frontmatter fields are
-  left alone. Whether prose is enough, or the spec needs a `refines:` field, is untested.
+- **Where "editable" ends is now `main`, and nothing enforces it.** A record for a decision
+  that has merged must not be rewritten, and the only thing preventing it is a reader
+  checking whether the change is on `main` yet. On a long-lived branch that check is easy
+  to get wrong in the permissive direction.
+- **The rule assumes a branch's history lives on its PR.** That holds while review happens
+  on GitHub; a decision revised in a branch that never opens a PR would leave the
+  intermediate reasoning nowhere.
 - **`Rejected` and `Unsettled` are reconstructed**, from issue threads written at the time
   by the person who made the calls. That is the best available source and it is not the
   same as having been written alongside the decision. A reader should weight them as
   contemporaneous evidence, not as contemporaneous authorship.
-- **The `supersedes:` frontmatter is unused across all 27**, including where an entry
-  superseded an archive entry (the 2026-07-20 `config.toml` record supersedes the archived
-  2026-06-29 `config-bootstrap` entry). The field expects a slug, and archive entries have
-  none, so that relationship is prose-only.
+- **The `supersedes:` frontmatter is unused across all 27.** The one supersession in the
+  batch points at an archive entry, which has no slug for the field to name, so it is
+  prose. Whether the field is worth keeping, or whether prose is simply how this repo does
+  it, will not be known until a record supersedes a merged record.
 - **The split now has a rule that has to be explained**, not one a reader infers: the
   archive holds what merged to `main` before this branch, and everything from this branch
   onward is a record. Nothing in the directory listing shows that.

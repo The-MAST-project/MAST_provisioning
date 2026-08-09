@@ -166,20 +166,37 @@ Retrieval works three ways; the prose feeds the first two:
 
 ## Immutability and superseding
 
-A committed record is never edited -- not for staleness, not for cleanup. The value is the
-historical belief, which an edit destroys.
+A record whose decision has **reached `main`** is never edited -- not for staleness, not
+for cleanup. The value is the historical belief, which an edit destroys.
 
-When a decision is reversed or refined, write a **new** record with `supersedes:` set, and
-in the same PR flip the old one's `status:` to `superseded` and fill its `superseded_by:`.
+When such a decision is reversed or refined, write a **new** record with `supersedes:` set,
+and in the same PR flip the old one's `status:` to `superseded` and fill its
+`superseded_by:`. A superseded entry in the frozen archive has no slug, so name it in prose
+instead and leave the frontmatter alone.
 
-**Permitted edits to a committed record are exactly three frontmatter keys** -- `status:`,
-`superseded_by:`, and `areas:`. The body is never touched. The line this draws: the freeze
-protects the *historical claim* (what was believed and decided, which an edit falsifies),
-not the *navigation metadata* (which record supersedes this one, what subject to find it
-under). Retagging `creds` to `credentials` while merging synonyms in `AREAS.md` changes
-nothing about what the decision said; rewriting a sentence does.
+**Until a decision reaches `main`, its record is still editable -- rewrite it in place.**
+A decision that changes mid-review gets **one record stating where it ended up**, not a
+record plus a correction: no second file, no `superseded` status, no in-branch supersession
+chain. `main` is the line rather than any commit, because that is where a decision stops
+being in flight and other people start working against it. While the branch is open, the
+argument about how the decision moved belongs on the PR, which is where it happened; a
+reviewer should read what is proposed, not an archaeology of how it got there. Two records
+were consolidated under this rule on 2026-08-09 -- see
+`2026-08-09-unmerged-decisions-ship-in-the-current-format.md`.
 
-While a record is still uncommitted, edit it freely.
+Rewriting in place does not mean discarding what was learned: an approach that was tried
+and abandoned during review is usually a **`Rejected` entry**, which is a better home for
+it than a superseded record, because it names something concrete that failed and why.
+
+**Once a record has reached `main`, the permitted edits are exactly three frontmatter
+keys** -- `status:`, `superseded_by:`, and `areas:`. The body is never touched. The line
+this draws: the freeze protects the *historical claim* (what was believed and decided,
+which an edit falsifies), not the *navigation metadata* (which record supersedes this one,
+what subject to find it under). Retagging `creds` to `credentials` while merging synonyms
+in `AREAS.md` changes nothing about what the decision said; rewriting a sentence does.
+
+Before that -- uncommitted, or committed on a branch that has not merged -- edit it freely,
+body included.
 
 ## When to write one
 

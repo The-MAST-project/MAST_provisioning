@@ -10,7 +10,8 @@ areas:
 
 # Smoke gates only what ran, and the report and driver share one set of unit paths
 
-Second and final batch of #33 review fixes; follows `2026-08-02-drift-review-fixes.md`.
+Second and final batch of #33 review fixes; the first batch settled the design in
+`2026-08-02-per-module-drift-decides-what-runs.md`.
 
 **Why:**
 

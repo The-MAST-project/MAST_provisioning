@@ -91,12 +91,10 @@ hosting is deployment infra, not driver code.
 - **Two drivers exist at once** until the cutover, and nothing prevents someone from
   running the wrong one.
 
-**Directional (recommended, not yet committed at the time of writing):** move to
-**SSH-first transport** (retire WinRM, sequenced with the detached-execute work, which
-neutralizes WinRM's only real advantage) and standardize all MAST JSON on
-**UTF-8-no-BOM + LF**, with unit-side PS writers switching to `[IO.File]::WriteAllText`.
-Both were approved the same day and are recorded in
-`2026-07-12-ssh-first-transport-and-utf8-no-bom.md`, which settles this paragraph.
+Two changes the port surfaced are decided separately the same day and recorded in
+`2026-07-12-ssh-first-transport-and-utf8-no-bom.md`: SSH-first transport, and a
+UTF-8-no-BOM + LF standard for all MAST JSON. Both belong to the transport and data
+layer rather than to the orchestration move, which is why they are their own record.
 
 **Implications:** The control plane stops being Windows-bound, and the transport becomes
 a shipped component with one owner instead of test scaffolding the driver borrowed. The

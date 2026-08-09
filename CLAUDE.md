@@ -111,12 +111,20 @@ this file and have it cite the record.
 `(Get-Date).ToString('yyyy-MM-dd')` (PowerShell). Never guess. `decided:` is when the call
 was made, not when the PR merges; git records the latter.
 
-**Immutability:** the body of a committed record is never edited. To reverse or refine one,
-write a new record with `supersedes:` set and flip the old one's `status:` to `superseded`
-with `superseded_by:` filled. Exactly three frontmatter keys may be edited after commit --
-`status:`, `superseded_by:`, `areas:` (the last so synonyms can be merged during `AREAS.md`
-curation). The freeze protects the historical claim, not the navigation metadata.
-Uncommitted records are freely editable.
+**Immutability:** the body of a record is never edited **once its decision has reached
+`main`**. To reverse or refine such a record, write a new one with `supersedes:` set and
+flip the old one's `status:` to `superseded` with `superseded_by:` filled (an archive entry
+has no slug, so name it in prose instead). From that point exactly three frontmatter keys
+may be edited -- `status:`, `superseded_by:`, `areas:` (the last so synonyms can be merged
+during `AREAS.md` curation). The freeze protects the historical claim, not the navigation
+metadata.
+
+**Before `main`, rewrite in place -- do not supersede.** A record on an open branch is
+freely editable, body included. If the decision changes mid-review, the record is rewritten
+to state where it ended up: one record, no correction file, no `superseded` status. The
+argument about how it moved lives on the PR. An approach tried and abandoned during review
+usually belongs as a `Rejected` entry in the rewritten record. See
+`docs/decisions/2026-08-09-unmerged-decisions-ship-in-the-current-format.md`.
 
 ## Every PR body states why, not just what
 

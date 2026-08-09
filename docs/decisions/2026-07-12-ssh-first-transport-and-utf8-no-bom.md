@@ -10,9 +10,10 @@ areas:
 
 # SSH becomes the primary transport, and all MAST JSON is UTF-8 without a BOM
 
-This settles the "directional (recommended, not yet committed)" paragraph in the same-day
-`2026-07-12-port-server-orchestration-to-python.md`; Eli approved both, so they are now
-decided rather than recommended.
+Both changes were surfaced by the same-day
+`2026-07-12-port-server-orchestration-to-python.md` and decided alongside it; they are
+recorded separately because they concern the transport and data layer rather than the
+orchestration move.
 
 **Why:** As the server orchestration becomes platform-agnostic Python, the two
 Windows-flavored fragilities in the transport/data layer should go. WinRM
