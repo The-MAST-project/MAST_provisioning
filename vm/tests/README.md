@@ -5,22 +5,30 @@ mock-free unit tests, and reserve the slow VM runs for genuine **integration**.
 
 ## Tier 1 — pure-logic unit tests (fast, no mocking)
 
-`test_*.py` here exercise pure functions: given inputs, assert the decision —
-no WinRM/SSH/SMB/VBox, no live unit. This is cheap **only because the logic is
-factored out of the I/O**. The wedge is `vm/vm_lib.py`, which is *import-pure*
-(it touches nothing at import), so importing it in a test costs nothing.
+`test_*.py` exercise pure functions: given inputs, assert the decision — no
+WinRM/SSH/SMB/VBox, no live unit. This is cheap **only because the logic is
+factored out of the I/O**.
 
-Covered today (`test_vm_lib.py`):
+**Tier 1 now lives mainly in `server/prov/tests/`, not here.** The Python port
+of the server orchestration moved the pure helpers into the `server/prov`
+package, and the tests followed them; `vm/tests/` keeps only what tests the VM
+harness itself. The tier's founding cases are in
+`server/prov/tests/test_transport.py`:
+
 - `winrm_encoded_cmd_len` / `assert_inline_dispatchable` — the inline-dispatch
-  size limit. A script too big for `powershell -EncodedCommand` now fails **fast
+  size limit. A script too big for `powershell -EncodedCommand` fails **fast
   and locally** with an actionable message instead of a remote "The command line
   is too long". (This is the regression that motivated the tier.)
 - `_ps_escape`, `_candidate_users` — quoting / local-account variants.
 
+Covered here (`test_run_prov_test.py`): `run-prov-test.py`'s phase-argument
+parsing — the default full cycle, explicit `--phases`, the legacy flag mappings,
+and the three ways a bad combination must exit rather than run a partial cycle.
+
 Run:
 ```
-python -m pytest vm/tests/          # if pytest is installed
-python vm/tests/test_vm_lib.py      # standalone, no dependency
+python -m pytest server/prov/tests/   # the bulk of tier 1
+python -m pytest vm/tests/            # the VM-harness slice; needs paramiko
 ```
 
 ### How to add more without churn
@@ -29,10 +37,11 @@ Don't mock the ecosystem to fake a provision — that's the trap. Instead:
    skip-if-present, disk-fits?), factor that decision into a pure function that
    takes plain inputs (sizes, codes, paths) and returns a verdict, then test the
    function. Push the I/O (the `Get-PSDrive`, the `robocopy`) to the caller.
-2. Keep such helpers in an import-pure module (`vm_lib.py` for Python). If logic
-   lives in `run-prov-test.py`, note that it does work at import
+2. Keep such helpers in an import-pure module — a `server/prov` module for
+   server-side logic, `vm_lib.py` for VM-harness logic. If logic lives in
+   `run-prov-test.py`, note that it does work at import
    (`ALL_MODULES = _discover_all_modules()` spawns PowerShell), so prefer moving
-   shared pure helpers into `vm_lib.py` rather than importing the script.
+   shared pure helpers out rather than importing the script.
 
 ### PowerShell logic (Pester, same principle)
 Live in `server/tests/*.Tests.ps1`, run with the Pester that ships with Windows
@@ -40,11 +49,17 @@ PowerShell 5.1 (3.x: `Should Be`, not 5.x `Should -Be`):
 ```
 Invoke-Pester -Path server\tests\mast-pull-staging.Tests.ps1
 ```
-Implemented (`mast-pull-staging.Tests.ps1`): the pull script's pure decisions
-`Get-RobocopyOutcome` (rc>=8 -> ROBOCOPY_ERROR) and `Test-StagingFits` (payload +
-margin fits the disk). The script is dot-sourced with no `-SrcUNC`; a guard
-(`if (-not $SrcUNC) { return }`) skips the live net use / robocopy so only the
-pure functions load — no SMB, no unit, no cmdlet mocking.
+Ten suites are implemented today: `build-manifest-lib`, `build-staging-lib`,
+`mast-installed-manifest`, `mast-log-archive`, `mast-proxy-assert`,
+`mast-pull-staging`, `mast-staging-size`, `mast-timezone`, `mast-winrm-warn`,
+and `proxy-lib`.
+
+`mast-pull-staging.Tests.ps1` is the pattern the rest follow: it covers the pull
+script's pure decisions `Get-RobocopyOutcome` (rc>=8 -> ROBOCOPY_ERROR) and
+`Test-StagingFits` (payload + margin fits the disk). The script is dot-sourced
+with no `-SrcUNC`; a guard (`if (-not $SrcUNC) { return }`) skips the live
+net use / robocopy so only the pure functions load — no SMB, no unit, no cmdlet
+mocking.
 
 How it stays cheap: factor a decision into a named function, guard the script's
 side-effecting body behind a "were we actually invoked?" check, then dot-source
