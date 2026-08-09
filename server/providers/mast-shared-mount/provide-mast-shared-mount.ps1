@@ -115,17 +115,36 @@ if (${nssmOk} -and ${svc}) {
     # parameter outright. Probe before setting: the set used to be issued blind and
     # its failure was invisible, so the provider logged "Set nssm Start/Pre hook"
     # and exited 0 for something that never happened (#55).
-    ${probe} = (& ${nssmExe} get ${UnitService} AppEvents 'Start/Pre' 2>&1 | Out-String)
-    ${appEventsSupported} = (${LASTEXITCODE} -eq 0) -and (${probe} -notmatch 'Invalid parameter')
+    # Both nssm calls must be isolated from ErrorActionPreference=Stop: 2>&1 captures
+    # the native error text, but the NativeCommandError still TERMINATES the script,
+    # which would abort the provider here -- before the mount in step 5 -- on exactly
+    # the builds this probe exists to detect.
+    ${appEventsSupported} = $false
+    ${hookSet} = $false
+    ${hookDetail} = ''
+    ${prevEap} = ${ErrorActionPreference}
+    try {
+        ${ErrorActionPreference} = 'Continue'
+        ${probe} = (& ${nssmExe} get ${UnitService} AppEvents 'Start/Pre' 2>&1 | Out-String)
+        ${appEventsSupported} = (${LASTEXITCODE} -eq 0) -and (${probe} -notmatch 'Invalid parameter')
+
+        if (${appEventsSupported}) {
+            ${hook} = ('powershell.exe -NoProfile -ExecutionPolicy Bypass -NonInteractive -File "{0}"' -f ${MountScript})
+            ${hookDetail} = (& ${nssmExe} set ${UnitService} AppEvents ('Start/Pre=' + ${hook}) 2>&1 | Out-String)
+            ${hookSet} = (${LASTEXITCODE} -eq 0)
+        }
+    } catch {
+        ${hookDetail} = ${_}.Exception.Message
+    } finally {
+        ${ErrorActionPreference} = ${prevEap}
+    }
 
     if (${appEventsSupported}) {
-        ${hook} = ('powershell.exe -NoProfile -ExecutionPolicy Bypass -NonInteractive -File "{0}"' -f ${MountScript})
-        & ${nssmExe} set ${UnitService} AppEvents ('Start/Pre=' + ${hook}) 2>&1 | Out-Null
-        if (${LASTEXITCODE} -eq 0) {
+        if (${hookSet}) {
             Write-MLog ("Set nssm Start/Pre hook on {0}." -f ${UnitService})
         } else {
-            Write-MLog ("[WARN] nssm rejected the Start/Pre hook on {0} (exit {1}); the hook is NOT set." -f `
-                ${UnitService}, ${LASTEXITCODE})
+            Write-MLog ("[WARN] nssm rejected the Start/Pre hook on {0}; the hook is NOT set. {1}" -f `
+                ${UnitService}, (${hookDetail} -replace "`0", '').Trim())
         }
     } else {
         # Not fatal, and deliberately so. The at-startup SYSTEM task below covers a
