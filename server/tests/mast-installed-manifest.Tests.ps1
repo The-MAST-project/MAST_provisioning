@@ -174,4 +174,62 @@ Describe 'Merge-MastInstalledManifest -- legacy manifest migration' {
                 -Outcomes (New-Outcomes @{ 'git' = @($true, $true) }) -InstalledAt $AT
         $r.PSObject.Properties.Match('payload_hash').Count | Should Be 0
     }
+    It 'carries nothing from a legacy manifest whose modules is a LIST of names' {
+        # THE SHAPE THE FLEET ACTUALLY HAS (#57). mast01-04's pre-module_state
+        # manifests carry the key holding a list, not a map. Enumerating that
+        # list's PSObject properties yields System.Array's own members, which
+        # were being recorded as modules. Nothing per-module is knowable from a
+        # list of names, so the correct result is the same as no key at all.
+        $legacy = [pscustomobject]@{
+            built_at     = '2026-06-01T00:00:00Z'
+            git_sha      = 'old1234'
+            installed_at = '2026-06-01T01:00:00Z'
+            modules      = @('git', 'python', 'ascom')
+        }
+        $build = New-BuildData -Modules @('git', 'python') -Hashes @{ git = 'h-git'; python = 'h-py' }
+        $r = Merge-MastInstalledManifest -Previous $legacy -BuildData $build `
+                -Outcomes (New-Outcomes @{ 'git' = @($true, $true) }) -InstalledAt $AT
+
+        $rt = $r | ConvertTo-Json -Depth 6 | ConvertFrom-Json
+        @($rt.modules.PSObject.Properties).Count | Should Be 1
+        $rt.modules.git.hash | Should Be 'h-git'
+        foreach ($phantom in @('Count', 'Length', 'LongLength', 'Rank', 'SyncRoot',
+                               'IsReadOnly', 'IsFixedSize', 'IsSynchronized')) {
+            $rt.modules.PSObject.Properties.Match($phantom).Count | Should Be 0
+        }
+    }
+    It 'drops phantom Array-member entries an earlier run already wrote' {
+        # The self-heal. A unit polluted by the pre-#57 merge carries a valid
+        # map whose entries include scalars named after System.Array's members.
+        # Filtering per entry (not per manifest) means the next run sheds them
+        # while keeping the real module state beside them -- no separate cleanup.
+        $polluted = [pscustomobject]@{
+            modules = [pscustomobject]@{
+                Count          = 3
+                Length         = 3
+                LongLength     = 3
+                Rank           = 1
+                SyncRoot       = @('git', 'python', 'ascom')
+                IsReadOnly     = $false
+                IsFixedSize    = $true
+                IsSynchronized = $false
+                ascom          = [pscustomobject]@{
+                    version = '1.0'; hash = 'h-ascom'; provide = 'pass'
+                    verify = 'pass'; installed_at = $EARLIER
+                }
+            }
+        }
+        $build = New-BuildData -Modules @('git', 'ascom') -Hashes @{ git = 'h-git'; ascom = 'h-ascom' }
+        $r = Merge-MastInstalledManifest -Previous $polluted -BuildData $build `
+                -Outcomes (New-Outcomes @{ 'git' = @($true, $true) }) -InstalledAt $AT
+
+        $rt = $r | ConvertTo-Json -Depth 6 | ConvertFrom-Json
+        # ascom survives untouched (this run did not run it); git is recorded new.
+        @($rt.modules.PSObject.Properties).Count | Should Be 2
+        $rt.modules.ascom.installed_at | Should Be $EARLIER
+        $rt.modules.git.hash           | Should Be 'h-git'
+        # and the unit is fully provisioned again, which it could not be while
+        # the phantoms sat in the map alongside real state.
+        $r.fully_provisioned | Should Be $true
+    }
 }
