@@ -42,8 +42,12 @@ if (${content} -match '(?m)^\s*machine_role\s*=\s*"?([A-Za-z]+)"?') {
     ${fail} += "missing key 'machine_role'"
 }
 
-# 3) The pre-machine_role scheme is gone (clean migration): no legacy role-named file,
-# no machine-wide MAST_PROJECT env var.
+# 3) The pre-machine_role scheme is absent: no legacy role-named file, no machine-wide
+# MAST_PROJECT env var. These two assertions outlive the migration deliberately (#41).
+# The provider no longer removes either -- the fleet is past it -- so this is now a
+# regression guard rather than a migration check: cheap, and it makes a reintroduction
+# loud instead of letting a unit quietly acquire a second, contradicting source of its
+# own identity. Nothing repairs them any more, so a failure here is a report.
 ${legacyToml} = 'C:\WIS\{0}.toml' -f ${Role}
 if (Test-Path -LiteralPath ${legacyToml}) { ${fail} += ("legacy bootstrap file still present: {0}" -f ${legacyToml}) }
 ${mp} = [Environment]::GetEnvironmentVariable('MAST_PROJECT', 'Machine')
