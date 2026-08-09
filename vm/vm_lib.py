@@ -2,7 +2,7 @@
 
 The WinRM/SSH transport layer that used to live here was lifted into the
 production package ``server/prov/transport.py`` (single source of truth, see
-DECISIONS.md 2026-07-12) so the shipped driver does not depend on this test
+docs/decisions/2026-07-12-port-server-orchestration-to-python.md) so the shipped driver does not depend on this test
 module. This file now re-exports that transport surface unchanged and keeps only
 the VirtualBox helpers, which are test-only (the production driver never touches
 a VM). Existing ``import vm_lib`` / ``from vm_lib import ...`` call sites in

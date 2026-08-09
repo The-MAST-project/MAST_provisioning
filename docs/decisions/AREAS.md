@@ -40,6 +40,19 @@ front. Expect it to be wrong in places and to shift.
 | `docs-process` | How this repo records and communicates its own decisions |
 | `rationale retrieval` | Getting from a piece of code to the reasoning behind it |
 | `PR conventions` | What a pull request is expected to carry |
+| `failure reporting` | Whether the system's own report matches what happened -- fail-closed vs fail-open, a silent success, a warning where a failure belongs |
+| `platform independence` | Running the same way from a Linux or a Windows server, with no per-platform branch |
+| `reproducibility` | A build or install producing the same result twice: pins, frozen caches, vendored artifacts |
+| `service logon sessions` | Which logon session a thing exists in -- LocalSystem vs interactive -- and what is visible from where |
+| `drive letters` | Windows drive letters as a naming mechanism, and what they can and cannot carry |
+| `the operational share` | The site controller's science share, and the contract units have with it |
+| `operator tooling` | What a person standing at a unit uses, with no controller and no network |
+| `fleet migration` | One-time, supervised changes applied across production units |
+
+Added 2026-08-09 with the 27 rewritten v3-branch records. Four of them
+(`platform independence`, `service logon sessions`, `the operational share`, `drive
+letters`) were already used as examples in this file and in `README.md` without being
+listed; the inventory made that visible.
 
 Multi-word phrases are fine and often better than forcing a single word (`the operational
 share`, `service logon sessions`, `platform independence`). Mixing grains inside one record

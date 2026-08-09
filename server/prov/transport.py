@@ -4,7 +4,8 @@ This module is the single source of truth for the server-side transport layer
 of MAST provisioning -- used by both the production driver (prov.driver) and the
 vm/ test harness (vm_lib re-exports it). It is deliberately platform-agnostic:
 pywinrm speaks WinRM over HTTP and paramiko speaks SSH, so the prov server can
-run on any OS while the units stay Windows (see DECISIONS.md 2026-07-12).
+run on any OS while the units stay Windows
+(see docs/decisions/2026-07-12-port-server-orchestration-to-python.md).
 
 It is the canonical source of truth for:
   * loading vault credentials
@@ -520,7 +521,8 @@ def connect_unit(
     """Return a unit session exposing .run_ps() -- an SshSession by default, a
     pywinrm Session only as fallback.
 
-    SSH-first (the adopted direction, DECISIONS.md 2026-07-12): SSH is encrypted,
+    SSH-first (the adopted direction,
+    docs/decisions/2026-07-12-ssh-first-transport-and-utf8-no-bom.md): SSH is encrypted,
     uniform across server OSes, and already the channel that survives the
     post-reboot Public-profile 401 that makes WinRM Basic refuse. WinRM is kept
     as a fallback until item 6's detached-execute lands, after which it retires

@@ -130,7 +130,7 @@ renumbering.
 |  1050 | `usbpcap` | USBPcap USB capture driver + tools |
 |  1100 | `wireshark` | Wireshark 4.6.0 network analyzer |
 |  1200 | `nssm` | NSSM (Non-Sucking Service Manager) + PATH |
-|  1300 | `nomachine` | NoMachine Enterprise Desktop (server) + license. Pins `SessionHistory 0` (the 9.0.188 history cleaner crashes the server, see `DECISIONS.md` 2026-08-03) and `UpdateFrequency 0`, then leaves `nxd` accepting NX connections on 4000 — re-running repairs a unit a past crash loop had disabled |
+|  1300 | `nomachine` | NoMachine Enterprise Desktop (server) + license. Pins `SessionHistory 0` (the 9.0.188 history cleaner crashes the server, see `docs/decisions/2026-08-03-nomachine-pins-server-cfg-and-verifies-serving.md`) and `UpdateFrequency 0`, then leaves `nxd` accepting NX connections on 4000 — re-running repairs a unit a past crash loop had disabled |
 |  1400 | `phd2` | PHD2 telescope autoguiding |
 |  1450 | `phd2-log-viewer` | PHDLogView offline PHD2 guide-log analyzer |
 |  1500 | `vcredist2013` | Visual C++ 2013 (MSVC120) x64 + x86 redistributables (for XILabs) |
@@ -246,7 +246,7 @@ This is the only path operators run by hand. Everything else is autonomous.
 > suites under `server/tests/` need Windows PowerShell 5.1 + Pester 3.x:
 > `Invoke-Pester -Path server\tests`. The **supervised loop** is `--loop` (`--interval-seconds`,
 > `--max-cycles`); run it as a service per **[server/deploy/README.md](server/deploy/README.md)**
-> (systemd unit / NSSM). See DECISIONS.md 2026-07-12.
+> (systemd unit / NSSM). See `docs/decisions/2026-07-12-loop-mode-is-a-long-lived-service.md`.
 
 For complete step-by-step instructions starting from a bare Windows machine,
 see **[docs/provisioning-server-setup.md](docs/provisioning-server-setup.md)**.
@@ -509,6 +509,6 @@ Never commit secrets, tokens, or `.lic` files.
 
 - [docs/provisioning-server-setup.md](docs/provisioning-server-setup.md) - full installation guide (bare Windows -> running autonomous loop)
 - [docs/decisions/](docs/decisions/) - design rationale, one file per decision ([format](docs/decisions/README.md)); where new decisions are recorded
-- [docs/decisions/archive-2026-05-04-to-2026-08-03.md](docs/decisions/archive-2026-05-04-to-2026-08-03.md) - the frozen former `DECISIONS.md`: 118 decisions taken 2026-05-04 to 2026-08-03, reverse-chronological
+- [docs/decisions/archive-2026-05-04-to-2026-08-03.md](docs/decisions/archive-2026-05-04-to-2026-08-03.md) - the frozen former `DECISIONS.md`: 91 decisions taken 2026-05-04 to 2026-07-29, reverse-chronological (the 27 later entries, written on `eli/provisioning-v3` and unmerged, are individual records)
 - [autonomous-provisioning-requirements.md](autonomous-provisioning-requirements.md) - design of the autonomous loop
 - [unit-config-open-questions.md](unit-config-open-questions.md) - open questions on per-unit MongoDB `UnitConfig` fields

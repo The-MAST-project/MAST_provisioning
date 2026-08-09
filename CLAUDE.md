@@ -43,18 +43,25 @@ Unit and host provisioning is executed under **`powershell.exe` (Desktop edition
 Design rationale lives in **`docs/decisions/YYYY-MM-DD-slug.md`, one file per decision**.
 The full format spec is `docs/decisions/README.md` -- read it before writing a record.
 
-**The pre-2026-08-07 log is a FROZEN archive, kept whole**, at
-`docs/decisions/archive-2026-05-04-to-2026-08-03.md` (118 entries). Do not append to it and
-do not edit it. It stays authoritative for everything it covers and is the **only** place
-that rationale exists, so **search it alongside** the individual records.
+**The merged pre-2026-08-07 log is a FROZEN archive, kept whole**, at
+`docs/decisions/archive-2026-05-04-to-2026-08-03.md` (91 entries, ending 2026-07-29). Do not
+append to it and do not edit it. It stays authoritative for what it covers and is the
+**only** place that rationale exists, so **search it alongside** the individual records.
+
+**Its filename names its provenance, not its span.** As `DECISIONS.md` it ran to 2026-08-03;
+the 27 entries written on `eli/provisioning-v3` and never merged to `main` were rewritten as
+individual records on 2026-08-09, before that branch landed. The filename is unchanged so the
+legacy citation mapping below keeps working. Why:
+`docs/decisions/2026-08-09-unmerged-decisions-ship-in-the-current-format.md`.
 
 **Legacy citations:** this file used to be `DECISIONS.md` at the repo root. About 30
 comments and docs still say `see DECISIONS.md 2026-05-26` or `see the 2026-05-25 DECISIONS
 entry` -- those all mean the archive above; the path in them is stale, the date is good.
 They were deliberately not rewritten (a doc move is not worth touching 25 provider scripts).
-Note that 24 of the archive's dates carry more than one entry (`2026-08-02` has nine), so a
+Note that 19 of the archive's dates carry more than one entry (`2026-05-16` has eight), so a
 bare date citation may be ambiguous -- read the surrounding entries, don't assume the first
-match.
+match. A dated citation **after 2026-07-29** points at one of the extracted records, not at
+the archive: list `docs/decisions/2026-0[78]-*.md` and match on the subject.
 
 ### Retrieval -- do this before changing unfamiliar code
 
@@ -200,8 +207,8 @@ The WinRM/SSH transport is the canonical `server/prov/transport.py` (lifted out 
 ### The server orchestration is being ported to Python (platform-agnostic)
 
 The server-side control plane is moving from `server/check-and-provision.ps1` to the Python
-package **`server/prov/`** (`MAST_provisioning#10` item 9 / PR #13; rationale in `DECISIONS.md`
-2026-07-12). **Standing requirement: the provisioning server must be platform-agnostic — all
+package **`server/prov/`** (`MAST_provisioning#10` item 9 / PR #13; rationale in
+`docs/decisions/2026-07-12-port-server-orchestration-to-python.md`). **Standing requirement: the provisioning server must be platform-agnostic — all
 paths and mechanisms run end-to-end against the Windows units with no per-platform patching or
 extra code.** Consequences for any new server code:
 
@@ -257,7 +264,7 @@ Two rules follow for any code that touches a network drive on a unit:
   provisioning server -- deriving one from the other lands on the wrong machine (this
   was a real fallback in the timesync provider).
 
-See `DECISIONS.md` 2026-08-03 and issue #25.
+See `docs/decisions/2026-08-03-z-belongs-to-the-operational-share.md` and issue #25.
 
 ## Empty-string args are dropped from `module.json` `-File` commands
 

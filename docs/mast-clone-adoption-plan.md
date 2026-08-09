@@ -182,7 +182,7 @@ time would defeat the single-source-of-truth this whole change is for.
 
 **Status:** landed — `build/build-staging-lib.ps1`, the staging loop in
 `build-mast.ps1`, `server/tests/build-staging-lib.Tests.ps1`, README schema
-note, DECISIONS 2026-08-02. Hash coverage deferred as described. **The Pester
+note, docs/decisions/2026-08-02-repofiles-stage-shared-tooling.md. Hash coverage deferred as described. **The Pester
 suite has not been run** — this branch was developed on macOS, which has no
 PowerShell; run `Invoke-Pester -Path server\tests\build-staging-lib.Tests.ps1`
 on the Windows provisioning box before merging.

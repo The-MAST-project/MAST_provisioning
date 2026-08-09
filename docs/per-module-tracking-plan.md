@@ -153,7 +153,8 @@ version-as-reporting). Per-stage consequences are in the stages below.
   only that module's hash; schema; `-TestMode` optional-payload skips don't
   crash the per-module hash.
 
-**Status:** landed as `module_state` (commit `890fa22`, DECISIONS 2026-07-23),
+**Status:** landed as `module_state` (commit `890fa22`,
+docs/decisions/2026-07-23-build-manifest-per-module-content-hashes.md),
 with `build/build-manifest-lib.ps1` + `server/tests/build-manifest-lib.Tests.ps1`.
 
 ### Stage 1b — Resolve upstream refs for source-tracked modules (added 2026-08-02)
@@ -223,7 +224,8 @@ Fixes the two-directional `mast` defect described above.
   schema; verify-outcome recorded; legacy manifest handled, not crashed.
 
 **Status:** landed (`7b773d6`) — `client/mast-installed-manifest.ps1` +
-`server/tests/mast-installed-manifest.Tests.ps1`, DECISIONS 2026-08-02.
+`server/tests/mast-installed-manifest.Tests.ps1`,
+docs/decisions/2026-08-02-installed-manifest-is-cumulative.md.
 Decided during implementation: the manifest is written on **every** run, partial
 included, and `payload_hash` is published only when `fully_provisioned` — so a
 partial run cannot make the driver's fast path skip the unit. **Pester not run**
@@ -252,7 +254,7 @@ order-terminal providers (`reboot`, `mast-services-finalize`, the order-9000
 writer but an operator. Fixed by classifying before the hash gate, a
 `module.json` `"always": true` flag carried to `build-manifest.json` as
 `always_modules`, and ignoring a tier-2 entry whose report predates the module's
-`installed_at`. See DECISIONS 2026-08-02.
+`installed_at`. See docs/decisions/2026-08-02-installed-manifest-is-cumulative.md.
 
 **Status:** landed (`04d4ee7`) — `server/prov/drift.py` + `test_drift.py` +
 targeted-update cases in `test_driver_flow.py`; 106 pytest pass, ruff clean.

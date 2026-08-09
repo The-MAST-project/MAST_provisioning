@@ -1,7 +1,8 @@
 """Tests for prov.transport -- the pure logic in the lifted WinRM/SSH transport.
 
 Moved from vm/tests/test_vm_lib.py when the transport was lifted out of vm_lib
-into prov.transport (DECISIONS.md 2026-07-12). The heartbeat test now patches
+into prov.transport
+(docs/decisions/2026-07-12-port-server-orchestration-to-python.md). The heartbeat test now patches
 prov.transport (where _run_with_heartbeat reads its module globals), not vm_lib.
 A re-export smoke test guards that the vm_lib shim still surfaces the API the
 vm/ harness imports.
