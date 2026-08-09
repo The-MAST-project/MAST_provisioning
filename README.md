@@ -71,7 +71,9 @@ MAST_provisioning/
 |   |-- creds.json                    # WinRM credentials for units
 |   `-- nomachine-licenses/*.lic
 |-- staging/<host>/01-provisioning/   # Build output, gitignored
-|-- DECISIONS.md
+|-- docs/
+|   |-- decisions/                    # Design rationale: one file per decision + the frozen archive
+|   `-- *.md                          # Plans and analyses
 |-- autonomous-provisioning-requirements.md
 `-- README.md
 ```
@@ -506,6 +508,7 @@ Never commit secrets, tokens, or `.lic` files.
 ## See also
 
 - [docs/provisioning-server-setup.md](docs/provisioning-server-setup.md) - full installation guide (bare Windows -> running autonomous loop)
-- [DECISIONS.md](DECISIONS.md) - architecture decisions, in reverse-chronological order
+- [docs/decisions/](docs/decisions/) - design rationale, one file per decision ([format](docs/decisions/README.md)); where new decisions are recorded
+- [docs/decisions/archive-2026-05-04-to-2026-08-03.md](docs/decisions/archive-2026-05-04-to-2026-08-03.md) - the frozen former `DECISIONS.md`: 118 decisions taken 2026-05-04 to 2026-08-03, reverse-chronological
 - [autonomous-provisioning-requirements.md](autonomous-provisioning-requirements.md) - design of the autonomous loop
 - [unit-config-open-questions.md](unit-config-open-questions.md) - open questions on per-unit MongoDB `UnitConfig` fields

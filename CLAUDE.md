@@ -38,35 +38,95 @@ Unit and host provisioning is executed under **`powershell.exe` (Desktop edition
 - Do **not** use `if` as an inline expression inside bare parentheses `(if (...) {...} else {...})`. In 5.1, `if` inside `()` is parsed as a command name and throws `"The term 'if' is not recognized as the name of a cmdlet"`. Use the subexpression operator instead: `$(if (...) {...} else {...})`. This applies anywhere `if` appears inside a `-f` format string argument, a function call argument, or any other expression context.
 - Do **not** use `Register-ObjectEvent ... -Action { ... }` (or `Register-EngineEvent -Action`) in scripts that run under WinRM. The action creates a PSEventJob bound to the engine event queue, and `powershell.exe` waits for all event subscribers to drain before returning to the WinRM caller. If an event is mid-flight at exit (or `Unregister-Event` races a running action), the process hangs indefinitely with no timeout -- the WinRM call never returns, and only the outer Python heartbeat reveals the stall. This bit `execute-mast-provisioning.ps1` once: a `System.Timers.Timer` + `Register-ObjectEvent` lease renewer hung every clean-exit run (see 2026-05-16 DECISIONS entry). If you need periodic work alongside a long-running script, run the renewer as a child process (`Start-Process powershell.exe -PassThru` + `Stop-Process` in finally) so its lifetime is decoupled from the parent runspace. Pick a TTL long enough to cover the worst-case run before reaching for periodic renewal at all. **Note:** symptoms that *look* like this bug (unit-side script finishes, but the host's `run_ps` keeps ticking) can also come from the host-side WinRM transport hanging on a single oversized WSMan Receive on a half-dead TCP socket -- that one lives in `vm/vm_lib.py` and is addressed by the 2026-05-17 resilient Receive loop, not by anything on the unit. Verify which side is stuck before reaching for renewer-style fixes; the unit-side teardown breadcrumbs at the bottom of `execute-mast-provisioning.ps1` exist for exactly that triage.
 
-## DECISIONS.md
+## Decision records (`docs/decisions/`)
 
-`DECISIONS.md` is a reverse-chronological log of architectural and design decisions.
+Design rationale lives in **`docs/decisions/YYYY-MM-DD-slug.md`, one file per decision**.
+The full format spec is `docs/decisions/README.md` -- read it before writing a record.
 
-**When to add an entry:**
-- Any architectural or design decision: transfer mechanism, credential model, script
-  decomposition, protocol choice, directory layout, security posture, etc.
-- Do NOT add entries for debugging spikes, transient experiments, or bug fixes that
-  don't reflect a deliberate design choice.
+**The pre-2026-08-07 log is a FROZEN archive, kept whole**, at
+`docs/decisions/archive-2026-05-04-to-2026-08-03.md` (118 entries). Do not append to it and
+do not edit it. It stays authoritative for everything it covers and is the **only** place
+that rationale exists, so **search it alongside** the individual records.
 
-**Format:** Each entry is a dated H2 heading followed by three sections -- **Why**
-(the problem or motivation), **What** (the change made), **Implications** (consequences,
-constraints, or follow-on work). Match the style of existing entries.
+**Legacy citations:** this file used to be `DECISIONS.md` at the repo root. About 30
+comments and docs still say `see DECISIONS.md 2026-05-26` or `see the 2026-05-25 DECISIONS
+entry` -- those all mean the archive above; the path in them is stale, the date is good.
+They were deliberately not rewritten (a doc move is not worth touching 25 provider scripts).
+Note that 24 of the archive's dates carry more than one entry (`2026-08-02` has nine), so a
+bare date citation may be ambiguous -- read the surrounding entries, don't assume the first
+match.
 
-**Date:** Always generate the date with a system command -- run `date /t` (cmd) or
-`(Get-Date).ToString('yyyy-MM-dd')` (PowerShell) and use the result. Never guess or
-hardcode a date.
+### Retrieval -- do this before changing unfamiliar code
 
-**Order:** Prepend new entries at the top (below the H1 and first `---`). The file
-reads newest-first.
+When the question is *"why is this written this way?"* and the code does not answer it, the
+rationale is very likely recorded. Look for it before assuming the shape is accidental:
 
-**Amending vs. appending:** If your understanding of the decision evolves while the
-same change is still staged (i.e., before the relevant git commit), edit the pending
-entry in place to reflect the decision more accurately. Only append a new entry once
-the prior decision is committed and you are recording something genuinely new.
+```bash
+git grep -il '<symbol, script, or path>' docs/decisions/   # covers records AND the archive
+git log -1 --format=%s -- <path>          # then read the PR body the commit came from
+ls docs/decisions/2*.md                   # filenames are descriptive slugs; this is the index
+```
 
-**Immutability after commit:** Once an entry is committed, do not edit it -- even if
-later work makes it stale. Later decisions that supersede an earlier one get their own
-new entry at the top.
+Do this in particular before "simplifying" something that looks redundant, removing a
+workaround, widening a permission, or changing an ordering constant. Several such shapes in
+this repo are deliberate and the reason is only in the record (`/persistent:no` on the `Z:`
+mapping, the interactive Npcap install, the order-9000 proxy finalize).
+
+**Report what you find, and treat it as history rather than law.** A record states what was
+believed when the decision was made -- cite it with its date ("a 2026-08-03 decision chose
+X because Y") and check whether the reason still holds, rather than treating it as a
+standing prohibition. Standing prohibitions are in this file, not there.
+
+### Writing a record
+
+**When:** any change that embodied a judgment call -- a mechanism chosen over an
+alternative, a constraint accepted, a compromise taken knowingly, an ordering with a
+reason, or a bug whose *diagnosis* was surprising. The bar is deliberately low; the reader
+is an agent, so volume is cheap and a missing record is expensive. Skip records only for
+typos, mechanical renames, and refactors with no rationale.
+
+**Anchor it in the prose.** Name the concrete file paths, script names, provider
+directories, and symbol names **in the body**, spelled as they appear in the code -- that is
+the only thing making a record findable from the code it explains. Keep identifiers out of
+frontmatter: in a sentence about what was done on a date a stale path reads as history, but
+in a metadata field it reads as a claim about the present. Frontmatter carries `areas:`
+instead: 2-4 subject tags at any level of the system, **reused from
+`docs/decisions/AREAS.md`** where one fits and **coined and added there** where none does.
+Block list form only -- the inline `[a, b]` form drops out of that file's inventory command.
+
+**Record the doubt.** The `Rejected` and `Unsettled` sections are the point -- alternatives
+not taken (specifically enough to be recognized later), plus what was not known, knowingly
+left broken, or assumed without verification. Do not write invariants or predictions about
+what future contributors might do; if a decision produces a standing rule, add the rule to
+this file and have it cite the record.
+
+**Date:** always from a system command -- `date /t` (cmd) or
+`(Get-Date).ToString('yyyy-MM-dd')` (PowerShell). Never guess. `decided:` is when the call
+was made, not when the PR merges; git records the latter.
+
+**Immutability:** the body of a committed record is never edited. To reverse or refine one,
+write a new record with `supersedes:` set and flip the old one's `status:` to `superseded`
+with `superseded_by:` filled. Exactly three frontmatter keys may be edited after commit --
+`status:`, `superseded_by:`, `areas:` (the last so synonyms can be merged during `AREAS.md`
+curation). The freeze protects the historical claim, not the navigation metadata.
+Uncommitted records are freely editable.
+
+## Every PR body states why, not just what
+
+A PR body must contain a **Why** paragraph: the problem, what was tried or rejected, and
+anything knowingly left undone. The *what* is already in the diff and the commit subjects;
+the *why* exists nowhere else and is the thing that is impossible to recover three weeks
+later when fixing a one-liner.
+
+This is the second retrieval path: `git blame` -> commit -> PR -> rationale. It works from
+any line of code and needs no index, which is why it is required on **every** PR, while a
+`docs/decisions/` record is reserved for rationale that should outlive its diff.
+
+Link the ticket (`Closes MAST_provisioning#NN`) and, when the change enacts one, the
+decision record. The ticket carries the discussion; the PR carries the ratified reason.
+
+> Provisional here, pending promotion to `mast-claude-config` -- PR conventions are
+> genuinely cross-repo, and this is being proven on one repo first.
 
 ## Single source of truth / DRY
 
