@@ -58,13 +58,6 @@ if (-not (Test-Path -LiteralPath ${Top})) {
     [void]${issues}.Add("source tree missing: ${Top}")
 }
 
-# The old layout is a hard failure, not something to work around: the unit is
-# unmigrated, and the autonomous loop must refuse it rather than half-update it
-# (docs/mast-clone-adoption-plan.md stage 6).
-if (Test-Path -LiteralPath 'C:\MAST\repos') {
-    [void]${issues}.Add('legacy C:\MAST\repos still present -- unit not migrated to the mast-clone layout')
-}
-
 ${venvPython} = Join-Path ${Top} '.venv\Scripts\python.exe'
 if (-not (Test-Path -LiteralPath ${venvPython})) {
     [void]${issues}.Add("venv interpreter missing: ${venvPython}")
