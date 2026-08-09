@@ -61,11 +61,36 @@ ${nssmExe} = 'C:\Program Files\nssm\nssm.exe'
 ${nssmOk} = Test-Path -LiteralPath ${nssmExe}
 ${svc} = Get-Service -Name ${UnitService} -ErrorAction SilentlyContinue
 if (${nssmOk} -and ${svc}) {
-    ${appEvents} = (& ${nssmExe} get ${UnitService} AppEvents 'Start/Pre' 2>&1 | Out-String)
+    # 2>&1 captures nssm's native error text into the variable, but under
+    # ErrorActionPreference=Stop the NativeCommandError still TERMINATES the script --
+    # so on a build without AppEvents this check used to abort the whole verify with a
+    # stack trace, and checks 5 and 6 never ran. Isolate the invocation so one
+    # unsupported parameter cannot mask the state of everything after it (#55).
+    ${appEvents} = ''
+    ${probeFailed} = $false
+    try {
+        ${prevEap} = ${ErrorActionPreference}
+        ${ErrorActionPreference} = 'Continue'
+        ${appEvents} = (& ${nssmExe} get ${UnitService} AppEvents 'Start/Pre' 2>&1 | Out-String)
+        if (${LASTEXITCODE} -ne 0) { ${probeFailed} = $true }
+    } catch {
+        ${probeFailed} = $true
+        ${appEvents} = ${_}.Exception.Message
+    } finally {
+        ${ErrorActionPreference} = ${prevEap}
+    }
     # nssm pads its output with NULs; strip them before matching (same trick the
     # verify-mast interpreter check uses).
     ${appEvents} = (${appEvents} -replace "`0", '').Trim()
-    if (${appEvents} -like ("*" + (Split-Path -Leaf ${MountScript}) + "*")) {
+
+    if (${probeFailed} -or (${appEvents} -match 'Invalid parameter')) {
+        # Reported, not failed. The vendored nssm has no AppEvents parameter at all, so
+        # there is no hook to assert; the provider says the same and does not claim to
+        # have set one. The residual risk -- a mast-unit restart without a reboot -- is
+        # owned by MAST_common#26, which removes the need for the letter entirely.
+        W ("[WARN] nssm build does not support AppEvents; no Start/Pre hook to verify on {0} (see #55)" -f ${UnitService})
+    }
+    elseif (${appEvents} -like ("*" + (Split-Path -Leaf ${MountScript}) + "*")) {
         W ("nssm Start/Pre hook on {0}: {1}" -f ${UnitService}, ${appEvents})
     } else {
         ${fail} += ("nssm Start/Pre hook on {0} does not invoke {1} (got: '{2}')" -f ${UnitService}, ${MountScript}, ${appEvents})
