@@ -84,6 +84,11 @@ EXIT_OK = 0
 EXIT_UNIT_FAIL = 1
 EXIT_FATAL = 2
 
+#: Exit code execute-mast-provisioning.ps1 uses for "another run holds the execute
+#: lease" -- a refusal, not a failure. Must stay in step with MAST_EXIT_LEASE_HELD
+#: in client/execute-mast-provisioning.ps1.
+EXECUTE_EXIT_LEASE_HELD = 10
+
 
 def _ps_lit(s: str) -> str:
     """A value as a PowerShell single-quoted string literal (doubles quotes)."""
@@ -742,6 +747,15 @@ class Driver:
             self.exit_code = EXIT_UNIT_FAIL
             return False, session
         rc = int(result.get("exit_code", 1))
+        if rc == EXECUTE_EXIT_LEASE_HELD:
+            # A refusal, not a failure: another run holds the execute lease and is
+            # progressing. Reprovisioning over it is the actively wrong reaction, and
+            # calling it EXECUTE_FAIL is how a healthy run got misdiagnosed as dead
+            # (#47). Leave self.exit_code alone -- the cycle did not fail.
+            self.log.event("EXECUTE_LEASE_HELD", unit=host, exit_code=rc, duration_s=dur(),
+                           detail=str(result.get("lease") or "").strip()[:200])
+            self.log.activity(host, "SKIP", "lease_held", dur(), payload_hash, git_sha)
+            return False, session
         if rc != 0:
             self.log.event("EXECUTE_FAIL", unit=host, exit_code=rc, duration_s=dur())
             self.log.activity(host, "EXECUTE_FAIL", f"exit_{rc}", dur(), payload_hash, git_sha)

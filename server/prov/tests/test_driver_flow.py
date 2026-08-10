@@ -10,6 +10,8 @@ the earlier suite left to the VM run.
 from __future__ import annotations
 
 import json
+import re
+from pathlib import Path
 
 import pytest
 
@@ -452,3 +454,39 @@ def test_execute_no_longer_carries_an_smb_credential(root, monkeypatch):
     cfg = _detached_cfg(sess)
     assert "smb_user" not in cfg and "prov_server" not in cfg, cfg
     assert not any("smb-cred.dpapi" in s for s in sess.scripts)
+
+
+def test_lease_held_is_a_refusal_not_a_failure(root, monkeypatch):
+    """Exit 10 from execute means another run holds the lease and is progressing.
+
+    It used to arrive as a plain exit 1, indistinguishable from a real failure, so a
+    live run was misdiagnosed as dead and an issue filed claiming no lease guard
+    existed when the guard had worked perfectly (#47). The cycle must not be marked
+    failed, and the loop must not reprovision over a healthy run.
+    """
+    responder = make_responder(
+        execute='{"status": "done", "exit_code": 10, "lease": "LEASE_HELD run_id=exec-1 pid=6824"}'
+    )
+    drv, _sess = _make_driver(root, monkeypatch, responder)
+    code = drv.run()
+    log = drv.log.run_log_path.read_text()
+
+    assert "EXECUTE_LEASE_HELD" in log, log
+    assert "EXECUTE_FAIL" not in log, log
+    assert code == D.EXIT_OK, log
+    # The holder is named where someone reading the run log will see it.
+    assert "exec-1" in log or "6824" in log, log
+
+
+def test_execute_lease_held_code_matches_the_powershell_constant():
+    """The refusal code is duplicated across the language boundary; assert it agrees.
+
+    The driver decides what the number means and execute-mast-provisioning.ps1 emits
+    it, so a silent divergence turns every refusal back into an EXECUTE_FAIL -- the
+    exact confusion #47 is about.
+    """
+    ps_path = Path(D.__file__).resolve().parents[2] / "client" / "execute-mast-provisioning.ps1"
+    ps = ps_path.read_text(encoding="utf-8", errors="replace")
+    m = re.search(r"MAST_EXIT_LEASE_HELD\s+-Value\s+(\d+)", ps)
+    assert m, f"MAST_EXIT_LEASE_HELD constant not found in {ps_path}"
+    assert int(m.group(1)) == D.EXECUTE_EXIT_LEASE_HELD
