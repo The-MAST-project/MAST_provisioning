@@ -152,6 +152,10 @@ class Driver:
         self.log_root = self.log.log_root
         self.exit_code = EXIT_OK
         self.units_checked = 0
+        #: Set per unit by _execute when a run is refused for a held execute lease,
+        #: so _process_unit can hand the unit back as available rather than leaving
+        #: it flagged unavailable by a run that changed nothing.
+        self.execute_refused = False
         self.prov_server = os.environ.get("COMPUTERNAME") or socket.gethostname()
 
     # -- top-level ----------------------------------------------------------
@@ -420,8 +424,18 @@ class Driver:
                     return  # TRANSFER_FAIL already logged
 
                 # Phase 8 -- execute (detached; may reconnect and replace session).
+                self.execute_refused = False
                 ok, session = self._execute(session, host, dur, payload_hash, git_sha,
                                             target_modules)
+                if not ok and self.execute_refused:
+                    # Refused for a held execute lease: this run changed nothing, so
+                    # hand the unit straight back instead of leaving it flagged
+                    # unavailable. Otherwise a refusal takes a healthy unit out of
+                    # service until the next successful run -- the same wrong signal
+                    # as #47's exit code, one layer up in the availability contract.
+                    self._set_available(session, host)
+                    lease_held = False
+                    return
                 if not ok:
                     return  # EXECUTE_FAIL already logged
 
@@ -771,6 +785,8 @@ class Driver:
                            holder_pid=holder.get("pid") or "unknown",
                            expires=holder.get("expires_utc") or "unknown")
             self.log.activity(host, "SKIP", "lease_held", dur(), payload_hash, git_sha)
+            # Tells _process_unit to hand the unit back as available: nothing ran.
+            self.execute_refused = True
             return False, session
         if rc != 0:
             self.log.event("EXECUTE_FAIL", unit=host, exit_code=rc, duration_s=dur())

@@ -482,6 +482,10 @@ def test_lease_held_is_a_refusal_not_a_failure(root, monkeypatch):
     # which one is what let a healthy run be read as a dead one.
     assert "holder_run=exec-1" in log, log
     assert "holder_pid=6824" in log, log
+    # A refusal changed nothing, so the unit is handed straight back rather than left
+    # flagged unavailable until some later run happens to succeed.
+    assert "AVAIL_SET" in log and "available=true" in log, log
+    assert "provisioning_incomplete" not in log, log
 
 
 def test_execute_lease_held_code_matches_the_powershell_constant():
