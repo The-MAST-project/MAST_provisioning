@@ -30,6 +30,30 @@ def _write_smoke(smoke_path: Path, body: str) -> None:
     smoke_path.write_text(body + "\n", encoding="ascii")
 
 
+def _resolve_controller() -> tuple[bool, str, str]:
+    """Return (ok, controller_host, detail) from the unit's own config.toml.
+
+    Recorded in the smoke body so the artifact says which controller the run
+    validated against. Without it a wrong-controller validation is invisible
+    until someone reads a traceback: #50 was found that way, from a solve that
+    had already reached mast-wis-control on an `ns` unit.
+
+    Resolution failing is a hard error, not a warning. The rest of the chain
+    already depends on this file -- MastrometryDotNet constructs Config, which
+    reads it -- so a config that cannot be resolved is a run that cannot be
+    valid, consistent with the module-level precondition policy.
+    """
+    try:
+        from common.config.local import load_local_config  # type: ignore
+    except Exception as e:
+        return False, "", f"import_failed ({e})"
+    try:
+        cfg = load_local_config()
+    except Exception as e:
+        return False, "", f"{type(e).__name__} ({e})"
+    return True, cfg.controller_host, f"site={cfg.site} mongo_uri={cfg.mongo_uri}"
+
+
 def _has_ramdisk_indexes() -> tuple[bool, str]:
     """Return (ok, reason). ok=True means we can attempt the solve."""
     # Mastrometry expects indexes at <ram.drive>/mast-indexes (see
@@ -80,6 +104,12 @@ def main() -> int:
 
     # Machine identity/role comes from C:\WIS\config.toml (machine_role), laid down by
     # config-bootstrap before this runs -- no MAST_PROJECT env var.
+    ctrl_ok, controller, ctrl_detail = _resolve_controller()
+    if not ctrl_ok:
+        print(f"FAIL: could not resolve the controller from the unit's config: {ctrl_detail}. "
+              "The solve reads the same config, so a run that cannot resolve it is not valid.")
+        return 1
+    print(f"controller={controller} ({ctrl_detail})")
 
     # Preconditions -- HARD FAIL if not met (a run without a real solve is invalid).
     if not fits_path.exists():
@@ -156,7 +186,7 @@ def main() -> int:
         if args.allow_missing_avx and (
             "killed by signal 4" in err_text or "SIGILL" in err_text
         ):
-            body = "mastrometry_ok solve=skipped reason=avx_missing"
+            body = f"mastrometry_ok solve=skipped reason=avx_missing controller={controller}"
             _write_smoke(smoke_path, body)
             print("WARN: solver crashed with signal 4 / SIGILL -- guest CPU lacks AVX/AVX2/FMA.")
             print("WARN: --allow-missing-avx set (dev VM mode); treating mast-validation as SKIPPED.")
@@ -174,6 +204,7 @@ def main() -> int:
 
     body = (
         "mastrometry_ok solve=ok "
+        f"controller={controller} "
         f"ra_hours={ra_hours} dec_degs={dec_degs} matched={matched}"
     )
     _write_smoke(smoke_path, body)
