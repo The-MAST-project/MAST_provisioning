@@ -57,6 +57,58 @@ def test_resolve_modules_precedence(root):
     assert drv._resolve_modules({"hostname": "m", "modules": ["ascom"]}) == ["git", "mast"]
 
 
+def _write_module(root, name, order, always=False):
+    d = root / "server" / "providers" / name
+    d.mkdir(parents=True, exist_ok=True)
+    body = {"name": name, "order": order}
+    if always:
+        body["always"] = True
+    (d / "module.json").write_text(json.dumps(body), encoding="utf-8")
+
+
+def test_explicit_modules_still_get_the_always_modules(root):
+    """A --modules subset must close out the run like a drift-targeted one does.
+
+    DriftReport.targets deliberately folds the ``always: true`` modules into any
+    non-empty target set; the CLI override bypassed that entirely, so a targeted
+    run skipped proxy (posture), mast-services-finalize (leaves the unit
+    quiescent) and reboot (pending-reboot detection the orchestrator acts on).
+    Observed 2026-08-09: three runs with --modules left mast-unit Running on
+    three production units and reported exit_code=0 (#60).
+    """
+    drv = D.Driver(_cfg(root))
+    repo = drv.cfg.repo_top
+    _write_module(repo, "proxy", 100, always=True)
+    _write_module(repo, "config-bootstrap", 150)
+    _write_module(repo, "mast", 2200)
+    _write_module(repo, "mast-services-finalize", 9500, always=True)
+    _write_module(repo, "reboot", 9999, always=True)
+
+    drv.cfg.modules = ["config-bootstrap,mast"]
+    got = drv._resolve_modules({"hostname": "m"})
+
+    assert got == ["proxy", "config-bootstrap", "mast", "mast-services-finalize", "reboot"], got
+
+
+def test_always_modules_are_not_added_to_an_empty_override(root):
+    # No override: the registry list or the full-set fallback already covers them,
+    # and nothing should be synthesised out of a request that was not made.
+    drv = D.Driver(_cfg(root))
+    repo = drv.cfg.repo_top
+    _write_module(repo, "reboot", 9999, always=True)
+    _write_module(repo, "git", 500)
+    assert drv._resolve_modules({"hostname": "m", "modules": ["git"]}) == ["git"]
+
+
+def test_always_modules_are_not_duplicated_when_named_explicitly(root):
+    drv = D.Driver(_cfg(root))
+    repo = drv.cfg.repo_top
+    _write_module(repo, "proxy", 100, always=True)
+    _write_module(repo, "mast", 2200)
+    drv.cfg.modules = ["mast,proxy"]
+    assert drv._resolve_modules({"hostname": "m"}) == ["proxy", "mast"]
+
+
 def test_run_fatal_on_missing_registry(root):
     cfg = _cfg(root)  # reg.json / creds.json do not exist
     drv = D.Driver(cfg)

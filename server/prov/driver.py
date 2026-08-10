@@ -224,12 +224,58 @@ class Driver:
             self.log.event("PREFLIGHT_SMB_OK")
 
     # -- per unit -----------------------------------------------------------
+    def _module_order(self) -> dict[str, int]:
+        """``module.json`` name -> ``order``, for every provider in the tree."""
+        providers = self.cfg.repo_top / "server" / "providers"
+        if not providers.is_dir():
+            return {}
+        out: dict[str, int] = {}
+        for d in providers.iterdir():
+            mj = d / "module.json"
+            if not mj.exists():
+                continue
+            body = _parse_json_or_none(mj.read_text(encoding="utf-8-sig", errors="replace")) or {}
+            out[d.name] = int(body.get("order") or 0)
+        return out
+
+    def _always_modules(self) -> list[str]:
+        """Providers declaring ``"always": true`` in module.json.
+
+        These are the order-terminal cross-cutting steps -- ``proxy`` (posture),
+        ``mast-services-finalize`` (leave the unit quiescent), ``reboot`` (detect a
+        pending reboot the orchestrator acts on). DriftReport.targets already folds
+        them into any non-empty target set; this is the same set, read from the tree
+        rather than from the build manifest, because module resolution happens
+        before the build that would produce it.
+        """
+        providers = self.cfg.repo_top / "server" / "providers"
+        if not providers.is_dir():
+            return []
+        found: list[str] = []
+        for d in providers.iterdir():
+            mj = d / "module.json"
+            if not mj.exists():
+                continue
+            body = _parse_json_or_none(mj.read_text(encoding="utf-8-sig", errors="replace")) or {}
+            if body.get("always"):
+                found.append(d.name)
+        return found
+
     def _resolve_modules(self, unit: dict) -> list[str]:
         if self.cfg.modules:
             out: list[str] = []
             for m in self.cfg.modules:
                 out += [p for p in str(m).split(",") if p]
-            return out
+            # An explicit subset must still close out the run. Without this a
+            # targeted run skipped the always-modules entirely: observed 2026-08-09,
+            # three --modules runs left mast-unit Running on three production units
+            # and reported exit_code=0, because mast-services-finalize never ran
+            # (#60). The drift path has always done this; the override bypassed it.
+            order = self._module_order()
+            for name in self._always_modules():
+                if name not in out:
+                    out.append(name)
+            return sorted(out, key=lambda n: (order.get(n, 0), n))
         if unit.get("modules"):
             return list(unit["modules"])
         providers = self.cfg.repo_top / "server" / "providers"
