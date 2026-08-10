@@ -132,7 +132,7 @@ $script:AllowUnencryptedOk = $false
 # flag units missing newer bootstrap elements. BUMP THIS whenever you add a bootstrap
 # capability, and add a matching element (since = this number) to
 # client/bootstrap-elements.json so its current_version stays == this value.
-$script:BootstrapVersion = 8
+$script:BootstrapVersion = 9
 
 # --- Service trim list (applied by default; exempt with -SkipTrim) ------------
 # Non-essential / vendor services with no role on a headless control box. Service
@@ -425,16 +425,56 @@ function Write-BootstrapDesktopReport([string]$HostNm, [string]$SiteCode) {
     }
 }
 
+# Set the machine-wide ExecutionPolicy here rather than printing it as a manual step.
+# It was printed for months and skipped on mast04 (2026-07-07) and mast03
+# (2026-07-08), then applied by hand both times -- #51. Bootstrap already runs
+# elevated, so there was never a capability reason for it to be manual.
+#
+# Set-ExecutionPolicy writes the registry and THEN throws SecurityException with
+# FullyQualifiedErrorId 'ExecutionPolicyOverride' if a more permissive scope shadows
+# the one written (measured on mast03, PS 5.1.19041.4522). Bootstrap is normally run
+# from an interactive console where nothing shadows it, but it can be launched with
+# -ExecutionPolicy Bypass, so the read-back -- not the absence of a throw -- is what
+# decides. The execution-policy provider re-asserts this on every cycle; bootstrap
+# is the one-shot that stops a fresh unit shipping Restricted in the meantime.
+function Set-MastExecutionPolicy {
+    $want = 'RemoteSigned'
+    $before = (Get-ExecutionPolicy -Scope LocalMachine).ToString()
+    if ($before -eq $want) {
+        Write-BootstrapMsg ("  ExecutionPolicy LocalMachine already {0}." -f $want) 'White'
+        return
+    }
+    try {
+        Set-ExecutionPolicy -ExecutionPolicy $want -Scope LocalMachine -Force -ErrorAction Stop
+    } catch [System.Security.SecurityException] {
+        if ($_.FullyQualifiedErrorId -notlike 'ExecutionPolicyOverride*') {
+            Write-BootstrapMsg ("  [WARN] Set-ExecutionPolicy: {0}" -f $_.Exception.Message) 'Yellow'
+        }
+    } catch {
+        Write-BootstrapMsg ("  [WARN] Set-ExecutionPolicy failed: {0}" -f $_.Exception.Message) 'Yellow'
+    }
+    $after = (Get-ExecutionPolicy -Scope LocalMachine).ToString()
+    if ($after -eq $want) {
+        Write-BootstrapMsg ("  ExecutionPolicy LocalMachine set to {0} (was {1})." -f $after, $before) 'White'
+        return
+    }
+    $gpo = @(Get-ExecutionPolicy -List |
+        Where-Object { $_.Scope -in @('MachinePolicy', 'UserPolicy') -and $_.ExecutionPolicy -ne 'Undefined' })
+    if ($gpo.Count -gt 0) {
+        $which = ($gpo | ForEach-Object { "{0}={1}" -f $_.Scope, $_.ExecutionPolicy }) -join ', '
+        Write-BootstrapMsg ("  [WARN] ExecutionPolicy is {0}, wanted {1}; Group Policy defines {2} and outranks LocalMachine." -f $after, $want, $which) 'Yellow'
+        Write-BootstrapMsg '         This needs a domain-policy change; provisioning cannot fix it.' 'Yellow'
+    } else {
+        Write-BootstrapMsg ("  [WARN] ExecutionPolicy is {0}, wanted {1}, with no Group Policy to explain it." -f $after, $want) 'Yellow'
+    }
+}
+
 function Show-BootstrapNextSteps([string]$HostNm) {
-    Write-BootstrapMsg '' 'Yellow'
-    Write-BootstrapMsg '--- MANUAL STEP: set ExecutionPolicy ---' 'Yellow'
-    Write-BootstrapMsg '  Run this once in an elevated PowerShell on this machine:' 'Yellow'
-    Write-BootstrapMsg '    Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope LocalMachine' 'White'
-    Write-BootstrapMsg '  Answer [Y] at the confirmation prompt.' 'Yellow'
     Write-BootstrapMsg '' 'Green'
     Write-BootstrapMsg '--- NEXT: hand off to provisioning ---' 'Green'
     Write-BootstrapMsg '  Bootstrap has done all first-time prep (mast admin, WinRM HTTP/5985, firewall,' 'Green'
-    Write-BootstrapMsg '  OpenSSH, Npcap, Windows Update suppression, computer name). No prepare step remains.' 'Green'
+    Write-BootstrapMsg '  OpenSSH, Npcap, Windows Update suppression, computer name, ExecutionPolicy).' 'Green'
+    Write-BootstrapMsg '  No prepare step remains.' 'Green'
     Write-BootstrapMsg "  1) Ensure the prov server resolves $HostNm (DNS or hosts entry)." 'Green'
     Write-BootstrapMsg "  2) Add $HostNm to server\unit-registry.json on the prov server; the autonomous" 'Green'
     Write-BootstrapMsg '     check-and-provision.ps1 loop will provision it on its next cycle.' 'Green'
@@ -1431,6 +1471,10 @@ try {
         $skip = if ($SkipTrim -contains $t.Name) { ' [skip]' } else { '' }
         Write-BootstrapMsg ("    {0,-26} State={1,-9} StartMode={2}{3}" -f $s.Name, $s.Status, $start, $skip) 'White'
     }
+
+    Write-BootstrapMsg '' 'Cyan'
+    Write-BootstrapMsg '--- ExecutionPolicy ---' 'Cyan'
+    Set-MastExecutionPolicy
 
     # Stamp the bootstrap version so the fleet drift report can tell which bootstrap
     # this unit ran (and therefore which newer bootstrap elements it may be missing).
