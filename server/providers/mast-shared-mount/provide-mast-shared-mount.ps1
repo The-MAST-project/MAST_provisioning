@@ -110,9 +110,52 @@ ${nssmExe} = 'C:\Program Files\nssm\nssm.exe'
 ${nssmOk} = Test-Path -LiteralPath ${nssmExe}
 ${svc} = Get-Service -Name ${UnitService} -ErrorAction SilentlyContinue
 if (${nssmOk} -and ${svc}) {
-    ${hook} = ('powershell.exe -NoProfile -ExecutionPolicy Bypass -NonInteractive -File "{0}"' -f ${MountScript})
-    & ${nssmExe} set ${UnitService} AppEvents ('Start/Pre=' + ${hook}) | Out-Null
-    Write-MLog ("Set nssm Start/Pre hook on {0}." -f ${UnitService})
+    # AppEvents (the Start/Pre, Start/Post, Stop/Pre ... hook family) arrived in a
+    # later nssm build than the one vendored on the fleet, which rejects the
+    # parameter outright. Probe before setting: the set used to be issued blind and
+    # its failure was invisible, so the provider logged "Set nssm Start/Pre hook"
+    # and exited 0 for something that never happened (#55).
+    # Both nssm calls must be isolated from ErrorActionPreference=Stop: 2>&1 captures
+    # the native error text, but the NativeCommandError still TERMINATES the script,
+    # which would abort the provider here -- before the mount in step 5 -- on exactly
+    # the builds this probe exists to detect.
+    ${appEventsSupported} = $false
+    ${hookSet} = $false
+    ${hookDetail} = ''
+    ${prevEap} = ${ErrorActionPreference}
+    try {
+        ${ErrorActionPreference} = 'Continue'
+        ${probe} = (& ${nssmExe} get ${UnitService} AppEvents 'Start/Pre' 2>&1 | Out-String)
+        ${appEventsSupported} = (${LASTEXITCODE} -eq 0) -and (${probe} -notmatch 'Invalid parameter')
+
+        if (${appEventsSupported}) {
+            ${hook} = ('powershell.exe -NoProfile -ExecutionPolicy Bypass -NonInteractive -File "{0}"' -f ${MountScript})
+            ${hookDetail} = (& ${nssmExe} set ${UnitService} AppEvents ('Start/Pre=' + ${hook}) 2>&1 | Out-String)
+            ${hookSet} = (${LASTEXITCODE} -eq 0)
+        }
+    } catch {
+        ${hookDetail} = ${_}.Exception.Message
+    } finally {
+        ${ErrorActionPreference} = ${prevEap}
+    }
+
+    if (${appEventsSupported}) {
+        if (${hookSet}) {
+            Write-MLog ("Set nssm Start/Pre hook on {0}." -f ${UnitService})
+        } else {
+            Write-MLog ("[WARN] nssm rejected the Start/Pre hook on {0}; the hook is NOT set. {1}" -f `
+                ${UnitService}, (${hookDetail} -replace "`0", '').Trim())
+        }
+    } else {
+        # Not fatal, and deliberately so. The at-startup SYSTEM task below covers a
+        # reboot; what stays uncovered is a mast-unit restart WITHOUT a reboot. That
+        # window closes for good when MAST_common#26 lands and Filer resolves the
+        # shared area from controller_host as a UNC path, at which point this hook
+        # stops being load-bearing -- so the fleet is not being upgraded to a newer
+        # nssm to close it. Reported, not claimed, and not a failure.
+        Write-MLog ("[WARN] nssm build does not support AppEvents; Start/Pre hook not set on {0}. " -f ${UnitService})
+        Write-MLog ("       Reboot is covered by the '{0}' startup task; a service restart without a reboot is not (see #55)." -f ${TaskName})
+    }
 } else {
     # Not fatal: a modules-filtered run may provision this module without the mast
     # provider having installed the service. The startup task still covers boot.

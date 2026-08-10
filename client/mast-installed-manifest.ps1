@@ -79,14 +79,24 @@ function Merge-MastInstalledManifest {
 
     $modules = [ordered]@{}
 
-    # 1. Carry forward everything the unit previously recorded. A legacy manifest
-    #    (pre-module_state, i.e. the whole-document copy) has no 'modules' key --
-    #    there is simply nothing to carry, and the result is a manifest whose
-    #    coverage starts from this run. Stage 3 treats a module with no entry as
-    #    'missing' and reprovisions it, which is the documented one-time
+    # 1. Carry forward every entry the unit previously recorded that is actually
+    #    module state. A legacy manifest (pre-module_state, i.e. the whole-document
+    #    copy) carries 'modules' as a LIST of names, so there is nothing per-module
+    #    to carry and coverage starts from this run; Stage 3 then treats every
+    #    module as 'missing' and reprovisions it, which is the documented one-time
     #    migration for mast01-04.
+    #
+    #    The per-entry guard is load-bearing, not defensive. Enumerating a list's
+    #    PSObject properties yields System.Array's own members -- Count, Length,
+    #    LongLength, Rank, SyncRoot, IsReadOnly, IsFixedSize, IsSynchronized --
+    #    which were written in as modules and then carried forward verbatim on
+    #    every later run. Filtering per entry rather than per manifest also heals a
+    #    unit already polluted that way: the phantoms fail the test individually
+    #    while its real modules pass. See #57; the reader-side twin of this guard
+    #    is prov.drift.classify (abe0828).
     if ($null -ne $Previous -and $Previous.PSObject.Properties.Match('modules').Count) {
         foreach ($p in $Previous.modules.PSObject.Properties) {
+            if (-not (Test-MastModuleEntry -Entry $p.Value)) { continue }
             $modules[$p.Name] = $p.Value
         }
     }
@@ -162,6 +172,19 @@ function Merge-MastInstalledManifest {
     }
 
     return [pscustomobject]$out
+}
+
+# Is this value a module-state entry? Those are exactly the two shapes
+# Get-MastEntryField reads: an ordered hashtable built fresh in this run, or a
+# PSCustomObject parsed from a previous run's JSON. A scalar or an array is not
+# module state and must not enter the map -- that is how System.Array's own
+# members ended up recorded as modules (#57).
+function Test-MastModuleEntry {
+    param($Entry)
+
+    if ($null -eq $Entry) { return $false }
+    if ($Entry -is [System.Collections.IDictionary]) { return $true }
+    return $Entry -is [System.Management.Automation.PSCustomObject]
 }
 
 # Read a field from an entry that may be either a PSCustomObject (parsed from
