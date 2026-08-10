@@ -42,9 +42,13 @@ def _resolve_controller() -> tuple[bool, str, str]:
     already depends on this file -- MastrometryDotNet constructs Config, which
     reads it -- so a config that cannot be resolved is a run that cannot be
     valid, consistent with the module-level precondition policy.
+
+    The import is function-local because `common` only becomes importable once
+    main() has put the unit's src on sys.path; at module scope it would fail
+    before the path is set up.
     """
     try:
-        from common.config.local import load_local_config  # type: ignore
+        from common.config.local import load_local_config
     except Exception as e:
         return False, "", f"import_failed ({e})"
     try:
