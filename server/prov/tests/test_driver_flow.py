@@ -45,6 +45,7 @@ def make_responder(
     pull: str = DEFAULT_PULL,
     register: str = "DETACHED_REGISTERED",
     execute: str = '{"status": "done", "exit_code": 0}',
+    lease: str = "",
     smoke: str = 'SMOKE {"git": "ok"}',
     proxy: str = "PROXY {}",
     inventory: str = "",
@@ -61,6 +62,8 @@ def make_responder(
             return (0, register)
         if "execute-result.json" in s:
             return (0, execute)
+        if "execute-lease.json" in s:
+            return (0, lease)
         if "schtasks /delete" in s:
             return (0, "")
         if "mast-pull-staging.ps1" in s:
@@ -465,7 +468,8 @@ def test_lease_held_is_a_refusal_not_a_failure(root, monkeypatch):
     failed, and the loop must not reprovision over a healthy run.
     """
     responder = make_responder(
-        execute='{"status": "done", "exit_code": 10, "lease": "LEASE_HELD run_id=exec-1 pid=6824"}'
+        execute='{"status": "done", "exit_code": 10}',
+        lease='{"run_id": "exec-1", "pid": 6824, "expires_utc": "2026-08-10T12:00:00Z"}',
     )
     drv, _sess = _make_driver(root, monkeypatch, responder)
     code = drv.run()
@@ -474,8 +478,10 @@ def test_lease_held_is_a_refusal_not_a_failure(root, monkeypatch):
     assert "EXECUTE_LEASE_HELD" in log, log
     assert "EXECUTE_FAIL" not in log, log
     assert code == D.EXIT_OK, log
-    # The holder is named where someone reading the run log will see it.
-    assert "exec-1" in log or "6824" in log, log
+    # Naming the holder is most of the point: "a run is in progress" without saying
+    # which one is what let a healthy run be read as a dead one.
+    assert "holder_run=exec-1" in log, log
+    assert "holder_pid=6824" in log, log
 
 
 def test_execute_lease_held_code_matches_the_powershell_constant():

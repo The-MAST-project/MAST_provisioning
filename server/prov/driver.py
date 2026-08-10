@@ -58,6 +58,9 @@ UNIT_PULL_SCRIPT = r"C:\MAST\mast-pull-staging.ps1"
 UNIT_DETACHED_RUNNER = r"C:\MAST\mast-run-detached.ps1"
 UNIT_DETACHED_CFG = r"C:\MAST\status\detached-run.json"
 UNIT_EXECUTE_RESULT = r"C:\MAST\status\execute-result.json"
+#: Written by execute while it holds the run; read only to name the holder when a
+#: run is refused. Must match Get-MastExecuteLeasePath in server/lib/mast-log.ps1.
+UNIT_EXECUTE_LEASE = r"C:\MAST\status\execute-lease.json"
 # Credential for the OPERATIONAL share (\\<controller_host>\mast-share), consumed by
 # the mast-shared-mount provider's SYSTEM task. Machine-bound DPAPI-LocalMachine blob;
 # the plaintext is uploaded to a temp file and shredded rather than passed on a
@@ -752,8 +755,21 @@ class Driver:
             # progressing. Reprovisioning over it is the actively wrong reaction, and
             # calling it EXECUTE_FAIL is how a healthy run got misdiagnosed as dead
             # (#47). Leave self.exit_code alone -- the cycle did not fail.
+            #
+            # Name the holder. execute prints it on stdout, but the detached runner
+            # reports only an exit code, so the driver reads the lease itself --
+            # otherwise the log says a run is in progress without saying which, which
+            # is most of what made the original misdiagnosis possible.
+            holder = _parse_json_or_none(
+                self._ps_out(session,
+                             f"if (Test-Path {_ps_lit(UNIT_EXECUTE_LEASE)}) "
+                             f"{{ Get-Content {_ps_lit(UNIT_EXECUTE_LEASE)} -Raw }}",
+                             f"lease-read:{host}")
+            ) or {}
             self.log.event("EXECUTE_LEASE_HELD", unit=host, exit_code=rc, duration_s=dur(),
-                           detail=str(result.get("lease") or "").strip()[:200])
+                           holder_run=holder.get("run_id") or "unknown",
+                           holder_pid=holder.get("pid") or "unknown",
+                           expires=holder.get("expires_utc") or "unknown")
             self.log.activity(host, "SKIP", "lease_held", dur(), payload_hash, git_sha)
             return False, session
         if rc != 0:
