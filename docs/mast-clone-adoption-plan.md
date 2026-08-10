@@ -1,5 +1,21 @@
 # Retire the `mast` provider's clone/venv code in favor of `mast-clone` — plan
 
+> **COMPLETE — archived 2026-08-09.** Every stage landed, and stage 6 (the on-unit
+> migration) ran on all four production units: mast01 and mast04 on 2026-08-06,
+> mast02 and mast03 on 2026-08-09, each verified with `mast-verify` passing and
+> `IN SYNC` in `tools/fleet-drift-report.py`. The one-time machinery this plan
+> describes — `tools/migrate-unit-to-mast-clone.py`, `server/prov/migration.py`,
+> the `verify-mast` legacy-tree check, and the NSSM re-point branch in
+> `provide-mast.ps1` — was deleted the same day (#41).
+>
+> **Kept as a design record, not as instructions.** Nothing here should be
+> followed: the stages are done and the tooling to execute them is gone. It is
+> retained because several providers cite it for *why* they call `mast-clone`
+> rather than clone anything themselves, and because it is the fullest account of
+> that reasoning. The outcomes are recorded individually under `docs/decisions/`
+> (the 2026-08-02 and 2026-08-03 records on mast-clone delegation, the upstream
+> repo pin, and the stage-6 rename).
+
 Branch: `eli/mast-clone-adoption` (off `eli/provisioning-v3`), landing back onto
 v3. Tracking issue: The-MAST-project/MAST_provisioning#31.
 

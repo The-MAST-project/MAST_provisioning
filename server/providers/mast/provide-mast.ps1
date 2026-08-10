@@ -339,19 +339,7 @@ try {
             Start-Service -Name ${ServiceName} -ErrorAction SilentlyContinue
             Write-MastProvisionEvent ("NSSM service register DONE name={0}" -f ${ServiceName})
         } else {
-            # An already-registered service on a pre-migration unit still points at
-            # the OLD layout (C:\MAST\repos\MAST_unit.2024-12-12 with a per-repo
-            # venv). Re-point it rather than leaving it running code from a tree the
-            # migration is about to delete.
-            ${curApp} = ((& ${nssmExe} get ${ServiceName} Application) -join '').Trim([char]0, ' ', "`r", "`n")
-            if (${curApp} -and ${curApp} -ne ${venvPython}) {
-                Write-MastProvisionEvent ("NSSM service re-point: {0} -> {1}" -f ${curApp}, ${venvPython})
-                Stop-Service -Name ${ServiceName} -Force -ErrorAction SilentlyContinue
-                & ${nssmExe} set ${ServiceName} Application ${venvPython}
-                & ${nssmExe} set ${ServiceName} AppParameters ${unitEntryPoint}
-                & ${nssmExe} set ${ServiceName} AppDirectory ${unitDir}
-                Start-Service -Name ${ServiceName} -ErrorAction SilentlyContinue
-            } elseif (${unitMoved} -or ${Force}) {
+            if (${unitMoved} -or ${Force}) {
                 Write-MastProvisionEvent ("Restarting {0} (unit checkout moved)" -f ${ServiceName})
                 Restart-Service -Name ${ServiceName} -Force -ErrorAction SilentlyContinue
             } else {
