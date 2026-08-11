@@ -1,0 +1,44 @@
+# Ruff configuration for MAST_provisioning.
+#
+# Mirrors the MAST fleet standard (MAST_common, MAST_unit) so every repo formats
+# identically. The ruff version is pinned in requirements-dev.txt (ruff==0.16.0);
+# config alone is not enough -- both formatter output and the DEFAULT rule set
+# differ between ruff versions. Measured while adopting this: the same tree
+# reports 13 findings under ruff 0.15.16 defaults and 90 under 0.16.0 defaults.
+#
+# Unlike MAST_common this repo is not consumed as a sibling clone; its own
+# package is `prov` (server/prov/), so that is what isort must treat as
+# first-party.
+
+line-length = 125
+target-version = "py312"
+
+[lint]
+# Enable rules from common linters.
+extend-select = [
+    "F",   # Pyflakes (runtime errors)
+    "E",   # pycodestyle (formatting)
+    "W",   # pycodestyle warnings
+    "I",   # isort (import sorting)
+    "N",   # pep8-naming
+    "B",   # flake8-bugbear
+    "UP",  # pyupgrade
+    "C90", # mccabe complexity
+    "SIM", # flake8-simplify
+    "TID", # tidy imports
+]
+
+[lint.isort]
+# server/prov/ is imported as `from prov import ...` by the driver, the CLI and
+# the tests, which run with server/ on sys.path rather than as an installed
+# package. Ruff's path-based resolver therefore cannot classify it, and without
+# naming it here every isort run reshuffles the import blocks.
+known-first-party = ["prov"]
+
+[format]
+# Ruff's Black-compatible formatter.
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "lf"
+docstring-code-format = true
