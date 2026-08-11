@@ -31,14 +31,14 @@ rpt = _load_run_prov_test()
 
 
 def _args(**kw) -> argparse.Namespace:
-    base = dict(
-        phases=None,
-        build_only=False,
-        execute_only=False,
-        build_transfer_verify=False,
-        pull_repos=False,
-        rebuild_repos=False,
-    )
+    base = {
+        "phases": None,
+        "build_only": False,
+        "execute_only": False,
+        "build_transfer_verify": False,
+        "pull_repos": False,
+        "rebuild_repos": False,
+    }
     base.update(kw)
     return argparse.Namespace(**base)
 

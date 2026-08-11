@@ -560,10 +560,7 @@ def main() -> int:
     # STATUS rather than a version string compared to the fleet's modal value --
     # "is this unit current?" instead of "do the units agree?". Without one (or
     # against a pre-module_state build) fall back to the cross-unit comparison.
-    if build_doc and build_doc.get("module_state"):
-        cmp = compare_to_build(units, build_doc)
-    else:
-        cmp = compare(units, reference)
+    cmp = compare_to_build(units, build_doc) if build_doc and build_doc.get("module_state") else compare(units, reference)
     elements_doc = load_bootstrap_elements(_REPO_ROOT)
     boot = bootstrap_gaps(units, elements_doc)
 

@@ -51,6 +51,7 @@ from vm_lib import (
     wait_for_winrm,
     winrm_session,
 )
+import contextlib
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -541,10 +542,8 @@ def run_prov_subprocess(args: list[str], label: str) -> tuple[int, float]:
                     last_lines = line_count
 
             reader.join()
-            try:
+            with contextlib.suppress(OSError):
                 proc.stdout.close()
-            except OSError:
-                pass
             rc = proc.wait()
     except OSError as e:
         elapsed = time.monotonic() - t0

@@ -136,7 +136,7 @@ def _make_driver(root, monkeypatch, responder, unit=UNIT):
 
 
 def test_process_unit_happy_path(root, monkeypatch):
-    drv, sess = _make_driver(root, monkeypatch, make_responder())
+    drv, _sess = _make_driver(root, monkeypatch, make_responder())
     code = drv.run()
     log = drv.log.run_log_path.read_text()
     assert code == D.EXIT_OK, log
@@ -156,7 +156,7 @@ def test_process_unit_happy_path(root, monkeypatch):
     ],
 )
 def test_transfer_fails_closed_on_bad_pull(root, monkeypatch, pull, reason):
-    drv, sess = _make_driver(root, monkeypatch, make_responder(pull=pull))
+    drv, _sess = _make_driver(root, monkeypatch, make_responder(pull=pull))
     code = drv.run()
     log = drv.log.run_log_path.read_text()
     assert code == D.EXIT_UNIT_FAIL, log
@@ -175,7 +175,7 @@ def test_transfer_fails_closed_on_bad_pull(root, monkeypatch, pull, reason):
     ],
 )
 def test_transfer_known_failure_outcomes_still_fail(root, monkeypatch, pull):
-    drv, sess = _make_driver(root, monkeypatch, make_responder(pull=pull))
+    drv, _sess = _make_driver(root, monkeypatch, make_responder(pull=pull))
     code = drv.run()
     log = drv.log.run_log_path.read_text()
     assert code == D.EXIT_UNIT_FAIL, log
@@ -184,7 +184,7 @@ def test_transfer_known_failure_outcomes_still_fail(root, monkeypatch, pull):
 
 def test_transfer_ok_rc_zero_is_success(root, monkeypatch):
     # rc 0 (no changes) and rc 2-7 (robocopy info) are still OK outcomes.
-    drv, sess = _make_driver(root, monkeypatch, make_responder(pull='PULLRESULT {"outcome": "OK", "rc": 0}'))
+    drv, _sess = _make_driver(root, monkeypatch, make_responder(pull='PULLRESULT {"outcome": "OK", "rc": 0}'))
     code = drv.run()
     log = drv.log.run_log_path.read_text()
     assert code == D.EXIT_OK, log
@@ -193,7 +193,7 @@ def test_transfer_ok_rc_zero_is_success(root, monkeypatch):
 
 # --- other failure branches (broaden phase-flow coverage) --------------------
 def test_execute_nonzero_exit_fails(root, monkeypatch):
-    drv, sess = _make_driver(root, monkeypatch, make_responder(execute='{"status": "done", "exit_code": 3}'))
+    drv, _sess = _make_driver(root, monkeypatch, make_responder(execute='{"status": "done", "exit_code": 3}'))
     code = drv.run()
     log = drv.log.run_log_path.read_text()
     assert code == D.EXIT_UNIT_FAIL, log
@@ -202,7 +202,7 @@ def test_execute_nonzero_exit_fails(root, monkeypatch):
 
 
 def test_execute_register_failure_fails(root, monkeypatch):
-    drv, sess = _make_driver(root, monkeypatch, make_responder(register="something-not-the-marker"))
+    drv, _sess = _make_driver(root, monkeypatch, make_responder(register="something-not-the-marker"))
     code = drv.run()
     log = drv.log.run_log_path.read_text()
     assert code == D.EXIT_UNIT_FAIL, log
@@ -210,7 +210,7 @@ def test_execute_register_failure_fails(root, monkeypatch):
 
 
 def test_smoke_missing_module_fails(root, monkeypatch):
-    drv, sess = _make_driver(root, monkeypatch, make_responder(smoke="SMOKE {}"))
+    drv, _sess = _make_driver(root, monkeypatch, make_responder(smoke="SMOKE {}"))
     code = drv.run()
     log = drv.log.run_log_path.read_text()
     assert code == D.EXIT_UNIT_FAIL, log
@@ -218,7 +218,7 @@ def test_smoke_missing_module_fails(root, monkeypatch):
 
 
 def test_unreachable_unit_fails_without_session(root, monkeypatch):
-    drv, sess = _make_driver(root, monkeypatch, make_responder())
+    drv, _sess = _make_driver(root, monkeypatch, make_responder())
     monkeypatch.setattr(D.Driver, "_tcp_open", staticmethod(lambda host, port, timeout=5.0: False))
     code = drv.run()
     log = drv.log.run_log_path.read_text()
@@ -369,7 +369,7 @@ CURRENT_INSTALLED = {
 
 
 def test_a_fully_current_unit_is_skipped(root, monkeypatch):
-    drv, sess = _drift_driver(root, monkeypatch, CURRENT_INSTALLED, BUILD_TWO)
+    drv, _sess = _drift_driver(root, monkeypatch, CURRENT_INSTALLED, BUILD_TWO)
     code = drv.run()
     log = drv.log.run_log_path.read_text()
     assert code == D.EXIT_OK, log
@@ -405,7 +405,7 @@ def test_a_validation_report_older_than_the_repair_is_ignored(root, monkeypatch)
         "failures": 1,
         "modules": {"python": "fail"},
     }
-    drv, sess = _drift_driver(root, monkeypatch, CURRENT_INSTALLED, BUILD_TWO, validation)
+    drv, _sess = _drift_driver(root, monkeypatch, CURRENT_INSTALLED, BUILD_TWO, validation)
     code = drv.run()
     log = drv.log.run_log_path.read_text()
     assert code == D.EXIT_OK, log
@@ -447,7 +447,7 @@ def test_missing_shared_creds_is_fatal(root, monkeypatch):
     """Without shared.user/pass the mast-shared-mount provider cannot map Z:, and the
     unit silently writes exposures to C:. Fail the run rather than provision a unit
     whose operational store is wrong."""
-    drv, sess = _make_driver(root, monkeypatch, make_responder())
+    drv, _sess = _make_driver(root, monkeypatch, make_responder())
     creds = json.loads(drv.cfg.vault_creds.read_text())
     del creds["shared"]
     drv.cfg.vault_creds.write_text(json.dumps(creds))
@@ -549,7 +549,7 @@ def test_modules_flag_does_not_shrink_the_build(root, monkeypatch):
     checked against the full set. mast03 read fully_provisioned=True off six
     modules this way (#63).
     """
-    drv, sess = _make_driver(root, monkeypatch, make_responder(), unit=UNIT_NO_MODULES)
+    drv, _sess = _make_driver(root, monkeypatch, make_responder(), unit=UNIT_NO_MODULES)
     repo = drv.cfg.repo_top
     for name, order in (("config-bootstrap", 150), ("git", 500), ("mast", 2200)):
         _write_provider(repo, name, order)
@@ -574,7 +574,7 @@ def test_modules_flag_does_not_shrink_the_build(root, monkeypatch):
 
 
 def test_modules_flag_filters_what_executes(root, monkeypatch):
-    drv, sess = _make_driver(root, monkeypatch, make_responder(), unit=UNIT_NO_MODULES)
+    drv, _sess = _make_driver(root, monkeypatch, make_responder(), unit=UNIT_NO_MODULES)
     repo = drv.cfg.repo_top
     for name, order in (("config-bootstrap", 150), ("mast", 2200)):
         _write_provider(repo, name, order)
@@ -597,7 +597,7 @@ def test_modules_flag_skips_when_no_named_module_needs_work(root, monkeypatch):
     reboot is an always-module, so synthesising a run out of an empty
     intersection would reboot a unit for a run with no work in it.
     """
-    drv, sess = _make_driver(root, monkeypatch, make_responder(), unit=UNIT_NO_MODULES)
+    drv, _sess = _make_driver(root, monkeypatch, make_responder(), unit=UNIT_NO_MODULES)
     repo = drv.cfg.repo_top
     _write_provider(repo, "config-bootstrap", 150)
     _write_provider(repo, "mast", 2200)
@@ -669,7 +669,7 @@ def test_unreachable_staging_fails_before_the_build(root, monkeypatch):
         self.log.event("BUILD_OK", unit=host, payload_hash="h", git_sha="s")
         return "h", "s", {}
 
-    drv, sess = _make_driver(root, monkeypatch, make_responder(smbreach="SMBREACH timeout"))
+    drv, _sess = _make_driver(root, monkeypatch, make_responder(smbreach="SMBREACH timeout"))
     monkeypatch.setattr(D.Driver, "_build", counting_build)
 
     code = drv.run()

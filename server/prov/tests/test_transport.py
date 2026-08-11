@@ -52,16 +52,7 @@ def test_candidate_users_offers_local_account_variants():
 
 
 def test_minify_ps_strips_comments_blanks_and_indent():
-    raw = "\n".join(
-        [
-            "<# block",
-            "comment spanning lines #>",
-            "# whole-line comment",
-            "   Write-Host 'a'   ",
-            "",
-            "Get-Service WinRM   # trailing comment is kept",
-        ]
-    )
+    raw = "<# block\ncomment spanning lines #>\n# whole-line comment\n   Write-Host 'a'   \n\nGet-Service WinRM   # trailing comment is kept"
     out = T._minify_ps(raw)
     assert out.splitlines() == ["Write-Host 'a'", "Get-Service WinRM   # trailing comment is kept"]
     assert "block" not in out

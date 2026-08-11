@@ -47,6 +47,7 @@ except ImportError as e:
 
 # requests is a hard dependency of pywinrm, so this import is always safe.
 import requests  # type: ignore[import]
+import contextlib
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -212,10 +213,8 @@ def _dispose_winrm_session(sess: Any | None) -> None:
     if isinstance(sess, SshSession):
         sess.close()
         return
-    try:
+    with contextlib.suppress(Exception):
         sess.protocol.transport.close_session()
-    except Exception:
-        pass
 
 
 # ---------------------------------------------------------------------------
@@ -421,10 +420,8 @@ class SshSession:
                 raise ConnectionError("SSH channel closed before exit status (connection dropped)")
             return _SshResponse(rc, bytes(out), bytes(err))
         finally:
-            try:
+            with contextlib.suppress(Exception):
                 chan.close()
-            except Exception:
-                pass
 
     def put_file(self, remote_path: str, data: bytes) -> None:
         """Write bytes to a Windows path over SFTP. Avoids the base64-over-
@@ -439,10 +436,8 @@ class SshSession:
             sftp.close()
 
     def close(self) -> None:
-        try:
+        with contextlib.suppress(Exception):
             self._client.close()
-        except Exception:
-            pass
 
 
 def ssh_session(host: str, cred: dict[str, str], port: int = SSH_PORT, connect_timeout_s: int = 30) -> SshSession:
@@ -1075,37 +1070,37 @@ def upload_file(session: Any, remote_path: str, content: str, label: str = "file
 # and its tests use) so existing `from vm_lib import ...` call sites keep working.
 # ---------------------------------------------------------------------------
 __all__ = [
-    # constants
-    "REPO_ROOT",
-    "VAULT_CREDS",
-    "WINRM_PORT",
-    "WINRM_ENCODED_CMD_MAX",
-    "WINRM_CALL_TIMEOUT_S",
-    "WINRM_BOOT_TIMEOUT_S",
-    "SSH_PORT",
+    "HEARTBEAT_ESCALATE_GAP_S",
+    "HEARTBEAT_ESCALATE_S",
     "HEARTBEAT_INTERVAL_S",
     "HEARTBEAT_MAX_GAP_S",
-    "HEARTBEAT_ESCALATE_S",
-    "HEARTBEAT_ESCALATE_GAP_S",
-    # log sinks (rebindable)
-    "log_fn",
-    "log_raw_fn",
-    # json helpers
-    "load_json_file",
-    "parse_json_text",
+    # constants
+    "REPO_ROOT",
+    "SSH_PORT",
+    "VAULT_CREDS",
+    "WINRM_BOOT_TIMEOUT_S",
+    "WINRM_CALL_TIMEOUT_S",
+    "WINRM_ENCODED_CMD_MAX",
+    "WINRM_PORT",
+    "SshSession",
+    "assert_inline_dispatchable",
+    "check_rc",
+    "connect_unit",
     "dump_json_file",
     # creds + transport
     "load_creds",
-    "winrm_session",
-    "ssh_session",
-    "wait_for_ssh",
-    "connect_unit",
-    "wait_for_winrm",
+    # json helpers
+    "load_json_file",
+    # log sinks (rebindable)
+    "log_fn",
+    "log_raw_fn",
+    "parse_json_text",
     "run_ps",
-    "check_rc",
+    "ssh_session",
     "upload_file",
     "upload_file_b64",
+    "wait_for_ssh",
+    "wait_for_winrm",
     "winrm_encoded_cmd_len",
-    "assert_inline_dispatchable",
-    "SshSession",
+    "winrm_session",
 ]

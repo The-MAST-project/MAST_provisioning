@@ -47,6 +47,7 @@ from prov.unit_paths import (
     UNIT_SMOKE_DIR,
     UNIT_VALIDATION,
 )
+import contextlib
 
 # --- unit-side literal paths (Windows units; never pathlib) ------------------
 # The shared ones live in prov.unit_paths so the read-only tooling names the same
@@ -347,10 +348,8 @@ class Driver:
         session = None
 
         resolved = ""
-        try:
+        with contextlib.suppress(OSError):
             resolved = socket.gethostbyname(host)
-        except OSError:
-            pass
         self.log.event("UNIT_BEGIN", unit=host, resolved_ip=resolved)
 
         # Tell the unit an ADDRESS, not this machine's name. A name obliges the
@@ -596,10 +595,8 @@ class Driver:
         except Exception as e:  # noqa: BLE001 -- mirror PS outer catch (EXCEPTION)
             err = f"{type(e).__name__}: {e}"
             self.log.event("EXCEPTION", unit=host, error=err)
-            try:
+            with contextlib.suppress(OSError):
                 self.log.last_err_log.write_text(err + "\n", encoding="utf-8")
-            except OSError:
-                pass
             self.log.activity(host, "FAIL", f"exception:{type(e).__name__}", dur(), payload_hash, git_sha)
             self.exit_code = EXIT_UNIT_FAIL
 
@@ -722,10 +719,8 @@ class Driver:
         exp = avail.get("expected_return_utc")
         is_stale = False
         if exp:
-            try:
-                is_stale = datetime.now(UTC) > datetime.fromisoformat(exp.replace("Z", "+00:00"))
-            except ValueError:
-                pass
+            with contextlib.suppress(ValueError):
+                is_stale = datetime.now(UTC) > datetime.fromisoformat(exp)
         if owner == self.run_id:
             self.log.event("AVAIL_LEASE_SELF", unit=host, owner=owner, reason=avail.get("reason"))
         else:

@@ -291,7 +291,7 @@ def log_to_file(path: Path) -> Generator[None, None, None]:
 def _format_elapsed(seconds: float) -> str:
     if seconds >= 3600:
         h, rem = divmod(int(seconds), 3600)
-        m, s = divmod(rem, 60)
+        m, _s = divmod(rem, 60)
         return f"{h}h {m}m {seconds % 60:.1f}s"
     if seconds >= 60:
         return f"{seconds / 60:.2f} min ({seconds:.1f}s)"
@@ -1057,7 +1057,7 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=WINRM_BOOT_TIMEOUT_S,
         metavar="N",
-        help="Max seconds to wait for TCP :5985 plus WinRM Basic auth before failing (default: %s)." % WINRM_BOOT_TIMEOUT_S,
+        help="Max seconds to wait for TCP :5985 plus WinRM Basic auth before failing (default: {}).".format(WINRM_BOOT_TIMEOUT_S),
     )
     p.add_argument(
         "--winrm-call-timeout-s",

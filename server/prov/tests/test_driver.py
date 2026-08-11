@@ -39,7 +39,7 @@ def test_parse_json_or_none_tolerates_bom_and_empty():
 def _cfg(root, **kw):
     repo = root / "repo"
     (repo / "server" / "providers").mkdir(parents=True, exist_ok=True)
-    base = dict(repo_top=repo, unit_registry=repo / "reg.json", vault_creds=repo / "creds.json")
+    base = {"repo_top": repo, "unit_registry": repo / "reg.json", "vault_creds": repo / "creds.json"}
     base.update(kw)
     return D.Config(**base)
 

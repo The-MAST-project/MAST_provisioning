@@ -119,7 +119,7 @@ def _strip_powershell_clixml(text: str) -> str:
         s = ln.strip()
         if not s:
             continue
-        if s.startswith("<Objs ") or s.startswith("<Obj ") or s.startswith("</Objs>"):
+        if s.startswith(("<Objs ", "<Obj ", "</Objs>")):
             continue
         lines.append(ln)
     return "\n".join(lines) + ("\n" if lines else "")
@@ -436,7 +436,7 @@ def main() -> int:
         type=int,
         default=900,
         metavar="N",
-        help="Keep polling until WinRM answers on port %s (0 = no wait). Default 900. Use after a unit reboot." % WINRM_PORT,
+        help="Keep polling until WinRM answers on port {} (0 = no wait). Default 900. Use after a unit reboot.".format(WINRM_PORT),
     )
     ap.add_argument(
         "--wait-winrm-poll-seconds",
