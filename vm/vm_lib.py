@@ -23,7 +23,7 @@ if str(_SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(_SERVER_DIR))
 
 # Re-export the full transport public API (see prov.transport.__all__) ...
-from prov.transport import *  # noqa: E402,F401,F403
+from prov.transport import *  # noqa: E402, F403
 
 # ... plus the underscored helpers the vm/ scripts and tests reference directly.
 from prov.transport import (  # noqa: E402,F401

@@ -17,7 +17,7 @@ import csv
 import io
 import json
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 # activity.csv columns -- must match the PowerShell header for append-compat.
@@ -35,7 +35,7 @@ _ACTIVITY_HEADER = [
 
 def now_utc() -> str:
     """UTC timestamp in the driver's canonical form (matches PS Now-Utc)."""
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def server_root() -> Path:

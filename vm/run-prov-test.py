@@ -66,7 +66,6 @@ import base64
 import ctypes
 import json
 import os
-import re
 import socket
 import subprocess
 import sys
@@ -74,10 +73,11 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Generator
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Generator, TextIO
+from typing import Any, TextIO
 
 try:
     import paramiko  # type: ignore[import]  # noqa: F401 -- SSH transport (transport.SshSession)
@@ -104,24 +104,15 @@ except (AttributeError, OSError):
 
 import vm_lib
 from vm_lib import (
-    VAULT_CREDS,
-    VBOXMANAGE,
     WINRM_BOOT_TIMEOUT_S,
     WINRM_CALL_TIMEOUT_S,
-    WINRM_PORT,
     _dispose_winrm_session,
     _minify_ps,
     _ps_escape,
-    check_rc,
     load_creds,
     reset_to_clean_snapshot,
     run_ps,
     ssh_session,
-    unit_reset_to_snapshot,
-    unit_start,
-    unit_stop,
-    vbox,
-    vm_state,
     wait_for_ssh,
 )
 
@@ -263,7 +254,7 @@ _log_file: TextIO | None = None
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).strftime("%H:%M:%SZ")
+    return datetime.now(UTC).strftime("%H:%M:%SZ")
 
 
 def log(msg: str) -> None:

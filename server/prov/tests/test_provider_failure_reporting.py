@@ -44,7 +44,7 @@ _EXIT_ZERO = re.compile(r"\bexit\s+0\b", re.IGNORECASE)
 _INVOCATION = re.compile(r"[&.]\s+(?P<target>[^\s;|&]+)")
 
 _LINE_COMMENT = re.compile(r"#[^\n]*")
-_BLOCK_COMMENT = re.compile(r"<#.*?#>", re.S)
+_BLOCK_COMMENT = re.compile(r"<#.*?#>", re.DOTALL)
 
 
 def _strip_comments(text: str) -> str:

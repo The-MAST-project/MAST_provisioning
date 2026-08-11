@@ -30,15 +30,14 @@ import sys
 import threading
 import time
 from collections import deque
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Callable
 
 import vm_lib
 from vm_lib import (
     REPO_ROOT,
-    VAULT_CREDS,
     VBOXMANAGE,
     check_rc,
     dump_json_file,
@@ -452,7 +451,7 @@ def _print_tail(path: Path, n: int) -> None:
     if n <= 0 or path is None or not path.exists():
         return
     try:
-        with open(path, "r", encoding="utf-8", errors="replace") as f:
+        with open(path, encoding="utf-8", errors="replace") as f:
             lines = deque(f, maxlen=n)
     except OSError as e:
         print(f"  [suite] could not read log for tail: {e}")
@@ -461,7 +460,7 @@ def _print_tail(path: Path, n: int) -> None:
     for line in lines:
         line = line.rstrip("\r\n")
         print(f"  {line}")
-    print(f"  --- end tail ---")
+    print("  --- end tail ---")
 
 
 def run_prov_subprocess(args: list[str], label: str) -> tuple[int, float]:
@@ -1055,7 +1054,7 @@ def write_suite_results_json(results: list[ScenarioResult], suite_log_dir: Path)
     suite_log_dir.mkdir(parents=True, exist_ok=True)
     out = suite_log_dir / "suite-results.json"
     payload = {
-        "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "generated_at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "results": [asdict(r) for r in results],
     }
     out.write_text(json.dumps(payload, indent=2), encoding="utf-8")
@@ -1128,7 +1127,7 @@ def main() -> int:
                 print(f"  - {e}")
             return 2
 
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%SZ")
     suite_log_dir = SUITE_LOG_ROOT / stamp
     suite_log_dir.mkdir(parents=True, exist_ok=True)
     print(f"[suite] log dir: {suite_log_dir}")
@@ -1160,7 +1159,7 @@ def main() -> int:
                 try:
 
                     def _pf_log(msg: str, _f=pf) -> None:
-                        ts = datetime.now(timezone.utc).strftime("%H:%M:%SZ")
+                        ts = datetime.now(UTC).strftime("%H:%M:%SZ")
                         line = f"[{ts}] {msg}\n"
                         _f.write(line)
                         _f.flush()

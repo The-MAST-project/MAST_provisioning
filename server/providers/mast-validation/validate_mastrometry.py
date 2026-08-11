@@ -19,7 +19,6 @@ runs. We therefore FAIL when:
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 import traceback
 from pathlib import Path

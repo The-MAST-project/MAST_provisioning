@@ -42,7 +42,7 @@ import sys
 import threading
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -52,7 +52,7 @@ from winrm.exceptions import InvalidCredentialsError
 # Shared WinRM/PS helpers live in vm/vm_lib.py (canonical source of truth -- see
 # CLAUDE.md DRY rules). tools/ is not on sys.path next to vm/, so add it.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "vm"))
-from vm_lib import _candidate_users, _ps_escape, winrm_session  # noqa: E402
+from vm_lib import _candidate_users, _ps_escape, winrm_session
 
 CHUNK = 800
 WINRM_PORT = 5985
@@ -63,7 +63,7 @@ def repo_root() -> Path:
 
 
 def _ts() -> str:
-    return datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S")
+    return datetime.now(UTC).astimezone().strftime("%Y-%m-%d %H:%M:%S")
 
 
 def obs(msg: str, *, quiet: bool) -> None:
@@ -567,7 +567,7 @@ def main() -> int:
             "script": args.script,
             "status_code": int(r.status_code),
             "duration_exec_s": round(exec_s, 3),
-            "finished_local_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "finished_local_utc": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "remote_note": "See unit <SystemDrive>\\MAST\\logs\\remote-runs\\<timestamp>_<run_id>\\remote-<host>-<run_id>.json",
         }
         local_path.write_text(json.dumps(local_meta, indent=2), encoding="utf-8")

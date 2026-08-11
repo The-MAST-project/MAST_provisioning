@@ -25,7 +25,7 @@ DEFAULT_PULL = 'PULLRESULT {"outcome": "OK", "rc": 1}'
 class FakeSession(T.SshSession):
     """A unit session that returns canned stdout per phase (no paramiko)."""
 
-    def __init__(self, responder) -> None:  # noqa: D107 -- bypass SshSession.connect
+    def __init__(self, responder) -> None:
         self._responder = responder
         self.scripts: list[str] = []
 
@@ -466,7 +466,7 @@ def test_shared_cred_is_planted_as_a_blob_never_on_a_command_line(root, monkeypa
     assert "ProtectedData" in protect[0] and "LocalMachine" in protect[0]
     # The temp plaintext is overwritten and removed by the same script.
     assert "Remove-Item" in protect[0] and "shared-cred.tmp" in protect[0]
-    assert not any("z" == tok for s in sess.scripts for tok in s.split("'")), (
+    assert not any(tok == "z" for s in sess.scripts for tok in s.split("'")), (
         "the shared password appears in a script argument"
     )
 

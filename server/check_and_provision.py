@@ -18,7 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # make `prov` importable
 
-from prov.driver import Config, Driver, run_loop  # noqa: E402
+from prov.driver import Config, Driver, run_loop
 
 
 def _parse_args(argv: list[str] | None = None):

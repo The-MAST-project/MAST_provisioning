@@ -29,9 +29,10 @@ import re
 import socket
 import threading
 import time
-from datetime import datetime, timezone
+from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 try:
     import winrm  # type: ignore[import]
@@ -78,7 +79,7 @@ HEARTBEAT_ESCALATE_GAP_S = 300
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).strftime("%H:%M:%SZ")
+    return datetime.now(UTC).strftime("%H:%M:%SZ")
 
 
 def _default_log(msg: str) -> None:
@@ -136,8 +137,7 @@ def load_json_file(path: Path) -> object:
 
 def parse_json_text(text: str) -> object:
     """Parse a JSON string, tolerating a leading UTF-8 BOM."""
-    if text.startswith("\ufeff"):
-        text = text[1:]
+    text = text.removeprefix("\ufeff")
     return json.loads(text)
 
 

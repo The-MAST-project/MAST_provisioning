@@ -11,8 +11,8 @@ from __future__ import annotations
 
 import re
 import shutil
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 # A run id is "run-yyyyMMdd-HHmmss" (check_and_provision mints it). The embedded
 # stamp sorts lexically == chronologically. A dir whose name does not conform is

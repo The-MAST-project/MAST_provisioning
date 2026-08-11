@@ -1,12 +1,12 @@
 """Tests for prov.maintenance_window (port of Test-InMaintenanceWindow)."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from prov.maintenance_window import in_maintenance_window
 
 
 def _utc(y, mo, d, h, mi=0):
-    return datetime(y, mo, d, h, mi, tzinfo=timezone.utc)
+    return datetime(y, mo, d, h, mi, tzinfo=UTC)
 
 
 def test_no_window_configured_is_always_allowed():

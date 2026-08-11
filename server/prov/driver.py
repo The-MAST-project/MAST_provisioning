@@ -31,23 +31,22 @@ import socket
 import subprocess
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from prov import drift
+from prov import drift, transport
 from prov import logevents as L
-from prov import transport
+from prov.maintenance_window import in_maintenance_window
+from prov.proxy_assert import ProxyPosture, get_proxy_dirty_surfaces
+from prov.retention import run_retention
+from prov.staging_size import staging_payload_size
 from prov.unit_paths import (
     UNIT_AVAIL,
     UNIT_INSTALLED,
     UNIT_SMOKE_DIR,
     UNIT_VALIDATION,
 )
-from prov.maintenance_window import in_maintenance_window
-from prov.proxy_assert import ProxyPosture, get_proxy_dirty_surfaces
-from prov.retention import run_retention
-from prov.staging_size import staging_payload_size
 
 # --- unit-side literal paths (Windows units; never pathlib) ------------------
 # The shared ones live in prov.unit_paths so the read-only tooling names the same
@@ -151,8 +150,8 @@ class Config:
 class Driver:
     def __init__(self, cfg: Config) -> None:
         self.cfg = cfg
-        self.run_id = "run-" + datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-        self.run_start = datetime.now(timezone.utc)
+        self.run_id = "run-" + datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+        self.run_start = datetime.now(UTC)
         self.log = L.RunLog(self.run_id)
         self.log.install_as_transport_sink()
         self.log_root = self.log.log_root
@@ -340,7 +339,7 @@ class Driver:
     def _process_unit(self, unit: dict) -> None:
         self.units_checked += 1
         host = unit["hostname"]
-        unit_start = datetime.now(timezone.utc)
+        unit_start = datetime.now(UTC)
         modules = self._resolve_modules(unit)
         payload_hash = ""
         git_sha = ""
@@ -374,7 +373,7 @@ class Driver:
             )
 
         def dur() -> int:
-            return int((datetime.now(timezone.utc) - unit_start).total_seconds())
+            return int((datetime.now(UTC) - unit_start).total_seconds())
 
         try:
             # Phase 1 -- reachability. Probe both transports (SSH-first, WinRM
@@ -724,7 +723,7 @@ class Driver:
         is_stale = False
         if exp:
             try:
-                is_stale = datetime.now(timezone.utc) > datetime.fromisoformat(exp.replace("Z", "+00:00"))
+                is_stale = datetime.now(UTC) > datetime.fromisoformat(exp.replace("Z", "+00:00"))
             except ValueError:
                 pass
         if owner == self.run_id:
@@ -792,7 +791,7 @@ class Driver:
         return payload_hash, git_sha, bm
 
     def _set_unavailable(self, session: Any, host: str, payload_hash: str) -> None:
-        since = datetime.now(timezone.utc)
+        since = datetime.now(UTC)
         expected = since + timedelta(seconds=AVAIL_TTL_S)
         self._write_unit_json(
             session,
@@ -1099,7 +1098,7 @@ class Driver:
             UNIT_AVAIL,
             {
                 "available": True,
-                "since_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "since_utc": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
             },
         )
         self.log.event("AVAIL_SET", unit=host, available="true")
@@ -1115,7 +1114,7 @@ class Driver:
                     {
                         "available": False,
                         "reason": "provisioning_incomplete",
-                        "released_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        "released_utc": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
                     },
                 )
                 self.log.event("AVAIL_RELEASE", unit=host, reason="provisioning_incomplete")
@@ -1166,7 +1165,7 @@ class Driver:
 
     # -- finish -------------------------------------------------------------
     def _finish(self) -> None:
-        run_end = datetime.now(timezone.utc)
+        run_end = datetime.now(UTC)
         duration_s = int((run_end - self.run_start).total_seconds())
         fail_states = {"FAIL", "UNREACHABLE", "BUILD_FAIL", "TRANSFER_FAIL", "EXECUTE_FAIL"}
         outcomes = self.log.unit_outcomes
@@ -1231,7 +1230,7 @@ def run_loop(
     cycle = 0
     while not stop():
         cycle += 1
-        started = datetime.now(timezone.utc)
+        started = datetime.now(UTC)
         print(f"[loop] cycle {cycle} start {started.strftime('%Y-%m-%dT%H:%M:%SZ')}", flush=True)
         try:
             code = Driver(cfg).run()

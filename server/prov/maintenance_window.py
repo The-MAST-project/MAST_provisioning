@@ -15,9 +15,10 @@ what lets IANA ids resolve, preserving item 1's fix.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Any, Mapping
+from datetime import UTC, datetime
+from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
@@ -67,7 +68,7 @@ def in_maintenance_window(
             return WindowResult(allowed=True, reason="window_fields_missing", tz=tz)
         start_h, end_h = int(mw["start_hour"]), int(mw["end_hour"])
 
-    now_utc = now_utc or datetime.now(timezone.utc)
+    now_utc = now_utc or datetime.now(UTC)
     local, tz_error = _resolve_local(now_utc, tz)
     h = local.hour
     if start_h <= end_h:
