@@ -27,7 +27,10 @@ def _parse_args(argv: list[str] | None = None):
     p.add_argument("--repo-top", type=Path, default=repo_top_default)
     p.add_argument("--unit-registry", type=Path, default=None)
     p.add_argument("--vault-creds", type=Path, default=None)
-    p.add_argument("--modules", default="", help="comma-separated module override")
+    p.add_argument("--modules", default="",
+                   help="comma-separated filter on what EXECUTES; the full set is still "
+                        "built and drift-classified, and a unit that is already current "
+                        "is still skipped. always-modules ride along")
     p.add_argument("--only-hosts", default="", help="comma-separated hostname whitelist")
     p.add_argument("--proxy-mode", choices=("weizmann", "direct"), default="weizmann")
     p.add_argument("--dry-run", action="store_true")

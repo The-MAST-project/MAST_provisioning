@@ -274,25 +274,53 @@ class Driver:
         return found
 
     def _resolve_modules(self, unit: dict) -> list[str]:
-        if self.cfg.modules:
-            out: list[str] = []
-            for m in self.cfg.modules:
-                out += [p for p in str(m).split(",") if p]
-            # An explicit subset must still close out the run. Without this a
-            # targeted run skipped the always-modules entirely: observed 2026-08-09,
-            # three --modules runs left mast-unit Running on three production units
-            # and reported exit_code=0, because mast-services-finalize never ran
-            # (#60). The drift path has always done this; the override bypassed it.
-            order = self._module_order()
-            for name in self._always_modules():
-                if name not in out:
-                    out.append(name)
-            return sorted(out, key=lambda n: (order.get(n, 0), n))
+        """The unit's COMPLETE module set -- what a full provisioning of it means.
+
+        Deliberately ignores ``--modules``. This set is what gets built, and the
+        build-manifest's module list is what ``fully_provisioned`` is judged
+        against (client/mast-installed-manifest.ps1), so letting a CLI subset
+        reach it made the flag read true off a partial set and published the
+        aggregate payload_hash with it -- #63. A registry-declared ``modules``
+        list is different: it says what this unit's full set IS, so it belongs
+        here. Targeting is applied later, by _filter_targets.
+        """
         if unit.get("modules"):
             return list(unit["modules"])
         providers = self.cfg.repo_top / "server" / "providers"
         return sorted(p.name for p in providers.iterdir()
                       if (p / "module.json").exists()) if providers.is_dir() else []
+
+    def _filter_targets(self, targets: list[str], full_set: list[str]) -> list[str]:
+        """Restrict what will execute to ``--modules``, keeping the always-modules.
+
+        ``--modules`` is a filter on execution, not on the build: whatever the
+        classifier decided to run is intersected with the named set. An empty
+        ``targets`` means "run everything", so the intersection is just the named
+        set.
+
+        The always-modules are re-added afterwards because a targeted run still
+        has to close itself out -- three --modules runs on 2026-08-09 left
+        mast-unit Running on three production units and reported exit_code=0
+        because mast-services-finalize never ran (#60).
+
+        Returns the ordered target list, or [] when the named modules need no
+        work. [] is NOT "run everything" to the caller here -- see _process_unit,
+        which treats it as nothing to do. Running the always-modules alone would
+        mean running ``reboot`` for a run that had no work in it.
+        """
+        named: list[str] = []
+        for m in self.cfg.modules:
+            named += [p for p in str(m).split(",") if p]
+        wanted = targets or full_set
+        real = [n for n in wanted if n in named]
+        if not real:
+            return []
+        order = self._module_order()
+        out = list(real)
+        for name in self._always_modules():
+            if name not in out:
+                out.append(name)
+        return sorted(out, key=lambda n: (order.get(n, 0), n))
 
     def _process_unit(self, unit: dict) -> None:
         self.units_checked += 1
@@ -359,12 +387,15 @@ class Driver:
                 # decide only whether a no-drift result means "skip" or "run the
                 # full set".
                 #
-                # The build above is deliberately still the FULL module set:
-                # building a subset would make the payload's build-manifest
-                # declare only that subset, and the unit's fully_provisioned
-                # (client/mast-installed-manifest.ps1) would then be judged
-                # against a partial set and read true on a one-module run.
-                # Targeting therefore happens at EXECUTE, not at build.
+                # The build above is the unit's FULL module set, and that is load
+                # bearing: the build-manifest's module list is what the unit's
+                # fully_provisioned is judged against
+                # (client/mast-installed-manifest.ps1), so a subset build makes the
+                # flag read true off a partial set and publishes the aggregate
+                # payload_hash with it. This comment used to assert that invariant
+                # while _resolve_modules quietly broke it by passing --modules
+                # straight into the build (#63). Targeting happens at EXECUTE only,
+                # via _filter_targets below.
                 target_modules: list[str] = []
                 if self.cfg.force:
                     # --force means "run everything": no classification, no skip.
@@ -396,6 +427,23 @@ class Driver:
                         self.log.event("HASH_CHECK", unit=host, installed=installed_hash or "none",
                                        built=payload_hash,
                                        result="NEEDS_REPAIR" if aggregate_matches else "NEEDS_UPDATE")
+                if self.cfg.modules:
+                    # Filter what executes, having already built and classified the
+                    # full set. A unit that came out already_current above has
+                    # returned by now, so --modules deliberately does not force a
+                    # run on a current unit.
+                    target_modules = self._filter_targets(target_modules, modules)
+                    if not target_modules:
+                        self.log.event("MODULE_TARGET_EMPTY", unit=host,
+                                       requested=",".join(self.cfg.modules),
+                                       note="none of the requested modules need work; "
+                                            "not running the always-modules alone")
+                        self.log.activity(host, "SKIP", "no_requested_module_drift",
+                                          dur(), payload_hash, git_sha)
+                        return
+                    self.log.event("MODULE_TARGET_FILTERED", unit=host,
+                                   requested=",".join(self.cfg.modules),
+                                   targets=",".join(target_modules))
                 if self.cfg.dry_run:
                     self.log.event("DRYRUN_STOP", unit=host, reason="would_transfer_and_execute")
                     self.log.activity(host, "SKIP", "dry_run", dur(), payload_hash, git_sha)
