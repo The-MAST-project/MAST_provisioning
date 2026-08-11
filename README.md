@@ -238,18 +238,42 @@ This is the only path operators run by hand. Everything else is autonomous.
 > `check-and-provision.ps1` below **remains authoritative** until the Python
 > driver is validated on a real run. Once landed, run it with
 > `python server/check_and_provision.py [--only-hosts ...] [--dry-run]`
-> (`pip install -r server/requirements.txt` first); pure-logic tests live in
-> `server/prov/tests/`, run with `python -m pytest server/prov/tests` (`pytest` is
-> a dev-only extra, not in `server/requirements.txt`; the runtime deps must still
-> be installed, since `prov.transport` imports `pywinrm`/`paramiko` at module
-> level and four test modules fail at *collection* without them). The PowerShell
-> suites under `server/tests/` need Windows PowerShell 5.1 + Pester 3.x:
-> `Invoke-Pester -Path server\tests`. The **supervised loop** is `--loop` (`--interval-seconds`,
+> (`pip install -r server/requirements.txt` first). Tests and lint are described
+> under **[Tests and CI](#tests-and-ci)** below. The **supervised loop** is `--loop` (`--interval-seconds`,
 > `--max-cycles`); run it as a service per **[server/deploy/README.md](server/deploy/README.md)**
 > (systemd unit / NSSM). See `docs/decisions/2026-07-12-loop-mode-is-a-long-lived-service.md`.
 
 For complete step-by-step instructions starting from a bare Windows machine,
 see **[docs/provisioning-server-setup.md](docs/provisioning-server-setup.md)**.
+
+## Tests and CI
+
+```bash
+pip install -r server/requirements.txt -r requirements-dev.txt   # both, see below
+python -m pytest -q -ra                                          # from the REPO ROOT
+ruff format --check . && ruff check .
+```
+
+```powershell
+Import-Module Pester -RequiredVersion 3.4.0 -Force                # NOT a bare Import-Module
+Invoke-Pester -Path server\tests
+```
+
+Three things are easy to get wrong, and CI (`.github/workflows/ci.yml`) encodes all three:
+
+- **Install the runtime deps too, not just `requirements-dev.txt`.** `prov.transport`
+  imports `pywinrm` and `vm/run-prov-test.py` imports `paramiko` at module level, so
+  without them pytest dies during *collection* with `INTERNALERROR` and reports zero
+  tests rather than failing one.
+- **Run pytest from the repo root.** `server/prov/tests` alone skips `vm/tests`.
+- **Pin Pester to 3.4.0.** The suites are Pester 3 syntax (`Should Be`, not
+  `Should -Be`); Windows ships 5.x alongside 3.4.0 and a bare `Import-Module Pester`
+  picks 5.x, where every assertion is a syntax error. Windows PowerShell 5.1, not `pwsh`.
+
+Lint uses the fleet-wide `ruff.toml` (shared with MAST_common and MAST_unit) with
+`ruff` pinned in `requirements-dev.txt` — the pin matters for the default rule set, not
+only formatter output. CI also parse-checks every `.ps1`/`.psm1`; see
+`docs/decisions/2026-08-11-ci-is-three-jobs-and-lands-green.md`.
 
 The abbreviated setup sequence is:
 

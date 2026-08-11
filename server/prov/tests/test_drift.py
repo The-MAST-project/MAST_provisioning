@@ -18,8 +18,7 @@ def installed_manifest(**entries: dict) -> dict:
 
 
 def entry(hash_: str, provide: str = "pass", verify: str = "pass", version: str = "1.0") -> dict:
-    return {"version": version, "hash": hash_, "provide": provide, "verify": verify,
-            "installed_at": "2026-08-02T09:00:00Z"}
+    return {"version": version, "hash": hash_, "provide": provide, "verify": verify, "installed_at": "2026-08-02T09:00:00Z"}
 
 
 def test_matching_hashes_are_up_to_date():
@@ -72,13 +71,18 @@ def test_legacy_manifest_without_modules_map_targets_everything():
     assert all(m.state is ModuleState.MISSING for m in r.modules)
 
 
-def test_legacy_manifest_with_a_modules_LIST_targets_everything():
+def test_legacy_manifest_with_a_modules_list_targets_everything():
     """The shape mast01-04 actually carry: 'modules' present, but the pre-module_state
     LIST of names rather than a map. Same meaning as the no-key case above -- state
     unknown -- and it must not be walked as if it were a map."""
-    legacy = {"payload_hash": "old", "git_sha": "abc", "hostname": "mast01",
-              "modules": ["proxy"], "module_versions": {"proxy": "1.1"},
-              "installed_at": "2026-07-08T09:40:59Z"}
+    legacy = {
+        "payload_hash": "old",
+        "git_sha": "abc",
+        "hostname": "mast01",
+        "modules": ["proxy"],
+        "module_versions": {"proxy": "1.1"},
+        "installed_at": "2026-07-08T09:40:59Z",
+    }
     r = classify(legacy, build_manifest(git="h1", python="p1"))
     assert r.targets == ["git", "python"]
     assert all(m.state is ModuleState.MISSING for m in r.modules)
@@ -102,8 +106,7 @@ def test_verify_none_is_not_a_failure():
 
 
 def test_missing_installed_hash_needs_update_rather_than_silently_passing():
-    r = classify(installed_manifest(git={"version": "1.0", "provide": "pass"}),
-                 build_manifest(git="h1"))
+    r = classify(installed_manifest(git={"version": "1.0", "provide": "pass"}), build_manifest(git="h1"))
     assert r.targets == ["git"]
 
 
@@ -151,15 +154,13 @@ def validation(**modules: str) -> dict:
 
 def test_live_verify_failure_on_a_hash_matched_module_is_needs_repair():
     """Runtime drift: the payload did not change, the unit did."""
-    r = classify(installed_manifest(git=entry("h1")), build_manifest(git="h1"),
-                 validation(git="fail"))
+    r = classify(installed_manifest(git=entry("h1")), build_manifest(git="h1"), validation(git="fail"))
     assert r.by_state(ModuleState.NEEDS_REPAIR) == ["git"]
     assert r.targets == ["git"]
 
 
 def test_live_verify_pass_leaves_the_module_up_to_date():
-    r = classify(installed_manifest(git=entry("h1")), build_manifest(git="h1"),
-                 validation(git="pass"))
+    r = classify(installed_manifest(git=entry("h1")), build_manifest(git="h1"), validation(git="pass"))
     assert r.current
 
 
@@ -170,15 +171,13 @@ def test_absent_validation_leaves_the_tier_1_verdict_alone():
 
 
 def test_a_module_missing_from_the_validation_report_is_not_penalised():
-    r = classify(installed_manifest(git=entry("h1")), build_manifest(git="h1"),
-                 validation(python="fail"))
+    r = classify(installed_manifest(git=entry("h1")), build_manifest(git="h1"), validation(python="fail"))
     assert r.current
 
 
 def test_needs_update_wins_over_needs_repair():
     """A changed payload is reported as an update, not a repair -- the fix differs."""
-    r = classify(installed_manifest(git=entry("h1")), build_manifest(git="h2"),
-                 validation(git="fail"))
+    r = classify(installed_manifest(git=entry("h1")), build_manifest(git="h2"), validation(git="fail"))
     assert r.by_state(ModuleState.NEEDS_UPDATE) == ["git"]
     assert r.by_state(ModuleState.NEEDS_REPAIR) == []
 
@@ -212,9 +211,11 @@ def test_always_modules_keep_build_order():
     b = {
         "modules": ["proxy", "python", "reboot"],
         "always_modules": ["proxy", "reboot"],
-        "module_state": {"proxy": {"version": "1", "hash": "x1"},
-                         "python": {"version": "1", "hash": "NEW"},
-                         "reboot": {"version": "1", "hash": "r1"}},
+        "module_state": {
+            "proxy": {"version": "1", "hash": "x1"},
+            "python": {"version": "1", "hash": "NEW"},
+            "reboot": {"version": "1", "hash": "r1"},
+        },
     }
     installed = installed_manifest(proxy=entry("x1"), python=entry("OLD"), reboot=entry("r1"))
     # proxy runs first and reboot last, as their module.json order dictates.
@@ -231,8 +232,7 @@ def test_an_always_module_that_is_itself_drifted_is_not_duplicated():
 
 
 def dated_entry(hash_: str, installed_at: str) -> dict:
-    return {"version": "1.0", "hash": hash_, "provide": "pass", "verify": "pass",
-            "installed_at": installed_at}
+    return {"version": "1.0", "hash": hash_, "provide": "pass", "verify": "pass", "installed_at": installed_at}
 
 
 def test_a_validation_report_older_than_the_install_is_ignored():

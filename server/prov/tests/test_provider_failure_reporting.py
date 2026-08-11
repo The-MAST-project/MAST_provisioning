@@ -30,9 +30,7 @@ import pytest
 # server/prov/tests/test_*.py -> parents[3] == repo root
 REPO_ROOT = Path(__file__).resolve().parents[3]
 PROVIDER_SCRIPTS = sorted(
-    p
-    for p in (REPO_ROOT / "server" / "providers").glob("*/*.ps1")
-    if p.name.startswith(("provide-", "verify-"))
+    p for p in (REPO_ROOT / "server" / "providers").glob("*/*.ps1") if p.name.startswith(("provide-", "verify-"))
 )
 
 _LASTEXITCODE = re.compile(r"\$LASTEXITCODE", re.IGNORECASE)
@@ -46,7 +44,7 @@ _EXIT_ZERO = re.compile(r"\bexit\s+0\b", re.IGNORECASE)
 _INVOCATION = re.compile(r"[&.]\s+(?P<target>[^\s;|&]+)")
 
 _LINE_COMMENT = re.compile(r"#[^\n]*")
-_BLOCK_COMMENT = re.compile(r"<#.*?#>", re.S)
+_BLOCK_COMMENT = re.compile(r"<#.*?#>", re.DOTALL)
 
 
 def _strip_comments(text: str) -> str:
@@ -78,14 +76,10 @@ def _block_after(text: str, open_brace_index: int) -> str:
 
 def test_there_are_provider_scripts_to_check() -> None:
     # A glob that silently matches nothing would make every test below vacuous.
-    assert len(PROVIDER_SCRIPTS) > 20, (
-        f"only found {len(PROVIDER_SCRIPTS)} provider scripts"
-    )
+    assert len(PROVIDER_SCRIPTS) > 20, f"only found {len(PROVIDER_SCRIPTS)} provider scripts"
 
 
-@pytest.mark.parametrize(
-    "script", PROVIDER_SCRIPTS, ids=lambda p: p.parent.name + "/" + p.name
-)
+@pytest.mark.parametrize("script", PROVIDER_SCRIPTS, ids=lambda p: p.parent.name + "/" + p.name)
 def test_no_exit_zero_inside_finally(script: Path) -> None:
     text = _strip_comments(script.read_text(encoding="utf-8", errors="replace"))
     for match in _FINALLY.finditer(text):
@@ -102,9 +96,7 @@ def test_no_exit_zero_inside_finally(script: Path) -> None:
             )
 
 
-@pytest.mark.parametrize(
-    "script", PROVIDER_SCRIPTS, ids=lambda p: p.parent.name + "/" + p.name
-)
+@pytest.mark.parametrize("script", PROVIDER_SCRIPTS, ids=lambda p: p.parent.name + "/" + p.name)
 def test_no_lastexitcode_test_on_a_ps1_call(script: Path) -> None:
     text = _strip_comments(script.read_text(encoding="utf-8", errors="replace"))
     invocations = [(m.end(), m.group("target")) for m in _INVOCATION.finditer(text)]

@@ -25,12 +25,17 @@ def test_select_returns_nothing_at_or_under_retain():
 
 def test_select_keeps_newest_n_prunes_rest():
     ids = [
-        "run-20260710-090000", "run-20260712-090000", "run-20260711-090000",
-        "run-20260709-090000", "run-20260708-090000",
+        "run-20260710-090000",
+        "run-20260712-090000",
+        "run-20260711-090000",
+        "run-20260709-090000",
+        "run-20260708-090000",
     ]
     prune = select_prunable_runs(ids, 2)
     assert set(prune) == {
-        "run-20260710-090000", "run-20260709-090000", "run-20260708-090000",
+        "run-20260710-090000",
+        "run-20260709-090000",
+        "run-20260708-090000",
     }
     assert "run-20260712-090000" not in prune
     assert "run-20260711-090000" not in prune
@@ -68,7 +73,9 @@ def test_run_retention_prunes_on_real_fs(tmp_path):
     # Newest two conforming kept + the non-conforming dir.
     assert remaining == ["run-20260715-090000", "run-20260716-090000", "scratch"]
     assert set(removed) == {
-        "run-20260712-090000", "run-20260713-090000", "run-20260714-090000",
+        "run-20260712-090000",
+        "run-20260713-090000",
+        "run-20260714-090000",
     }
     assert warnings == []
 

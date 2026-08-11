@@ -81,10 +81,7 @@ def start_ps3cli_server(port: int):
 
     ps3dir = locate_ps3cli_dir()
     if ps3dir is None:
-        raise RuntimeError(
-            "ps3cli.exe not found (set PS3CLI_DIR or install under "
-            "~/Documents/PlaneWave/ps3cli)"
-        )
+        raise RuntimeError("ps3cli.exe not found (set PS3CLI_DIR or install under ~/Documents/PlaneWave/ps3cli)")
     catalog = locate_ps3cli_catalog()
     if catalog is None:
         raise RuntimeError(
@@ -163,18 +160,24 @@ def validate_series(name: str, files: list[str], expected: dict, host: str, port
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--unit-src", type=Path, required=True,
-                        help="path to MAST_unit/src (added to sys.path for focus_analysis + PlaneWave.ps3cli_locate)")
-    parser.add_argument("--fits-dir", type=Path, required=True,
-                        help="directory holding focus series (subdirs of FOCUS*.fits)")
-    parser.add_argument("--expected", type=Path, default=None,
-                        help="JSON of per-series expectations (optional)")
+    parser.add_argument(
+        "--unit-src",
+        type=Path,
+        required=True,
+        help="path to MAST_unit/src (added to sys.path for focus_analysis + PlaneWave.ps3cli_locate)",
+    )
+    parser.add_argument(
+        "--fits-dir", type=Path, required=True, help="directory holding focus series (subdirs of FOCUS*.fits)"
+    )
+    parser.add_argument("--expected", type=Path, default=None, help="JSON of per-series expectations (optional)")
     parser.add_argument("--host", default=DEFAULT_HOST)
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument("--timeout", type=float, default=60, help="per-series analyser timeout (s)")
-    parser.add_argument("--start-server", action="store_true",
-                        help="launch a throwaway ps3cli --server (auto-locates exe + catalog, "
-                             "honoring PS3CLI_DIR/PS3CLI_CATALOG if set)")
+    parser.add_argument(
+        "--start-server",
+        action="store_true",
+        help="launch a throwaway ps3cli --server (auto-locates exe + catalog, honoring PS3CLI_DIR/PS3CLI_CATALOG if set)",
+    )
     parser.add_argument("--server-wait", type=float, default=30, help="seconds to wait for the server port")
     args = parser.parse_args()
 
@@ -203,12 +206,16 @@ def main() -> int:
             server = start_ps3cli_server(args.port)
 
         if not wait_for_port(args.host, args.port, args.server_wait):
-            print(f"ERROR: ps3cli server not reachable at {args.host}:{args.port} "
-                  f"within {args.server_wait}s (is the unit app or --start-server running?)")
+            print(
+                f"ERROR: ps3cli server not reachable at {args.host}:{args.port} "
+                f"within {args.server_wait}s (is the unit app or --start-server running?)"
+            )
             return 2
 
-        results = {name: validate_series(name, files, expected, args.host, args.port, args.timeout)
-                   for name, files in series.items()}
+        results = {
+            name: validate_series(name, files, expected, args.host, args.port, args.timeout)
+            for name, files in series.items()
+        }
     finally:
         if server is not None:
             print("\nterminating throwaway ps3cli --server")

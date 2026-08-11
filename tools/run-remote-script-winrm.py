@@ -30,6 +30,7 @@ Troubleshooting (orchestrator hangs after guest appears finished):
     WinRM-recycling work. Use --no-remote-transcript to skip Start-Transcript entirely if the
     transcript file causes trouble.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -41,7 +42,7 @@ import sys
 import threading
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -51,7 +52,7 @@ from winrm.exceptions import InvalidCredentialsError
 # Shared WinRM/PS helpers live in vm/vm_lib.py (canonical source of truth -- see
 # CLAUDE.md DRY rules). tools/ is not on sys.path next to vm/, so add it.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "vm"))
-from vm_lib import _candidate_users, _ps_escape, winrm_session  # noqa: E402
+from vm_lib import _candidate_users, _ps_escape, winrm_session
 
 CHUNK = 800
 WINRM_PORT = 5985
@@ -62,7 +63,7 @@ def repo_root() -> Path:
 
 
 def _ts() -> str:
-    return datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S")
+    return datetime.now(UTC).astimezone().strftime("%Y-%m-%d %H:%M:%S")
 
 
 def obs(msg: str, *, quiet: bool) -> None:
@@ -118,7 +119,7 @@ def _strip_powershell_clixml(text: str) -> str:
         s = ln.strip()
         if not s:
             continue
-        if s.startswith("<Objs ") or s.startswith("<Obj ") or s.startswith("</Objs>"):
+        if s.startswith(("<Objs ", "<Obj ", "</Objs>")):
             continue
         lines.append(ln)
     return "\n".join(lines) + ("\n" if lines else "")
@@ -153,9 +154,7 @@ def _guest_log_root_default() -> str:
 def print_guest_remote_runs_listing(session: winrm.Session, *, quiet: bool) -> None:
     """Best-effort: show where remote-runs would be and what's present."""
     ps = (
-        "$root = "
-        + _guest_log_root_default()
-        + "; "
+        "$root = " + _guest_log_root_default() + "; "
         'Write-Host ("##MAST## kind=remote_runs_root root=" + $root); '
         "if (Test-Path -LiteralPath $root) { "
         "  $items = @(Get-ChildItem -LiteralPath $root -Recurse -File -Force -ErrorAction SilentlyContinue | "
@@ -201,16 +200,10 @@ def build_remote_invoke(
     mast_skip = "$true" if not transcript else "$false"
     # invoke_tail is appended raw after & $ps1 (same as legacy behavior).
     return (
-        "$mastSkipTx = "
-        + mast_skip
-        + "; "
-        "$env:MAST_RUN_ID = '"
-        + rid
-        + "'; "
+        "$mastSkipTx = " + mast_skip + "; "
+        "$env:MAST_RUN_ID = '" + rid + "'; "
         "$env:MAST_REMOTE_INVOKER = 'run-remote-script-winrm.py'; "
-        "$env:MAST_REMOTE_SCRIPT_REPO = '"
-        + repo
-        + "'; "
+        "$env:MAST_REMOTE_SCRIPT_REPO = '" + repo + "'; "
         "$mastRunId = $env:MAST_RUN_ID; "
         "$mastStamp = Get-Date -Format 'yyyyMMdd-HHmmss'; "
         "$mastLogRoot = Join-Path $env:SystemDrive ('MAST\\logs\\remote-runs\\' + $mastStamp + '_' + $mastRunId); "
@@ -362,9 +355,7 @@ def wait_for_winrm_ready(
         attempt += 1
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            raise TimeoutError(
-                f"WinRM on {host!r} did not become ready within {timeout_s}s"
-            )
+            raise TimeoutError(f"WinRM on {host!r} did not become ready within {timeout_s}s")
         try:
             sock_timeout = min(5.0, max(1.0, remaining))
             with socket.create_connection((host, WINRM_PORT), timeout=sock_timeout):
@@ -411,7 +402,7 @@ def main() -> int:
         "--invoke-args",
         default="",
         help="Literal argument string appended after the script path (PowerShell), e.g. "
-        '\'-HostName mast01 -Provider 192.168.56.1\'',
+        "'-HostName mast01 -Provider 192.168.56.1'",
     )
     ap.add_argument(
         "--quiet",
@@ -445,8 +436,7 @@ def main() -> int:
         type=int,
         default=900,
         metavar="N",
-        help="Keep polling until WinRM answers on port %s (0 = no wait). Default 900. "
-        "Use after a unit reboot." % WINRM_PORT,
+        help=f"Keep polling until WinRM answers on port {WINRM_PORT} (0 = no wait). Default 900. Use after a unit reboot.",
     )
     ap.add_argument(
         "--wait-winrm-poll-seconds",
@@ -516,10 +506,7 @@ def main() -> int:
     upload_start = time.perf_counter()
     for i, ch in enumerate(chunks):
         es = _ps_escape(ch)
-        line = (
-            "$p = Join-Path $env:TEMP 'mast-remote.b64'; "
-            f"[IO.File]::AppendAllText($p, '{es}')"
-        )
+        line = f"$p = Join-Path $env:TEMP 'mast-remote.b64'; [IO.File]::AppendAllText($p, '{es}')"
         if nchunks <= 24 or i == 0 or (i + 1) % step == 0 or i == nchunks - 1:
             pct = 100 * (i + 1) // max(1, nchunks)
             obs(f"upload chunk {i + 1}/{nchunks} ({pct}%)...", quiet=quiet)
@@ -580,7 +567,7 @@ def main() -> int:
             "script": args.script,
             "status_code": int(r.status_code),
             "duration_exec_s": round(exec_s, 3),
-            "finished_local_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "finished_local_utc": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "remote_note": "See unit <SystemDrive>\\MAST\\logs\\remote-runs\\<timestamp>_<run_id>\\remote-<host>-<run_id>.json",
         }
         local_path.write_text(json.dumps(local_meta, indent=2), encoding="utf-8")

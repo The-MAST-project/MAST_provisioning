@@ -13,12 +13,13 @@ Exit codes: 0 all OK/SKIPPED, 1 one or more units failed, 2 fatal startup error.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # make `prov` importable
 
-from prov.driver import Config, Driver, run_loop  # noqa: E402
+from prov.driver import Config, Driver, run_loop
 
 
 def _parse_args(argv: list[str] | None = None):
@@ -27,10 +28,13 @@ def _parse_args(argv: list[str] | None = None):
     p.add_argument("--repo-top", type=Path, default=repo_top_default)
     p.add_argument("--unit-registry", type=Path, default=None)
     p.add_argument("--vault-creds", type=Path, default=None)
-    p.add_argument("--modules", default="",
-                   help="comma-separated filter on what EXECUTES; the full set is still "
-                        "built and drift-classified, and a unit that is already current "
-                        "is still skipped. always-modules ride along")
+    p.add_argument(
+        "--modules",
+        default="",
+        help="comma-separated filter on what EXECUTES; the full set is still "
+        "built and drift-classified, and a unit that is already current "
+        "is still skipped. always-modules ride along",
+    )
     p.add_argument("--only-hosts", default="", help="comma-separated hostname whitelist")
     p.add_argument("--proxy-mode", choices=("weizmann", "direct"), default="weizmann")
     p.add_argument("--dry-run", action="store_true")
@@ -39,12 +43,13 @@ def _parse_args(argv: list[str] | None = None):
     p.add_argument("--maint-window-start", type=int, default=-1)
     p.add_argument("--maint-window-end", type=int, default=-1)
     p.add_argument("--retain-runs", type=int, default=60)
-    p.add_argument("--loop", action="store_true",
-                   help="run provisioning cycles on a cadence (the supervised -Loop service mode)")
-    p.add_argument("--interval-seconds", type=int, default=1800,
-                   help="seconds between cycles in --loop mode (default 1800)")
-    p.add_argument("--max-cycles", type=int, default=None,
-                   help="--loop mode: stop after this many cycles (default: run until stopped)")
+    p.add_argument(
+        "--loop", action="store_true", help="run provisioning cycles on a cadence (the supervised -Loop service mode)"
+    )
+    p.add_argument("--interval-seconds", type=int, default=1800, help="seconds between cycles in --loop mode (default 1800)")
+    p.add_argument(
+        "--max-cycles", type=int, default=None, help="--loop mode: stop after this many cycles (default: run until stopped)"
+    )
     return p.parse_args(argv)
 
 
@@ -74,16 +79,17 @@ def _install_stop_event():
     instead of waiting out the interval."""
     import signal
     import threading
+
     ev = threading.Event()
 
     def _handler(*_):
         ev.set()
 
     signal.signal(signal.SIGINT, _handler)
-    try:
-        signal.signal(signal.SIGTERM, _handler)  # not deliverable the same way on Windows
-    except (ValueError, AttributeError, OSError):
-        pass
+    # SIGTERM is not deliverable the same way on Windows; registering it is
+    # best-effort and its absence is not an error.
+    with contextlib.suppress(ValueError, AttributeError, OSError):
+        signal.signal(signal.SIGTERM, _handler)
     return ev
 
 
@@ -92,8 +98,7 @@ def main(argv: list[str] | None = None) -> int:
     cfg = _build_config(argv)
     if a.loop:
         ev = _install_stop_event()
-        run_loop(cfg, a.interval_seconds, max_cycles=a.max_cycles,
-                 stop=ev.is_set, sleep_fn=ev.wait)
+        run_loop(cfg, a.interval_seconds, max_cycles=a.max_cycles, stop=ev.is_set, sleep_fn=ev.wait)
         return 0
     return Driver(cfg).run()
 

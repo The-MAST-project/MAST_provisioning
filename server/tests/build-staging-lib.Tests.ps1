@@ -9,6 +9,14 @@ $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 . (Join-Path $here '..\..\build\build-staging-lib.ps1')
 
 $root = Join-Path $env:TEMP ("mast-repofiles-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
+New-Item -ItemType Directory -Force -Path $root | Out-Null
+# $env:TEMP can be an 8.3 SHORT path -- GitHub's windows-latest runner reports
+# C:\Users\RUNNER~1\AppData\Local\Temp, where the account is 'runneradmin'.
+# Resolve-MastRepoFile returns the long form, so building the expected paths
+# straight from $env:TEMP compared 'RUNNER~1' against 'runneradmin' and failed by
+# exactly three characters. Normalise the root once, so every expectation in this
+# file is spelled the way the filesystem spells it.
+$root = (Get-Item -LiteralPath $root).FullName
 $tools = Join-Path $root 'tools'
 $outside = Join-Path $root '..' | ForEach-Object { [System.IO.Path]::GetFullPath($_) }
 New-Item -ItemType Directory -Force -Path $tools | Out-Null

@@ -14,7 +14,7 @@ See ``docs/per-module-tracking-plan.md`` Stage 3, issue #22.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import StrEnum
 
 
@@ -36,6 +36,7 @@ class ModuleState(StrEnum):
 #: Verdicts that mean "run this module". ``EXTRA`` is deliberately absent: a
 #: module the build no longer ships cannot be provisioned, only reported.
 ACTIONABLE = frozenset({ModuleState.NEEDS_UPDATE, ModuleState.MISSING, ModuleState.NEEDS_REPAIR})
+
 
 @dataclass(frozen=True)
 class ModuleDrift:
@@ -75,8 +76,7 @@ class DriftReport:
         drifted = [m.name for m in self.modules if m.actionable]
         if not drifted:
             return []
-        wanted = set(drifted) | {m.name for m in self.modules
-                                 if m.name in self.always and m.state is not ModuleState.EXTRA}
+        wanted = set(drifted) | {m.name for m in self.modules if m.name in self.always and m.state is not ModuleState.EXTRA}
         return [m.name for m in self.modules if m.name in wanted]
 
     @property
@@ -106,7 +106,11 @@ def _parse_ts(value: str | None) -> datetime | None:
     if not value:
         return None
     try:
-        return datetime.strptime(value, _TS_FMT)
+        # _TS_FMT ends in a literal Z, i.e. these are UTC. strptime returns a
+        # NAIVE datetime for that, so attach the zone the format already asserts:
+        # both sides of the comparison in _validation_is_stale come through here,
+        # so aware-vs-aware stays consistent.
+        return datetime.strptime(value, _TS_FMT).replace(tzinfo=UTC)
     except ValueError:
         return None
 
@@ -200,7 +204,8 @@ def classify(installed: dict | None, build: dict, validation: dict | None = None
         if failed or not inst_hash or inst_hash != built_hash:
             state = ModuleState.NEEDS_UPDATE
         elif str(live.get(name, "")).lower() == "fail" and not _validation_is_stale(
-                checked_at, _entry_field(entry, "installed_at")):
+            checked_at, _entry_field(entry, "installed_at")
+        ):
             # Hash matches and the install was recorded clean, but the module is
             # not working right now. Reprovisioning is still the action, so this
             # is actionable; the distinct label is what tells an operator the
@@ -209,18 +214,24 @@ def classify(installed: dict | None, build: dict, validation: dict | None = None
         else:
             state = ModuleState.UP_TO_DATE
 
-        out.append(ModuleDrift(name, state, inst_version, built_version,
-                               inst_hash, built_hash, provide, verify))
+        out.append(ModuleDrift(name, state, inst_version, built_version, inst_hash, built_hash, provide, verify))
 
     # Modules the unit records but the build no longer ships. Reported, never
     # actioned: provisioning has nothing to run for them, and removing software
     # is out of scope for a drift pass.
     for name in sorted(set(installed_modules) - set(build_modules)):
         entry = installed_modules.get(name)
-        out.append(ModuleDrift(name, ModuleState.EXTRA,
-                               _entry_field(entry, "version"), None,
-                               _entry_field(entry, "hash"), None,
-                               _entry_field(entry, "provide"),
-                               _entry_field(entry, "verify")))
+        out.append(
+            ModuleDrift(
+                name,
+                ModuleState.EXTRA,
+                _entry_field(entry, "version"),
+                None,
+                _entry_field(entry, "hash"),
+                None,
+                _entry_field(entry, "provide"),
+                _entry_field(entry, "verify"),
+            )
+        )
 
     return DriftReport(tuple(out), always)

@@ -15,9 +15,10 @@ what lets IANA ids resolve, preserving item 1's fix.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Any, Mapping
+from datetime import UTC, datetime
+from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
@@ -25,8 +26,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 class WindowResult:
     allowed: bool
     reason: str = ""
-    current: str = ""          # local time "HH:mm" (empty when allowed with no window)
-    window: str = ""           # "HH:00-HH:00" (empty when no window configured)
+    current: str = ""  # local time "HH:mm" (empty when allowed with no window)
+    window: str = ""  # "HH:00-HH:00" (empty when no window configured)
     tz: str | None = None
     tz_error: str | None = None  # set when an IANA id could not be resolved
 
@@ -67,10 +68,10 @@ def in_maintenance_window(
             return WindowResult(allowed=True, reason="window_fields_missing", tz=tz)
         start_h, end_h = int(mw["start_hour"]), int(mw["end_hour"])
 
-    now_utc = now_utc or datetime.now(timezone.utc)
+    now_utc = now_utc or datetime.now(UTC)
     local, tz_error = _resolve_local(now_utc, tz)
     h = local.hour
-    if start_h <= end_h:
+    if start_h <= end_h:  # noqa: SIM108 -- the ternary buries the wrap-around case
         in_win = start_h <= h < end_h
     else:  # wrap, e.g. 22-06
         in_win = h >= start_h or h < end_h

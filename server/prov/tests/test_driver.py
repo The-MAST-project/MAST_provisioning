@@ -4,6 +4,7 @@ The I/O-heavy per-unit orchestration is validated on the real VM run; here we
 cover the pure decision helpers and that a missing registry/creds fails fast
 with exit 2 and the right events.
 """
+
 import json
 
 import pytest
@@ -23,14 +24,14 @@ def test_ps_lit_escapes_single_quotes():
 
 
 def test_marker_json_extracts_payload():
-    out = "noise line\nPULLRESULT {\"outcome\": \"OK\", \"rc\": 1}\ntrailing"
+    out = 'noise line\nPULLRESULT {"outcome": "OK", "rc": 1}\ntrailing'
     res = D._marker_json(out, "PULLRESULT ")
     assert res == {"outcome": "OK", "rc": 1}
     assert D._marker_json("no marker here", "PULLRESULT ") is None
 
 
 def test_parse_json_or_none_tolerates_bom_and_empty():
-    assert D._parse_json_or_none("﻿{\"a\": 1}") == {"a": 1}
+    assert D._parse_json_or_none('﻿{"a": 1}') == {"a": 1}
     assert D._parse_json_or_none("   ") is None
     assert D._parse_json_or_none("not json") is None
 
@@ -38,7 +39,7 @@ def test_parse_json_or_none_tolerates_bom_and_empty():
 def _cfg(root, **kw):
     repo = root / "repo"
     (repo / "server" / "providers").mkdir(parents=True, exist_ok=True)
-    base = dict(repo_top=repo, unit_registry=repo / "reg.json", vault_creds=repo / "creds.json")
+    base = {"repo_top": repo, "unit_registry": repo / "reg.json", "vault_creds": repo / "creds.json"}
     base.update(kw)
     return D.Config(**base)
 
@@ -185,8 +186,8 @@ def test_run_fatal_on_missing_creds(root):
 
 def test_cli_config_builder_parses_args():
     import check_and_provision as cli
-    cfg = cli._build_config(["--only-hosts", "mast04,mast03", "--dry-run",
-                             "--proxy-mode", "direct", "--retain-runs", "10"])
+
+    cfg = cli._build_config(["--only-hosts", "mast04,mast03", "--dry-run", "--proxy-mode", "direct", "--retain-runs", "10"])
     assert cfg.only_hosts == ["mast04", "mast03"]
     assert cfg.dry_run is True
     assert cfg.proxy_mode == "direct"

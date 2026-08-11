@@ -22,15 +22,11 @@ MODULE = "execution-policy"
 
 def _module(name: str) -> dict:
     # utf-8-sig: several module.json files carry a BOM.
-    return json.loads(
-        (PROVIDERS / name / "module.json").read_text(encoding="utf-8-sig")
-    )
+    return json.loads((PROVIDERS / name / "module.json").read_text(encoding="utf-8-sig"))
 
 
 def _all_modules() -> dict[str, dict]:
-    return {
-        p.parent.name: _module(p.parent.name) for p in PROVIDERS.glob("*/module.json")
-    }
+    return {p.parent.name: _module(p.parent.name) for p in PROVIDERS.glob("*/module.json")}
 
 
 def test_execution_policy_runs_before_every_other_provider():
@@ -55,13 +51,9 @@ def test_execution_policy_is_an_always_module():
 def test_execution_policy_declares_both_of_its_scripts():
     m = _module(MODULE)
     files = set(m["commandfiles"])
-    assert {"provide-execution-policy.ps1", "verify-execution-policy.ps1"} <= files, (
-        files
-    )
+    assert {"provide-execution-policy.ps1", "verify-execution-policy.ps1"} <= files, files
     for rel in files:
-        assert (PROVIDERS / MODULE / rel).is_file(), (
-            f"declared commandfile missing: {rel}"
-        )
+        assert (PROVIDERS / MODULE / rel).is_file(), f"declared commandfile missing: {rel}"
 
 
 def test_execution_policy_verify_is_a_script_not_an_inline_command():

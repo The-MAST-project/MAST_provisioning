@@ -23,7 +23,8 @@ if str(_SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(_SERVER_DIR))
 
 # Re-export the full transport public API (see prov.transport.__all__) ...
-from prov.transport import *  # noqa: E402,F401,F403
+from prov.transport import *  # noqa: E402, F403
+
 # ... plus the underscored helpers the vm/ scripts and tests reference directly.
 from prov.transport import (  # noqa: E402,F401
     WINRM_BOOT_TIMEOUT_S,
@@ -46,10 +47,7 @@ from prov.transport import (  # noqa: E402,F401
 
 # VirtualBox -- canonical path on Windows. Override by setting VBOXMANAGE_PATH
 # in the environment if VirtualBox is installed elsewhere.
-VBOXMANAGE = Path(
-    os.environ.get("VBOXMANAGE_PATH")
-    or r"C:\Program Files\Oracle\VirtualBox\VBoxManage.exe"
-)
+VBOXMANAGE = Path(os.environ.get("VBOXMANAGE_PATH") or r"C:\Program Files\Oracle\VirtualBox\VBoxManage.exe")
 VM_STOP_POLL_TIMEOUT_S = 30
 
 
@@ -78,7 +76,9 @@ def vbox_snapshot_exists(vm: str, snapshot: str) -> bool:
     try:
         r = subprocess.run(
             [str(VBOXMANAGE), "snapshot", vm, "list", "--machinereadable"],
-            check=True, text=True, capture_output=True,
+            check=True,
+            text=True,
+            capture_output=True,
         )
     except (subprocess.CalledProcessError, FileNotFoundError):
         return False

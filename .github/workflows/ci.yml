@@ -1,0 +1,156 @@
+# Continuous integration for MAST_provisioning.
+#
+# Three jobs, not the siblings' two, because this repo has two test languages:
+# pytest for the platform-agnostic Python server, and Pester for the PowerShell
+# libraries the units run. They are separate jobs so the signals stay
+# independent -- a red lint must not hide which of the two broke, and vice versa.
+#
+# Lint is BLOCKING and, unlike MAST_common and MAST_unit, currently GREEN: the
+# debt (195 findings, 27 files unformatted) was cleared when the fleet ruff
+# standard was adopted, rather than landing red and waiting. A permanently-red
+# check stops being read, which is the same failure this repo keeps finding in
+# its own providers (#55, #67, #68, #69). What is deliberately deferred is scoped
+# per-file in ruff.toml with a reason and tracked in #72.
+#
+# TWO THINGS THAT WILL SILENTLY MAKE THIS PROVE NOTHING IF CHANGED:
+#
+# 1. Pester MUST be pinned to 3.4.0. windows-latest ships Pester 5.x preinstalled
+#    ALONGSIDE the bundled 3.4.0, and a bare `Import-Module Pester` picks 5.x --
+#    where all 112 `Should Be` assertions in server/tests are syntax errors. The
+#    suites are Pester 3 throughout (112 `Should Be`, 9 `Should Throw`, 89 `It`),
+#    and 3.4.0 is what the units themselves carry. `shell: powershell` is Windows
+#    PowerShell 5.1; `pwsh` (7.x) has no bundled Pester 3 at all.
+#
+# 2. Invoke-Pester 3.x does NOT set a failing exit code by itself. Hence
+#    -PassThru and the explicit FailedCount check. Without it the job goes green
+#    with failing tests.
+#
+# pytest runs from the REPO ROOT, not server/prov/tests: vm/tests is otherwise
+# never collected. And it needs server/requirements.txt installed, because a
+# missing paramiko does not fail a test -- it kills collection with an
+# INTERNALERROR and zero tests report.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A new push supersedes an in-flight run for the same ref.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Report both platforms. The server is deliberately platform-agnostic with a
+      # Linux target while the units are Windows, so a one-platform break is
+      # exactly what this matrix exists to catch; cancelling the other job hides
+      # half the answer.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          # ruff.toml sets target-version = "py312"; keep these in step.
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            server/requirements.txt
+            requirements-dev.txt
+
+      - name: Install dependencies
+        # Runtime deps too, not just dev: prov.transport imports pywinrm and
+        # vm/run-prov-test.py imports paramiko at module level.
+        run: python -m pip install --upgrade pip -r server/requirements.txt -r requirements-dev.txt
+
+      - name: Tests
+        # From the root so vm/tests is included. -ra surfaces skips: a skip here
+        # would mean a dependency failed to install rather than that the test is
+        # inapplicable, and it must not pass unnoticed.
+        run: python -m pytest -q -ra
+
+  pester:
+    name: pester (windows-latest)
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Parse every PowerShell file
+        # Cheap syntax gate over the ~two thirds of this repo that is PowerShell
+        # and is otherwise unlinted. Catches what a reviewer cannot see and what
+        # Pester cannot reach: a provider script is only executed on a unit, so a
+        # syntax error in one would otherwise surface during a production run.
+        # This is deliberately NOT PSScriptAnalyzer -- that is tracked in #73.
+        shell: powershell
+        run: |
+          $bad = 0
+          Get-ChildItem -Path . -Recurse -Include *.ps1, *.psm1 -File |
+            Where-Object { $_.FullName -notmatch '\\(\.git|\.venv|staging)\\' } |
+            ForEach-Object {
+              $tokens = $null; $errors = $null
+              [void][System.Management.Automation.Language.Parser]::ParseFile(
+                $_.FullName, [ref]$tokens, [ref]$errors)
+              if ($errors.Count -gt 0) {
+                $bad++
+                Write-Host ("PARSE FAIL {0}" -f $_.FullName)
+                $errors | ForEach-Object {
+                  Write-Host ("    line {0}: {1}" -f $_.Extent.StartLineNumber, $_.Message)
+                }
+              }
+            }
+          Write-Host ("PowerShell parse sweep: {0} file(s) with errors" -f $bad)
+          if ($bad -gt 0) { exit 1 }
+
+      - name: Pester (3.x)
+        # See the header: 3.4.0 explicitly, and the exit code is ours to set.
+        shell: powershell
+        run: |
+          Import-Module Pester -RequiredVersion 3.4.0 -Force
+          (Get-Module Pester).Version.ToString() | ForEach-Object { Write-Host "Pester $_" }
+          $r = Invoke-Pester -Path server\tests -PassThru
+          Write-Host ("Pester: {0} passed, {1} failed, {2} skipped" -f `
+            $r.PassedCount, $r.FailedCount, $r.SkippedCount)
+          if ($r.FailedCount -gt 0) { exit 1 }
+          if ($r.PassedCount -eq 0) {
+            Write-Host "No tests ran -- treating as failure (the suites were not discovered)."
+            exit 1
+          }
+
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install ruff
+        # requirements-dev.txt pins the version, so CI and every workstation agree
+        # on what counts as a finding. The pin covers the DEFAULT rule set too, not
+        # just formatter output: the same tree reports 13 findings under ruff
+        # 0.15.16 and 90 under 0.16.0. Nothing else is needed -- ruff never imports
+        # the code.
+        run: python -m pip install --upgrade pip -r requirements-dev.txt
+
+      - name: Format
+        # Deliberately before `ruff check`: this one is a single `ruff format .`
+        # away, so surfacing it first means the cheap half of any future debt is
+        # not hidden behind the expensive half.
+        run: ruff format --check .
+
+      - name: Lint
+        run: ruff check .

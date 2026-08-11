@@ -17,19 +17,25 @@ import csv
 import io
 import json
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 # activity.csv columns -- must match the PowerShell header for append-compat.
 _ACTIVITY_HEADER = [
-    "timestamp_utc", "run_id", "unit", "outcome",
-    "reason", "duration_s", "payload_hash", "git_sha",
+    "timestamp_utc",
+    "run_id",
+    "unit",
+    "outcome",
+    "reason",
+    "duration_s",
+    "payload_hash",
+    "git_sha",
 ]
 
 
 def now_utc() -> str:
     """UTC timestamp in the driver's canonical form (matches PS Now-Utc)."""
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def server_root() -> Path:
@@ -43,7 +49,7 @@ def server_root() -> Path:
     if env:
         return Path(env)
     if os.name == "nt":
-        return Path((os.environ.get("SystemDrive") or "C:") + "\\MAST")
+        return Path((os.environ.get("SYSTEMDRIVE") or "C:") + "\\MAST")
     return Path("/var/lib/mast")
 
 
@@ -138,8 +144,7 @@ class RunLog:
         payload_hash: str = "",
         git_sha: str = "",
     ) -> None:
-        row = [now_utc(), self.run_id, unit, outcome, reason,
-               str(duration_s), payload_hash, git_sha]
+        row = [now_utc(), self.run_id, unit, outcome, reason, str(duration_s), payload_hash, git_sha]
         buf = io.StringIO()
         csv.writer(buf).writerow(row)
         with self.activity_csv.open("a", encoding="utf-8", newline="") as fh:
@@ -150,5 +155,6 @@ class RunLog:
         """Route prov.transport's heartbeat/stdout log sinks into this run log so
         transport chatter and driver events share one timeline."""
         from prov import transport
+
         transport.log_fn = lambda m: self._append_run_log(f"[{now_utc()}] {m}")
         transport.log_raw_fn = self.raw

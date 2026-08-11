@@ -20,8 +20,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 
 def _load_report_module():
     sys.path.insert(0, str(_REPO_ROOT / "server"))
-    spec = importlib.util.spec_from_file_location(
-        "fleet_drift_report", _REPO_ROOT / "tools" / "fleet-drift-report.py")
+    spec = importlib.util.spec_from_file_location("fleet_drift_report", _REPO_ROOT / "tools" / "fleet-drift-report.py")
     mod = importlib.util.module_from_spec(spec)
     # Register before exec: the module defines dataclasses, and @dataclass looks
     # its own module up in sys.modules while the class body is being processed.
@@ -46,8 +45,7 @@ def _entry(hash_: str, version: str = "1.0") -> dict:
 BUILD = {
     "payload_hash": "agg",
     "modules": ["git", "desktop-shortcuts"],
-    "module_state": {"git": {"version": "2.52", "hash": "h-git"},
-                     "desktop-shortcuts": {"version": "1.0", "hash": "NEW"}},
+    "module_state": {"git": {"version": "2.52", "hash": "h-git"}, "desktop-shortcuts": {"version": "1.0", "hash": "NEW"}},
 }
 
 
@@ -55,10 +53,8 @@ def test_status_matrix_keys_on_hash_not_version(fdr):
     """The case that motivated hash-keyed reporting: this PR's desktop-shortcuts
     change altered the verify command with no version bump, so a version matrix
     shows nothing while the module is genuinely stale."""
-    stale = _unit(fdr, "mast01", git=_entry("h-git", "2.52"),
-                  **{"desktop-shortcuts": _entry("OLD", "1.0")})
-    current = _unit(fdr, "mast02", git=_entry("h-git", "2.52"),
-                    **{"desktop-shortcuts": _entry("NEW", "1.0")})
+    stale = _unit(fdr, "mast01", git=_entry("h-git", "2.52"), **{"desktop-shortcuts": _entry("OLD", "1.0")})
+    current = _unit(fdr, "mast02", git=_entry("h-git", "2.52"), **{"desktop-shortcuts": _entry("NEW", "1.0")})
     cmp = fdr.compare_to_build([stale, current], BUILD)
     assert cmp["verdicts"] == {"mast01": "DRIFT", "mast02": "IN SYNC"}
     cells = {r["module"]: r["cells"] for r in cmp["matrix"]}
@@ -68,8 +64,11 @@ def test_status_matrix_keys_on_hash_not_version(fdr):
 def test_csv_and_text_report_agree(fdr, tmp_path):
     """One run must not emit a text report saying STALE and a CSV saying nothing."""
     stale = _unit(fdr, "mast01", **{"desktop-shortcuts": _entry("OLD")})
-    build = {"payload_hash": "agg", "modules": ["desktop-shortcuts"],
-             "module_state": {"desktop-shortcuts": {"version": "1.0", "hash": "NEW"}}}
+    build = {
+        "payload_hash": "agg",
+        "modules": ["desktop-shortcuts"],
+        "module_state": {"desktop-shortcuts": {"version": "1.0", "hash": "NEW"}},
+    }
     cmp = fdr.compare_to_build([stale], build)
     out = tmp_path / "r.csv"
     fdr.write_csv(out, [stale], cmp, fdr.bootstrap_gaps([stale], {}))
@@ -86,8 +85,7 @@ def test_a_missing_module_renders_as_missing(fdr):
 
 
 def test_tier2_failure_renders_as_repair(fdr):
-    unit = _unit(fdr, "mast01", git=_entry("h-git"),
-                 **{"desktop-shortcuts": _entry("NEW")})
+    unit = _unit(fdr, "mast01", git=_entry("h-git"), **{"desktop-shortcuts": _entry("NEW")})
     unit.validation = {"git": "fail"}
     unit.validated_at = "2026-08-02T10:00:00Z"
     cmp = fdr.compare_to_build([unit], BUILD)
@@ -97,16 +95,15 @@ def test_tier2_failure_renders_as_repair(fdr):
 
 def test_legacy_manifest_module_versions_still_parse(fdr):
     """A unit not yet reprovisioned carries the pre-stage-2 shape."""
-    rec = fdr._manifest_from_obj("mast01", {
-        "payload_hash": "old", "module_versions": {"git": "2.44"}})
+    rec = fdr._manifest_from_obj("mast01", {"payload_hash": "old", "module_versions": {"git": "2.44"}})
     assert rec.module_versions == {"git": "2.44"}
     assert rec.modules == {}
 
 
 def test_new_manifest_yields_both_modules_and_versions(fdr):
-    rec = fdr._manifest_from_obj("mast01", {
-        "payload_hash": "new", "fully_provisioned": True,
-        "modules": {"git": {"version": "2.52", "hash": "h"}}})
+    rec = fdr._manifest_from_obj(
+        "mast01", {"payload_hash": "new", "fully_provisioned": True, "modules": {"git": {"version": "2.52", "hash": "h"}}}
+    )
     assert rec.modules["git"]["hash"] == "h"
     assert rec.module_versions == {"git": "2.52"}
     assert rec.fully_provisioned is True
@@ -119,7 +116,6 @@ def test_an_unreadable_validation_report_is_unknown_not_failed(fdr):
 
 
 def test_validation_report_parses_modules_and_timestamp(fdr):
-    mods, at = fdr._parse_validation(
-        '{"checked_at": "2026-08-02T10:00:00Z", "modules": {"git": "fail"}}')
+    mods, at = fdr._parse_validation('{"checked_at": "2026-08-02T10:00:00Z", "modules": {"git": "fail"}}')
     assert mods == {"git": "fail"}
     assert at == "2026-08-02T10:00:00Z"

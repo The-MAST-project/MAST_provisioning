@@ -1,0 +1,10 @@
+# Test- and lint-only dependencies. Runtime dependencies live in
+# server/requirements.txt, which CI installs as well: prov.transport imports
+# pywinrm at module level and vm/run-prov-test.py imports paramiko, and without
+# them pytest dies during COLLECTION (INTERNALERROR) rather than failing a test,
+# so the run reports nothing at all.
+pytest
+# Pinned so every machine and CI format and lint identically (rules in ruff.toml).
+# The pin covers the default rule set too, not just formatter output -- 0.16.0
+# enables substantially more by default than 0.15.x.
+ruff==0.16.0

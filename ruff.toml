@@ -1,0 +1,86 @@
+# Ruff configuration for MAST_provisioning.
+#
+# Mirrors the MAST fleet standard (MAST_common, MAST_unit) so every repo formats
+# identically. The ruff version is pinned in requirements-dev.txt (ruff==0.16.0);
+# config alone is not enough -- both formatter output and the DEFAULT rule set
+# differ between ruff versions. Measured while adopting this: the same tree
+# reports 13 findings under ruff 0.15.16 defaults and 90 under 0.16.0 defaults.
+#
+# Unlike MAST_common this repo is not consumed as a sibling clone; its own
+# package is `prov` (server/prov/), so that is what isort must treat as
+# first-party.
+
+line-length = 125
+target-version = "py312"
+
+[lint]
+# Enable rules from common linters.
+# The short module aliases `logevents as L`, `driver as D`, `transport as T` are a
+# deliberate, pervasive convention (~124 call sites across the driver and tests).
+# Renaming them is churn with no readability gain, so N812 is off fleet-wide here.
+ignore = ["N812"]
+
+extend-select = [
+    "F",   # Pyflakes (runtime errors)
+    "E",   # pycodestyle (formatting)
+    "W",   # pycodestyle warnings
+    "I",   # isort (import sorting)
+    "N",   # pep8-naming
+    "B",   # flake8-bugbear
+    "UP",  # pyupgrade
+    "C90", # mccabe complexity
+    "SIM", # flake8-simplify
+    "TID", # tidy imports
+]
+
+# Scoped rather than global, deliberately: these rules stay BLOCKING everywhere
+# they are not listed, so new code cannot add to the debt. Each entry names why
+# it is here, and the remaining work is tracked in #72.
+[lint.per-file-ignores]
+# C901 (complexity > 10). Every entry is either an argparse `main()` whose
+# branching IS the CLI surface, or -- for driver.py -- `_process_unit`, the phase
+# sequence the whole orchestrator is built around (complexity 20). Splitting that
+# is a real refactor with real risk, and doing it inside a lint sweep is how an
+# orchestrator regression gets introduced for a style score. Tracked, not hidden.
+"server/prov/driver.py" = ["C901"]
+"server/prov/tests/test_driver_flow.py" = ["C901"]
+"tools/fleet-drift-report.py" = ["C901"]
+# The dev VM harness (vm/): a scenario run drives VirtualBox, WinRM and a guest OS
+# through dozens of steps, and broad catches with a silent continue are how a
+# transient guest hiccup avoids killing a 40-minute run. It is developer tooling,
+# not production code, and its failure mode is a re-run.
+"vm/test-suite.py" = ["C901", "BLE001", "S110", "SIM105", "SIM115", "TRY004", "B904"]
+"vm/run-prov-test.py" = ["C901", "BLE001", "S110", "SIM105", "PLW1510"]
+"server/providers/mast-autofocus-validation/validate_autofocus_solve.py" = ["C901", "BLE001"]
+"server/providers/mast-validation/validate_mastrometry.py" = ["C901", "BLE001"]
+
+# BLE001 (`except Exception`). In the transport and the two validation providers
+# these are deliberate: a provisioning run must not abort because one cleanup
+# step, one optional probe, or one unit raised something unforeseen -- the
+# handlers report and continue, which is the behaviour the driver's fleet loop
+# depends on. Narrowing 33 catch sites by guesswork would trade a style finding
+# for a real outage, so each needs reading against its own failure mode (#72).
+# S110/SIM105 here are the WinRM session-close and candidate-probe paths, both
+# documented in situ as best-effort: whatever requests/urllib3 version is in use,
+# close() may raise, and the next call rebuilds the pool anyway.
+"server/prov/transport.py" = ["BLE001", "S110", "SIM105"]
+
+# E501 in this file only: the long lines are embedded PowerShell source inside
+# Python string literals. Splitting them means concatenating PS across Python
+# lines, which risks changing the script that actually gets emitted.
+"tools/run-remote-script-winrm.py" = ["C901", "BLE001", "E501"]
+
+[lint.isort]
+# server/prov/ is imported as `from prov import ...` by the driver, the CLI and
+# the tests, which run with server/ on sys.path rather than as an installed
+# package. Ruff's path-based resolver therefore cannot classify it, and without
+# naming it here every isort run reshuffles the import blocks.
+known-first-party = ["prov"]
+
+[format]
+# Ruff's Black-compatible formatter.
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "lf"
+docstring-code-format = true

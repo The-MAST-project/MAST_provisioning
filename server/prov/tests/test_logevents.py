@@ -48,8 +48,7 @@ def test_fmt_event_shape():
 def test_runlog_event_and_activity(root):
     rl = L.RunLog("run-20260712-130000", echo=False)
     rl.event("RUN_START", run_id=rl.run_id, trigger="manual")
-    rl.activity("mast04", "OK", reason="updated", duration_s=42,
-                payload_hash="h1", git_sha="s1")
+    rl.activity("mast04", "OK", reason="updated", duration_s=42, payload_hash="h1", git_sha="s1")
     rl.activity("mast03", "FAIL", reason="smoke:x")
 
     log_text = rl.run_log_path.read_text()
@@ -64,6 +63,5 @@ def test_runlog_event_and_activity(root):
 def test_runlog_reuses_existing_activity_csv_header_once(root):
     L.RunLog("run-a", echo=False).activity("mast00", "OK")
     L.RunLog("run-b", echo=False).activity("mast01", "OK")
-    header_lines = [r for r in L.prov_activity_csv().read_text().splitlines()
-                    if r.startswith("timestamp_utc")]
+    header_lines = [r for r in L.prov_activity_csv().read_text().splitlines() if r.startswith("timestamp_utc")]
     assert len(header_lines) == 1  # header written once, not per RunLog
