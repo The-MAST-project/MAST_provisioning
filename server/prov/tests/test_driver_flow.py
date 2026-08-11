@@ -500,3 +500,101 @@ def test_execute_lease_held_code_matches_the_powershell_constant():
     m = re.search(r"MAST_EXIT_LEASE_HELD\s+-Value\s+(\d+)", ps)
     assert m, f"MAST_EXIT_LEASE_HELD constant not found in {ps_path}"
     assert int(m.group(1)) == D.EXECUTE_EXIT_LEASE_HELD
+
+
+# --- #63: --modules must filter EXECUTE, never shrink the BUILD --------------
+# A unit with no registry-declared module list, so discovery supplies the full set.
+UNIT_NO_MODULES = {k: v for k, v in UNIT.items() if k != "modules"}
+
+
+def _write_provider(repo, name, order, always=False):
+    d = repo / "server" / "providers" / name
+    d.mkdir(parents=True, exist_ok=True)
+    body = {"name": name, "order": order}
+    if always:
+        body["always"] = True
+    (d / "module.json").write_text(json.dumps(body), encoding="utf-8")
+
+
+def test_modules_flag_does_not_shrink_the_build(root, monkeypatch):
+    """The build must declare the unit's FULL set even on a --modules run.
+
+    The build-manifest's module list is what the unit's fully_provisioned is
+    judged against (client/mast-installed-manifest.ps1). A subset build made the
+    flag read true off a partial set and published the aggregate payload_hash
+    with it, after which a repeated identical subset run satisfied both halves of
+    the already_current skip and the unit was reported current having never been
+    checked against the full set. mast03 read fully_provisioned=True off six
+    modules this way (#63).
+    """
+    drv, sess = _make_driver(root, monkeypatch, make_responder(), unit=UNIT_NO_MODULES)
+    repo = drv.cfg.repo_top
+    for name, order in (("config-bootstrap", 150), ("git", 500), ("mast", 2200)):
+        _write_provider(repo, name, order)
+    _write_provider(repo, "proxy", 100, always=True)
+    _write_provider(repo, "reboot", 9999, always=True)
+
+    seen: dict[str, list[str]] = {}
+
+    def capturing_build(self, unit, host, modules, dur):
+        seen["build"] = list(modules)
+        self._staging_dir = repo / "staging"
+        self.log.event("BUILD_OK", unit=host, payload_hash="hash123", git_sha="sha")
+        return "hash123", "sha", {}
+
+    monkeypatch.setattr(D.Driver, "_build", capturing_build)
+    drv.cfg.modules = ["mast"]
+
+    drv.run()
+
+    assert seen["build"] == ["config-bootstrap", "git", "mast", "proxy", "reboot"], seen
+    assert "mast" in seen["build"] and len(seen["build"]) > 1
+
+
+def test_modules_flag_filters_what_executes(root, monkeypatch):
+    drv, sess = _make_driver(root, monkeypatch, make_responder(), unit=UNIT_NO_MODULES)
+    repo = drv.cfg.repo_top
+    for name, order in (("config-bootstrap", 150), ("mast", 2200)):
+        _write_provider(repo, name, order)
+    _write_provider(repo, "proxy", 100, always=True)
+    _write_provider(repo, "reboot", 9999, always=True)
+    drv.cfg.modules = ["mast"]
+
+    drv.run()
+    log = drv.log.run_log_path.read_text()
+
+    assert "MODULE_TARGET_FILTERED" in log, log
+    # proxy/reboot ride along so the run still closes itself out (#60);
+    # config-bootstrap was not asked for and must not execute.
+    assert "targets=proxy,mast,reboot" in log, log
+
+
+def test_modules_flag_skips_when_no_named_module_needs_work(root, monkeypatch):
+    """Nothing named needs work -> skip, rather than run the always-modules alone.
+
+    reboot is an always-module, so synthesising a run out of an empty
+    intersection would reboot a unit for a run with no work in it.
+    """
+    drv, sess = _make_driver(root, monkeypatch, make_responder(), unit=UNIT_NO_MODULES)
+    repo = drv.cfg.repo_top
+    _write_provider(repo, "config-bootstrap", 150)
+    _write_provider(repo, "mast", 2200)
+    _write_provider(repo, "reboot", 9999, always=True)
+
+    # Drift says only config-bootstrap needs work; the operator asked for mast.
+    monkeypatch.setattr(
+        D.drift, "classify",
+        lambda installed, bm, val: type("R", (), {
+            "current": False,
+            "targets": ["config-bootstrap"],
+            "summary": lambda self: "1 drifted",
+        })(),
+    )
+    drv.cfg.modules = ["mast"]
+
+    code = drv.run()
+    log = drv.log.run_log_path.read_text()
+
+    assert "MODULE_TARGET_EMPTY" in log, log
+    assert "EXECUTE_START" not in log, f"executed despite nothing to do\n{log}"
+    assert code == D.EXIT_OK, log

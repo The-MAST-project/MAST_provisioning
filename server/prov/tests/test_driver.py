@@ -50,11 +50,26 @@ def test_resolve_modules_precedence(root):
         (drv.cfg.repo_top / "server" / "providers" / name).mkdir(parents=True)
         (drv.cfg.repo_top / "server" / "providers" / name / "module.json").write_text("{}")
     assert drv._resolve_modules({"hostname": "m"}) == ["ascom", "git", "mast"]
-    # unit registry entry overrides discovery
+    # A registry entry says what this unit's full set IS, so it wins over discovery.
     assert drv._resolve_modules({"hostname": "m", "modules": ["git"]}) == ["git"]
-    # CLI --modules overrides everything (and splits comma lists)
-    drv.cfg.modules = ["git,mast"]
-    assert drv._resolve_modules({"hostname": "m", "modules": ["ascom"]}) == ["git", "mast"]
+
+
+def test_resolve_modules_ignores_the_cli_subset(root):
+    """--modules must not reach the build. This is #63.
+
+    The build-manifest's module list is what the unit's fully_provisioned is
+    judged against, so a subset build made the flag read true off a partial set
+    and published the aggregate payload_hash with it -- after which a repeated
+    identical subset run satisfied both halves of the already_current skip.
+    """
+    drv = D.Driver(_cfg(root))
+    for name in ("ascom", "git", "mast"):
+        (drv.cfg.repo_top / "server" / "providers" / name).mkdir(parents=True)
+        (drv.cfg.repo_top / "server" / "providers" / name / "module.json").write_text("{}")
+    drv.cfg.modules = ["git"]
+    assert drv._resolve_modules({"hostname": "m"}) == ["ascom", "git", "mast"]
+    # ...and it does not override a registry-declared full set either.
+    assert drv._resolve_modules({"hostname": "m", "modules": ["ascom"]}) == ["ascom"]
 
 
 def _write_module(root, name, order, always=False):
@@ -66,47 +81,88 @@ def _write_module(root, name, order, always=False):
     (d / "module.json").write_text(json.dumps(body), encoding="utf-8")
 
 
-def test_explicit_modules_still_get_the_always_modules(root):
-    """A --modules subset must close out the run like a drift-targeted one does.
-
-    DriftReport.targets deliberately folds the ``always: true`` modules into any
-    non-empty target set; the CLI override bypassed that entirely, so a targeted
-    run skipped proxy (posture), mast-services-finalize (leaves the unit
-    quiescent) and reboot (pending-reboot detection the orchestrator acts on).
-    Observed 2026-08-09: three runs with --modules left mast-unit Running on
-    three production units and reported exit_code=0 (#60).
-    """
-    drv = D.Driver(_cfg(root))
-    repo = drv.cfg.repo_top
+def _fleet(repo):
     _write_module(repo, "proxy", 100, always=True)
     _write_module(repo, "config-bootstrap", 150)
     _write_module(repo, "mast", 2200)
     _write_module(repo, "mast-services-finalize", 9500, always=True)
     _write_module(repo, "reboot", 9999, always=True)
+    return ["proxy", "config-bootstrap", "mast", "mast-services-finalize", "reboot"]
 
+
+def test_filtered_targets_still_get_the_always_modules(root):
+    """A --modules run must close out like a drift-targeted one does.
+
+    DriftReport.targets folds the ``always: true`` modules into any non-empty
+    target set; the CLI path bypassed that, so a targeted run skipped proxy
+    (posture), mast-services-finalize (leaves the unit quiescent) and reboot
+    (pending-reboot detection the orchestrator acts on). Observed 2026-08-09:
+    three runs with --modules left mast-unit Running on three production units
+    and reported exit_code=0 (#60).
+    """
+    drv = D.Driver(_cfg(root))
+    full = _fleet(drv.cfg.repo_top)
     drv.cfg.modules = ["config-bootstrap,mast"]
-    got = drv._resolve_modules({"hostname": "m"})
+
+    got = drv._filter_targets(["config-bootstrap", "mast"], full)
 
     assert got == ["proxy", "config-bootstrap", "mast", "mast-services-finalize", "reboot"], got
 
 
-def test_always_modules_are_not_added_to_an_empty_override(root):
-    # No override: the registry list or the full-set fallback already covers them,
-    # and nothing should be synthesised out of a request that was not made.
+def test_filter_intersects_the_drift_targets_with_the_named_set(root):
+    # Named but not drifted -> excluded. Drifted but not named -> excluded.
     drv = D.Driver(_cfg(root))
-    repo = drv.cfg.repo_top
-    _write_module(repo, "reboot", 9999, always=True)
-    _write_module(repo, "git", 500)
-    assert drv._resolve_modules({"hostname": "m", "modules": ["git"]}) == ["git"]
+    full = _fleet(drv.cfg.repo_top)
+    drv.cfg.modules = ["config-bootstrap,mast"]
+
+    got = drv._filter_targets(["mast"], full)
+
+    assert got == ["proxy", "mast", "mast-services-finalize", "reboot"], got
 
 
-def test_always_modules_are_not_duplicated_when_named_explicitly(root):
+def test_filter_treats_empty_targets_as_the_full_set(root):
+    # target_modules == [] means "run everything" upstream, so the intersection
+    # is just the named set -- not everything.
     drv = D.Driver(_cfg(root))
-    repo = drv.cfg.repo_top
-    _write_module(repo, "proxy", 100, always=True)
-    _write_module(repo, "mast", 2200)
+    full = _fleet(drv.cfg.repo_top)
+    drv.cfg.modules = ["mast"]
+
+    got = drv._filter_targets([], full)
+
+    assert got == ["proxy", "mast", "mast-services-finalize", "reboot"], got
+
+
+def test_filter_returns_empty_when_no_named_module_needs_work(root):
+    """Empty means nothing to do -- NOT "run the always-modules alone".
+
+    reboot is an always-module, so synthesising a run out of an empty
+    intersection would reboot a unit for a run that had no work in it.
+    _process_unit logs MODULE_TARGET_EMPTY and returns.
+    """
+    drv = D.Driver(_cfg(root))
+    full = _fleet(drv.cfg.repo_top)
+    drv.cfg.modules = ["config-bootstrap"]
+
+    assert drv._filter_targets(["mast"], full) == []
+
+
+def test_filter_does_not_duplicate_a_named_always_module(root):
+    drv = D.Driver(_cfg(root))
+    full = _fleet(drv.cfg.repo_top)
     drv.cfg.modules = ["mast,proxy"]
-    assert drv._resolve_modules({"hostname": "m"}) == ["proxy", "mast"]
+
+    got = drv._filter_targets(["mast", "proxy"], full)
+
+    assert got.count("proxy") == 1, got
+    assert got == ["proxy", "mast", "mast-services-finalize", "reboot"], got
+
+
+def test_filter_splits_comma_lists(root):
+    drv = D.Driver(_cfg(root))
+    full = _fleet(drv.cfg.repo_top)
+    drv.cfg.modules = ["config-bootstrap", "mast,proxy"]
+    got = drv._filter_targets([], full)
+    assert got == ["proxy", "config-bootstrap", "mast", "mast-services-finalize", "reboot"], got
 
 
 def test_run_fatal_on_missing_registry(root):
