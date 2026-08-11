@@ -273,6 +273,11 @@ The 5th `rev` column is **optional**:
 A `-Branch`/`--branch <dir>=<ref>` override **disables** that folder's pin, logged
 loudly, so a developer can follow a feature branch without editing the manifest.
 
+`tools/fleet-drift-report.py` reports these across the fleet under
+**Upstream repos**, flagging `*` for a unit that resolved to a different commit and
+`!` for one where a pin was requested but the checkout is on a branch. A repo that a
+unit's role never pulls shows `absent` and is not counted as drift.
+
 Every run writes `<Top>/clone-manifest.json` recording, per repo, the branch, the
 `rev` as *requested*, and the `resolved_sha` that actually landed —
 `Merge-MastInstalledManifest` folds it into the unit's `installed-manifest.json` as
