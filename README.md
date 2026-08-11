@@ -258,6 +258,9 @@ common	MAST_common	unit,control,spec	master	v1.4.0
 unit	MAST_unit.2024-12-12	unit	main
 ```
 
+(Nothing is pinned as shipped — every row's `rev` is empty. The `v1.4.0` above is
+illustrative.)
+
 The 5th `rev` column is **optional**:
 
 - **Empty (or absent)** — track the branch. `-Update` fast-forwards. This is the
