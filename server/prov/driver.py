@@ -58,6 +58,9 @@ UNIT_PULL_SCRIPT = r"C:\MAST\mast-pull-staging.ps1"
 UNIT_DETACHED_RUNNER = r"C:\MAST\mast-run-detached.ps1"
 UNIT_DETACHED_CFG = r"C:\MAST\status\detached-run.json"
 UNIT_EXECUTE_RESULT = r"C:\MAST\status\execute-result.json"
+#: Written by execute while it holds the run; read only to name the holder when a
+#: run is refused. Must match Get-MastExecuteLeasePath in server/lib/mast-log.ps1.
+UNIT_EXECUTE_LEASE = r"C:\MAST\status\execute-lease.json"
 # Credential for the OPERATIONAL share (\\<controller_host>\mast-share), consumed by
 # the mast-shared-mount provider's SYSTEM task. Machine-bound DPAPI-LocalMachine blob;
 # the plaintext is uploaded to a temp file and shredded rather than passed on a
@@ -83,6 +86,11 @@ EXECUTE_TIMEOUT_S = 3600
 EXIT_OK = 0
 EXIT_UNIT_FAIL = 1
 EXIT_FATAL = 2
+
+#: Exit code execute-mast-provisioning.ps1 uses for "another run holds the execute
+#: lease" -- a refusal, not a failure. Must stay in step with MAST_EXIT_LEASE_HELD
+#: in client/execute-mast-provisioning.ps1.
+EXECUTE_EXIT_LEASE_HELD = 10
 
 
 def _ps_lit(s: str) -> str:
@@ -144,6 +152,10 @@ class Driver:
         self.log_root = self.log.log_root
         self.exit_code = EXIT_OK
         self.units_checked = 0
+        #: Set per unit by _execute when a run is refused for a held execute lease,
+        #: so _process_unit can hand the unit back as available rather than leaving
+        #: it flagged unavailable by a run that changed nothing.
+        self.execute_refused = False
         self.prov_server = os.environ.get("COMPUTERNAME") or socket.gethostname()
 
     # -- top-level ----------------------------------------------------------
@@ -224,12 +236,58 @@ class Driver:
             self.log.event("PREFLIGHT_SMB_OK")
 
     # -- per unit -----------------------------------------------------------
+    def _module_order(self) -> dict[str, int]:
+        """``module.json`` name -> ``order``, for every provider in the tree."""
+        providers = self.cfg.repo_top / "server" / "providers"
+        if not providers.is_dir():
+            return {}
+        out: dict[str, int] = {}
+        for d in providers.iterdir():
+            mj = d / "module.json"
+            if not mj.exists():
+                continue
+            body = _parse_json_or_none(mj.read_text(encoding="utf-8-sig", errors="replace")) or {}
+            out[d.name] = int(body.get("order") or 0)
+        return out
+
+    def _always_modules(self) -> list[str]:
+        """Providers declaring ``"always": true`` in module.json.
+
+        These are the order-terminal cross-cutting steps -- ``proxy`` (posture),
+        ``mast-services-finalize`` (leave the unit quiescent), ``reboot`` (detect a
+        pending reboot the orchestrator acts on). DriftReport.targets already folds
+        them into any non-empty target set; this is the same set, read from the tree
+        rather than from the build manifest, because module resolution happens
+        before the build that would produce it.
+        """
+        providers = self.cfg.repo_top / "server" / "providers"
+        if not providers.is_dir():
+            return []
+        found: list[str] = []
+        for d in providers.iterdir():
+            mj = d / "module.json"
+            if not mj.exists():
+                continue
+            body = _parse_json_or_none(mj.read_text(encoding="utf-8-sig", errors="replace")) or {}
+            if body.get("always"):
+                found.append(d.name)
+        return found
+
     def _resolve_modules(self, unit: dict) -> list[str]:
         if self.cfg.modules:
             out: list[str] = []
             for m in self.cfg.modules:
                 out += [p for p in str(m).split(",") if p]
-            return out
+            # An explicit subset must still close out the run. Without this a
+            # targeted run skipped the always-modules entirely: observed 2026-08-09,
+            # three --modules runs left mast-unit Running on three production units
+            # and reported exit_code=0, because mast-services-finalize never ran
+            # (#60). The drift path has always done this; the override bypassed it.
+            order = self._module_order()
+            for name in self._always_modules():
+                if name not in out:
+                    out.append(name)
+            return sorted(out, key=lambda n: (order.get(n, 0), n))
         if unit.get("modules"):
             return list(unit["modules"])
         providers = self.cfg.repo_top / "server" / "providers"
@@ -366,8 +424,18 @@ class Driver:
                     return  # TRANSFER_FAIL already logged
 
                 # Phase 8 -- execute (detached; may reconnect and replace session).
+                self.execute_refused = False
                 ok, session = self._execute(session, host, dur, payload_hash, git_sha,
                                             target_modules)
+                if not ok and self.execute_refused:
+                    # Refused for a held execute lease: this run changed nothing, so
+                    # hand the unit straight back instead of leaving it flagged
+                    # unavailable. Otherwise a refusal takes a healthy unit out of
+                    # service until the next successful run -- the same wrong signal
+                    # as #47's exit code, one layer up in the availability contract.
+                    self._set_available(session, host)
+                    lease_held = False
+                    return
                 if not ok:
                     return  # EXECUTE_FAIL already logged
 
@@ -696,6 +764,30 @@ class Driver:
             self.exit_code = EXIT_UNIT_FAIL
             return False, session
         rc = int(result.get("exit_code", 1))
+        if rc == EXECUTE_EXIT_LEASE_HELD:
+            # A refusal, not a failure: another run holds the execute lease and is
+            # progressing. Reprovisioning over it is the actively wrong reaction, and
+            # calling it EXECUTE_FAIL is how a healthy run got misdiagnosed as dead
+            # (#47). Leave self.exit_code alone -- the cycle did not fail.
+            #
+            # Name the holder. execute prints it on stdout, but the detached runner
+            # reports only an exit code, so the driver reads the lease itself --
+            # otherwise the log says a run is in progress without saying which, which
+            # is most of what made the original misdiagnosis possible.
+            holder = _parse_json_or_none(
+                self._ps_out(session,
+                             f"if (Test-Path {_ps_lit(UNIT_EXECUTE_LEASE)}) "
+                             f"{{ Get-Content {_ps_lit(UNIT_EXECUTE_LEASE)} -Raw }}",
+                             f"lease-read:{host}")
+            ) or {}
+            self.log.event("EXECUTE_LEASE_HELD", unit=host, exit_code=rc, duration_s=dur(),
+                           holder_run=holder.get("run_id") or "unknown",
+                           holder_pid=holder.get("pid") or "unknown",
+                           expires=holder.get("expires_utc") or "unknown")
+            self.log.activity(host, "SKIP", "lease_held", dur(), payload_hash, git_sha)
+            # Tells _process_unit to hand the unit back as available: nothing ran.
+            self.execute_refused = True
+            return False, session
         if rc != 0:
             self.log.event("EXECUTE_FAIL", unit=host, exit_code=rc, duration_s=dur())
             self.log.activity(host, "EXECUTE_FAIL", f"exit_{rc}", dur(), payload_hash, git_sha)

@@ -72,6 +72,14 @@ foreach (${legacyLock} in @(
 }
 
 # ---------------------------------------------------------------------------
+# Exit codes. 0 = every command succeeded, 1 = at least one module failed.
+# Anything else is a distinct, documented refusal that is NOT a failure -- a
+# caller must be able to tell "I declined to run" from "the run went wrong",
+# because the correct reaction differs (attach or skip, vs reprovision).
+# ---------------------------------------------------------------------------
+Set-Variable -Name MAST_EXIT_LEASE_HELD -Value 10 -Option Constant -Scope Script
+
+# ---------------------------------------------------------------------------
 # Execute-lease acquire. The lease replaces the old sticky lock file: it
 # carries an expiry, the run id that owns it, and the pid so a crashed run
 # can be detected and taken over on the next cycle instead of blocking the
@@ -114,7 +122,25 @@ if (Test-Path ${leasePath}) {
         }
         ${nowUtc} = (Get-Date).ToUniversalTime()
         if (${expiresUtc} -and ${nowUtc} -lt ${expiresUtc} -and ${pidAlive}) {
-            throw "LEASE_HELD run_id=$(${existing}.run_id) held_by=$(${existing}.held_by) pid=$(${existing}.pid) expires=$(${existing}.expires_utc)"
+            # A refusal is not a failure, and must not look like one. This used to be a
+            # plain `throw`: exit 1, identical to a genuine provisioning failure, with the
+            # message naming the holder on stderr where nothing surfaced it. A live run
+            # was consequently misdiagnosed as dead and an issue filed claiming no lease
+            # guard existed, when the guard had worked perfectly (#47).
+            #
+            # Exit ${MAST_EXIT_LEASE_HELD} says "a run is already in progress" so a caller
+            # can attach or skip rather than reprovisioning over a healthy run -- the
+            # reaction the autonomous loop would otherwise get wrong. Emitted on STDOUT as
+            # well, so a caller reading only stdout still learns which run holds it.
+            ${heldMsg} = "LEASE_HELD run_id=$(${existing}.run_id) held_by=$(${existing}.held_by) pid=$(${existing}.pid) expires=$(${existing}.expires_utc)"
+            Write-Output ${heldMsg}
+            Write-Warning ${heldMsg}
+            # Leave no empty session dir behind to explain later: this run did nothing.
+            if ((Test-Path -LiteralPath ${logDir}) -and
+                -not (Get-ChildItem -LiteralPath ${logDir} -Force -ErrorAction SilentlyContinue)) {
+                Remove-Item -LiteralPath ${logDir} -Force -Recurse -ErrorAction SilentlyContinue
+            }
+            exit ${MAST_EXIT_LEASE_HELD}
         }
         Write-Warning "LEASE_STALE_TAKEOVER prior_run=$(${existing}.run_id) prior_pid=$(${existing}.pid) prior_expires=$(${existing}.expires_utc)"
     }
