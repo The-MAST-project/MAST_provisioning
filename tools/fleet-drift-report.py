@@ -72,6 +72,12 @@ class UnitRecord:
     fully_provisioned: bool | None = None
     bootstrap_version: int | None = None
     bootstrapped_at: str | None = None
+    #: Upstream repo provenance from the manifest's 'repos' block, keyed by the
+    #: clone dir: {'common': {'repo','branch','rev','resolved_sha','head'}, ...}.
+    #: Empty on a unit whose manifest predates #75 -- the same way `modules` is
+    #: empty on a pre-stage-2 manifest. Populated by mast-clone's
+    #: clone-manifest.json, which execute folds into installed-manifest.json.
+    repos: dict[str, dict] = field(default_factory=dict)
     #: Tier-2 verify outcomes {module: pass|fail} from the unit's last
     #: run-verify-only pass; empty when tier 2 has not run.
     validation: dict[str, str] = field(default_factory=dict)
@@ -109,6 +115,16 @@ def _manifest_from_obj(host: str, obj: dict) -> UnitRecord:
     mv = {str(k): str(v.get("version", "")) for k, v in modules.items() if isinstance(v, dict)}
     if not mv:
         mv = {str(k): str(v) for k, v in (obj.get("module_versions") or {}).items()}
+    # 'repos' arrives as a LIST of rows; index it by dir for comparison. Anything
+    # unexpected degrades to {} -- this is a diagnostic and must survive a unit
+    # whose manifest is in a bad state, which is when it is most needed.
+    repos: dict[str, dict] = {}
+    raw_repos = obj.get("repos")
+    if isinstance(raw_repos, list):
+        for row in raw_repos:
+            if isinstance(row, dict) and row.get("dir"):
+                repos[str(row["dir"])] = row
+
     return UnitRecord(
         host=host,
         status="ok",
@@ -118,6 +134,7 @@ def _manifest_from_obj(host: str, obj: dict) -> UnitRecord:
         installed_at=obj.get("installed_at"),
         module_versions=mv,
         modules=modules,
+        repos=repos,
         fully_provisioned=obj.get("fully_provisioned"),
     )
 
@@ -327,6 +344,141 @@ def compare(units: list[UnitRecord], reference: UnitRecord | None) -> dict:
     }
 
 
+#: Per-repo cell states. Kept distinct from a plain SHA mismatch on purpose --
+#: "the fleet diverged" and "this unit is not pinned at all" have different causes
+#: and different fixes.
+REPO_OK = "ok"
+REPO_DIFFERS = "DIFFERS"
+#: Absent although this unit's ROLE pulls it -- a real gap, and drift. Distinct from
+#: REPO_NA: 'claude' has roles unit,control,spec, so a unit without it is missing
+#: something it should have, while 'gui' is control-only and its absence on a unit
+#: means nothing.
+REPO_MISSING = "MISSING"
+#: Absent and not expected for this role. Benign, never counted as drift.
+REPO_NA = "n/a"
+REPO_UNPINNED = "UNPINNED"
+
+
+def expected_repo_dirs(repo_root: Path, role: str = "unit") -> set[str]:
+    """Clone dirs that `role` is supposed to pull, from tools/mast-repos.tsv.
+
+    Without this the report cannot tell "absent because this role never pulls it"
+    from "absent although it should be here", and the second is a gap worth
+    flagging. Read from the same file mast-clone reads, so the expectation cannot
+    drift from what the clone step actually does.
+    """
+    manifest = repo_root / "tools" / "mast-repos.tsv"
+    want: set[str] = set()
+    if not manifest.exists():
+        return want
+    for line in manifest.read_text(encoding="utf-8", errors="replace").splitlines():
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        parts = line.split("\t")
+        if len(parts) < 4:
+            continue
+        roles = {r.strip() for r in parts[2].split(",") if r.strip()}
+        if role in roles or "all" in roles:
+            want.add(parts[0].strip())
+    return want
+
+
+def compare_repos(units: list[UnitRecord], reference: UnitRecord | None, expected: set[str] | None = None) -> dict:
+    """Cross-unit comparison of the UPSTREAM repo revisions each unit installed.
+
+    The module matrix answers "does this unit match the payload"; it says nothing
+    about which MAST_common or MAST_unit that payload cloned. On 2026-08-11 three
+    units came out of one fleet run on two different MAST_common commits and two
+    different MAST_unit commits, every run reporting success, because the manifest
+    pins a branch and each clone resolved it at a different moment (#75). This is
+    the check that makes that visible without four SSH round trips.
+
+    Compared per REPO rather than per unit: the question is "is the fleet on one
+    revision of common", and a unit legitimately lacks a repo its role never pulls.
+    """
+    ok_units = [u for u in units if u.status == "ok"]
+    ref_repos = reference.repos if reference else {}
+    want = expected or set()
+    # Union the EXPECTED dirs in too, so a repo missing from every unit still gets a
+    # row instead of vanishing from the report entirely.
+    all_dirs = sorted({d for u in ok_units for d in u.repos} | set(ref_repos) | want)
+
+    matrix: list[dict] = []
+    drift_repos_by_host: dict[str, list[str]] = {u.host: [] for u in ok_units}
+    for d in all_dirs:
+        cells: dict[str, str | None] = {}
+        states: dict[str, str] = {}
+        for u in ok_units:
+            row = u.repos.get(d)
+            cells[u.host] = (row or {}).get("resolved_sha") or None
+        ref_sha = (ref_repos.get(d) or {}).get("resolved_sha") if reference else None
+        base = _baseline(list(cells.values()), ref_sha)
+
+        # The requested pin, as recorded by whichever units carry one. Reported
+        # separately because "pinned and yet divergent" means a moved tag, which is
+        # a worse and differently-caused problem than an unpinned branch drifting.
+        revs = {(u.repos.get(d) or {}).get("rev") or "" for u in ok_units}
+        revs.discard("")
+        # One pin -> report it; several -> report them all, because units disagreeing
+        # about which rev was REQUESTED is itself the finding.
+        pinned_rev = next(iter(revs)) if len(revs) == 1 else ";".join(sorted(revs))
+
+        for u in ok_units:
+            row = u.repos.get(d)
+            if not row:
+                # Expected for this role but not there: a gap, and drift.
+                states[u.host] = REPO_MISSING if d in want else REPO_NA
+                if d in want:
+                    drift_repos_by_host[u.host].append(d)
+                continue
+            sha = row.get("resolved_sha") or None
+            want_rev = row.get("rev") or ""
+            head = row.get("head") or ""
+            if want_rev and head != "HEAD":
+                # A pin was requested but this checkout is on a branch: an override
+                # was used, or the clone predates the pin. Not honouring the pin at
+                # all, which is not the same as being at the wrong revision.
+                states[u.host] = REPO_UNPINNED
+                drift_repos_by_host[u.host].append(d)
+            elif sha != base:
+                states[u.host] = REPO_DIFFERS
+                drift_repos_by_host[u.host].append(d)
+            else:
+                states[u.host] = REPO_OK
+
+        matrix.append(
+            {
+                "dir": d,
+                "baseline": base,
+                "pinned_rev": pinned_rev,
+                "cells": cells,
+                "states": states,
+            }
+        )
+
+    # A repo is consistent when every unit that SHOULD have it agrees. REPO_NA is
+    # excluded (a role that never pulls gui is not a problem); REPO_MISSING is not
+    # excluded, because that is the gap this distinction exists to surface.
+    consistent = [
+        r
+        for r in matrix
+        if all(s == REPO_OK for s in r["states"].values() if s != REPO_NA)
+        and any(s == REPO_OK for s in r["states"].values())
+    ]
+    return {
+        "dirs": all_dirs,
+        "matrix": matrix,
+        "drift_repos_by_host": drift_repos_by_host,
+        "consistent_count": len(consistent),
+        "total_count": len(matrix),
+        "divergent_dirs": [r["dir"] for r in matrix if r not in consistent],
+        #: True only when at least one unit reported any repo data at all; the key
+        #: does not exist in manifests written before #75, so an all-absent report
+        #: means "not re-provisioned yet", not "nothing to see".
+        "any_data": any(u.repos for u in ok_units),
+    }
+
+
 def bootstrap_gaps(units: list[UnitRecord], elements_doc: dict) -> dict:
     """Per-unit bootstrap state vs the current bootstrap version + missing elements."""
     current = elements_doc.get("current_version")
@@ -353,7 +505,14 @@ def _boot_cell(gap: dict) -> str:
     return f"v{gap['version']}"
 
 
-def render(units: list[UnitRecord], reference: UnitRecord | None, cmp: dict, boot: dict, repo_boot_v: int | None) -> str:
+def render(
+    units: list[UnitRecord],
+    reference: UnitRecord | None,
+    cmp: dict,
+    boot: dict,
+    repo_boot_v: int | None,
+    repos: dict | None = None,
+) -> str:
     lines: list[str] = []
     cols = ([reference] if reference else []) + units
     host_w = max([len(u.host) for u in cols] + [9])
@@ -376,6 +535,17 @@ def render(units: list[UnitRecord], reference: UnitRecord | None, cmp: dict, boo
             f"{u.host.ljust(host_w)}  {verdict.ljust(11)}  {_short(u.payload_hash).ljust(12)}  "
             f"{_short(u.git_sha).ljust(12)}  {boot_cell.ljust(6)}  {u.installed_at or '-'}{detail}"
         )
+
+    if repos and repos.get("total_count"):
+        if not repos.get("any_data"):
+            lines.append("upstream repos: no data (no unit has re-provisioned since #75 landed)")
+        elif repos["consistent_count"] == repos["total_count"]:
+            lines.append(f"upstream repos: all {repos['total_count']} consistent across the fleet")
+        else:
+            lines.append(
+                f"upstream repos: {repos['consistent_count']} of {repos['total_count']} consistent "
+                f"({', '.join(repos['divergent_dirs'])} differ)"
+            )
 
     ok_cols = [u for u in cols if u.status == "ok"]
     if cmp["modules"] and ok_cols:
@@ -421,6 +591,60 @@ def render(units: list[UnitRecord], reference: UnitRecord | None, cmp: dict, boo
         for h, mods in drifted.items():
             lines.append(f"  {h}: {', '.join(mods)}")
 
+    # --- Upstream repos ---
+    if repos and repos.get("any_data"):
+        lines.append("")
+        lines.append(
+            "=== Upstream repos (resolved revision; '*' = differs, '!' = pin not honoured, "
+            "MISSING = expected for this role, n/a = not) ==="
+        )
+        repo_w = max([len(r["dir"]) for r in repos["matrix"]] + [8])
+        rhdr = "repo".ljust(repo_w) + "  " + "  ".join(u.host.ljust(9) for u in ok_cols) + "  pin"
+        lines.append(rhdr)
+        lines.append("-" * len(rhdr))
+        for row in repos["matrix"]:
+            cells = []
+            for u in ok_cols:
+                st = row["states"].get(u.host, REPO_NA)
+                sha = _short(row["cells"].get(u.host), 7)
+                if st == REPO_NA:
+                    cells.append("n/a".ljust(9))
+                elif st == REPO_MISSING:
+                    cells.append("MISSING".ljust(9))
+                elif st == REPO_UNPINNED:
+                    cells.append((sha + "!").ljust(9))
+                elif st == REPO_DIFFERS:
+                    cells.append((sha + "*").ljust(9))
+                else:
+                    cells.append(sha.ljust(9))
+            pin = row["pinned_rev"] or "-"
+            lines.append(row["dir"].ljust(repo_w) + "  " + "  ".join(cells) + f"  {pin}")
+
+        # Spelled out rather than left to the glyphs: 'pinned and yet divergent'
+        # means a MOVED TAG, which is a different failure from a branch drifting.
+        for row in repos["matrix"]:
+            if row["pinned_rev"] and any(s == REPO_DIFFERS for s in row["states"].values()):
+                lines.append(
+                    f"  [WARN] {row['dir']}: pinned at {row['pinned_rev']} but units resolved to "
+                    f"different commits -- the tag moved, or a unit predates the pin."
+                )
+            if any(s == REPO_MISSING for s in row["states"].values()):
+                gone = [h for h, s in row["states"].items() if s == REPO_MISSING]
+                lines.append(
+                    f"  [WARN] {row['dir']}: expected for this role but ABSENT on "
+                    f"{', '.join(gone)} -- the clone did not land, or predates the repo."
+                )
+            if any(s == REPO_UNPINNED for s in row["states"].values()):
+                off = [h for h, s in row["states"].items() if s == REPO_UNPINNED]
+                lines.append(
+                    f"  [WARN] {row['dir']}: pinned in the manifest but on a branch on "
+                    f"{', '.join(off)} -- a --branch override, or a clone from before the pin."
+                )
+    elif repos and repos.get("total_count") == 0:
+        lines.append("")
+        lines.append("=== Upstream repos ===")
+        lines.append("  no 'repos' block on any unit -- nothing has re-provisioned since #75 landed.")
+
     # --- Bootstrap ---
     lines.append("")
     cur = boot["current"]
@@ -447,17 +671,22 @@ def render(units: list[UnitRecord], reference: UnitRecord | None, cmp: dict, boo
     lines.append("")
     module_problems = [u.host for u in units if cmp["verdicts"].get(u.host) != "IN SYNC"]
     boot_problems = [u.host for u in units if boot["by_host"].get(u.host, {}).get("state") != "current"]
-    if module_problems or boot_problems:
+    repo_problems = sorted(repos["divergent_dirs"]) if (repos and repos.get("any_data")) else []
+    if module_problems or boot_problems or repo_problems:
         if module_problems:
             lines.append(f"RESULT: payload drift/gaps on {len(module_problems)} unit(s): {', '.join(module_problems)}")
         if boot_problems:
             lines.append(f"RESULT: bootstrap outdated/unstamped on {len(boot_problems)} unit(s): {', '.join(boot_problems)}")
+        # Reported even when every module matches the build: that combination is
+        # precisely the 08-11 state, and the old RESULT line called it in sync.
+        if repo_problems:
+            lines.append(f"RESULT: upstream repo divergence on {len(repo_problems)} repo(s): {', '.join(repo_problems)}")
     else:
         lines.append("RESULT: all units in sync and bootstrap current")
     return "\n".join(lines)
 
 
-def write_csv(path: Path, units: list[UnitRecord], cmp: dict, boot: dict) -> None:
+def write_csv(path: Path, units: list[UnitRecord], cmp: dict, boot: dict, repos: dict | None = None) -> None:
     # Emit the SAME cells the rendered matrix shows. Reading them off
     # module_versions instead was wrong in hash-keyed mode: a module can drift
     # with an unchanged version string (the desktop-shortcuts verify gaining
@@ -465,6 +694,10 @@ def write_csv(path: Path, units: list[UnitRecord], cmp: dict, boot: dict) -> Non
     # showed a uniform version and no drift at all.
     modules = cmp["modules"]
     cells_by_module = {row["module"]: row["cells"] for row in cmp["matrix"]}
+    # Repo columns keep the CSV a superset of the text report. Prefixed so they
+    # cannot collide with a module named 'common' or 'unit'.
+    repo_dirs = list(repos["dirs"]) if repos else []
+    repo_cells = {row["dir"]: row["cells"] for row in (repos["matrix"] if repos else [])}
     with path.open("w", newline="", encoding="utf-8") as fh:
         w = csv.writer(fh)
         w.writerow(
@@ -480,6 +713,7 @@ def write_csv(path: Path, units: list[UnitRecord], cmp: dict, boot: dict) -> Non
                 "bootstrap_missing",
             ]
             + modules
+            + [f"repo:{d}" for d in repo_dirs]
         )
         for u in units:
             g = boot["by_host"].get(u.host, {})
@@ -496,6 +730,7 @@ def write_csv(path: Path, units: list[UnitRecord], cmp: dict, boot: dict) -> Non
                     " ".join(g.get("missing", [])),
                 ]
                 + [str(cells_by_module.get(m, {}).get(u.host, "")) for m in modules]
+                + [str(repo_cells.get(d, {}).get(u.host) or "") for d in repo_dirs]
             )
 
 
@@ -504,6 +739,13 @@ def main() -> int:
     ap.add_argument("--hosts", help="Comma-separated hostnames (default: all in unit-registry.json).")
     ap.add_argument("--registry", default=None, help="Path to unit-registry.json (default: server/unit-registry.json).")
     ap.add_argument("--build-manifest", default=None, help="Compare units against this build-manifest.json (desired state).")
+    ap.add_argument(
+        "--role",
+        default="unit",
+        help="Role whose expected upstream repos are read from tools/mast-repos.tsv "
+        "(default: unit -- everything in the unit registry is a unit). Decides whether "
+        "an absent repo reads MISSING or n/a.",
+    )
     ap.add_argument("--connect-timeout", type=int, default=15, help="SSH connect timeout seconds (default 15).")
     ap.add_argument("--json", dest="json_out", default=None, help="Write gathered unit records to this JSON file.")
     ap.add_argument("--csv", dest="csv_out", default=None, help="Write the comparison matrix to this CSV file.")
@@ -561,13 +803,16 @@ def main() -> int:
     # "is this unit current?" instead of "do the units agree?". Without one (or
     # against a pre-module_state build) fall back to the cross-unit comparison.
     cmp = compare_to_build(units, build_doc) if build_doc and build_doc.get("module_state") else compare(units, reference)
+    # Independent of the module comparison: a unit can match the payload exactly and
+    # still be running a different MAST_common than its neighbour (#75).
+    repos_cmp = compare_repos(units, reference, expected_repo_dirs(_REPO_ROOT, args.role))
     elements_doc = load_bootstrap_elements(_REPO_ROOT)
     boot = bootstrap_gaps(units, elements_doc)
 
     if args.csv_out:
-        write_csv(Path(args.csv_out), units, cmp, boot)
+        write_csv(Path(args.csv_out), units, cmp, boot, repos_cmp)
 
-    print(render(units, reference, cmp, boot, repo_bootstrap_version(_REPO_ROOT)))
+    print(render(units, reference, cmp, boot, repo_bootstrap_version(_REPO_ROOT), repos_cmp))
 
     if not units:
         return 1

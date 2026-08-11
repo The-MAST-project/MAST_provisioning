@@ -119,3 +119,182 @@ def test_validation_report_parses_modules_and_timestamp(fdr):
     mods, at = fdr._parse_validation('{"checked_at": "2026-08-02T10:00:00Z", "modules": {"git": "fail"}}')
     assert mods == {"git": "fail"}
     assert at == "2026-08-02T10:00:00Z"
+
+
+# --- #75: the report must show which upstream revisions each unit installed ----
+#
+# The fixtures use the real 2026-08-11 SHAs on purpose: three units came out of one
+# fleet run on two different MAST_common commits and two different MAST_unit
+# commits, every run reporting success, and the report called them IN SYNC.
+_COMMON_NEW = "b4991791aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+_COMMON_OLD = "86ab89e6bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+_UNIT_NEW = "1cf92164cccccccccccccccccccccccccccccccc"
+_UNIT_OLD = "abb17241dddddddddddddddddddddddddddddddd"
+
+
+def _repo_row(dir_: str, sha: str, rev: str = "", head: str = "master", repo: str = "R") -> dict:
+    return {"dir": dir_, "repo": repo, "branch": "master", "rev": rev, "resolved_sha": sha, "head": head}
+
+
+def _unit_with_repos(fdr, host: str, rows: list[dict]):
+    u = fdr.UnitRecord(host=host, status="ok")
+    u.repos = {r["dir"]: r for r in rows}
+    return u
+
+
+def test_repos_parsed_from_the_manifest(fdr):
+    rec = fdr._manifest_from_obj("mast01", {"repos": [_repo_row("common", _COMMON_NEW), _repo_row("unit", _UNIT_NEW)]})
+    assert sorted(rec.repos) == ["common", "unit"]
+    assert rec.repos["common"]["resolved_sha"] == _COMMON_NEW
+
+
+@pytest.mark.parametrize("bad", [None, {}, "nope", [1, 2], [{"no_dir": "x"}]])
+def test_a_malformed_repos_block_degrades_to_empty(fdr, bad):
+    # This is a diagnostic; it must survive the unit state it exists to diagnose.
+    rec = fdr._manifest_from_obj("mast01", {"repos": bad})
+    assert rec.repos == {}
+
+
+def test_a_consistent_fleet_reports_all_ok(fdr):
+    units = [
+        _unit_with_repos(fdr, h, [_repo_row("common", _COMMON_NEW), _repo_row("unit", _UNIT_NEW)])
+        for h in ("mast01", "mast02", "mast04")
+    ]
+    out = fdr.compare_repos(units, None)
+    assert out["consistent_count"] == out["total_count"] == 2
+    assert out["divergent_dirs"] == []
+    assert all(s == fdr.REPO_OK for row in out["matrix"] for s in row["states"].values())
+
+
+def test_the_2026_08_11_divergence_is_reported(fdr):
+    units = [
+        _unit_with_repos(fdr, "mast01", [_repo_row("common", _COMMON_NEW), _repo_row("unit", _UNIT_NEW)]),
+        _unit_with_repos(fdr, "mast02", [_repo_row("common", _COMMON_NEW), _repo_row("unit", _UNIT_NEW)]),
+        _unit_with_repos(fdr, "mast03", [_repo_row("common", _COMMON_OLD), _repo_row("unit", _UNIT_OLD)]),
+    ]
+    out = fdr.compare_repos(units, None)
+
+    assert sorted(out["divergent_dirs"]) == ["common", "unit"]
+    assert out["consistent_count"] == 0
+    # The majority is the baseline, so the odd unit out is the one flagged.
+    for row in out["matrix"]:
+        assert row["states"]["mast03"] == fdr.REPO_DIFFERS
+        assert row["states"]["mast01"] == fdr.REPO_OK
+    assert out["drift_repos_by_host"]["mast03"] == ["common", "unit"]
+    assert out["drift_repos_by_host"]["mast01"] == []
+
+
+def test_a_repo_the_role_never_pulls_is_na_not_drift(fdr):
+    # 'gui' is control-only, so its absence on a unit means nothing.
+    units = [
+        _unit_with_repos(fdr, "mast01", [_repo_row("common", _COMMON_NEW), _repo_row("gui", "aaa")]),
+        _unit_with_repos(fdr, "mast02", [_repo_row("common", _COMMON_NEW)]),
+    ]
+    out = fdr.compare_repos(units, None, expected={"common"})
+    gui = next(r for r in out["matrix"] if r["dir"] == "gui")
+    assert gui["states"]["mast02"] == fdr.REPO_NA
+    assert out["drift_repos_by_host"]["mast02"] == []
+
+
+def test_a_repo_the_role_does_pull_is_missing_and_is_drift(fdr):
+    # The case Eli caught: 'claude' has roles unit,control,spec, so a unit without
+    # it is missing something it should have. Treating that as benign hid a real gap.
+    units = [
+        _unit_with_repos(fdr, "mast01", [_repo_row("common", _COMMON_NEW), _repo_row("claude", "3f2a1c8")]),
+        _unit_with_repos(fdr, "mast04", [_repo_row("common", _COMMON_NEW)]),
+    ]
+    out = fdr.compare_repos(units, None, expected={"common", "claude"})
+    claude = next(r for r in out["matrix"] if r["dir"] == "claude")
+
+    assert claude["states"]["mast04"] == fdr.REPO_MISSING
+    assert out["drift_repos_by_host"]["mast04"] == ["claude"]
+    assert "claude" in out["divergent_dirs"]
+
+
+def test_a_repo_absent_from_every_unit_still_gets_a_row(fdr):
+    # Otherwise a repo nobody cloned vanishes from the report entirely, which is the
+    # least visible way to be missing something.
+    units = [_unit_with_repos(fdr, "mast01", [_repo_row("common", _COMMON_NEW)])]
+    out = fdr.compare_repos(units, None, expected={"common", "claude"})
+    assert "claude" in out["dirs"]
+    assert next(r for r in out["matrix"] if r["dir"] == "claude")["states"]["mast01"] == fdr.REPO_MISSING
+
+
+def test_expected_repo_dirs_reads_the_real_manifest(fdr):
+    want = fdr.expected_repo_dirs(_REPO_ROOT, "unit")
+    # From tools/mast-repos.tsv: common/unit/claude are unit-role; gui is control-only.
+    assert {"common", "unit", "claude"} <= want
+    assert "gui" not in want
+
+
+def test_a_pin_not_honoured_is_its_own_state(fdr):
+    # Same SHA as the baseline, but on a branch while a rev was requested: the pin
+    # was displaced (an override, or a clone predating it). Distinct from DIFFERS
+    # because the cause and the fix are different.
+    units = [
+        _unit_with_repos(fdr, "mast01", [_repo_row("common", _COMMON_NEW, rev="v1.0.0", head="HEAD")]),
+        _unit_with_repos(fdr, "mast02", [_repo_row("common", _COMMON_NEW, rev="v1.0.0", head="master")]),
+    ]
+    out = fdr.compare_repos(units, None)
+    row = out["matrix"][0]
+    assert row["states"]["mast01"] == fdr.REPO_OK
+    assert row["states"]["mast02"] == fdr.REPO_UNPINNED
+    assert row["pinned_rev"] == "v1.0.0"
+
+
+def test_no_repo_data_is_distinguished_from_consistent(fdr):
+    units = [fdr.UnitRecord(host="mast01", status="ok"), fdr.UnitRecord(host="mast02", status="ok")]
+    out = fdr.compare_repos(units, None)
+    assert out["any_data"] is False
+    assert out["total_count"] == 0
+
+
+def test_the_result_line_calls_out_repo_divergence(fdr):
+    # The regression that matters: every module matching the build while the units
+    # run different upstream commits used to render "all units in sync".
+    units = [
+        _unit_with_repos(fdr, "mast01", [_repo_row("common", _COMMON_NEW)]),
+        _unit_with_repos(fdr, "mast03", [_repo_row("common", _COMMON_OLD)]),
+    ]
+    cmp = fdr.compare(units, None)
+    boot = fdr.bootstrap_gaps(units, {"current_version": 1, "elements": []})
+    repos = fdr.compare_repos(units, None)
+
+    text = fdr.render(units, None, cmp, boot, None, repos)
+
+    assert "upstream repo divergence" in text
+    assert "=== Upstream repos" in text
+    assert "all units in sync and bootstrap current" not in text
+
+
+def test_the_csv_carries_the_repo_columns(fdr, tmp_path):
+    units = [
+        _unit_with_repos(fdr, "mast01", [_repo_row("common", _COMMON_NEW)]),
+        _unit_with_repos(fdr, "mast03", [_repo_row("common", _COMMON_OLD)]),
+    ]
+    cmp = fdr.compare(units, None)
+    boot = fdr.bootstrap_gaps(units, {"current_version": 1, "elements": []})
+    repos = fdr.compare_repos(units, None)
+
+    out = tmp_path / "r.csv"
+    fdr.write_csv(out, units, cmp, boot, repos)
+    rows = list(csv.DictReader(out.open(encoding="utf-8")))
+
+    assert "repo:common" in rows[0]
+    by_host = {r["host"]: r for r in rows}
+    assert by_host["mast01"]["repo:common"] == _COMMON_NEW
+    assert by_host["mast03"]["repo:common"] == _COMMON_OLD
+
+
+def test_an_unexpected_repo_absence_does_not_make_a_repo_divergent(fdr):
+    # Found by rendering a realistic fleet: a repo was reported divergent purely
+    # because one unit lacked it, while every unit that had it agreed. Only holds for
+    # a repo the role does not pull -- see the MISSING test above for the other half.
+    units = [
+        _unit_with_repos(fdr, "mast01", [_repo_row("common", _COMMON_NEW), _repo_row("gui", "3f2a1c8")]),
+        _unit_with_repos(fdr, "mast02", [_repo_row("common", _COMMON_NEW), _repo_row("gui", "3f2a1c8")]),
+        _unit_with_repos(fdr, "mast04", [_repo_row("common", _COMMON_NEW)]),
+    ]
+    out = fdr.compare_repos(units, None, expected={"common"})
+    assert out["divergent_dirs"] == []
+    assert out["consistent_count"] == out["total_count"] == 2

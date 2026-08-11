@@ -342,9 +342,27 @@ try {
                 }
             }
 
+            # Upstream provenance, if mast-clone left it. Read here rather than in
+            # the merge so the merge stays a pure function over its inputs, and so a
+            # malformed sidecar degrades to "no repos key" instead of failing the run
+            # -- the manifest write is the last thing standing between a good run and
+            # a unit that cannot say what it installed.
+            ${repos} = $null
+            ${cloneManifest} = Join-Path (Join-Path ${env:SystemDrive} 'MAST') 'src\clone-manifest.json'
+            if (Test-Path -LiteralPath ${cloneManifest}) {
+                try {
+                    ${cm} = Get-Content -LiteralPath ${cloneManifest} -Raw | ConvertFrom-Json
+                    if (${cm}.PSObject.Properties.Match('repos').Count) { ${repos} = ${cm}.repos }
+                }
+                catch {
+                    Write-Log "WARNING: clone-manifest.json unreadable, recording no upstream revisions: $_"
+                }
+            }
+
             ${merged} = Merge-MastInstalledManifest -Previous ${previous} -BuildData ${buildData} `
                 -Outcomes ${moduleOutcomes} `
-                -InstalledAt ((Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ'))
+                -InstalledAt ((Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')) `
+                -Repos ${repos}
 
             # Atomic write: tmp then rename, so a concurrent reader never
             # sees a partial file.

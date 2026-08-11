@@ -272,7 +272,10 @@ TOP_ABS="$(cd -- "$TOP" 2>/dev/null && pwd || echo "$TOP")"
 VENV="${TOP_ABS}/.venv"
 
 CLONED=()
-while IFS=$'\t' read -r dir repo roles manifest_branch; do
+PROV_DIRS=(); PROV_REPOS=(); PROV_BRANCHES=(); PROV_REVS=()
+# 'manifest_rev' is the OPTIONAL 5th column; a 4-column manifest leaves it empty,
+# which means "track the branch". Keep this read in step with the ps1 half.
+while IFS=$'\t' read -r dir repo roles manifest_branch manifest_rev; do
     case "$dir" in ''|\#*) continue ;; esac
     [ -n "${roles:-}" ] || continue
     wants_repo "$roles" || continue
@@ -283,8 +286,17 @@ while IFS=$'\t' read -r dir repo roles manifest_branch; do
     # the remote default HEAD -- for common and control that is an abandoned
     # 2-commit stub (see mast-repos.tsv).
     branch="${BRANCH_OVERRIDE[$dir]:-${manifest_branch:-}}"
+    rev="${manifest_rev:-}"
+    if [ -n "${BRANCH_OVERRIDE[$dir]:-}" ] && [ -n "$rev" ]; then
+        # An explicit override is a developer saying "follow this branch"; honouring
+        # the pin as well would silently ignore them. Loud, because this checkout is
+        # then deliberately NOT the pinned revision.
+        warn "$dir: --branch override '$branch' displaces the pinned rev '$rev'"
+        rev=""
+    fi
     [ -n "$branch" ] || die "$dir: no branch in manifest and no --branch override"
     CLONED+=("$dir")
+    PROV_DIRS+=("$dir"); PROV_REPOS+=("$repo"); PROV_BRANCHES+=("$branch"); PROV_REVS+=("$rev")
 
     if [ -d "$dest/.git" ]; then
         # Idempotent re-run. Never merge implicitly -- local work is sacred.
@@ -297,7 +309,16 @@ while IFS=$'\t' read -r dir repo roles manifest_branch; do
         run git -C "$dest" fetch --prune origin
         if [ "$UPDATE" -eq 1 ]; then
             if [ "$DRY_RUN" -eq 0 ] && [ -n "$(git -C "$dest" status --porcelain)" ]; then
-                warn "$dir: working tree dirty -- not fast-forwarding"
+                warn "$dir: working tree dirty -- not moving"
+            elif [ -n "$rev" ]; then
+                # Pinned: re-assert the revision. Deliberately NOT a fast-forward --
+                # 'merge --ff-only @{u}' is a branch operation and would defeat the
+                # pin. --force on the tag fetch so a legitimately moved tag is picked
+                # up; the sidecar records what it moved to.
+                info "$dir: pinned, checking out $rev"
+                run git -C "$dest" fetch --tags --force origin
+                run git -C "$dest" checkout --detach "$rev" \
+                    || die "$dir: cannot check out pinned rev '$rev'"
             else
                 info "$dir: fast-forwarding"
                 run git -C "$dest" merge --ff-only @{u} || warn "$dir: not a fast-forward, left alone"
@@ -307,8 +328,20 @@ while IFS=$'\t' read -r dir repo roles manifest_branch; do
         warn "$dir: '$dest' exists but is not a git clone -- skipping"
         continue
     else
-        info "$dir: cloning $repo (branch $branch)"
+        if [ -n "$rev" ]; then
+            info "$dir: cloning $repo (branch $branch, pinned at $rev)"
+        else
+            info "$dir: cloning $repo (branch $branch)"
+        fi
         run git clone --branch "$branch" "$url" "$dest"
+        if [ -n "$rev" ]; then
+            # Clone the branch first rather than 'clone --branch <tag>': it leaves the
+            # branch ref present, which --branch overrides and the wrong-branch
+            # diagnostic both rely on.
+            run git -C "$dest" fetch --tags --force origin
+            run git -C "$dest" checkout --detach "$rev" \
+                || die "$dir: cannot check out pinned rev '$rev'"
+        fi
     fi
 done <<< "$MANIFEST_TEXT"
 
@@ -337,6 +370,46 @@ if [ "$DRY_RUN" -eq 0 ]; then
            grep -q 'submodule "common"' "${TOP_ABS}/${d}/.gitmodules" 2>/dev/null; then
             git -C "${TOP_ABS}/${d}" config --local submodule.common.update none
             info "${d}: pinned submodule.common.update=none (vestigial submodule left unpopulated)"
+        fi
+    done
+fi
+
+# --- record what was actually deployed -------------------------------------
+#
+# A pin says what was ASKED FOR; this says what landed. Both matter: a tag can be
+# force-moved upstream, and an unpinned repo resolves to whatever the branch head
+# was at the moment THIS clone ran -- which is how three units ended up on two
+# different MAST_common commits from one fleet run (#75). Kept byte-compatible with
+# the ps1 half: same filename, same shape.
+PROV_FILE="${TOP_ABS}/clone-manifest.json"
+if [ "$DRY_RUN" -eq 0 ]; then
+    {
+        printf '{\n'
+        printf '  "written_at": "%s",\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        printf '  "manifest": "%s",\n' "$(basename "$MANIFEST")"
+        printf '  "repos": [\n'
+        _n=${#PROV_DIRS[@]}
+        for _i in "${!PROV_DIRS[@]}"; do
+            _d="${PROV_DIRS[$_i]}"
+            _sha=""; _head=""
+            if [ -d "${TOP_ABS}/${_d}/.git" ]; then
+                _sha="$(git -C "${TOP_ABS}/${_d}" rev-parse HEAD 2>/dev/null || echo '')"
+                _head="$(git -C "${TOP_ABS}/${_d}" rev-parse --abbrev-ref HEAD 2>/dev/null || echo '')"
+            fi
+            printf '    {"dir": "%s", "repo": "%s", "branch": "%s", "rev": "%s", "resolved_sha": "%s", "head": "%s"}' \
+                "$_d" "${PROV_REPOS[$_i]}" "${PROV_BRANCHES[$_i]}" "${PROV_REVS[$_i]}" "$_sha" "$_head"
+            if [ $((_i + 1)) -lt "$_n" ]; then printf ',\n'; else printf '\n'; fi
+        done
+        printf '  ]\n}\n'
+    } > "$PROV_FILE"
+    info "wrote $PROV_FILE"
+    for _i in "${!PROV_DIRS[@]}"; do
+        _d="${PROV_DIRS[$_i]}"
+        _sha="$(git -C "${TOP_ABS}/${_d}" rev-parse --short HEAD 2>/dev/null || echo '?')"
+        if [ -n "${PROV_REVS[$_i]}" ]; then
+            info "  ${_d}: ${PROV_BRANCHES[$_i]} pinned ${PROV_REVS[$_i]} -> ${_sha}"
+        else
+            info "  ${_d}: ${PROV_BRANCHES[$_i]} ${_sha}"
         fi
     done
 fi

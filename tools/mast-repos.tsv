@@ -9,6 +9,25 @@
 #   repo    GitHub repository name under the The-MAST-project org.
 #   roles   Comma-separated roles that pull this repo. 'all' pulls every row.
 #   branch  Branch to check out. MUST be explicit -- see below.
+#   rev     OPTIONAL 5th column: an exact revision to pin this repo to -- a tag
+#           (preferred) or a commit SHA. Empty or absent means "track the branch",
+#           which is the historical behaviour.
+#
+#           A pinned repo is checked out DETACHED at that revision and does NOT
+#           move on --update/-Update: it moves only when this column moves. That
+#           is the whole point, and it is what a branch cannot give you.
+#
+#           WHY: moving the fleet off git submodules to sibling clones traded away
+#           exact-commit pinning and nothing replaced it (MAST_unit#94). A branch
+#           pins a moving target, so a unit gets whatever the branch head was at
+#           the moment ITS clone ran. On 2026-08-11 two upstream merges landed
+#           mid-fleet-run and left three units on two different MAST_common and
+#           two different MAST_unit commits -- every run reporting success, with
+#           nothing in the logs saying they had diverged. See #75.
+#
+#           A --branch/-Branch override for a folder DISABLES its pin, so a
+#           developer can still follow a feature branch without editing this file.
+#           The scripts log loudly when an override displaces a pin.
 #
 # WHY BRANCH IS PINNED AND NOT LEFT TO THE REMOTE DEFAULT:
 # Two repos have a GitHub default branch that is an abandoned stub:
@@ -20,8 +39,12 @@
 # A plain 'git clone' of either lands on the stub and silently produces a nearly
 # empty checkout -- for common that means no __init__.py, so every
 # 'from common.X import ...' in the fleet fails with ModuleNotFoundError.
-# Fix the GitHub default branches and this column can relax; until then it is
-# the only thing standing between a provisioning run and a broken unit.
+# Historical note, kept because it is why this column exists: both of those
+# abandoned 'main' stubs have since been DELETED and both repos now report
+# default_branch = master. So a plain clone would no longer land on a stub. The
+# explicit column stays regardless -- explicit beats inherited, 'unit', 'gui' and
+# 'claude' genuinely are on 'main', and a remote default can be changed by anyone
+# with admin on the org.
 #
 # Adding a repo: add a row here only. Neither script hardcodes a repo list.
 #
@@ -37,7 +60,7 @@
 # the .sha256 GitHub publishes beside each artifact.
 #!uv-version	0.11.33
 #
-# dir	repo	roles	branch
+# dir	repo	roles	branch	rev
 common	MAST_common	unit,control,spec	master
 unit	MAST_unit.2024-12-12	unit	main
 control	MAST_control	control	master

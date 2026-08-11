@@ -222,11 +222,16 @@ foreach ($line in (Get-Content -LiteralPath $Manifest)) {
     if ($trimmed.StartsWith('#')) { continue }
     $parts = $line -split "`t"
     if ($parts.Count -lt 4) { continue }
+    # 'rev' is an OPTIONAL 5th column, so a 4-column manifest still parses -- see
+    # mast-repos.tsv. Empty means "track the branch".
+    $rev = ''
+    if ($parts.Count -ge 5) { $rev = $parts[4].Trim() }
     $rows += [pscustomobject]@{
         Dir    = $parts[0].Trim()
         Repo   = $parts[1].Trim()
         Roles  = ($parts[2].Trim() -split ',')
         Branch = $parts[3].Trim()
+        Rev    = $rev
     }
 }
 if ($rows.Count -eq 0) { throw "manifest '$Manifest' yielded no rows" }
@@ -272,6 +277,7 @@ if (Test-Path -LiteralPath $Top) {
 
 # --- clone / refresh ------------------------------------------------------
 $cloned = @()
+$provenance = @()
 foreach ($row in $rows) {
     $wanted = $wantsAll
     if (-not $wanted) {
@@ -293,10 +299,26 @@ foreach ($row in $rows) {
     # the remote default HEAD -- for common and control that is an abandoned
     # 2-commit stub (see mast-repos.tsv).
     $pin = $row.Branch
-    if ($Branch.ContainsKey($row.Dir)) { $pin = [string] $Branch[$row.Dir] }
+    $rev = $row.Rev
+    if ($Branch.ContainsKey($row.Dir)) {
+        $pin = [string] $Branch[$row.Dir]
+        # An explicit override is a developer saying "follow this branch"; honouring
+        # the pin as well would silently ignore them. Loud, because it means this
+        # checkout is deliberately NOT the pinned revision.
+        if ($rev) {
+            Write-Warn ("{0}: -Branch override '{1}' displaces the pinned rev '{2}'" -f $row.Dir, $pin, $rev)
+            $rev = ''
+        }
+    }
     if (-not $pin) { throw ("{0}: no branch in manifest and no -Branch override" -f $row.Dir) }
 
     $cloned += $row.Dir
+    $provenance += [pscustomobject]@{
+        dir    = $row.Dir
+        repo   = $row.Repo
+        branch = $pin
+        rev    = $rev          # as REQUESTED (tag/SHA), '' when tracking the branch
+    }
 
     if (Test-Path -LiteralPath (Join-Path $dest '.git')) {
         # Idempotent re-run. Never merge implicitly -- local work is sacred.
@@ -315,7 +337,18 @@ foreach ($row in $rows) {
                 if ($status) { $dirty = $true }
             }
             if ($dirty) {
-                Write-Warn ("{0}: working tree dirty -- not fast-forwarding" -f $row.Dir)
+                Write-Warn ("{0}: working tree dirty -- not moving" -f $row.Dir)
+            }
+            elseif ($rev) {
+                # Pinned: re-assert the revision. Deliberately NOT a fast-forward --
+                # 'merge --ff-only @{u}' is a branch operation and would defeat the
+                # pin. --force on the tag fetch so a legitimately moved tag is
+                # picked up; the resolved SHA below records what it moved to.
+                Write-Info ("{0}: pinned, checking out {1}" -f $row.Dir, $rev)
+                $null = Invoke-Git @('-C', $dest, 'fetch', '--tags', '--force', 'origin')
+                if (-not (Invoke-Git @('-C', $dest, 'checkout', '--detach', $rev))) {
+                    throw ("{0}: cannot check out pinned rev '{1}'" -f $row.Dir, $rev)
+                }
             }
             else {
                 Write-Info ("{0}: fast-forwarding" -f $row.Dir)
@@ -330,9 +363,19 @@ foreach ($row in $rows) {
         continue
     }
     else {
-        Write-Info ("{0}: cloning {1} (branch {2})" -f $row.Dir, $row.Repo, $pin)
+        Write-Info ("{0}: cloning {1} (branch {2}{3})" -f $row.Dir, $row.Repo, $pin,
+                    $(if ($rev) { ", pinned at $rev" } else { '' }))
         if (-not (Invoke-Git @('clone', '--branch', $pin, $url, $dest))) {
             throw ("{0}: clone failed" -f $row.Dir)
+        }
+        if ($rev) {
+            # Clone the branch first rather than 'clone --branch <tag>': it leaves
+            # the branch ref present, which the -Branch override and the wrong-branch
+            # diagnostic below both rely on.
+            $null = Invoke-Git @('-C', $dest, 'fetch', '--tags', '--force', 'origin')
+            if (-not (Invoke-Git @('-C', $dest, 'checkout', '--detach', $rev))) {
+                throw ("{0}: cannot check out pinned rev '{1}'" -f $row.Dir, $rev)
+            }
         }
     }
 }
@@ -365,6 +408,51 @@ if (-not $DryRun) {
     }
 }
 
+# --- record what was actually deployed -------------------------------------
+#
+# A pin says what was ASKED FOR; this says what landed. Both matter: a tag can be
+# force-moved upstream, and an unpinned repo resolves to whatever the branch head
+# was at the moment THIS clone ran -- which is exactly how three units ended up on
+# two different MAST_common commits from one fleet run (#75). The unit-side
+# installed-manifest.json folds this in, so a unit can be asked what it is running
+# without the operator cloning anything.
+$provFile = Join-Path $topAbs 'clone-manifest.json'
+if (-not $DryRun) {
+    $repoRecords = @()
+    foreach ($pr in $provenance) {
+        $sha = ''
+        $head = ''
+        $d = Join-Path $topAbs $pr.dir
+        if (Test-Path -LiteralPath (Join-Path $d '.git')) {
+            & git -C $d rev-parse HEAD 2>$null | ForEach-Object { $sha = $_.Trim() }
+            & git -C $d rev-parse --abbrev-ref HEAD 2>$null | ForEach-Object { $head = $_.Trim() }
+        }
+        $repoRecords += [pscustomobject]@{
+            dir          = $pr.dir
+            repo         = $pr.repo
+            branch       = $pr.branch
+            rev          = $pr.rev
+            resolved_sha = $sha
+            # 'HEAD' means detached, which is what a pinned checkout looks like.
+            head         = $head
+        }
+    }
+    $provDoc = [pscustomobject]@{
+        written_at = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+        manifest   = (Split-Path -Leaf $Manifest)
+        repos      = $repoRecords
+    }
+    # UTF8 without BOM: the readers are Python and PowerShell, and a BOM trips
+    # non-PowerShell JSON parsers (see the driver's BOM-tolerant reads).
+    [IO.File]::WriteAllText($provFile, ($provDoc | ConvertTo-Json -Depth 5), (New-Object Text.UTF8Encoding($false)))
+    Write-Info ("wrote {0}" -f $provFile)
+    foreach ($r in $repoRecords) {
+        Write-Info ("  {0}: {1} {2}{3}" -f $r.dir, $r.branch,
+                    $(if ($r.rev) { "pinned $($r.rev) -> " } else { '' }),
+                    $(if ($r.resolved_sha) { $r.resolved_sha.Substring(0, [Math]::Min(7, $r.resolved_sha.Length)) } else { '?' }))
+    }
+}
+
 # --- sanity check: the file the whole scheme rests on ---------------------
 #
 # MAST_common's root __init__.py is what makes 'common' an importable package.
@@ -375,9 +463,12 @@ $commonDir = Join-Path $topAbs 'common'
 if ((-not $DryRun) -and (Test-Path -LiteralPath $commonDir) -and
     (-not (Test-Path -LiteralPath (Join-Path $commonDir '__init__.py')))) {
     $onBranch = & git -C $commonDir rev-parse --abbrev-ref HEAD 2>$null
+    $atSha = & git -C $commonDir rev-parse --short HEAD 2>$null
+    # 'HEAD' for the branch means a detached checkout, i.e. a pinned rev -- in which
+    # case the pin is the thing to look at, not the branch.
     throw ("common\__init__.py is missing -- 'common' is not an importable package. " +
-           "The clone almost certainly landed on the wrong branch. On branch: {0}. " +
-           "Expected the branch pinned in mast-repos.tsv." -f $onBranch)
+           "The checkout landed somewhere without it. HEAD: {0} ({1}). " +
+           "Expected the branch, or the rev, pinned in mast-repos.tsv." -f $onBranch, $atSha)
 }
 
 # --- venv creation and population ------------------------------------------
