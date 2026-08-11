@@ -128,6 +128,15 @@ function Merge-MastInstalledManifest {
     #    the build hash, installed cleanly, and did not fail its verify. A module
     #    with no verify command ('none') does not disqualify the unit -- absence
     #    of a check is not a failed check.
+    #
+    #    NOTE the scope this rests on: "the BUILD declares". This function cannot
+    #    tell a full build from a partial one, so the flag means what the caller's
+    #    build meant. A subset build-manifest yields fully_provisioned = true off
+    #    a subset -- correct per this contract, and a false fleet signal. mast03
+    #    read true off 6 of 41 modules that way (#63), because --modules reached
+    #    the build. The invariant now lives in prov.driver._resolve_modules, which
+    #    builds the unit's complete set and filters only what EXECUTES; if that
+    #    ever changes, this flag silently narrows with it.
     $fully = $true
     $buildModules = @()
     if ($BuildData.PSObject.Properties.Match('modules').Count) {
