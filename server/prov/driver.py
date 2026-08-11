@@ -73,6 +73,12 @@ EXECUTE_POLL_INTERVAL_S = 15
 
 AVAIL_TTL_S = 7200          # 2 h; matches execute-lease default
 WINRM_PORT = transport.WINRM_PORT
+SMB_PORT = 445
+
+#: RFC 863 discard. A UDP connect() to it sends nothing; it only binds the socket
+#: so getsockname() reveals the kernel's chosen source address. See
+#: Driver._local_address_for.
+DISCARD_PORT = 9
 
 # Phase watchdogs (item 6): each long phase has a hard timeout so a hung step
 # fails with a structured event instead of blocking the loop forever. Quick
@@ -156,7 +162,13 @@ class Driver:
         #: so _process_unit can hand the unit back as available rather than leaving
         #: it flagged unavailable by a run that changed nothing.
         self.execute_refused = False
-        self.prov_server = os.environ.get("COMPUTERNAME") or socket.gethostname()
+        #: This machine's NAME. Used only where an identity is wanted -- the
+        #: execute lease's held_by, and log lines. Deliberately NOT used as an
+        #: address: see prov_address and _local_address_for.
+        self.prov_identity = os.environ.get("COMPUTERNAME") or socket.gethostname()
+        #: This machine's ADDRESS as seen from the unit currently being processed,
+        #: set per unit by _process_unit. The staging UNC is built from this.
+        self.prov_address = self.prov_identity
 
     # -- top-level ----------------------------------------------------------
     def run(self) -> int:
@@ -339,6 +351,22 @@ class Driver:
             pass
         self.log.event("UNIT_BEGIN", unit=host, resolved_ip=resolved)
 
+        # Tell the unit an ADDRESS, not this machine's name. A name obliges the
+        # unit to resolve something that exists for the server's benefit, and
+        # nothing in this repo maintains that mapping -- three units pinned it to
+        # a dead APIPA address and every transfer failed with net.exe error 53
+        # (#70). Derived per unit because the answer is per route.
+        self.prov_address = self._local_address_for(resolved)
+        if self.prov_address:
+            self.log.event("PROV_ADDR", unit=host, address=self.prov_address,
+                           via_unit_ip=resolved)
+        else:
+            self.prov_address = self.prov_identity
+            self.log.event("PROV_ADDR_FALLBACK", unit=host, address=self.prov_address,
+                           unit_ip=resolved or "unresolved",
+                           note="could not derive a route-local address; falling back to "
+                                "this machine's name, which the unit must resolve itself")
+
         def dur() -> int:
             return int((datetime.now(timezone.utc) - unit_start).total_seconds())
 
@@ -367,6 +395,22 @@ class Driver:
                     session,
                     f"if (Test-Path '{UNIT_VALIDATION}') {{ Get-Content '{UNIT_VALIDATION}' -Raw }} else {{ '' }}",
                     "validation"))
+
+                # Phase 3b -- can the unit actually reach the staging host?
+                #
+                # Before the build, because a run that cannot transfer should not
+                # spend ~3 minutes building first: that is exactly how the #70
+                # failure presented, discovering net.exe error 53 only after a
+                # full build and a 403-file transfer plan. Reachability only, no
+                # credentials -- an auth problem is the pull script's to report.
+                if not self._unit_can_reach_staging(session, host):
+                    self.log.event("PREFLIGHT_UNIT_SMB_FAIL", unit=host,
+                                   address=self.prov_address, port=SMB_PORT,
+                                   note="unit cannot open SMB to the staging host; "
+                                        "not building a payload it cannot pull")
+                    self.log.activity(host, "PREFLIGHT_FAIL", "unit_smb_unreachable", dur())
+                    self.exit_code = EXIT_UNIT_FAIL
+                    return
 
                 # Phase 4 -- build (always).
                 payload_hash, git_sha, build_manifest = self._build(unit, host, modules, dur)
@@ -528,6 +572,54 @@ class Driver:
 
     # -- phase helpers ------------------------------------------------------
     @staticmethod
+    def _local_address_for(peer_ip: str) -> str:
+        """This machine's address on the route to ``peer_ip``, or '' if unknown.
+
+        Asks the kernel rather than choosing from the interface list. A UDP
+        ``connect`` sends nothing -- it only binds the socket, which makes
+        getsockname() report the source address the OS would actually use to
+        reach that peer.
+
+        Choosing from the interface list is what must be avoided: this machine
+        has seven IPv4 addresses (one routable, one VirtualBox host-only, five
+        APIPA), and a hand-picked one is how 169.254.215.207 came to be written
+        into three units' hosts files (#70). Route-based selection has no
+        heuristic to get wrong, and is also correct for a dev VM on the
+        host-only network, which legitimately sees a different address than a
+        production unit does.
+
+        Stdlib only, and identical on Linux and Windows, so it does not owe the
+        platform-agnostic server a per-platform branch.
+        """
+        if not peer_ip:
+            return ""
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect((peer_ip, DISCARD_PORT))
+            return s.getsockname()[0] or ""
+        except OSError:
+            return ""
+        finally:
+            s.close()
+
+    def _unit_can_reach_staging(self, session: Any, host: str) -> bool:
+        """Can the UNIT open SMB to the staging address we are about to hand it?
+
+        Asked from the unit, not the server: Test-MastSmbHostReady already checks
+        the server's own shares and passed on the run that then failed at
+        net.exe error 53. The direction that matters is unit -> server.
+        """
+        out = self._ps_out(
+            session,
+            f"$c = New-Object Net.Sockets.TcpClient; "
+            f"try {{ $a = $c.BeginConnect({_ps_lit(self.prov_address)}, {SMB_PORT}, $null, $null); "
+            f"if ($a.AsyncWaitHandle.WaitOne(5000)) {{ $c.EndConnect($a); 'SMBREACH ok' }} "
+            f"else {{ 'SMBREACH timeout' }} }} "
+            f"catch {{ 'SMBREACH ' + $_.Exception.Message }} finally {{ $c.Close() }}",
+            "smbreach")
+        return "SMBREACH ok" in (out or "")
+
+    @staticmethod
     def _tcp_open(host: str, port: int, timeout: float = 5.0) -> bool:
         try:
             with socket.create_connection((host, port), timeout=timeout):
@@ -661,7 +753,7 @@ class Driver:
 
     def _transfer(self, session: Any, host: str, dur, payload_hash: str, git_sha: str) -> bool:
         unit_stage = rf"C:\mast-staging\{self.run_id}"
-        src_unc = rf"\\{self.prov_server}\mast-staging\{host}\01-provisioning"
+        src_unc = rf"\\{self.prov_address}\mast-staging\{host}\01-provisioning"
         size = staging_payload_size(self._staging_dir)
         self.log.event("TRANSFER_START", unit=host, files=size.files, bytes=size.bytes,
                        src_unc=src_unc, dst_local=unit_stage)
@@ -669,7 +761,7 @@ class Driver:
         pull_src = (self.cfg.repo_top / "client" / "mast-pull-staging.ps1").read_text(encoding="utf-8")
         transport.upload_file(session, UNIT_PULL_SCRIPT, pull_src, label="pull-script")
         script = (
-            f"$r = & {_ps_lit(UNIT_PULL_SCRIPT)} -ProvServer {_ps_lit(self.prov_server)} "
+            f"$r = & {_ps_lit(UNIT_PULL_SCRIPT)} -ProvAddress {_ps_lit(self.prov_address)} "
             f"-UnitHostname {_ps_lit(host)} -SmbUser {_ps_lit(self.smb_user)} "
             f"-SmbPass {_ps_lit(self.smb_pass)} -UnitStage {_ps_lit(unit_stage)} "
             f"-SrcUNC {_ps_lit(src_unc)}; "
@@ -721,7 +813,7 @@ class Driver:
         # payload. Empty string, not absent: a ConvertFrom-Json object missing
         # the key would need a StrictMode-safe probe on the unit side.
         self._write_unit_json(session, UNIT_DETACHED_CFG, {
-            "run_id": self.run_id, "staging_path": stage, "held_by": self.prov_server,
+            "run_id": self.run_id, "staging_path": stage, "held_by": self.prov_identity,
             "modules": ",".join(target_modules or []),
         })
 
