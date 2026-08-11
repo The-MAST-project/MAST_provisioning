@@ -8,6 +8,7 @@ dot-sources proxy-lib.ps1, but it was missing from proxy/module.json
 Invariant: any ``<provider>/<name>-lib.ps1`` present in the tree must be listed
 in that provider's module.json ``commandfiles`` (or it will not reach the unit).
 """
+
 from __future__ import annotations
 
 import json
@@ -61,9 +62,9 @@ def test_commandfiles_entries_exist(module_json: Path) -> None:
     """
     provider = module_json.parent.name
     missing = [
-        e for e in _entries(module_json, "commandfiles")
-        if (provider, e) not in _OPTIONAL_COMMANDFILES
-        and not (module_json.parent / e).exists()
+        e
+        for e in _entries(module_json, "commandfiles")
+        if (provider, e) not in _OPTIONAL_COMMANDFILES and not (module_json.parent / e).exists()
     ]
     assert not missing, f"{provider}/module.json lists commandfiles that do not exist: {missing}"
 

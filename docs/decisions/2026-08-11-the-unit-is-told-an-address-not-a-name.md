@@ -47,7 +47,7 @@ The address is derived by asking the kernel, not by choosing from the interface 
 
 ```python
 s = socket.socket(AF_INET, SOCK_DGRAM)
-s.connect((unit_ip, DISCARD_PORT))   # UDP connect sends nothing; it binds
+s.connect((unit_ip, DISCARD_PORT))  # UDP connect sends nothing; it binds
 return s.getsockname()[0]
 ```
 

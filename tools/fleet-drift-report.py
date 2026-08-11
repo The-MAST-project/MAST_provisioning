@@ -29,6 +29,7 @@ work with no extra dependencies.
 Exit codes: 0 = every unit in sync AND bootstrap current; 2 = drift/missing/outdated found;
 1 = tool error.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -59,7 +60,7 @@ SPLIT = "====MAST-DRIFT-SPLIT===="
 @dataclass
 class UnitRecord:
     host: str
-    status: str = "unknown"          # ok | no-manifest | unreachable | parse-error | error
+    status: str = "unknown"  # ok | no-manifest | unreachable | parse-error | error
     payload_hash: str | None = None
     git_sha: str | None = None
     built_at: str | None = None
@@ -244,13 +245,15 @@ def compare_to_build(units: list[UnitRecord], build: dict) -> dict:
     readability, but they do not decide anything.
     """
     ok_units = [u for u in units if u.status == "ok"]
-    reports = {u.host: classify({"modules": u.modules} if u.modules else None, build,
-                                {"modules": u.validation} if u.validation else None)
-               for u in ok_units}
+    reports = {
+        u.host: classify(
+            {"modules": u.modules} if u.modules else None, build, {"modules": u.validation} if u.validation else None
+        )
+        for u in ok_units
+    }
 
     modules = [str(m) for m in (build.get("modules") or [])]
-    extras = sorted({m.name for r in reports.values() for m in r.modules
-                     if m.state is ModuleState.EXTRA})
+    extras = sorted({m.name for r in reports.values() for m in r.modules if m.state is ModuleState.EXTRA})
     all_modules = modules + [m for m in extras if m not in modules]
 
     matrix = []
@@ -311,7 +314,7 @@ def compare(units: list[UnitRecord], reference: UnitRecord | None) -> dict:
         if u.status != "ok":
             verdicts[u.host] = u.status.upper()
             continue
-        hash_ok = (u.payload_hash == baseline_hash)
+        hash_ok = u.payload_hash == baseline_hash
         mod_drift = bool(drift_modules_by_host.get(u.host))
         verdicts[u.host] = "IN SYNC" if (hash_ok and not mod_drift) else "DRIFT"
 
@@ -356,8 +359,10 @@ def render(units: list[UnitRecord], reference: UnitRecord | None, cmp: dict, boo
     host_w = max([len(u.host) for u in cols] + [9])
 
     lines.append("=== Fleet summary ===")
-    hdr = (f"{'unit'.ljust(host_w)}  {'status'.ljust(11)}  {'payload'.ljust(12)}  "
-           f"{'git'.ljust(12)}  {'boot'.ljust(6)}  installed_at")
+    hdr = (
+        f"{'unit'.ljust(host_w)}  {'status'.ljust(11)}  {'payload'.ljust(12)}  "
+        f"{'git'.ljust(12)}  {'boot'.ljust(6)}  installed_at"
+    )
     lines.append(hdr)
     lines.append("-" * len(hdr))
     for u in cols:
@@ -421,13 +426,17 @@ def render(units: list[UnitRecord], reference: UnitRecord | None, cmp: dict, boo
     cur = boot["current"]
     lines.append(f"=== Bootstrap (current version: {cur if cur is not None else 'unknown'}) ===")
     if repo_boot_v is not None and cur is not None and repo_boot_v != cur:
-        lines.append(f"  [WARN] client/bootstrap-winrm.ps1 $script:BootstrapVersion={repo_boot_v} "
-                     f"!= bootstrap-elements.json current_version={cur} -- bump them together.")
+        lines.append(
+            f"  [WARN] client/bootstrap-winrm.ps1 $script:BootstrapVersion={repo_boot_v} "
+            f"!= bootstrap-elements.json current_version={cur} -- bump them together."
+        )
     for u in units:
         g = boot["by_host"].get(u.host, {"state": "unstamped", "version": None, "missing": []})
         if g["state"] == "unstamped":
-            lines.append(f"  {u.host}: UNSTAMPED -- no bootstrap-manifest.json "
-                         f"(pre-versioning, or bootstrap not re-run since stamping was added)")
+            lines.append(
+                f"  {u.host}: UNSTAMPED -- no bootstrap-manifest.json "
+                f"(pre-versioning, or bootstrap not re-run since stamping was added)"
+            )
         elif g["state"] == "outdated":
             miss = ", ".join(g["missing"]) if g["missing"] else "(none listed)"
             lines.append(f"  {u.host}: v{g['version']} OUTDATED (current {cur}) -- may need: {miss}")
@@ -458,14 +467,34 @@ def write_csv(path: Path, units: list[UnitRecord], cmp: dict, boot: dict) -> Non
     cells_by_module = {row["module"]: row["cells"] for row in cmp["matrix"]}
     with path.open("w", newline="", encoding="utf-8") as fh:
         w = csv.writer(fh)
-        w.writerow(["host", "status", "verdict", "payload_hash", "git_sha", "installed_at",
-                    "bootstrap_version", "bootstrap_state", "bootstrap_missing"] + modules)
+        w.writerow(
+            [
+                "host",
+                "status",
+                "verdict",
+                "payload_hash",
+                "git_sha",
+                "installed_at",
+                "bootstrap_version",
+                "bootstrap_state",
+                "bootstrap_missing",
+            ]
+            + modules
+        )
         for u in units:
             g = boot["by_host"].get(u.host, {})
             w.writerow(
-                [u.host, u.status, cmp["verdicts"].get(u.host, "?"), u.payload_hash or "", u.git_sha or "",
-                 u.installed_at or "", u.bootstrap_version if u.bootstrap_version is not None else "",
-                 g.get("state", ""), " ".join(g.get("missing", []))]
+                [
+                    u.host,
+                    u.status,
+                    cmp["verdicts"].get(u.host, "?"),
+                    u.payload_hash or "",
+                    u.git_sha or "",
+                    u.installed_at or "",
+                    u.bootstrap_version if u.bootstrap_version is not None else "",
+                    g.get("state", ""),
+                    " ".join(g.get("missing", [])),
+                ]
                 + [str(cells_by_module.get(m, {}).get(u.host, "")) for m in modules]
             )
 
@@ -478,7 +507,9 @@ def main() -> int:
     ap.add_argument("--connect-timeout", type=int, default=15, help="SSH connect timeout seconds (default 15).")
     ap.add_argument("--json", dest="json_out", default=None, help="Write gathered unit records to this JSON file.")
     ap.add_argument("--csv", dest="csv_out", default=None, help="Write the comparison matrix to this CSV file.")
-    ap.add_argument("--from-json", default=None, help="Load previously-gathered records from JSON instead of SSH (no network).")
+    ap.add_argument(
+        "--from-json", default=None, help="Load previously-gathered records from JSON instead of SSH (no network)."
+    )
     args = ap.parse_args()
 
     reference: UnitRecord | None = None
@@ -510,6 +541,7 @@ def main() -> int:
                 return 1
         try:
             import vm_lib  # lazy: pywinrm/paramiko only needed for the live gather
+
             cred = vm_lib.load_creds()["unit"]
         except Exception as exc:  # noqa: BLE001
             print(f"ERROR: could not load unit credentials / vm_lib: {exc}", file=sys.stderr)

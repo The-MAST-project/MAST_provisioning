@@ -14,8 +14,7 @@ def test_clean_posture_has_no_dirty_surfaces():
 
 def test_machine_env_is_critical():
     d = get_proxy_dirty_surfaces(
-        ProxyPosture(http_proxy="http://bcproxy.weizmann.ac.il:8080",
-                     https_proxy="http://bcproxy.weizmann.ac.il:8080")
+        ProxyPosture(http_proxy="http://bcproxy.weizmann.ac.il:8080", https_proxy="http://bcproxy.weizmann.ac.il:8080")
     )
     assert d.critical == [
         "http_proxy=http://bcproxy.weizmann.ac.il:8080",
@@ -25,17 +24,13 @@ def test_machine_env_is_critical():
 
 
 def test_wininet_enabled_with_server_is_advisory():
-    d = get_proxy_dirty_surfaces(
-        ProxyPosture(wininet_enable=1, wininet_server="bcproxy:8080")
-    )
+    d = get_proxy_dirty_surfaces(ProxyPosture(wininet_enable=1, wininet_server="bcproxy:8080"))
     assert d.advisory == ["wininet=bcproxy:8080"]
     assert d.critical == []
 
 
 def test_wininet_disabled_is_clean():
-    d = get_proxy_dirty_surfaces(
-        ProxyPosture(wininet_enable=0, wininet_server="bcproxy:8080")
-    )
+    d = get_proxy_dirty_surfaces(ProxyPosture(wininet_enable=0, wininet_server="bcproxy:8080"))
     assert d.advisory == []
 
 

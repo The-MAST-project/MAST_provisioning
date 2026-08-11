@@ -41,8 +41,7 @@ except ImportError as e:
     # import-purity, and killing the process on import breaks any tool/test that
     # merely imports it. pywinrm is still a declared runtime dependency.
     raise ImportError(
-        "pywinrm is required for prov.transport (the WinRM fallback transport). "
-        "Install it with: pip install pywinrm"
+        "pywinrm is required for prov.transport (the WinRM fallback transport). Install it with: pip install pywinrm"
     ) from e
 
 # requests is a hard dependency of pywinrm, so this import is always safe.
@@ -76,6 +75,7 @@ HEARTBEAT_ESCALATE_GAP_S = 300
 # ---------------------------------------------------------------------------
 # Logging hooks -- callers may rebind these
 # ---------------------------------------------------------------------------
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).strftime("%H:%M:%SZ")
@@ -112,6 +112,7 @@ def _fmt_mmss(seconds: int) -> str:
 # PS string helpers
 # ---------------------------------------------------------------------------
 
+
 def _ps_escape(s: str) -> str:
     """Escape a value for embedding inside a PowerShell single-quoted string."""
     return s.replace("'", "''")
@@ -126,6 +127,7 @@ def _ps_escape(s: str) -> str:
 # Use these helpers anywhere we read JSON that may have been written by PS
 # (commands.json, build-manifest.json, installed-manifest.json, creds.json
 # touched by hand, etc.).
+
 
 def load_json_file(path: Path) -> object:
     """Parse a JSON file, tolerating a leading UTF-8 BOM."""
@@ -148,6 +150,7 @@ def dump_json_file(path: Path, data: object, *, indent: int = 4) -> None:
 # ---------------------------------------------------------------------------
 # Credentials / WinRM
 # ---------------------------------------------------------------------------
+
 
 def load_creds() -> dict[str, dict[str, str]]:
     if not VAULT_CREDS.exists():
@@ -299,9 +302,7 @@ class SshSession:
         try:
             import paramiko  # lazy: keep vm_lib import-pure and paramiko optional
         except ImportError as e:
-            raise RuntimeError(
-                "paramiko is required for the SSH fallback (pip install paramiko)."
-            ) from e
+            raise RuntimeError("paramiko is required for the SSH fallback (pip install paramiko).") from e
         timeout = self._connect_timeout_s if connect_timeout_s is None else connect_timeout_s
         client = paramiko.SSHClient()
         # The unit's host key is not pre-pinned in this lab pipeline; accept it.
@@ -337,8 +338,11 @@ class SshSession:
         away under heavy provisioning IO."""
         try:
             import paramiko
+
             conn_errors: tuple[type[BaseException], ...] = (
-                OSError, EOFError, paramiko.SSHException,
+                OSError,
+                EOFError,
+                paramiko.SSHException,
             )
         except ImportError:
             conn_errors = (OSError, EOFError)
@@ -363,10 +367,7 @@ class SshSession:
         # Mirror pywinrm: hand powershell the script as a UTF-16LE base64
         # -EncodedCommand so quoting/newlines survive the SSH command line intact.
         enc = base64.b64encode(script.encode("utf_16_le")).decode("ascii")
-        cmd = (
-            "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass "
-            f"-EncodedCommand {enc}"
-        )
+        cmd = f"powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand {enc}"
         # Key completion off the command's EXIT STATUS, not channel EOF. A
         # detached grandchild (a service started by mast-services-finalize/NSSM,
         # or the net-use Start-Job in mast-pull-staging.ps1) can inherit the
@@ -409,21 +410,15 @@ class SshSession:
                 # surface it as ConnectionError so _resilient_run_ps reconnects
                 # and retries rather than burning the whole timeout.
                 if not transport.is_active():
-                    raise ConnectionError(
-                        "SSH transport went inactive mid-command (connection dropped)"
-                    )
+                    raise ConnectionError("SSH transport went inactive mid-command (connection dropped)")
                 if deadline is not None and time.monotonic() >= deadline:
-                    raise TimeoutError(
-                        f"SSH run_ps exceeded {timeout_s}s with no exit status"
-                    )
+                    raise TimeoutError(f"SSH run_ps exceeded {timeout_s}s with no exit status")
                 time.sleep(0.1)
             rc = chan.recv_exit_status()
             # -1 == the channel closed without ever delivering an exit status,
             # i.e. the connection dropped rather than the command finishing.
             if rc == -1:
-                raise ConnectionError(
-                    "SSH channel closed before exit status (connection dropped)"
-                )
+                raise ConnectionError("SSH channel closed before exit status (connection dropped)")
             return _SshResponse(rc, bytes(out), bytes(err))
         finally:
             try:
@@ -450,16 +445,12 @@ class SshSession:
             pass
 
 
-def ssh_session(
-    host: str, cred: dict[str, str], port: int = SSH_PORT, connect_timeout_s: int = 30
-) -> SshSession:
+def ssh_session(host: str, cred: dict[str, str], port: int = SSH_PORT, connect_timeout_s: int = 30) -> SshSession:
     """Factory mirroring winrm_session(): construct an SSH session to the unit."""
     return SshSession(host, cred, port=port, connect_timeout_s=connect_timeout_s)
 
 
-def wait_for_ssh(
-    host: str, cred: dict[str, str], timeout: int = WINRM_BOOT_TIMEOUT_S, port: int = SSH_PORT
-) -> SshSession:
+def wait_for_ssh(host: str, cred: dict[str, str], timeout: int = WINRM_BOOT_TIMEOUT_S, port: int = SSH_PORT) -> SshSession:
     """Poll until an SSH session authenticates (unit booted + sshd up). Returns it."""
     _log(f"Waiting for SSH on {host}:{port} (up to {timeout}s)...")
     deadline = time.monotonic() + timeout
@@ -475,9 +466,7 @@ def wait_for_ssh(
     raise TimeoutError(f"SSH on {host}:{port} not ready after {timeout}s. Last: {last_err}")
 
 
-def _winrm_probe_once(
-    host: str, cred: dict[str, str], users: list[str]
-) -> tuple[winrm.Session | None, str]:
+def _winrm_probe_once(host: str, cred: dict[str, str], users: list[str]) -> tuple[winrm.Session | None, str]:
     """One WinRM reachability probe. Returns (session, state) where state is:
     'ok' (session usable, returned), 'auth_rejected' (TCP open, Basic refused --
     the post-reboot Public-profile regression), or 'down' (TCP closed / other)."""
@@ -515,7 +504,7 @@ def connect_unit(
     host: str,
     cred: dict[str, str],
     winrm_wait_s: int = WINRM_BOOT_TIMEOUT_S,
-    allow_ssh_fallback: bool = True,   # kept for call-site compat; unused when prefer='ssh'
+    allow_ssh_fallback: bool = True,  # kept for call-site compat; unused when prefer='ssh'
     prefer: str = "ssh",
 ) -> Any:
     """Return a unit session exposing .run_ps() -- an SshSession by default, a
@@ -630,9 +619,7 @@ def _run_with_heartbeat(
                     log_gap = min(HEARTBEAT_MAX_GAP_S, log_gap * 2)
                 last_log = now
             if elapsed >= timeout_s:
-                raise TimeoutError(
-                    f"{label} exceeded {timeout_s}s timeout - likely hung"
-                )
+                raise TimeoutError(f"{label} exceeded {timeout_s}s timeout - likely hung")
     if exc:
         raise exc[0]
     return result[0]
@@ -757,9 +744,7 @@ def _resilient_get_command_output(
 
     while not command_done:
         try:
-            stdout, stderr, return_code, command_done = (
-                protocol._raw_get_command_output(shell_id, command_id)
-            )
+            stdout, stderr, return_code, command_done = protocol._raw_get_command_output(shell_id, command_id)
             stdout_chunks.append(stdout)
             stderr_chunks.append(stderr)
             if transient_deadline is not None:
@@ -817,8 +802,12 @@ def _resilient_run_ps(
     if isinstance(session, SshSession):
         try:
             import paramiko
+
             conn_errors: tuple[type[BaseException], ...] = (
-                ConnectionError, EOFError, OSError, paramiko.SSHException,
+                ConnectionError,
+                EOFError,
+                OSError,
+                paramiko.SSHException,
             )
         except ImportError:
             conn_errors = (ConnectionError, EOFError, OSError)
@@ -959,9 +948,7 @@ def run_ps(
     if echo:
         _log(f"{tag}>>> {script[:120].rstrip()}")
     r = _run_with_heartbeat(
-        lambda: _resilient_run_ps(
-            session, script, log_label=f"{tag}run_ps", timeout_s=timeout_s
-        ),
+        lambda: _resilient_run_ps(session, script, log_label=f"{tag}run_ps", timeout_s=timeout_s),
         label=f"{tag}run_ps",
         timeout_s=timeout_s,
         step_timer=step_timer,
@@ -1036,6 +1023,7 @@ def wait_for_winrm(host: str, cred: dict[str, str], timeout: int = WINRM_BOOT_TI
 # File transfer
 # ---------------------------------------------------------------------------
 
+
 def upload_file_b64(
     session: winrm.Session,
     remote_path: str,
@@ -1050,7 +1038,7 @@ def upload_file_b64(
     segments and reassembled remotely before being decoded and written.
     """
     b64 = base64.b64encode(content.encode("utf-8")).decode("ascii")
-    chunks = [b64[i:i + chunk_size] for i in range(0, len(b64), chunk_size)]
+    chunks = [b64[i : i + chunk_size] for i in range(0, len(b64), chunk_size)]
     ps_lines = ["$chunks = @()"]
     for chunk in chunks:
         ps_lines.append(f"$chunks += '{chunk}'")
@@ -1088,17 +1076,36 @@ def upload_file(session: Any, remote_path: str, content: str, label: str = "file
 # ---------------------------------------------------------------------------
 __all__ = [
     # constants
-    "REPO_ROOT", "VAULT_CREDS", "WINRM_PORT", "WINRM_ENCODED_CMD_MAX",
-    "WINRM_CALL_TIMEOUT_S", "WINRM_BOOT_TIMEOUT_S", "SSH_PORT",
-    "HEARTBEAT_INTERVAL_S", "HEARTBEAT_MAX_GAP_S",
-    "HEARTBEAT_ESCALATE_S", "HEARTBEAT_ESCALATE_GAP_S",
+    "REPO_ROOT",
+    "VAULT_CREDS",
+    "WINRM_PORT",
+    "WINRM_ENCODED_CMD_MAX",
+    "WINRM_CALL_TIMEOUT_S",
+    "WINRM_BOOT_TIMEOUT_S",
+    "SSH_PORT",
+    "HEARTBEAT_INTERVAL_S",
+    "HEARTBEAT_MAX_GAP_S",
+    "HEARTBEAT_ESCALATE_S",
+    "HEARTBEAT_ESCALATE_GAP_S",
     # log sinks (rebindable)
-    "log_fn", "log_raw_fn",
+    "log_fn",
+    "log_raw_fn",
     # json helpers
-    "load_json_file", "parse_json_text", "dump_json_file",
+    "load_json_file",
+    "parse_json_text",
+    "dump_json_file",
     # creds + transport
-    "load_creds", "winrm_session", "ssh_session", "wait_for_ssh",
-    "connect_unit", "wait_for_winrm", "run_ps", "check_rc",
-    "upload_file", "upload_file_b64", "winrm_encoded_cmd_len", "assert_inline_dispatchable",
+    "load_creds",
+    "winrm_session",
+    "ssh_session",
+    "wait_for_ssh",
+    "connect_unit",
+    "wait_for_winrm",
+    "run_ps",
+    "check_rc",
+    "upload_file",
+    "upload_file_b64",
+    "winrm_encoded_cmd_len",
+    "assert_inline_dispatchable",
     "SshSession",
 ]

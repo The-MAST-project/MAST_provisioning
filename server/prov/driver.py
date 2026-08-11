@@ -71,7 +71,7 @@ UNIT_SHARED_CFG = r"C:\MAST\status\shared-cred.json"
 DETACHED_TASK = "MAST-Execute-Detached"
 EXECUTE_POLL_INTERVAL_S = 15
 
-AVAIL_TTL_S = 7200          # 2 h; matches execute-lease default
+AVAIL_TTL_S = 7200  # 2 h; matches execute-lease default
 WINRM_PORT = transport.WINRM_PORT
 SMB_PORT = 445
 
@@ -128,7 +128,7 @@ def _marker_json(stdout: str, marker: str) -> Any:
     """Extract the JSON payload that a remote snippet emitted after ``marker``."""
     for line in (stdout or "").splitlines():
         if line.startswith(marker):
-            return _parse_json_or_none(line[len(marker):])
+            return _parse_json_or_none(line[len(marker) :])
     return None
 
 
@@ -182,8 +182,7 @@ class Driver:
             self.log.event("FATAL", reason="vault_creds_missing", path=self.cfg.vault_creds)
             return EXIT_FATAL
 
-        units = [u for u in (transport.load_json_file(self.cfg.unit_registry) or [])
-                 if u and u.get("hostname")]
+        units = [u for u in (transport.load_json_file(self.cfg.unit_registry) or []) if u and u.get("hostname")]
         creds = transport.load_json_file(self.cfg.vault_creds)
         if not creds.get("unit"):
             self.log.event("FATAL", reason="creds_unit_missing")
@@ -197,8 +196,11 @@ class Driver:
         # controller accepts (Samba `valid users`), which units mount as Z:.
         shared = creds.get("shared") or {}
         if not (shared.get("user") and shared.get("pass")):
-            self.log.event("FATAL", reason="creds_shared_missing",
-                           hint="vault/creds.json needs shared.user/pass (the mast-share account)")
+            self.log.event(
+                "FATAL",
+                reason="creds_shared_missing",
+                hint="vault/creds.json needs shared.user/pass (the mast-share account)",
+            )
             return EXIT_FATAL
 
         # Basic auth wants the bare local username (strip a leading '.\').
@@ -213,8 +215,9 @@ class Driver:
 
         if self.cfg.only_hosts:
             units = [u for u in units if u["hostname"] in self.cfg.only_hosts]
-        self.log.event("RUN_PLAN", units=",".join(u["hostname"] for u in units),
-                       dry_run=self.cfg.dry_run, force=self.cfg.force)
+        self.log.event(
+            "RUN_PLAN", units=",".join(u["hostname"] for u in units), dry_run=self.cfg.dry_run, force=self.cfg.force
+        )
 
         for unit in units:
             self._process_unit(unit)
@@ -230,15 +233,16 @@ class Driver:
             self.log.event("PREFLIGHT_SMB_SKIP", reason="non_windows_server", server_os=os.name)
             return
         # On Windows, defer to the existing PS preflight helper for parity.
-        script = (self.cfg.repo_top / "server" / "lib" / "preflight-smb.ps1")
+        script = self.cfg.repo_top / "server" / "lib" / "preflight-smb.ps1"
         ps = (
             f". {_ps_lit(str(script))}; "
             f"$r = Test-MastSmbHostReady -ShareNames @('mast-staging','mast-shared') "
             f"-TransferUser {_ps_lit(self.smb_user)} -TransferPass {_ps_lit(self.smb_pass)} -Quiet; "
             f"Write-Output ('SMBRESULT ' + ($r | ConvertTo-Json -Compress -Depth 6))"
         )
-        out = subprocess.run([_powershell_exe(), "-NoProfile", "-ExecutionPolicy", "Bypass",
-                              "-Command", ps], text=True, capture_output=True)
+        out = subprocess.run(
+            [_powershell_exe(), "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps], text=True, capture_output=True
+        )
         res = _marker_json(out.stdout, "SMBRESULT ")
         if res and not res.get("Ok", res.get("ok")):
             failures = res.get("Failures") or res.get("failures") or []
@@ -299,8 +303,7 @@ class Driver:
         if unit.get("modules"):
             return list(unit["modules"])
         providers = self.cfg.repo_top / "server" / "providers"
-        return sorted(p.name for p in providers.iterdir()
-                      if (p / "module.json").exists()) if providers.is_dir() else []
+        return sorted(p.name for p in providers.iterdir() if (p / "module.json").exists()) if providers.is_dir() else []
 
     def _filter_targets(self, targets: list[str], full_set: list[str]) -> list[str]:
         """Restrict what will execute to ``--modules``, keeping the always-modules.
@@ -358,14 +361,17 @@ class Driver:
         # (#70). Derived per unit because the answer is per route.
         self.prov_address = self._local_address_for(resolved)
         if self.prov_address:
-            self.log.event("PROV_ADDR", unit=host, address=self.prov_address,
-                           via_unit_ip=resolved)
+            self.log.event("PROV_ADDR", unit=host, address=self.prov_address, via_unit_ip=resolved)
         else:
             self.prov_address = self.prov_identity
-            self.log.event("PROV_ADDR_FALLBACK", unit=host, address=self.prov_address,
-                           unit_ip=resolved or "unresolved",
-                           note="could not derive a route-local address; falling back to "
-                                "this machine's name, which the unit must resolve itself")
+            self.log.event(
+                "PROV_ADDR_FALLBACK",
+                unit=host,
+                address=self.prov_address,
+                unit_ip=resolved or "unresolved",
+                note="could not derive a route-local address; falling back to "
+                "this machine's name, which the unit must resolve itself",
+            )
 
         def dur() -> int:
             return int((datetime.now(timezone.utc) - unit_start).total_seconds())
@@ -384,17 +390,24 @@ class Driver:
             session = transport.connect_unit(host, self.unit_cred)
 
             try:
-                self._inventory(session, unit)                      # 2a-inv (non-fatal)
-                self._reclaim_availability(session, host)           # 2a
+                self._inventory(session, unit)  # 2a-inv (non-fatal)
+                self._reclaim_availability(session, host)  # 2a
 
-                installed = _parse_json_or_none(self._ps_out(
-                    session, f"if (Test-Path '{UNIT_INSTALLED}') {{ Get-Content '{UNIT_INSTALLED}' -Raw }} else {{ '' }}",
-                    "installed"))
+                installed = _parse_json_or_none(
+                    self._ps_out(
+                        session,
+                        f"if (Test-Path '{UNIT_INSTALLED}') {{ Get-Content '{UNIT_INSTALLED}' -Raw }} else {{ '' }}",
+                        "installed",
+                    )
+                )
                 installed_hash = installed.get("payload_hash") if installed else None
-                validation = _parse_json_or_none(self._ps_out(
-                    session,
-                    f"if (Test-Path '{UNIT_VALIDATION}') {{ Get-Content '{UNIT_VALIDATION}' -Raw }} else {{ '' }}",
-                    "validation"))
+                validation = _parse_json_or_none(
+                    self._ps_out(
+                        session,
+                        f"if (Test-Path '{UNIT_VALIDATION}') {{ Get-Content '{UNIT_VALIDATION}' -Raw }} else {{ '' }}",
+                        "validation",
+                    )
+                )
 
                 # Phase 3b -- can the unit actually reach the staging host?
                 #
@@ -404,10 +417,13 @@ class Driver:
                 # full build and a 403-file transfer plan. Reachability only, no
                 # credentials -- an auth problem is the pull script's to report.
                 if not self._unit_can_reach_staging(session, host):
-                    self.log.event("PREFLIGHT_UNIT_SMB_FAIL", unit=host,
-                                   address=self.prov_address, port=SMB_PORT,
-                                   note="unit cannot open SMB to the staging host; "
-                                        "not building a payload it cannot pull")
+                    self.log.event(
+                        "PREFLIGHT_UNIT_SMB_FAIL",
+                        unit=host,
+                        address=self.prov_address,
+                        port=SMB_PORT,
+                        note="unit cannot open SMB to the staging host; not building a payload it cannot pull",
+                    )
                     self.log.activity(host, "PREFLIGHT_FAIL", "unit_smb_unreachable", dur())
                     self.exit_code = EXIT_UNIT_FAIL
                     return
@@ -445,17 +461,21 @@ class Driver:
                     # --force means "run everything": no classification, no skip.
                     # Still record the hash comparison, which is the audit trail
                     # of what the unit had versus what was built.
-                    self.log.event("HASH_CHECK", unit=host, installed=installed_hash or "none",
-                                   built=payload_hash, result="FORCED")
+                    self.log.event(
+                        "HASH_CHECK", unit=host, installed=installed_hash or "none", built=payload_hash, result="FORCED"
+                    )
                 else:
                     report = drift.classify(installed, build_manifest, validation)
                     aggregate_matches = installed_hash == payload_hash
-                    self.log.event("MODULE_DRIFT", unit=host, summary=report.summary(),
-                                   targets=",".join(report.targets) or "none",
-                                   aggregate="match" if aggregate_matches else "differs")
+                    self.log.event(
+                        "MODULE_DRIFT",
+                        unit=host,
+                        summary=report.summary(),
+                        targets=",".join(report.targets) or "none",
+                        aggregate="match" if aggregate_matches else "differs",
+                    )
                     if report.current and aggregate_matches:
-                        self.log.event("UNIT_SKIP", unit=host, reason="already_current",
-                                       payload_hash=payload_hash)
+                        self.log.event("UNIT_SKIP", unit=host, reason="already_current", payload_hash=payload_hash)
                         self.log.activity(host, "SKIP", "already_current", dur(), payload_hash, git_sha)
                         return
                     if report.current:
@@ -464,13 +484,18 @@ class Driver:
                         # build-host-vendored asset, a client-side script). Not
                         # nothing -- fall through to a full run rather than
                         # skipping, since the aggregate is the broader check.
-                        self.log.event("MODULE_DRIFT_NONE", unit=host,
-                                       note="aggregate differs but no module drifted; running full set")
+                        self.log.event(
+                            "MODULE_DRIFT_NONE", unit=host, note="aggregate differs but no module drifted; running full set"
+                        )
                     else:
                         target_modules = report.targets
-                        self.log.event("HASH_CHECK", unit=host, installed=installed_hash or "none",
-                                       built=payload_hash,
-                                       result="NEEDS_REPAIR" if aggregate_matches else "NEEDS_UPDATE")
+                        self.log.event(
+                            "HASH_CHECK",
+                            unit=host,
+                            installed=installed_hash or "none",
+                            built=payload_hash,
+                            result="NEEDS_REPAIR" if aggregate_matches else "NEEDS_UPDATE",
+                        )
                 if self.cfg.modules:
                     # Filter what executes, having already built and classified the
                     # full set. A unit that came out already_current above has
@@ -478,16 +503,20 @@ class Driver:
                     # run on a current unit.
                     target_modules = self._filter_targets(target_modules, modules)
                     if not target_modules:
-                        self.log.event("MODULE_TARGET_EMPTY", unit=host,
-                                       requested=",".join(self.cfg.modules),
-                                       note="none of the requested modules need work; "
-                                            "not running the always-modules alone")
-                        self.log.activity(host, "SKIP", "no_requested_module_drift",
-                                          dur(), payload_hash, git_sha)
+                        self.log.event(
+                            "MODULE_TARGET_EMPTY",
+                            unit=host,
+                            requested=",".join(self.cfg.modules),
+                            note="none of the requested modules need work; not running the always-modules alone",
+                        )
+                        self.log.activity(host, "SKIP", "no_requested_module_drift", dur(), payload_hash, git_sha)
                         return
-                    self.log.event("MODULE_TARGET_FILTERED", unit=host,
-                                   requested=",".join(self.cfg.modules),
-                                   targets=",".join(target_modules))
+                    self.log.event(
+                        "MODULE_TARGET_FILTERED",
+                        unit=host,
+                        requested=",".join(self.cfg.modules),
+                        targets=",".join(target_modules),
+                    )
                 if self.cfg.dry_run:
                     self.log.event("DRYRUN_STOP", unit=host, reason="would_transfer_and_execute")
                     self.log.activity(host, "SKIP", "dry_run", dur(), payload_hash, git_sha)
@@ -495,16 +524,22 @@ class Driver:
 
                 # Phase 5b -- maintenance window.
                 mw = in_maintenance_window(
-                    unit, override_start=self.cfg.maint_window_start,
-                    override_end=self.cfg.maint_window_end)
+                    unit, override_start=self.cfg.maint_window_start, override_end=self.cfg.maint_window_end
+                )
                 if mw.tz_error:
                     self.log.event("MAINT_TZ_WARN", unit=host, tz=mw.tz, err=mw.tz_error)
                 if not mw.allowed:
-                    self.log.event("MAINT_SKIP", unit=host, reason="outside_window",
-                                   current=mw.current, window=mw.window, tz=mw.tz)
-                    self.log.activity(host, "SKIP_MAINTENANCE",
-                                      f"outside_window current={mw.current} window={mw.window}",
-                                      dur(), payload_hash, git_sha)
+                    self.log.event(
+                        "MAINT_SKIP", unit=host, reason="outside_window", current=mw.current, window=mw.window, tz=mw.tz
+                    )
+                    self.log.activity(
+                        host,
+                        "SKIP_MAINTENANCE",
+                        f"outside_window current={mw.current} window={mw.window}",
+                        dur(),
+                        payload_hash,
+                        git_sha,
+                    )
                     return
 
                 # Phase 6 -- mark unavailable / take lease.
@@ -517,8 +552,7 @@ class Driver:
 
                 # Phase 8 -- execute (detached; may reconnect and replace session).
                 self.execute_refused = False
-                ok, session = self._execute(session, host, dur, payload_hash, git_sha,
-                                            target_modules)
+                ok, session = self._execute(session, host, dur, payload_hash, git_sha, target_modules)
                 if not ok and self.execute_refused:
                     # Refused for a held execute lease: this run changed nothing, so
                     # hand the unit straight back instead of leaving it flagged
@@ -616,7 +650,8 @@ class Driver:
             f"if ($a.AsyncWaitHandle.WaitOne(5000)) {{ $c.EndConnect($a); 'SMBREACH ok' }} "
             f"else {{ 'SMBREACH timeout' }} }} "
             f"catch {{ 'SMBREACH ' + $_.Exception.Message }} finally {{ $c.Close() }}",
-            "smbreach")
+            "smbreach",
+        )
         return "SMBREACH ok" in (out or "")
 
     @staticmethod
@@ -627,13 +662,11 @@ class Driver:
         except OSError:
             return False
 
-    def _ps_out(self, session: Any, script: str, label: str,
-                timeout_s: int = PROBE_TIMEOUT_S) -> str:
+    def _ps_out(self, session: Any, script: str, label: str, timeout_s: int = PROBE_TIMEOUT_S) -> str:
         # tee_stdout=False: these are internal probes whose stdout is a marker the
         # caller parses -- keep them out of the controller log (esp. the big
         # base64 archive pull). timeout_s bounds a hung remote read (watchdog).
-        r = transport.run_ps(session, script, label=label, echo=False,
-                             tee_stdout=False, timeout_s=timeout_s)
+        r = transport.run_ps(session, script, label=label, echo=False, tee_stdout=False, timeout_s=timeout_s)
         return (r.std_out or b"").decode("utf-8", "replace")
 
     def _inventory(self, session: Any, unit: dict) -> None:
@@ -655,8 +688,11 @@ class Driver:
             inv_dir = L.prov_logs_base() / "unit-inventory"
             inv_dir.mkdir(parents=True, exist_ok=True)
             (inv_dir / f"{host}.json").write_text(json.dumps(inv, indent=2), encoding="utf-8", newline="\n")
-            macs_up = [a["mac"] for a in inv.get("adapters", [])
-                       if str(a.get("status")).lower() == "up" and "802.3" in str(a.get("media", ""))]
+            macs_up = [
+                a["mac"]
+                for a in inv.get("adapters", [])
+                if str(a.get("status")).lower() == "up" and "802.3" in str(a.get("media", ""))
+            ]
             self.log.event("INVENTORY_OK", unit=host, site=unit.get("site", ""), macs_up=len(macs_up))
             if macs_up and unit.get("mac") != macs_up[0]:
                 self._persist_mac(unit, macs_up[0])
@@ -676,9 +712,11 @@ class Driver:
             self.log.event("REGISTRY_MAC_WARN", unit=unit["hostname"], error=f"{type(e).__name__}: {e}")
 
     def _reclaim_availability(self, session: Any, host: str) -> None:
-        avail = _parse_json_or_none(self._ps_out(
-            session, f"if (Test-Path '{UNIT_AVAIL}') {{ Get-Content '{UNIT_AVAIL}' -Raw }} else {{ '' }}",
-            "avail"))
+        avail = _parse_json_or_none(
+            self._ps_out(
+                session, f"if (Test-Path '{UNIT_AVAIL}') {{ Get-Content '{UNIT_AVAIL}' -Raw }} else {{ '' }}", "avail"
+            )
+        )
         if not avail or avail.get("available") is not False:
             return
         owner = avail.get("lease_owner")
@@ -692,20 +730,36 @@ class Driver:
         if owner == self.run_id:
             self.log.event("AVAIL_LEASE_SELF", unit=host, owner=owner, reason=avail.get("reason"))
         else:
-            self.log.event("AVAIL_LEASE_RECLAIM", unit=host, prior_run=owner,
-                           reason=avail.get("reason"), expires=exp or "none", stale=is_stale)
+            self.log.event(
+                "AVAIL_LEASE_RECLAIM",
+                unit=host,
+                prior_run=owner,
+                reason=avail.get("reason"),
+                expires=exp or "none",
+                stale=is_stale,
+            )
 
-    def _build(self, unit: dict, host: str, modules: list[str],
-               dur) -> tuple[str | None, str | None, dict]:
+    def _build(self, unit: dict, host: str, modules: list[str], dur) -> tuple[str | None, str | None, dict]:
         # test_mode in the event is the auditable record of whether this build
         # passed -AllowMissing* (dev/test) or ran as a production build that
         # fails loud on any missing input (item 7). Production omits --test-mode.
         self.log.event("BUILD_START", unit=host, test_mode=self.cfg.test_mode)
         build_script = self.cfg.repo_top / "build" / "build-mast.ps1"
         build_log = self.log_root / f"{self.run_id}-{host}-build.log"
-        args = [_powershell_exe(), "-NoProfile", "-ExecutionPolicy", "Bypass",
-                "-File", str(build_script), "-Top", str(self.cfg.repo_top),
-                "-HostName", host, "-ProxyMode", self.cfg.proxy_mode]
+        args = [
+            _powershell_exe(),
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(build_script),
+            "-Top",
+            str(self.cfg.repo_top),
+            "-HostName",
+            host,
+            "-ProxyMode",
+            self.cfg.proxy_mode,
+        ]
         if unit.get("site"):
             args += ["-Site", unit["site"]]
         else:
@@ -716,11 +770,9 @@ class Driver:
             args += ["-TestMode", "-AllowMissingNoMachineLicense"]
         try:
             with build_log.open("wb") as fh:
-                rc = subprocess.run(args, stdout=fh, stderr=subprocess.STDOUT,
-                                    timeout=BUILD_TIMEOUT_S).returncode
+                rc = subprocess.run(args, stdout=fh, stderr=subprocess.STDOUT, timeout=BUILD_TIMEOUT_S).returncode
         except subprocess.TimeoutExpired:
-            self.log.event("BUILD_FAIL", unit=host, reason="timeout",
-                           timeout_s=BUILD_TIMEOUT_S, log=str(build_log))
+            self.log.event("BUILD_FAIL", unit=host, reason="timeout", timeout_s=BUILD_TIMEOUT_S, log=str(build_log))
             self.log.activity(host, "BUILD_FAIL", "timeout", dur())
             self.exit_code = EXIT_UNIT_FAIL
             return None, None, {}
@@ -742,21 +794,34 @@ class Driver:
     def _set_unavailable(self, session: Any, host: str, payload_hash: str) -> None:
         since = datetime.now(timezone.utc)
         expected = since + timedelta(seconds=AVAIL_TTL_S)
-        self._write_unit_json(session, UNIT_AVAIL, {
-            "available": False, "reason": "provisioning",
-            "since_utc": since.strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "expected_return_utc": expected.strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "lease_owner": self.run_id, "payload_hash": payload_hash,
-        })
-        self.log.event("AVAIL_SET", unit=host, available="false", reason="provisioning",
-                       expected_return_utc=expected.strftime("%Y-%m-%dT%H:%M:%SZ"), lease_owner=self.run_id)
+        self._write_unit_json(
+            session,
+            UNIT_AVAIL,
+            {
+                "available": False,
+                "reason": "provisioning",
+                "since_utc": since.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "expected_return_utc": expected.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "lease_owner": self.run_id,
+                "payload_hash": payload_hash,
+            },
+        )
+        self.log.event(
+            "AVAIL_SET",
+            unit=host,
+            available="false",
+            reason="provisioning",
+            expected_return_utc=expected.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            lease_owner=self.run_id,
+        )
 
     def _transfer(self, session: Any, host: str, dur, payload_hash: str, git_sha: str) -> bool:
         unit_stage = rf"C:\mast-staging\{self.run_id}"
         src_unc = rf"\\{self.prov_address}\mast-staging\{host}\01-provisioning"
         size = staging_payload_size(self._staging_dir)
-        self.log.event("TRANSFER_START", unit=host, files=size.files, bytes=size.bytes,
-                       src_unc=src_unc, dst_local=unit_stage)
+        self.log.event(
+            "TRANSFER_START", unit=host, files=size.files, bytes=size.bytes, src_unc=src_unc, dst_local=unit_stage
+        )
         # Ship the pull script (it runs before the payload arrives), then run it.
         pull_src = (self.cfg.repo_top / "client" / "mast-pull-staging.ps1").read_text(encoding="utf-8")
         transport.upload_file(session, UNIT_PULL_SCRIPT, pull_src, label="pull-script")
@@ -792,8 +857,15 @@ class Driver:
                 "ROBOCOPY_ERROR": "robocopy_error",
                 "DISK_INSUFFICIENT": "disk_insufficient",
             }.get(outcome, "unrecognized_pull_result")
-            self.log.event("TRANSFER_FAIL", unit=host, reason=reason, outcome=outcome or "none",
-                           rc=rc, detail=(res or {}).get("detail"), duration_s=dur())
+            self.log.event(
+                "TRANSFER_FAIL",
+                unit=host,
+                reason=reason,
+                outcome=outcome or "none",
+                rc=rc,
+                detail=(res or {}).get("detail"),
+                duration_s=dur(),
+            )
             self.log.activity(host, "TRANSFER_FAIL", f"{reason}_rc_{rc}", dur(), payload_hash, git_sha)
             self.exit_code = EXIT_UNIT_FAIL
             return False
@@ -803,8 +875,7 @@ class Driver:
         self._unit_stage = unit_stage
         return True
 
-    def _write_detached_inputs(self, session: Any, stage: str,
-                               target_modules: list[str] | None = None) -> None:
+    def _write_detached_inputs(self, session: Any, stage: str, target_modules: list[str] | None = None) -> None:
         """Write the detached runner's inputs. No secret travels here: execute no
         longer maps any drive (issue #25), so it needs no SMB credential."""
         # 'modules' is the targeted subset from the per-module drift compare, or
@@ -812,10 +883,16 @@ class Driver:
         # one-module drift runs one module's commands instead of the whole
         # payload. Empty string, not absent: a ConvertFrom-Json object missing
         # the key would need a StrictMode-safe probe on the unit side.
-        self._write_unit_json(session, UNIT_DETACHED_CFG, {
-            "run_id": self.run_id, "staging_path": stage, "held_by": self.prov_identity,
-            "modules": ",".join(target_modules or []),
-        })
+        self._write_unit_json(
+            session,
+            UNIT_DETACHED_CFG,
+            {
+                "run_id": self.run_id,
+                "staging_path": stage,
+                "held_by": self.prov_identity,
+                "modules": ",".join(target_modules or []),
+            },
+        )
 
     def _write_shared_cred(self, session: Any) -> None:
         """Plant the operational-share credential the mast-shared-mount provider needs,
@@ -839,11 +916,11 @@ class Driver:
             "[IO.File]::WriteAllBytes($p,(New-Object byte[] $b.Length)); "
             "Remove-Item -LiteralPath $p -Force"
         )
-        transport.run_ps(session, enc, label="shared-dpapi-blob", echo=False,
-                         tee_stdout=False, timeout_s=PROBE_TIMEOUT_S)
+        transport.run_ps(session, enc, label="shared-dpapi-blob", echo=False, tee_stdout=False, timeout_s=PROBE_TIMEOUT_S)
 
-    def _execute(self, session: Any, host: str, dur, payload_hash: str, git_sha: str,
-                 target_modules: list[str] | None = None) -> tuple[bool, Any]:
+    def _execute(
+        self, session: Any, host: str, dur, payload_hash: str, git_sha: str, target_modules: list[str] | None = None
+    ) -> tuple[bool, Any]:
         """Detached execute (item 6): run execute-mast-provisioning.ps1 as a
         detached scheduled task (via client/mast-run-detached.ps1) and poll its
         result marker, reconnecting if the transport session drops mid-run -- so a
@@ -853,8 +930,9 @@ class Driver:
         NOTE: reboot-survival (execute's -AllowReboot dropping the unit) can't be
         validated on the VM (see reference memory); the session-drop path is the
         common case and is handled here."""
-        self.log.event("EXECUTE_START", unit=host, run_id=self.run_id, mode="detached",
-                       modules=",".join(target_modules or []) or "all")
+        self.log.event(
+            "EXECUTE_START", unit=host, run_id=self.run_id, mode="detached", modules=",".join(target_modules or []) or "all"
+        )
         stage = self._unit_stage
         self._write_detached_inputs(session, stage, target_modules)
         self._write_shared_cred(session)
@@ -863,14 +941,14 @@ class Driver:
 
         reg = self._ps_out(session, f"& {_ps_lit(UNIT_DETACHED_RUNNER)} -Register", f"execute-register:{host}")
         if "DETACHED_REGISTERED" not in reg:
-            self.log.event("EXECUTE_FAIL", unit=host, reason="detached_register_failed",
-                           detail=reg.strip()[:200], duration_s=dur())
+            self.log.event(
+                "EXECUTE_FAIL", unit=host, reason="detached_register_failed", detail=reg.strip()[:200], duration_s=dur()
+            )
             self.log.activity(host, "EXECUTE_FAIL", "detached_register_failed", dur(), payload_hash, git_sha)
             self.exit_code = EXIT_UNIT_FAIL
             return False, session
 
-        poll_ps = (f"if (Test-Path {_ps_lit(UNIT_EXECUTE_RESULT)}) "
-                   f"{{ Get-Content {_ps_lit(UNIT_EXECUTE_RESULT)} -Raw }}")
+        poll_ps = f"if (Test-Path {_ps_lit(UNIT_EXECUTE_RESULT)}) {{ Get-Content {_ps_lit(UNIT_EXECUTE_RESULT)} -Raw }}"
         deadline = time.monotonic() + EXECUTE_TIMEOUT_S
         result = None
         last_beat = 0.0
@@ -881,8 +959,9 @@ class Driver:
                     break
                 now = time.monotonic()
                 if now - last_beat >= 90:
-                    self.log.event("EXECUTE_RUNNING", unit=host, elapsed_s=dur(),
-                                   status=(result or {}).get("status", "starting"))
+                    self.log.event(
+                        "EXECUTE_RUNNING", unit=host, elapsed_s=dur(), status=(result or {}).get("status", "starting")
+                    )
                     last_beat = now
             except Exception as e:  # noqa: BLE001 -- session dropped; reconnect and keep polling
                 self.log.event("EXECUTE_RECONNECT", unit=host, error=f"{type(e).__name__}: {e}")
@@ -914,16 +993,25 @@ class Driver:
             # reports only an exit code, so the driver reads the lease itself --
             # otherwise the log says a run is in progress without saying which, which
             # is most of what made the original misdiagnosis possible.
-            holder = _parse_json_or_none(
-                self._ps_out(session,
-                             f"if (Test-Path {_ps_lit(UNIT_EXECUTE_LEASE)}) "
-                             f"{{ Get-Content {_ps_lit(UNIT_EXECUTE_LEASE)} -Raw }}",
-                             f"lease-read:{host}")
-            ) or {}
-            self.log.event("EXECUTE_LEASE_HELD", unit=host, exit_code=rc, duration_s=dur(),
-                           holder_run=holder.get("run_id") or "unknown",
-                           holder_pid=holder.get("pid") or "unknown",
-                           expires=holder.get("expires_utc") or "unknown")
+            holder = (
+                _parse_json_or_none(
+                    self._ps_out(
+                        session,
+                        f"if (Test-Path {_ps_lit(UNIT_EXECUTE_LEASE)}) {{ Get-Content {_ps_lit(UNIT_EXECUTE_LEASE)} -Raw }}",
+                        f"lease-read:{host}",
+                    )
+                )
+                or {}
+            )
+            self.log.event(
+                "EXECUTE_LEASE_HELD",
+                unit=host,
+                exit_code=rc,
+                duration_s=dur(),
+                holder_run=holder.get("run_id") or "unknown",
+                holder_pid=holder.get("pid") or "unknown",
+                expires=holder.get("expires_utc") or "unknown",
+            )
             self.log.activity(host, "SKIP", "lease_held", dur(), payload_hash, git_sha)
             # Tells _process_unit to hand the unit back as available: nothing ran.
             self.execute_refused = True
@@ -995,17 +1083,25 @@ class Driver:
             self.log.event("PROXY_ASSERT_OK", unit=host, mode="direct")
         else:
             if not dirty.critical and not dirty.advisory:
-                self.log.event("PROXY_ASSERT_WARN", unit=host, mode="weizmann",
-                               note="no proxy surface set; unit should end on Weizmann proxy")
+                self.log.event(
+                    "PROXY_ASSERT_WARN",
+                    unit=host,
+                    mode="weizmann",
+                    note="no proxy surface set; unit should end on Weizmann proxy",
+                )
             else:
                 self.log.event("PROXY_ASSERT_OK", unit=host, mode="weizmann")
         return True
 
     def _set_available(self, session: Any, host: str) -> None:
-        self._write_unit_json(session, UNIT_AVAIL, {
-            "available": True,
-            "since_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        })
+        self._write_unit_json(
+            session,
+            UNIT_AVAIL,
+            {
+                "available": True,
+                "since_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            },
+        )
         self.log.event("AVAIL_SET", unit=host, available="true")
 
     def _release_and_archive(self, session: Any, host: str, lease_held: bool) -> None:
@@ -1013,17 +1109,24 @@ class Driver:
             return
         if lease_held:
             try:
-                self._write_unit_json(session, UNIT_AVAIL, {
-                    "available": False, "reason": "provisioning_incomplete",
-                    "released_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                })
+                self._write_unit_json(
+                    session,
+                    UNIT_AVAIL,
+                    {
+                        "available": False,
+                        "reason": "provisioning_incomplete",
+                        "released_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    },
+                )
                 self.log.event("AVAIL_RELEASE", unit=host, reason="provisioning_incomplete")
             except Exception as e:  # noqa: BLE001
                 self.log.event("AVAIL_RELEASE_WARN", unit=host, error=f"{type(e).__name__}: {e}")
         # Pull the unit's per-run session dir back for the archive.
         try:
             unit_sess = rf"C:\MAST\logs\sessions\{self.run_id}"
-            present = self._ps_out(session, f"if (Test-Path '{unit_sess}') {{ 'yes' }} else {{ 'no' }}", "archive-check").strip()
+            present = self._ps_out(
+                session, f"if (Test-Path '{unit_sess}') {{ 'yes' }} else {{ 'no' }}", "archive-check"
+            ).strip()
             if present.endswith("yes"):
                 dest = self.log_root / f"unit-{host}"
                 self._download_dir(session, unit_sess, dest)
@@ -1086,14 +1189,23 @@ class Driver:
         except OSError as e:
             self.log.event("HEARTBEAT_WRITE_FAIL", err=str(e))
         try:
-            pruned = run_retention(L.prov_logs_base() / "sessions", self.cfg.retain_runs,
-                                   logger=lambda m: self.log.event("RETENTION_WARN", msg=m))
+            pruned = run_retention(
+                L.prov_logs_base() / "sessions",
+                self.cfg.retain_runs,
+                logger=lambda m: self.log.event("RETENTION_WARN", msg=m),
+            )
             if pruned:
                 self.log.event("RETENTION_PRUNED", count=len(pruned), retained=self.cfg.retain_runs)
         except Exception as e:  # noqa: BLE001
             self.log.event("RETENTION_FAIL", err=f"{type(e).__name__}: {e}")
-        self.log.event("RUN_END", exit_code=self.exit_code, units_checked=self.units_checked,
-                       units_updated=units_updated, units_failed=units_failed, duration_s=duration_s)
+        self.log.event(
+            "RUN_END",
+            exit_code=self.exit_code,
+            units_checked=self.units_checked,
+            units_updated=units_updated,
+            units_failed=units_failed,
+            duration_s=duration_s,
+        )
 
 
 def run_loop(

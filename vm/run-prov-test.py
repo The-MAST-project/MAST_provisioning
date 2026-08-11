@@ -212,18 +212,20 @@ def _discover_all_modules() -> list[str]:
     proc = subprocess.run(
         [
             "powershell.exe",
-            "-NoProfile", "-NonInteractive",
-            "-ExecutionPolicy", "Bypass",
-            "-OutputFormat", "Text",
-            "-Command", ps_cmd,
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-OutputFormat",
+            "Text",
+            "-Command",
+            ps_cmd,
         ],
-        text=True, capture_output=True,
+        text=True,
+        capture_output=True,
     )
     if proc.returncode != 0:
-        sys.exit(
-            f"ERROR: Get-AllProviderModules failed (exit {proc.returncode}). "
-            f"stderr: {proc.stderr.strip()}"
-        )
+        sys.exit(f"ERROR: Get-AllProviderModules failed (exit {proc.returncode}). stderr: {proc.stderr.strip()}")
     if proc.stderr.strip():
         # Get-AllProviderModules emits Write-Warning for malformed module.json.
         # Forward those so the operator sees them at run start.
@@ -246,12 +248,10 @@ def all_modules() -> list[str]:
     if _ALL_MODULES_CACHE is None:
         mods = _discover_all_modules()
         if not mods:
-            sys.exit(
-                f"ERROR: no providers discovered under {REPO_ROOT / 'server' / 'providers'}. "
-                "Check the repo layout."
-            )
+            sys.exit(f"ERROR: no providers discovered under {REPO_ROOT / 'server' / 'providers'}. Check the repo layout.")
         _ALL_MODULES_CACHE = mods
     return _ALL_MODULES_CACHE
+
 
 VALID_PHASES = frozenset(("build", "transfer", "execute", "verify-run", "verify", "reset"))
 DEFAULT_PHASES = frozenset(("build", "transfer", "execute", "verify", "reset"))
@@ -326,6 +326,7 @@ def timed(label: str) -> Generator[None, None, None]:
 # Unit log path helper
 # ---------------------------------------------------------------------------
 
+
 def _find_unit_log_path(session: Any, log_filename: str) -> str:
     """Return the full path of log_filename inside the newest sessions/ subdir, or ''."""
     r = session.run_ps(
@@ -358,6 +359,7 @@ def setup_log_dir(cycle: int) -> Path:
 # Execute-log poller - streams provisioning-execute.log during execute phase
 # ---------------------------------------------------------------------------
 
+
 class ExecuteLogPoller:
     """Background thread that polls a provisioning session log on the unit
     and prints new lines to the local console during execute or verify-only."""
@@ -387,7 +389,8 @@ class ExecuteLogPoller:
         # This replaces the WinRM session whose Basic-auth reconnect storm locked
         # the account out mid-run ("credentials rejected by the server").
         return ssh_session(
-            self._host, self._cred,
+            self._host,
+            self._cred,
             connect_timeout_s=self._CALL_TIMEOUT_S,
         )
 
@@ -398,10 +401,7 @@ class ExecuteLogPoller:
         self._stop.set()
         self._thread.join(timeout=15)
         if self._thread.is_alive():
-            log(
-                "WARNING: ExecuteLogPoller did not stop in time; "
-                "leaving poller WinRM session open to avoid races."
-            )
+            log("WARNING: ExecuteLogPoller did not stop in time; leaving poller WinRM session open to avoid races.")
             return
         _dispose_winrm_session(self._session)
         self._session = None  # type: ignore[assignment]
@@ -445,6 +445,7 @@ class ExecuteLogPoller:
 # Phases
 # ---------------------------------------------------------------------------
 
+
 def phase_build(hostname: str, modules: list[str], proxy_mode: str) -> None:
     """Build runs LOCALLY on this Windows host (no VM, no WinRM)."""
     with timed("BUILD PHASE"):
@@ -455,19 +456,25 @@ def phase_build(hostname: str, modules: list[str], proxy_mode: str) -> None:
         cmd = [
             "powershell.exe",
             "-NoProfile",
-            "-ExecutionPolicy", "Bypass",
-            "-File", str(build_script),
-            "-Top", str(REPO_ROOT),
-            "-HostName", hostname,
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(build_script),
+            "-Top",
+            str(REPO_ROOT),
+            "-HostName",
+            hostname,
             # Dev/test: allow missing large optional assets and license/token material.
             "-TestMode",
             "-AllowMissingNoMachineLicense",
             "-AllowMissingNetFx3Sxs",
-            "-ProxyMode", proxy_mode,
+            "-ProxyMode",
+            proxy_mode,
             # The dev VM has 8 GB RAM; the production 32 GB -t vm mount cannot
             # attach there (imdisk exit 3, ENOMEM). File-backed keeps D: and
             # the astrometry smoke solve exercisable in VM cycles.
-            "-ImdiskMountType", "file",
+            "-ImdiskMountType",
+            "file",
         ]
         if sorted(modules) != sorted(all_modules()):
             cmd += ["-Modules", ",".join(modules)]
@@ -500,10 +507,7 @@ def phase_transfer(
         src_unc = f"\\\\{PROV_SERVER}\\mast-staging\\{hostname}\\01-provisioning"
         smb_pass_ps = _ps_escape(smb_pass)
 
-        log(
-            f"{len(files)} files, {total_bytes / 1_048_576:.1f} MB  "
-            f"via SMB pull from {src_unc}"
-        )
+        log(f"{len(files)} files, {total_bytes / 1_048_576:.1f} MB  via SMB pull from {src_unc}")
 
         pull_script = REPO_ROOT / "client" / "mast-pull-staging.ps1"
         # Dispatch the pull script by FILE, not inline. Once it carries the
@@ -521,21 +525,27 @@ def phase_transfer(
             unit,
             "$d='C:\\mast-staging'; if(-not(Test-Path $d)){New-Item -ItemType Directory -Force -Path $d|Out-Null}; "
             f"Set-Content -LiteralPath '{remote_b64}' -Value '' -NoNewline -Encoding ascii",
-            label="xfer-prep", timeout_s=60, echo=False,
+            label="xfer-prep",
+            timeout_s=60,
+            echo=False,
         )
         # Append the base64 in chunks; base64 is quote/newline-free so each
         # single-quoted value is safe, and each call stays small.
         for i in range(0, len(b64), 1500):
             run_ps(
                 unit,
-                f"Add-Content -LiteralPath '{remote_b64}' -Value '{b64[i:i + 1500]}' -NoNewline -Encoding ascii",
-                label="xfer-chunk", timeout_s=60, echo=False,
+                f"Add-Content -LiteralPath '{remote_b64}' -Value '{b64[i : i + 1500]}' -NoNewline -Encoding ascii",
+                label="xfer-chunk",
+                timeout_s=60,
+                echo=False,
             )
         # Decode the b64 back to the .ps1 on the unit.
         run_ps(
             unit,
             f"[System.IO.File]::WriteAllBytes('{remote_ps}', [Convert]::FromBase64String((Get-Content -LiteralPath '{remote_b64}' -Raw)))",
-            label="xfer-decode", timeout_s=60, echo=False,
+            label="xfer-decode",
+            timeout_s=60,
+            echo=False,
         )
 
         # Run the uploaded script as a SCRIPTBLOCK built from its text, not as a
@@ -554,7 +564,7 @@ def phase_transfer(
             f" -SrcUNC '{src_unc}'\n"
             f"if(-not $r){{Write-Error 'Transfer: null result from pull script';exit 1}}\n"
             f"if($r.outcome -ne 'OK'){{\n"
-            f"    Write-Error \"Transfer failed outcome=$($r.outcome) rc=$($r.rc) $($r.detail)\"\n"
+            f'    Write-Error "Transfer failed outcome=$($r.outcome) rc=$($r.rc) $($r.detail)"\n'
             f"    exit 1\n"
             f"}}\n"
             f"Write-Host 'UNIT_STAGE={unit_stage}'\n"
@@ -623,7 +633,8 @@ def phase_run_verify_only(
 
         step_timer: list[float] = [time.monotonic()]
         poller = ExecuteLogPoller(
-            host_unit, unit_cred,
+            host_unit,
+            unit_cred,
             log_filename="provisioning-verify-only.log",
             step_timer=step_timer,
         )
@@ -641,9 +652,7 @@ def phase_run_verify_only(
             poller.stop()
 
         if r.status_code != 0:
-            log(
-                f"run-verify-only exited with code {r.status_code} - fetching log tail..."
-            )
+            log(f"run-verify-only exited with code {r.status_code} - fetching log tail...")
             _fetch_session_log_tail(unit, "provisioning-verify-only.log")
 
         return r
@@ -655,10 +664,7 @@ def _fetch_session_log_tail(unit: Any, log_filename: str, lines: int = 40) -> No
         if not path:
             log(f"--- {log_filename} not found under sessions ---")
             return
-        r = unit.run_ps(
-            f"Get-Content -LiteralPath '{path}' -ErrorAction SilentlyContinue "
-            f"| Select-Object -Last {lines}"
-        )
+        r = unit.run_ps(f"Get-Content -LiteralPath '{path}' -ErrorAction SilentlyContinue | Select-Object -Last {lines}")
         if r.std_out:
             log(f"--- Last {lines} lines of {log_filename} ---")
             log_raw(r.std_out.decode(errors="replace").rstrip())
@@ -677,7 +683,7 @@ def _fetch_diagnostics(unit: Any) -> None:
     try:
         r = unit.run_ps(
             f"Get-ChildItem '{SMOKE_LOG_DIR}' -Filter '*-smoke.txt' -ErrorAction SilentlyContinue "
-            "| ForEach-Object { \"$($_.Name): $(Get-Content $_.FullName -Raw)\" }"
+            '| ForEach-Object { "$($_.Name): $(Get-Content $_.FullName -Raw)" }'
         )
         if r.std_out:
             log("Smoke files on unit:")
@@ -728,8 +734,7 @@ def phase_verify(
             r = run_ps(unit, f'& "{EXPECTED_PYTHON}" --version', label="python-check")
             results["python_ok"] = r.status_code == 0
             results["python_version"] = (
-                r.std_out.decode(errors="replace").strip()
-                or r.std_err.decode(errors="replace").strip()
+                r.std_out.decode(errors="replace").strip() or r.std_err.decode(errors="replace").strip()
             )
         else:
             results["python_ok"] = True
@@ -790,18 +795,12 @@ def print_results(results: dict[str, Any], cycle: int) -> bool:
     log(f"  execute exit code : {results['execute_exit_code']}")
     python_ver = results.get("python_version", "")
     if "(not tested" not in python_ver:
-        log(
-            f"  python check      : {'OK' if results['python_ok'] else 'FAIL'}"
-            f" ({python_ver})"
-        )
+        log(f"  python check      : {'OK' if results['python_ok'] else 'FAIL'} ({python_ver})")
     if results.get("repos_root_checked", True):
         log(f"  src root          : {'OK' if results['repos_root_ok'] else 'FAIL'}")
     unit_health_detail = results.get("unit_health_detail", "")
     if "(not checked)" not in unit_health_detail and "(skipped" not in unit_health_detail:
-        log(
-            f"  unit heartbeat    : {'OK' if results.get('unit_health_ok') else 'FAIL'}"
-            f" ({unit_health_detail})"
-        )
+        log(f"  unit heartbeat    : {'OK' if results.get('unit_health_ok') else 'FAIL'} ({unit_health_detail})")
     log("  smoke tests:")
     smoke = results.get("smoke", {})
     for mod, content in smoke.items():
@@ -829,7 +828,10 @@ def phase_reset(
 ) -> Any:
     with timed("RESET PHASE"):
         reset_to_clean_snapshot(
-            vbox_vm, snapshot, host_unit, unit_cred,
+            vbox_vm,
+            snapshot,
+            host_unit,
+            unit_cred,
             winrm_wait_s=winrm_wait_s,
         )
         return wait_for_ssh(host_unit, unit_cred, timeout=winrm_wait_s)
@@ -841,10 +843,7 @@ def phase_pull_repos(unit: Any) -> None:
         if not PULL_REPOS_SCRIPT.exists():
             raise FileNotFoundError(f"pull-mast-repos.ps1 not found: {PULL_REPOS_SCRIPT}")
         script_text = _minify_ps(PULL_REPOS_SCRIPT.read_text(encoding="ascii"))
-        ps = (
-            f"&{{\n{script_text}\n}}"
-            f" -CloneRoot '{CLONE_ROOT}'\n"
-        )
+        ps = f"&{{\n{script_text}\n}} -CloneRoot '{CLONE_ROOT}'\n"
         log(f"[pull-repos] Pulling repos under {CLONE_ROOT} on unit...")
         r = run_ps(unit, ps, label="pull-repos", timeout_s=30 * 60, echo=False)
         if r.status_code != 0:
@@ -867,9 +866,9 @@ def phase_clear_unit_logs(unit: Any) -> None:
             "    $p = Join-Path $d $f\n"
             "    if (Test-Path -LiteralPath $p) {\n"
             "        Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue\n"
-            "        Write-Host \"[clear-unit-logs] deleted $p\"\n"
+            '        Write-Host "[clear-unit-logs] deleted $p"\n'
             "    } else {\n"
-            "        Write-Host \"[clear-unit-logs] not found (skipping): $p\"\n"
+            '        Write-Host "[clear-unit-logs] not found (skipping): $p"\n'
             "    }\n"
             "}\n"
             "Write-Host '[clear-unit-logs] done'\n"
@@ -884,8 +883,7 @@ def phase_start_mast_unit(unit: Any) -> None:
     log("[start-mast-unit] Starting MAST_unit service...")
     r = run_ps(
         unit,
-        "Start-Service -Name 'mast-unit' -ErrorAction SilentlyContinue; "
-        "Write-Host '[start-mast-unit] done'",
+        "Start-Service -Name 'mast-unit' -ErrorAction SilentlyContinue; Write-Host '[start-mast-unit] done'",
         label="start-mast-unit",
         timeout_s=60,
         echo=False,
@@ -914,19 +912,13 @@ def phase_wait_for_unit_health(host: str, timeout_s: int = MAST_UNIT_BOOT_TIMEOU
             except (urllib.error.URLError, OSError, json.JSONDecodeError, ValueError) as e:
                 last_err = str(e)
             time.sleep(5)
-        raise RuntimeError(
-            f"MAST_unit health check timed out after {timeout_s}s. Last error: {last_err}"
-        )
-
+        raise RuntimeError(f"MAST_unit health check timed out after {timeout_s}s. Last error: {last_err}")
 
 
 def phase_run_rebuild_repos(unit: Any, staging_path: str) -> Any:
     """Force-reclone all repos: runs provide-mast.ps1 -Force from the transferred staging dir."""
     with timed("REBUILD-REPOS PHASE"):
-        log(
-            f"[rebuild-repos] Running provide-mast.ps1 -Force"
-            f" -CloneRoot {CLONE_ROOT!r} from {staging_path}..."
-        )
+        log(f"[rebuild-repos] Running provide-mast.ps1 -Force -CloneRoot {CLONE_ROOT!r} from {staging_path}...")
         cmd = (
             "Set-ExecutionPolicy Bypass -Scope Process -Force; "
             f"& '{staging_path}\\provide-mast.ps1'"
@@ -944,6 +936,7 @@ def phase_run_rebuild_repos(unit: Any, staging_path: str) -> Any:
 # Phase resolution
 # ---------------------------------------------------------------------------
 
+
 def resolve_phases(args: argparse.Namespace) -> frozenset[str] | None:
     """Return canonical phase set from args.
 
@@ -951,16 +944,18 @@ def resolve_phases(args: argparse.Namespace) -> frozenset[str] | None:
     which is handled by dedicated code in main() before the cycle loop.
     """
     legacy_flags = (
-        args.build_only, args.execute_only, args.build_transfer_verify,
-        args.pull_repos, args.rebuild_repos,
+        args.build_only,
+        args.execute_only,
+        args.build_transfer_verify,
+        args.pull_repos,
+        args.rebuild_repos,
     )
     legacy_count = sum(bool(f) for f in legacy_flags)
     has_phases = args.phases is not None
 
     if legacy_count > 1:
         sys.exit(
-            "ERROR: use at most one of --build-only, --execute-only, "
-            "--build-transfer-verify, --pull-repos, --rebuild-repos."
+            "ERROR: use at most one of --build-only, --execute-only, --build-transfer-verify, --pull-repos, --rebuild-repos."
         )
     if legacy_count >= 1 and has_phases:
         sys.exit(
@@ -983,8 +978,7 @@ def resolve_phases(args: argparse.Namespace) -> frozenset[str] | None:
         unknown = requested - VALID_PHASES
         if unknown:
             sys.exit(
-                f"ERROR: unknown phase(s): {', '.join(sorted(unknown))}. "
-                f"Valid phases: {', '.join(sorted(VALID_PHASES))}"
+                f"ERROR: unknown phase(s): {', '.join(sorted(unknown))}. Valid phases: {', '.join(sorted(VALID_PHASES))}"
             )
         if "execute" in requested and "verify-run" in requested:
             sys.exit("ERROR: 'execute' and 'verify-run' are mutually exclusive in --phases.")
@@ -996,6 +990,7 @@ def resolve_phases(args: argparse.Namespace) -> frozenset[str] | None:
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="MAST VirtualBox provisioning test orchestrator (Windows host)")
@@ -1024,8 +1019,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--pull-repos",
         action="store_true",
-        help="Connect to unit and git pull (+ submodule update) all repos under "
-        f"{CLONE_ROOT}. No build or transfer.",
+        help=f"Connect to unit and git pull (+ submodule update) all repos under {CLONE_ROOT}. No build or transfer.",
     )
     p.add_argument(
         "--rebuild-repos",
@@ -1063,7 +1057,9 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     p.add_argument("--vbox-vm", default="mast-unit", help="VirtualBox VM name (default: 'mast-unit')")
-    p.add_argument("--snapshot", default="post-prepare", help="Snapshot name to restore between cycles (default: 'post-prepare')")
+    p.add_argument(
+        "--snapshot", default="post-prepare", help="Snapshot name to restore between cycles (default: 'post-prepare')"
+    )
     p.add_argument("--no-reset", action="store_true", help="Do not reset the VM between cycles (debug)")
     p.add_argument(
         "--winrm-wait-seconds",
@@ -1081,7 +1077,8 @@ def parse_args() -> argparse.Namespace:
             "Override the per-WinRM-call read/operation timeout (default from "
             "vm_lib.WINRM_CALL_TIMEOUT_S=%d). Bump this for scenarios whose "
             "execute phase routinely runs longer than the default."
-        ) % WINRM_CALL_TIMEOUT_S,
+        )
+        % WINRM_CALL_TIMEOUT_S,
     )
     return p.parse_args()
 
@@ -1107,9 +1104,7 @@ def main() -> None:
     # fail to reach the network." Banner is duplicated by build-mast.ps1 and
     # the proxy/astrometry-deps providers so it appears at every layer.
     _proxy_banner = (
-        "*** WEIZMANN-PROXY MODE ***"
-        if args.proxy_mode == "weizmann"
-        else "*** NO-WEIZMANN-PROXY (DIRECT) MODE ***"
+        "*** WEIZMANN-PROXY MODE ***" if args.proxy_mode == "weizmann" else "*** NO-WEIZMANN-PROXY (DIRECT) MODE ***"
     )
     log("===================================================================")
     log(f"[run-prov-test] {_proxy_banner}")
@@ -1146,9 +1141,7 @@ def main() -> None:
         if args.pull_repos or args.rebuild_repos:
             try:
                 with timed("CONNECT UNIT"):
-                    unit_session = wait_for_ssh(
-                        args.host_unit, creds["unit"], timeout=args.winrm_wait_seconds
-                    )
+                    unit_session = wait_for_ssh(args.host_unit, creds["unit"], timeout=args.winrm_wait_seconds)
                 run_id = "run-" + datetime.now().strftime("%Y%m%d-%H%M%S")
                 log_dir = setup_log_dir(1)
 
@@ -1166,8 +1159,11 @@ def main() -> None:
                 else:  # rebuild_repos
                     phase_build(args.hostname, ["mast"], args.proxy_mode)
                     unit_stage = phase_transfer(
-                        unit_session, args.hostname, run_id,
-                        creds["smb"]["user"], creds["smb"]["pass"],
+                        unit_session,
+                        args.hostname,
+                        run_id,
+                        creds["smb"]["user"],
+                        creds["smb"]["pass"],
                     )
                     phase_clear_unit_logs(unit_session)
                     phase_run_rebuild_repos(unit_session, unit_stage)
@@ -1181,16 +1177,13 @@ def main() -> None:
             finally:
                 _dispose_winrm_session(unit_session)
 
-            log(
-                f"[TIMING] Total run (run-prov-test.py): "
-                f"{_format_elapsed(time.monotonic() - run_started)}"
-            )
+            log(f"[TIMING] Total run (run-prov-test.py): {_format_elapsed(time.monotonic() - run_started)}")
             total = len(cycle_results)
             passed_count = sum(cycle_results)
-            log(f"\n{'='*60}")
+            log(f"\n{'=' * 60}")
             log(f"SUMMARY: {passed_count}/{total} cycles passed")
             log(f"Run log saved to: {run_log}")
-            log(f"{'='*60}")
+            log(f"{'=' * 60}")
             sys.exit(0 if passed_count == total else 1)
 
         # --- standard phase-based cycle loop ---
@@ -1198,9 +1191,9 @@ def main() -> None:
         built = False
         try:
             for cycle in range(1, args.repeat + 1):
-                log(f"\n{'='*60}")
+                log(f"\n{'=' * 60}")
                 log(f"CYCLE {cycle}/{args.repeat}")
-                log(f"{'='*60}")
+                log(f"{'=' * 60}")
                 log_dir = setup_log_dir(cycle)
 
                 try:
@@ -1217,9 +1210,7 @@ def main() -> None:
                     non_build = phases - {"build"}
                     if non_build and unit_session is None:
                         with timed("CONNECT UNIT"):
-                            unit_session = wait_for_ssh(
-                                args.host_unit, creds["unit"], timeout=args.winrm_wait_seconds
-                            )
+                            unit_session = wait_for_ssh(args.host_unit, creds["unit"], timeout=args.winrm_wait_seconds)
 
                     if not non_build:
                         log("No non-build phases selected; stopping after build.")
@@ -1248,8 +1239,7 @@ def main() -> None:
                         unit_stage = r_probe.std_out.decode(errors="replace").strip()
                         if not unit_stage:
                             sys.exit(
-                                "ERROR: transfer not in phases but no run directory found "
-                                "under C:\\mast-staging on unit."
+                                "ERROR: transfer not in phases but no run directory found under C:\\mast-staging on unit."
                             )
                         log(f"Using existing staging dir: {unit_stage}")
 
@@ -1258,13 +1248,19 @@ def main() -> None:
 
                     if "execute" in phases:
                         run_response = phase_execute(
-                            unit_session, args.host_unit, creds["unit"], unit_stage,
+                            unit_session,
+                            args.host_unit,
+                            creds["unit"],
+                            unit_stage,
                             modules=modules,
                         )
                         run_rc = run_response.status_code
                     elif "verify-run" in phases:
                         run_response = phase_run_verify_only(
-                            unit_session, args.host_unit, creds["unit"], unit_stage,
+                            unit_session,
+                            args.host_unit,
+                            creds["unit"],
+                            unit_stage,
                             modules=modules,
                         )
                         run_rc = run_response.status_code
@@ -1273,7 +1269,10 @@ def main() -> None:
                     if "verify" in phases:
                         verify_only_mode = "verify-run" in phases and "execute" not in phases
                         results = phase_verify(
-                            unit_session, modules, run_rc, verify_only=verify_only_mode,
+                            unit_session,
+                            modules,
+                            run_rc,
+                            verify_only=verify_only_mode,
                             host=args.host_unit,
                         )
                         (log_dir / "results.json").write_text(json.dumps(results, indent=2))
@@ -1307,18 +1306,15 @@ def main() -> None:
         finally:
             _dispose_winrm_session(unit_session)
 
-        log(
-            f"[TIMING] Total run (run-prov-test.py): "
-            f"{_format_elapsed(time.monotonic() - run_started)}"
-        )
+        log(f"[TIMING] Total run (run-prov-test.py): {_format_elapsed(time.monotonic() - run_started)}")
 
         if "verify" in phases:
             total = len(cycle_results)
             passed_count = sum(cycle_results)
-            log(f"\n{'='*60}")
+            log(f"\n{'=' * 60}")
             log(f"SUMMARY: {passed_count}/{total} cycles passed")
             log(f"Run log saved to: {run_log}")
-            log(f"{'='*60}")
+            log(f"{'=' * 60}")
             sys.exit(0 if passed_count == total else 1)
 
 

@@ -25,8 +25,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 class WindowResult:
     allowed: bool
     reason: str = ""
-    current: str = ""          # local time "HH:mm" (empty when allowed with no window)
-    window: str = ""           # "HH:00-HH:00" (empty when no window configured)
+    current: str = ""  # local time "HH:mm" (empty when allowed with no window)
+    window: str = ""  # "HH:00-HH:00" (empty when no window configured)
     tz: str | None = None
     tz_error: str | None = None  # set when an IANA id could not be resolved
 

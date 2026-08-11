@@ -7,6 +7,7 @@ the real orchestration -- phase order, marker parsing, transfer/execute/smoke
 verdicts, activity outcomes, exit codes -- with no live unit, which is the layer
 the earlier suite left to the VM run.
 """
+
 from __future__ import annotations
 
 import json
@@ -108,18 +109,21 @@ def _make_driver(root, monkeypatch, responder, unit=UNIT):
     reg = repo / "reg.json"
     reg.write_text(json.dumps([unit]))
     creds = repo / "creds.json"
-    creds.write_text(json.dumps({
-        "unit": {"user": ".\\mast", "pass": "x"},
-        "smb": {"user": "prov", "pass": "y"},
-        "shared": {"user": "mast", "pass": "z"},
-    }))
+    creds.write_text(
+        json.dumps(
+            {
+                "unit": {"user": ".\\mast", "pass": "x"},
+                "smb": {"user": "prov", "pass": "y"},
+                "shared": {"user": "mast", "pass": "z"},
+            }
+        )
+    )
     cfg = D.Config(repo_top=repo, unit_registry=reg, vault_creds=creds)
     drv = D.Driver(cfg)
     sess = FakeSession(responder)
 
     monkeypatch.setattr(T, "connect_unit", lambda host, cred, **kw: sess)
-    monkeypatch.setattr(D.Driver, "_tcp_open",
-                        staticmethod(lambda host, port, timeout=5.0: True))
+    monkeypatch.setattr(D.Driver, "_tcp_open", staticmethod(lambda host, port, timeout=5.0: True))
 
     def fake_build(self, unit, host, modules, dur):  # skip subprocess/PS build
         self._staging_dir = repo / "staging"
@@ -127,8 +131,7 @@ def _make_driver(root, monkeypatch, responder, unit=UNIT):
         return "hash123", "sha", {}
 
     monkeypatch.setattr(D.Driver, "_build", fake_build)
-    monkeypatch.setattr(D, "staging_payload_size",
-                        lambda d: type("S", (), {"files": 3, "bytes": 1000})())
+    monkeypatch.setattr(D, "staging_payload_size", lambda d: type("S", (), {"files": 3, "bytes": 1000})())
     return drv, sess
 
 
@@ -143,12 +146,15 @@ def test_process_unit_happy_path(root, monkeypatch):
 
 
 # --- finding #1: transfer must fail CLOSED on any non-OK / unparseable pull ---
-@pytest.mark.parametrize("pull,reason", [
-    ("random text with no marker at all", "unrecognized_pull_result"),
-    ("", "unrecognized_pull_result"),
-    ('PULLRESULT {"outcome": "DISK_INSUFFICIENT", "rc": -2}', "disk_insufficient"),
-    ('PULLRESULT {"outcome": "NET_USE_HUNG", "rc": -1}', "net_use_hung"),
-])
+@pytest.mark.parametrize(
+    "pull,reason",
+    [
+        ("random text with no marker at all", "unrecognized_pull_result"),
+        ("", "unrecognized_pull_result"),
+        ('PULLRESULT {"outcome": "DISK_INSUFFICIENT", "rc": -2}', "disk_insufficient"),
+        ('PULLRESULT {"outcome": "NET_USE_HUNG", "rc": -1}', "net_use_hung"),
+    ],
+)
 def test_transfer_fails_closed_on_bad_pull(root, monkeypatch, pull, reason):
     drv, sess = _make_driver(root, monkeypatch, make_responder(pull=pull))
     code = drv.run()
@@ -161,10 +167,13 @@ def test_transfer_fails_closed_on_bad_pull(root, monkeypatch, pull, reason):
     assert drv.log.unit_outcomes.get("unit1") == "TRANSFER_FAIL"
 
 
-@pytest.mark.parametrize("pull", [
-    'PULLRESULT {"outcome": "NET_USE_FAIL", "rc": 2}',
-    'PULLRESULT {"outcome": "ROBOCOPY_ERROR", "rc": 8}',
-])
+@pytest.mark.parametrize(
+    "pull",
+    [
+        'PULLRESULT {"outcome": "NET_USE_FAIL", "rc": 2}',
+        'PULLRESULT {"outcome": "ROBOCOPY_ERROR", "rc": 8}',
+    ],
+)
 def test_transfer_known_failure_outcomes_still_fail(root, monkeypatch, pull):
     drv, sess = _make_driver(root, monkeypatch, make_responder(pull=pull))
     code = drv.run()
@@ -175,8 +184,7 @@ def test_transfer_known_failure_outcomes_still_fail(root, monkeypatch, pull):
 
 def test_transfer_ok_rc_zero_is_success(root, monkeypatch):
     # rc 0 (no changes) and rc 2-7 (robocopy info) are still OK outcomes.
-    drv, sess = _make_driver(root, monkeypatch,
-                             make_responder(pull='PULLRESULT {"outcome": "OK", "rc": 0}'))
+    drv, sess = _make_driver(root, monkeypatch, make_responder(pull='PULLRESULT {"outcome": "OK", "rc": 0}'))
     code = drv.run()
     log = drv.log.run_log_path.read_text()
     assert code == D.EXIT_OK, log
@@ -185,8 +193,7 @@ def test_transfer_ok_rc_zero_is_success(root, monkeypatch):
 
 # --- other failure branches (broaden phase-flow coverage) --------------------
 def test_execute_nonzero_exit_fails(root, monkeypatch):
-    drv, sess = _make_driver(root, monkeypatch,
-                             make_responder(execute='{"status": "done", "exit_code": 3}'))
+    drv, sess = _make_driver(root, monkeypatch, make_responder(execute='{"status": "done", "exit_code": 3}'))
     code = drv.run()
     log = drv.log.run_log_path.read_text()
     assert code == D.EXIT_UNIT_FAIL, log
@@ -195,8 +202,7 @@ def test_execute_nonzero_exit_fails(root, monkeypatch):
 
 
 def test_execute_register_failure_fails(root, monkeypatch):
-    drv, sess = _make_driver(root, monkeypatch,
-                             make_responder(register="something-not-the-marker"))
+    drv, sess = _make_driver(root, monkeypatch, make_responder(register="something-not-the-marker"))
     code = drv.run()
     log = drv.log.run_log_path.read_text()
     assert code == D.EXIT_UNIT_FAIL, log
@@ -213,8 +219,7 @@ def test_smoke_missing_module_fails(root, monkeypatch):
 
 def test_unreachable_unit_fails_without_session(root, monkeypatch):
     drv, sess = _make_driver(root, monkeypatch, make_responder())
-    monkeypatch.setattr(D.Driver, "_tcp_open",
-                        staticmethod(lambda host, port, timeout=5.0: False))
+    monkeypatch.setattr(D.Driver, "_tcp_open", staticmethod(lambda host, port, timeout=5.0: False))
     code = drv.run()
     log = drv.log.run_log_path.read_text()
     assert code == D.EXIT_UNIT_FAIL, log
@@ -224,8 +229,7 @@ def test_unreachable_unit_fails_without_session(root, monkeypatch):
 # --- per-module targeted update (issue #22 stage 3) --------------------------
 
 
-def _drift_driver(root, monkeypatch, installed: dict | None, build: dict,
-                  validation: dict | None = None):
+def _drift_driver(root, monkeypatch, installed: dict | None, build: dict, validation: dict | None = None):
     """Driver whose unit reports ``installed`` (+ optional tier-2 ``validation``)
     and whose build yields ``build``.
 
@@ -250,8 +254,7 @@ def _drift_driver(root, monkeypatch, installed: dict | None, build: dict,
 
 
 def _drift_make(root, monkeypatch, responder, build: dict):
-    drv, sess = _make_driver(root, monkeypatch, responder,
-                             unit={**UNIT, "modules": list(build.get("modules", []))})
+    drv, sess = _make_driver(root, monkeypatch, responder, unit={**UNIT, "modules": list(build.get("modules", []))})
 
     def fake_build(self, unit, host, modules, dur):
         self._staging_dir = root / "repo" / "staging"
@@ -275,8 +278,7 @@ def _detached_cfg(sess) -> dict:
 BUILD_TWO = {
     "payload_hash": "agg-new",
     "modules": ["git", "python"],
-    "module_state": {"git": {"version": "1", "hash": "h-git"},
-                     "python": {"version": "1", "hash": "h-py-NEW"}},
+    "module_state": {"git": {"version": "1", "hash": "h-git"}, "python": {"version": "1", "hash": "h-py-NEW"}},
 }
 
 
@@ -332,8 +334,10 @@ def test_force_bypasses_the_per_module_compare(root, monkeypatch):
     """--force means "run everything", so no targeting is applied."""
     installed = {
         "payload_hash": "agg-old",
-        "modules": {"git": {"version": "1", "hash": "h-git", "provide": "pass", "verify": "pass"},
-                    "python": {"version": "1", "hash": "h-py-OLD", "provide": "pass", "verify": "pass"}},
+        "modules": {
+            "git": {"version": "1", "hash": "h-git", "provide": "pass", "verify": "pass"},
+            "python": {"version": "1", "hash": "h-py-OLD", "provide": "pass", "verify": "pass"},
+        },
     }
     drv, sess = _drift_driver(root, monkeypatch, installed, BUILD_TWO)
     drv.cfg.force = True
@@ -346,10 +350,20 @@ CURRENT_INSTALLED = {
     "payload_hash": "agg-new",
     "fully_provisioned": True,
     "modules": {
-        "git": {"version": "1", "hash": "h-git", "provide": "pass", "verify": "pass",
-                "installed_at": "2026-08-01T00:00:00Z"},
-        "python": {"version": "1", "hash": "h-py-NEW", "provide": "pass", "verify": "pass",
-                   "installed_at": "2026-08-01T00:00:00Z"},
+        "git": {
+            "version": "1",
+            "hash": "h-git",
+            "provide": "pass",
+            "verify": "pass",
+            "installed_at": "2026-08-01T00:00:00Z",
+        },
+        "python": {
+            "version": "1",
+            "hash": "h-py-NEW",
+            "provide": "pass",
+            "verify": "pass",
+            "installed_at": "2026-08-01T00:00:00Z",
+        },
     },
 }
 
@@ -370,9 +384,7 @@ def test_tier2_failure_breaks_the_already_current_skip(root, monkeypatch):
     payload did not change; a service died). Gating on that hash before
     classifying made needs-repair unreachable for its own motivating case.
     """
-    validation = {"checked_at": "2026-08-02T00:00:00Z",
-                  "failures": 1,
-                  "modules": {"git": "pass", "python": "fail"}}
+    validation = {"checked_at": "2026-08-02T00:00:00Z", "failures": 1, "modules": {"git": "pass", "python": "fail"}}
     drv, sess = _drift_driver(root, monkeypatch, CURRENT_INSTALLED, BUILD_TWO, validation)
     code = drv.run()
     log = drv.log.run_log_path.read_text()
@@ -388,9 +400,11 @@ def test_a_validation_report_older_than_the_repair_is_ignored(root, monkeypatch)
     The report predates the module's installed_at, i.e. it describes a build no
     longer on the unit.
     """
-    validation = {"checked_at": "2026-07-01T00:00:00Z",   # before installed_at
-                  "failures": 1,
-                  "modules": {"python": "fail"}}
+    validation = {
+        "checked_at": "2026-07-01T00:00:00Z",  # before installed_at
+        "failures": 1,
+        "modules": {"python": "fail"},
+    }
     drv, sess = _drift_driver(root, monkeypatch, CURRENT_INSTALLED, BUILD_TWO, validation)
     code = drv.run()
     log = drv.log.run_log_path.read_text()
@@ -402,9 +416,11 @@ BUILD_WITH_ALWAYS = {
     "payload_hash": "agg-new",
     "modules": ["git", "python", "reboot"],
     "always_modules": ["reboot"],
-    "module_state": {"git": {"version": "1", "hash": "h-git"},
-                     "python": {"version": "1", "hash": "h-py-NEW"},
-                     "reboot": {"version": "1", "hash": "h-reboot"}},
+    "module_state": {
+        "git": {"version": "1", "hash": "h-git"},
+        "python": {"version": "1", "hash": "h-py-NEW"},
+        "reboot": {"version": "1", "hash": "h-reboot"},
+    },
 }
 
 
@@ -450,8 +466,9 @@ def test_shared_cred_is_planted_as_a_blob_never_on_a_command_line(root, monkeypa
     assert "ProtectedData" in protect[0] and "LocalMachine" in protect[0]
     # The temp plaintext is overwritten and removed by the same script.
     assert "Remove-Item" in protect[0] and "shared-cred.tmp" in protect[0]
-    assert not any("z" == tok for s in sess.scripts for tok in s.split("'")), \
+    assert not any("z" == tok for s in sess.scripts for tok in s.split("'")), (
         "the shared password appears in a script argument"
+    )
 
 
 def test_execute_no_longer_carries_an_smb_credential(root, monkeypatch):
@@ -588,12 +605,17 @@ def test_modules_flag_skips_when_no_named_module_needs_work(root, monkeypatch):
 
     # Drift says only config-bootstrap needs work; the operator asked for mast.
     monkeypatch.setattr(
-        D.drift, "classify",
-        lambda installed, bm, val: type("R", (), {
-            "current": False,
-            "targets": ["config-bootstrap"],
-            "summary": lambda self: "1 drifted",
-        })(),
+        D.drift,
+        "classify",
+        lambda installed, bm, val: type(
+            "R",
+            (),
+            {
+                "current": False,
+                "targets": ["config-bootstrap"],
+                "summary": lambda self: "1 drifted",
+            },
+        )(),
     )
     drv.cfg.modules = ["mast"]
 
@@ -616,8 +638,7 @@ def test_staging_unc_uses_the_derived_address_and_lease_keeps_the_name(root, mon
     it identifies who holds the run, and outlives a DHCP change.
     """
     drv, sess = _make_driver(root, monkeypatch, make_responder())
-    monkeypatch.setattr(D.Driver, "_local_address_for",
-                        staticmethod(lambda peer_ip: "10.23.2.34"))
+    monkeypatch.setattr(D.Driver, "_local_address_for", staticmethod(lambda peer_ip: "10.23.2.34"))
     drv.prov_identity = "AP-PC-PF62XRLL"
 
     drv.run()
@@ -626,7 +647,8 @@ def test_staging_unc_uses_the_derived_address_and_lease_keeps_the_name(root, mon
     assert "PROV_ADDR" in log and "address=10.23.2.34" in log, log
     assert r"src_unc=\\10.23.2.34\mast-staging" in log, log
     assert "AP-PC-PF62XRLL" not in log.split("TRANSFER_START")[1].split("\n")[0], (
-        "the staging UNC must not carry this machine's name\n" + log)
+        "the staging UNC must not carry this machine's name\n" + log
+    )
     # ...while the execute lease still identifies the holder by name.
     planted = [s for s in sess.scripts if "held_by" in s]
     assert planted, "no lease/detached-config write seen"
@@ -647,8 +669,7 @@ def test_unreachable_staging_fails_before_the_build(root, monkeypatch):
         self.log.event("BUILD_OK", unit=host, payload_hash="h", git_sha="s")
         return "h", "s", {}
 
-    drv, sess = _make_driver(root, monkeypatch,
-                             make_responder(smbreach="SMBREACH timeout"))
+    drv, sess = _make_driver(root, monkeypatch, make_responder(smbreach="SMBREACH timeout"))
     monkeypatch.setattr(D.Driver, "_build", counting_build)
 
     code = drv.run()

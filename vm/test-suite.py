@@ -88,22 +88,23 @@ ERROR = "ERROR"
 # Dataclasses
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class Scenario:
     name: str
     description: str
-    phases: str       # comma-separated phases passed as --phases to run-prov-test.py
-    modules: str      # "" = all (no --modules flag); "m1,m2" to filter
-    repeat: int       # --repeat N
+    phases: str  # comma-separated phases passed as --phases to run-prov-test.py
+    modules: str  # "" = all (no --modules flag); "m1,m2" to filter
+    repeat: int  # --repeat N
     expected_rc: int  # 0 = expect success
-    status: str       # "ACTIVE" or "STUB"
+    status: str  # "ACTIVE" or "STUB"
 
 
 @dataclass
 class ScenarioResult:
     name: str
-    status: str       # "ACTIVE" or "STUB"
-    outcome: str      # "PASS" / "FAIL" / "SKIP" / "ERROR"
+    status: str  # "ACTIVE" or "STUB"
+    outcome: str  # "PASS" / "FAIL" / "SKIP" / "ERROR"
     duration_s: float
     detail: str = ""
     sub_runs: list[dict] = field(default_factory=list)
@@ -146,7 +147,7 @@ SCENARIOS: list[Scenario] = [
             "Inject deterministic bomb at order=1250, expect non-zero on first "
             "attempt; after snapshot reset, clean re-run must pass."
         ),
-        phases="",   # custom multi-sub-run flow; not used directly
+        phases="",  # custom multi-sub-run flow; not used directly
         modules="",
         repeat=1,
         expected_rc=0,
@@ -334,6 +335,7 @@ SCENARIOS_BY_NAME = {s.name: s for s in SCENARIOS}
 # Prerequisites check
 # ---------------------------------------------------------------------------
 
+
 def check_prerequisites(vbox_vm: str, snapshot: str) -> list[str]:
     errors: list[str] = []
     # Credentials present and parseable. load_creds() raises RuntimeError if
@@ -354,10 +356,7 @@ def check_prerequisites(vbox_vm: str, snapshot: str) -> list[str]:
         try:
             vm_state(vbox_vm)
         except subprocess.CalledProcessError:
-            errors.append(
-                f"VBox VM {vbox_vm!r} not found. "
-                f"Use VBoxManage list vms to inspect."
-            )
+            errors.append(f"VBox VM {vbox_vm!r} not found. Use VBoxManage list vms to inspect.")
         if not vbox_snapshot_exists(vbox_vm, snapshot):
             errors.append(
                 f"VBox snapshot {snapshot!r} not found on VM {vbox_vm!r}. "
@@ -370,6 +369,7 @@ def check_prerequisites(vbox_vm: str, snapshot: str) -> list[str]:
 # Subprocess driver
 # ---------------------------------------------------------------------------
 
+
 def _build_prov_args(
     scenario: Scenario,
     host_unit: str,
@@ -380,11 +380,16 @@ def _build_prov_args(
     phases_override: str | None = None,
 ) -> list[str]:
     args: list[str] = [
-        sys.executable, str(RUN_PROV_TEST),
-        "--host-unit", host_unit,
-        "--hostname", hostname,
-        "--vbox-vm", vbox_vm,
-        "--snapshot", snapshot,
+        sys.executable,
+        str(RUN_PROV_TEST),
+        "--host-unit",
+        host_unit,
+        "--hostname",
+        hostname,
+        "--vbox-vm",
+        vbox_vm,
+        "--snapshot",
+        snapshot,
     ]
     phases = phases_override if phases_override is not None else scenario.phases
     if phases:
@@ -414,11 +419,11 @@ def _replace_phases(args: list[str], new_phases: str) -> list[str]:
 # driver. Threading these through every runner signature would be noisier than
 # the benefit; keep them here.
 _RUN_CTX: dict = {
-    "scenario_log_dir": None,    # Path
-    "sub_idx": 0,                # incrementing counter for sub-run filename prefix
+    "scenario_log_dir": None,  # Path
+    "sub_idx": 0,  # incrementing counter for sub-run filename prefix
     "verbose": False,
     "tail_on_fail": 30,
-    "heartbeat_s": 10.0,         # interval for the alive heartbeat line
+    "heartbeat_s": 10.0,  # interval for the alive heartbeat line
 }
 
 
@@ -489,8 +494,7 @@ def run_prov_subprocess(args: list[str], label: str) -> tuple[int, float]:
     heartbeat_s = float(_RUN_CTX.get("heartbeat_s", 10.0))
     stop_evt = threading.Event()
     try:
-        with open(log_path, "w", encoding="utf-8", errors="replace",
-                  newline="") as f:
+        with open(log_path, "w", encoding="utf-8", errors="replace", newline="") as f:
             f.write(f"# argv: {' '.join(args[1:])}\n")
             f.flush()
             proc = subprocess.Popen(
@@ -510,7 +514,7 @@ def run_prov_subprocess(args: list[str], label: str) -> tuple[int, float]:
                 # without the iterator's read-ahead buffering.
                 for line in iter(proc.stdout.readline, ""):
                     f.write(line)
-                    f.flush()           # flush each line to disk so tail -f works
+                    f.flush()  # flush each line to disk so tail -f works
                     line_count += 1
                     stripped = line.rstrip("\r\n")
                     if stripped:
@@ -532,8 +536,7 @@ def run_prov_subprocess(args: list[str], label: str) -> tuple[int, float]:
                 if not verbose and (now - last_beat) >= heartbeat_s:
                     delta = line_count - last_lines
                     tail = last_line_seen[-110:] if last_line_seen else "(no output yet)"
-                    print(f"    [running {now - t0:>5.0f}s "
-                          f"lines={line_count} (+{delta}) -> {log_path.name}]")
+                    print(f"    [running {now - t0:>5.0f}s lines={line_count} (+{delta}) -> {log_path.name}]")
                     print(f"      last: {tail}")
                     last_beat = now
                     last_lines = line_count
@@ -560,6 +563,7 @@ def run_prov_subprocess(args: list[str], label: str) -> tuple[int, float]:
 # commands.json injection
 # ---------------------------------------------------------------------------
 
+
 def _staging_commands_json(hostname: str) -> Path:
     return STAGING_ROOT / hostname / "01-provisioning" / "commands.json"
 
@@ -574,9 +578,7 @@ def _inject_commands_json_entry(hostname: str, entry: dict) -> Path:
     """
     path = _staging_commands_json(hostname)
     if not path.exists():
-        raise FileNotFoundError(
-            f"staged commands.json not found: {path}. Did the build sub-run succeed?"
-        )
+        raise FileNotFoundError(f"staged commands.json not found: {path}. Did the build sub-run succeed?")
     data = load_json_file(path)
     if not isinstance(data, list):
         raise RuntimeError(f"commands.json is not a list: {path}")
@@ -589,9 +591,9 @@ def _inject_commands_json_entry(hostname: str, entry: dict) -> Path:
 
 def _patch_commands_json_inject_bomb(hostname: str) -> Path:
     entry = {
-        "order":  BOMB_ORDER,
-        "desc":   "[TEST BOMB] synthetic deterministic failure injected by test-suite.py",
-        "cmd":    "powershell.exe -NoProfile -Command \"Write-Host '[BOMB] synthetic failure'; exit 1\"",
+        "order": BOMB_ORDER,
+        "desc": "[TEST BOMB] synthetic deterministic failure injected by test-suite.py",
+        "cmd": "powershell.exe -NoProfile -Command \"Write-Host '[BOMB] synthetic failure'; exit 1\"",
         "module": BOMB_MODULE,
     }
     return _inject_commands_json_entry(hostname, entry)
@@ -599,7 +601,7 @@ def _patch_commands_json_inject_bomb(hostname: str) -> Path:
 
 def _patch_commands_json_inject_sporadic_bomb(hostname: str) -> Path:
     cmd = (
-        "powershell.exe -NoProfile -Command \""
+        'powershell.exe -NoProfile -Command "'
         "$m = 'C:\\MAST\\state\\sporadic-bomb.marker'; "
         "if (Test-Path $m) { Write-Host '[SPORADIC] marker present, passing'; exit 0 } "
         "else { New-Item -ItemType Directory -Force -Path (Split-Path $m) | Out-Null; "
@@ -607,9 +609,9 @@ def _patch_commands_json_inject_sporadic_bomb(hostname: str) -> Path:
         "       Write-Host '[SPORADIC] first hit, failing'; exit 1 }\""
     )
     entry = {
-        "order":  BOMB_ORDER,
-        "desc":   "[TEST SPORADIC BOMB] fails once per unit, then self-clears",
-        "cmd":    cmd,
+        "order": BOMB_ORDER,
+        "desc": "[TEST SPORADIC BOMB] fails once per unit, then self-clears",
+        "cmd": cmd,
         "module": SPORADIC_BOMB_MODULE,
     }
     return _inject_commands_json_entry(hostname, entry)
@@ -619,13 +621,12 @@ def _patch_commands_json_inject_sporadic_bomb(hostname: str) -> Path:
 # Unit-side state helpers (via vm_lib)
 # ---------------------------------------------------------------------------
 
+
 def _unit_read_installed_manifest(host_unit: str, creds: dict) -> dict | None:
     """Return the parsed installed-manifest.json from the unit, or None if missing."""
     s = winrm_session(host_unit, creds["unit"])
     ps = (
-        f"$p = '{MANIFEST_REMOTE_PATH}'; "
-        "if (Test-Path -LiteralPath $p) { Get-Content -LiteralPath $p -Raw } "
-        "else { '' }"
+        f"$p = '{MANIFEST_REMOTE_PATH}'; if (Test-Path -LiteralPath $p) {{ Get-Content -LiteralPath $p -Raw }} else {{ '' }}"
     )
     r = run_ps(s, ps, label="read-manifest", echo=False)
     check_rc(r, "read-manifest")
@@ -654,6 +655,7 @@ def _unit_delete_installed_manifest(host_unit: str, creds: dict) -> None:
 # ---------------------------------------------------------------------------
 # Scenario runners
 # ---------------------------------------------------------------------------
+
 
 def run_simple_scenario(
     scenario: Scenario,
@@ -693,14 +695,15 @@ def run_interrupted_inject_fail(
     rc_a, e_a = run_prov_subprocess(_replace_phases(base, "build"), "A: build (clean)")
     sub_runs.append({"label": "A:build", "rc": rc_a, "duration_s": e_a})
     if rc_a != 0:
-        return ScenarioResult(scenario.name, scenario.status, ERROR,
-                              time.monotonic() - t0,
-                              f"sub-run A (build) failed: rc={rc_a}", sub_runs)
+        return ScenarioResult(
+            scenario.name, scenario.status, ERROR, time.monotonic() - t0, f"sub-run A (build) failed: rc={rc_a}", sub_runs
+        )
 
     _patch_commands_json_inject_bomb(hostname)
 
-    rc_b, e_b = run_prov_subprocess(_replace_phases(base, "transfer,execute,verify"),
-                                    "B: transfer,execute,verify (bomb present)")
+    rc_b, e_b = run_prov_subprocess(
+        _replace_phases(base, "transfer,execute,verify"), "B: transfer,execute,verify (bomb present)"
+    )
     sub_runs.append({"label": "B:tev-bombed", "rc": rc_b, "duration_s": e_b})
     if rc_b == 0:
         sub_runs[-1]["warning"] = "bomb not reached: sub-run B unexpectedly succeeded"
@@ -722,8 +725,12 @@ def run_interrupted_inject_fail(
         outcome, detail = FAIL, f"sub-run B rc={rc_b}, sub-run D rc={rc_d}"
 
     return ScenarioResult(
-        scenario.name, scenario.status, outcome,
-        time.monotonic() - t0, detail, sub_runs,
+        scenario.name,
+        scenario.status,
+        outcome,
+        time.monotonic() - t0,
+        detail,
+        sub_runs,
     )
 
 
@@ -742,9 +749,9 @@ def run_failure_recover_no_reset(
     rc_a, e_a = run_prov_subprocess(_replace_phases(base, "build"), "A: build (clean)")
     sub_runs.append({"label": "A:build", "rc": rc_a, "duration_s": e_a})
     if rc_a != 0:
-        return ScenarioResult(scenario.name, scenario.status, ERROR,
-                              time.monotonic() - t0,
-                              f"sub-run A (build) failed: rc={rc_a}", sub_runs)
+        return ScenarioResult(
+            scenario.name, scenario.status, ERROR, time.monotonic() - t0, f"sub-run A (build) failed: rc={rc_a}", sub_runs
+        )
 
     _patch_commands_json_inject_sporadic_bomb(hostname)
 
@@ -767,14 +774,17 @@ def run_failure_recover_no_reset(
         outcome, detail = PASS, ""
     elif rc_b == 0:
         outcome = ERROR
-        detail = ("sporadic bomb not reached in sub-run B (rc=0); marker may have "
-                  "leaked from a previous run")
+        detail = "sporadic bomb not reached in sub-run B (rc=0); marker may have leaked from a previous run"
     else:
         outcome, detail = FAIL, f"sub-run B rc={rc_b}, sub-run C rc={rc_c}"
 
     return ScenarioResult(
-        scenario.name, scenario.status, outcome,
-        time.monotonic() - t0, detail, sub_runs,
+        scenario.name,
+        scenario.status,
+        outcome,
+        time.monotonic() - t0,
+        detail,
+        sub_runs,
     )
 
 
@@ -801,23 +811,27 @@ def run_idempotent_after_manifest_wipe(
     )
     sub_runs.append({"label": "A:full", "rc": rc_a, "duration_s": e_a})
     if rc_a != 0:
-        return ScenarioResult(scenario.name, scenario.status, FAIL,
-                              time.monotonic() - t0,
-                              f"sub-run A failed: rc={rc_a}", sub_runs)
+        return ScenarioResult(
+            scenario.name, scenario.status, FAIL, time.monotonic() - t0, f"sub-run A failed: rc={rc_a}", sub_runs
+        )
 
     # Read manifest after A.
     try:
         wait_for_winrm(host_unit, creds["unit"])
         manifest_a = _unit_read_installed_manifest(host_unit, creds)
     except Exception as e:
-        return ScenarioResult(scenario.name, scenario.status, ERROR,
-                              time.monotonic() - t0,
-                              f"reading manifest after A failed: {e}", sub_runs)
+        return ScenarioResult(
+            scenario.name, scenario.status, ERROR, time.monotonic() - t0, f"reading manifest after A failed: {e}", sub_runs
+        )
     if manifest_a is None:
-        return ScenarioResult(scenario.name, scenario.status, FAIL,
-                              time.monotonic() - t0,
-                              "installed-manifest.json missing after sub-run A",
-                              sub_runs)
+        return ScenarioResult(
+            scenario.name,
+            scenario.status,
+            FAIL,
+            time.monotonic() - t0,
+            "installed-manifest.json missing after sub-run A",
+            sub_runs,
+        )
     hash_a = manifest_a.get("payload_hash")
     sub_runs.append({"label": "manifest-a", "payload_hash": hash_a})
 
@@ -825,9 +839,9 @@ def run_idempotent_after_manifest_wipe(
     try:
         _unit_delete_installed_manifest(host_unit, creds)
     except Exception as e:
-        return ScenarioResult(scenario.name, scenario.status, ERROR,
-                              time.monotonic() - t0,
-                              f"deleting manifest failed: {e}", sub_runs)
+        return ScenarioResult(
+            scenario.name, scenario.status, ERROR, time.monotonic() - t0, f"deleting manifest failed: {e}", sub_runs
+        )
     sub_runs.append({"label": "B:delete-manifest", "rc": 0})
 
     rc_c, e_c = run_prov_subprocess(
@@ -836,22 +850,26 @@ def run_idempotent_after_manifest_wipe(
     )
     sub_runs.append({"label": "C:full", "rc": rc_c, "duration_s": e_c})
     if rc_c != 0:
-        return ScenarioResult(scenario.name, scenario.status, FAIL,
-                              time.monotonic() - t0,
-                              f"sub-run C failed: rc={rc_c}", sub_runs)
+        return ScenarioResult(
+            scenario.name, scenario.status, FAIL, time.monotonic() - t0, f"sub-run C failed: rc={rc_c}", sub_runs
+        )
 
     # Read manifest after C.
     try:
         manifest_c = _unit_read_installed_manifest(host_unit, creds)
     except Exception as e:
-        return ScenarioResult(scenario.name, scenario.status, ERROR,
-                              time.monotonic() - t0,
-                              f"reading manifest after C failed: {e}", sub_runs)
+        return ScenarioResult(
+            scenario.name, scenario.status, ERROR, time.monotonic() - t0, f"reading manifest after C failed: {e}", sub_runs
+        )
     if manifest_c is None:
-        return ScenarioResult(scenario.name, scenario.status, FAIL,
-                              time.monotonic() - t0,
-                              "installed-manifest.json missing after sub-run C",
-                              sub_runs)
+        return ScenarioResult(
+            scenario.name,
+            scenario.status,
+            FAIL,
+            time.monotonic() - t0,
+            "installed-manifest.json missing after sub-run C",
+            sub_runs,
+        )
     hash_c = manifest_c.get("payload_hash")
     sub_runs.append({"label": "manifest-c", "payload_hash": hash_c})
 
@@ -859,19 +877,31 @@ def run_idempotent_after_manifest_wipe(
     sub_runs.append({"label": "D:reset", "rc": rc_d, "duration_s": e_d})
 
     if hash_a is None or hash_c is None:
-        return ScenarioResult(scenario.name, scenario.status, FAIL,
-                              time.monotonic() - t0,
-                              f"payload_hash missing: a={hash_a!r}, c={hash_c!r}",
-                              sub_runs)
+        return ScenarioResult(
+            scenario.name,
+            scenario.status,
+            FAIL,
+            time.monotonic() - t0,
+            f"payload_hash missing: a={hash_a!r}, c={hash_c!r}",
+            sub_runs,
+        )
     if hash_a != hash_c:
-        return ScenarioResult(scenario.name, scenario.status, FAIL,
-                              time.monotonic() - t0,
-                              f"payload_hash mismatch: a={hash_a!r}, c={hash_c!r}",
-                              sub_runs)
+        return ScenarioResult(
+            scenario.name,
+            scenario.status,
+            FAIL,
+            time.monotonic() - t0,
+            f"payload_hash mismatch: a={hash_a!r}, c={hash_c!r}",
+            sub_runs,
+        )
 
     return ScenarioResult(
-        scenario.name, scenario.status, PASS,
-        time.monotonic() - t0, "", sub_runs,
+        scenario.name,
+        scenario.status,
+        PASS,
+        time.monotonic() - t0,
+        "",
+        sub_runs,
     )
 
 
@@ -888,10 +918,10 @@ def run_stub(
 
 
 SCENARIO_RUNNERS: dict[str, Callable[..., ScenarioResult]] = {
-    "full-provision":                run_simple_scenario,
+    "full-provision": run_simple_scenario,
     # "full-provision-verify-only":    run_simple_scenario,  # see DISABLED note above
-    "interrupted-inject-fail":       run_interrupted_inject_fail,
-    "failure-recover-no-reset":      run_failure_recover_no_reset,
+    "interrupted-inject-fail": run_interrupted_inject_fail,
+    "failure-recover-no-reset": run_failure_recover_no_reset,
     "idempotent-after-manifest-wipe": run_idempotent_after_manifest_wipe,
 }
 
@@ -909,15 +939,23 @@ def run_scenario(
     runner = SCENARIO_RUNNERS.get(scenario.name)
     if runner is None:
         return ScenarioResult(
-            scenario.name, scenario.status, ERROR, 0.0,
-            f"no ACTIVE runner registered for scenario {scenario.name!r}", [],
+            scenario.name,
+            scenario.status,
+            ERROR,
+            0.0,
+            f"no ACTIVE runner registered for scenario {scenario.name!r}",
+            [],
         )
     try:
         return runner(scenario, host_unit, hostname, vbox_vm, snapshot, modules_override)
     except Exception as e:
         return ScenarioResult(
-            scenario.name, scenario.status, ERROR, 0.0,
-            f"unhandled exception: {type(e).__name__}: {e}", [],
+            scenario.name,
+            scenario.status,
+            ERROR,
+            0.0,
+            f"unhandled exception: {type(e).__name__}: {e}",
+            [],
         )
 
 
@@ -1028,6 +1066,7 @@ def write_suite_results_json(results: list[ScenarioResult], suite_log_dir: Path)
 # CLI
 # ---------------------------------------------------------------------------
 
+
 def _cli_list() -> int:
     print(f"{'Name':<34}  {'Status':<7}  Description")
     print("-" * 78)
@@ -1045,23 +1084,26 @@ def main() -> int:
     sel.add_argument("--scenario", metavar="NAME", help="Run one scenario by name.")
     sel.add_argument("--all", action="store_true", help="Run every scenario.")
 
-    p.add_argument("--host-unit", metavar="HOST",
-                   help="WinRM target hostname or IPv4 of the unit (required unless --list).")
-    p.add_argument("--hostname", default="mast-wis-01",
-                   help="Windows hostname for build (default: mast-wis-01).")
-    p.add_argument("--vbox-vm", default="mast-unit",
-                   help="VirtualBox VM name (default: mast-unit).")
-    p.add_argument("--snapshot", default="post-prepare",
-                   help="Snapshot to restore between cycles (default: post-prepare).")
-    p.add_argument("--modules", default=None,
-                   help="Override module list for all scenarios (comma-separated).")
-    p.add_argument("--skip-prereq-check", action="store_true",
-                   help="Skip prerequisite checks (creds, VBoxManage, snapshot, run-prov-test.py).")
-    p.add_argument("-v", "--verbose", action="store_true",
-                   help="Also echo each sub-run's captured output to stdout in real time.")
-    p.add_argument("--tail-on-fail", type=int, default=30, metavar="N",
-                   help="On sub-run non-zero exit, print last N lines of its log "
-                        "(default: 30; set 0 to disable).")
+    p.add_argument("--host-unit", metavar="HOST", help="WinRM target hostname or IPv4 of the unit (required unless --list).")
+    p.add_argument("--hostname", default="mast-wis-01", help="Windows hostname for build (default: mast-wis-01).")
+    p.add_argument("--vbox-vm", default="mast-unit", help="VirtualBox VM name (default: mast-unit).")
+    p.add_argument("--snapshot", default="post-prepare", help="Snapshot to restore between cycles (default: post-prepare).")
+    p.add_argument("--modules", default=None, help="Override module list for all scenarios (comma-separated).")
+    p.add_argument(
+        "--skip-prereq-check",
+        action="store_true",
+        help="Skip prerequisite checks (creds, VBoxManage, snapshot, run-prov-test.py).",
+    )
+    p.add_argument(
+        "-v", "--verbose", action="store_true", help="Also echo each sub-run's captured output to stdout in real time."
+    )
+    p.add_argument(
+        "--tail-on-fail",
+        type=int,
+        default=30,
+        metavar="N",
+        help="On sub-run non-zero exit, print last N lines of its log (default: 30; set 0 to disable).",
+    )
 
     args = p.parse_args()
 
@@ -1090,8 +1132,7 @@ def main() -> int:
     suite_log_dir = SUITE_LOG_ROOT / stamp
     suite_log_dir.mkdir(parents=True, exist_ok=True)
     print(f"[suite] log dir: {suite_log_dir}")
-    print(f"[suite] running {len(targets)} scenario(s); "
-          f"verbose={args.verbose}, tail_on_fail={args.tail_on_fail}")
+    print(f"[suite] running {len(targets)} scenario(s); verbose={args.verbose}, tail_on_fail={args.tail_on_fail}")
 
     _RUN_CTX["verbose"] = args.verbose
     _RUN_CTX["tail_on_fail"] = args.tail_on_fail
@@ -1109,16 +1150,15 @@ def main() -> int:
         _print_scenario_banner(idx, total, s, scenario_log_dir, results)
 
         if s.status == "ACTIVE":
-            print(f"[suite] pre-flight: resetting VM {args.vbox_vm!r} "
-                  f"to snapshot {args.snapshot!r}  (-> preflight.log)")
+            print(f"[suite] pre-flight: resetting VM {args.vbox_vm!r} to snapshot {args.snapshot!r}  (-> preflight.log)")
             preflight_log = scenario_log_dir / "preflight.log"
             t0 = time.monotonic()
             saved_log_fn = vm_lib.log_fn
             saved_log_raw_fn = vm_lib.log_raw_fn
             try:
-                pf = open(preflight_log, "w", encoding="utf-8",
-                          errors="replace", newline="")
+                pf = open(preflight_log, "w", encoding="utf-8", errors="replace", newline="")
                 try:
+
                     def _pf_log(msg: str, _f=pf) -> None:
                         ts = datetime.now(timezone.utc).strftime("%H:%M:%SZ")
                         line = f"[{ts}] {msg}\n"
@@ -1140,7 +1180,10 @@ def main() -> int:
                     vm_lib.log_fn = _pf_log
                     vm_lib.log_raw_fn = _pf_log_raw
                     reset_to_clean_snapshot(
-                        args.vbox_vm, args.snapshot, args.host_unit, creds["unit"],
+                        args.vbox_vm,
+                        args.snapshot,
+                        args.host_unit,
+                        creds["unit"],
                     )
                 finally:
                     pf.close()
@@ -1151,8 +1194,12 @@ def main() -> int:
                 print(f"[suite] {detail}  (see {preflight_log.name})")
                 _print_tail(preflight_log, args.tail_on_fail)
                 r = ScenarioResult(
-                    name=s.name, status=s.status, outcome=ERROR,
-                    duration_s=time.monotonic() - t0, detail=detail, sub_runs=[],
+                    name=s.name,
+                    status=s.status,
+                    outcome=ERROR,
+                    duration_s=time.monotonic() - t0,
+                    detail=detail,
+                    sub_runs=[],
                 )
                 results.append(r)
                 _print_scenario_footer(idx, total, r)
@@ -1162,8 +1209,7 @@ def main() -> int:
                 vm_lib.log_raw_fn = saved_log_raw_fn
                 print(f"[suite] pre-flight done in {time.monotonic() - t0:.1f}s")
 
-        r = run_scenario(s, args.host_unit, args.hostname, args.vbox_vm,
-                         args.snapshot, args.modules)
+        r = run_scenario(s, args.host_unit, args.hostname, args.vbox_vm, args.snapshot, args.modules)
         results.append(r)
         _print_scenario_footer(idx, total, r)
 
