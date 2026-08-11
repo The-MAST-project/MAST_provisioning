@@ -24,14 +24,42 @@ foreach (${c} in ${pwiCandidates}) {
     }
 }
 ${issues} = New-Object 'System.Collections.Generic.List[string]'
+# Observations that are REPORTED, not asserted -- written to the log on both the
+# pass and the fail path so the reasoning survives either outcome (#68).
+${notes} = New-Object 'System.Collections.Generic.List[string]'
 if (-not ${pwi}) {
     [void]${issues}.Add('PWI4.exe not found under expected PlaneWave paths.')
 }
+# Assert REGISTRATION and START-ABILITY, not running-ness (#68).
+#
+# This used to require Status -eq 'Running', which the fleet's own resting state
+# forbids: mast-services-finalize (order 9500, always) exists to leave every MAST
+# service Stopped/Manual, and its verify fails unless it finds exactly that. Two
+# modules asserting opposite states about the same service is unsatisfiable -- no
+# run could make both clean -- so planewave was red on every unit at rest,
+# permanently, which blocked fully_provisioned fleet-wide.
+#
+# What provisioning is actually responsible for is that the service EXISTS and could
+# start: registered, and set to Manual so the orchestrator can start it on demand.
+# Whether PWI4 works at runtime is a runtime question, and the diagnostics module
+# already answers it -- it launches PWI4 and reports the pid.
 ${pwi4Svc} = Get-Service -Name 'mast-pwi4' -ErrorAction SilentlyContinue
 if ($null -eq ${pwi4Svc}) {
     [void]${issues}.Add('mast-pwi4 service not registered')
-} elseif (${pwi4Svc}.Status -ne 'Running') {
-    [void]${issues}.Add(("mast-pwi4 service registered but not running (status={0})" -f ${pwi4Svc}.Status))
+}
+else {
+    # Disabled is the one start-type that makes the service unstartable on demand,
+    # which IS a provisioning failure. Manual is the intended resting state;
+    # Automatic is not what finalize leaves but is still startable, so it is
+    # reported rather than failed.
+    if (${pwi4Svc}.StartType -eq 'Disabled') {
+        [void]${issues}.Add('mast-pwi4 service is Disabled -- cannot be started on demand')
+    }
+    elseif (${pwi4Svc}.StartType -ne 'Manual') {
+        [void]${notes}.Add(("note: mast-pwi4 StartType={0}, expected Manual (startable, so not a failure)" -f ${pwi4Svc}.StartType))
+    }
+    [void]${notes}.Add(("mast-pwi4: registered, Status={0} StartType={1} -- Stopped is the fleet's resting state" -f `
+        ${pwi4Svc}.Status, ${pwi4Svc}.StartType))
 }
 if (-not (Test-Path -LiteralPath ${ps3cliPath})) {
     [void]${issues}.Add("PS3 CLI directory missing: ${ps3cliPath}")
@@ -85,9 +113,10 @@ ${ps3CatEnv} = [Environment]::GetEnvironmentVariable('PS3CLI_CATALOG', 'Machine'
 if (-not ${ps3DirEnv}) { [void]${issues}.Add('PS3CLI_DIR machine env var not set') }
 if (-not ${ps3CatEnv}) { [void]${issues}.Add('PS3CLI_CATALOG machine env var not set') }
 if (${issues}.Count -gt 0) {
-    (${issues} -join [Environment]::NewLine) | Out-File -FilePath ${verifyLog} -Encoding UTF8
+    ((@(${issues}) + @(${notes})) -join [Environment]::NewLine) | Out-File -FilePath ${verifyLog} -Encoding UTF8
     exit 1
 }
-("PlaneWave OK: PWI4={0}" -f ${pwi}) | Out-File -FilePath ${verifyLog} -Encoding UTF8
+((@(("PlaneWave OK: PWI4={0}" -f ${pwi})) + @(${notes})) -join [Environment]::NewLine) |
+    Out-File -FilePath ${verifyLog} -Encoding UTF8
 Write-MastSmokeOk -Module 'planewave' | Out-Null
 exit 0
