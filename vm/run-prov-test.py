@@ -340,7 +340,7 @@ def _find_unit_log_path(session: Any, log_filename: str) -> str:
 
 
 def setup_log_dir(cycle: int) -> Path:
-    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    ts = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
     log_dir = LOG_ROOT / f"{ts}-cycle{cycle}"
     log_dir.mkdir(parents=True, exist_ok=True)
     return log_dir
@@ -533,7 +533,8 @@ def phase_transfer(
         # Decode the b64 back to the .ps1 on the unit.
         run_ps(
             unit,
-            f"[System.IO.File]::WriteAllBytes('{remote_ps}', [Convert]::FromBase64String((Get-Content -LiteralPath '{remote_b64}' -Raw)))",
+            f"[System.IO.File]::WriteAllBytes('{remote_ps}', "
+            f"[Convert]::FromBase64String((Get-Content -LiteralPath '{remote_b64}' -Raw)))",
             label="xfer-decode",
             timeout_s=60,
             echo=False,
@@ -1057,7 +1058,7 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=WINRM_BOOT_TIMEOUT_S,
         metavar="N",
-        help="Max seconds to wait for TCP :5985 plus WinRM Basic auth before failing (default: {}).".format(WINRM_BOOT_TIMEOUT_S),
+        help=f"Max seconds to wait for TCP :5985 plus WinRM Basic auth before failing (default: {WINRM_BOOT_TIMEOUT_S}).",
     )
     p.add_argument(
         "--winrm-call-timeout-s",
@@ -1066,10 +1067,9 @@ def parse_args() -> argparse.Namespace:
         metavar="N",
         help=(
             "Override the per-WinRM-call read/operation timeout (default from "
-            "vm_lib.WINRM_CALL_TIMEOUT_S=%d). Bump this for scenarios whose "
-            "execute phase routinely runs longer than the default."
-        )
-        % WINRM_CALL_TIMEOUT_S,
+            f"vm_lib.WINRM_CALL_TIMEOUT_S={WINRM_CALL_TIMEOUT_S}). Bump this for scenarios "
+            "whose execute phase routinely runs longer than the default."
+        ),
     )
     return p.parse_args()
 
@@ -1111,7 +1111,7 @@ def main() -> None:
     phases = resolve_phases(args)
 
     LOG_ROOT.mkdir(parents=True, exist_ok=True)
-    run_ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    run_ts = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
     run_log = LOG_ROOT / f"{run_ts}-run.log"
     run_started = time.monotonic()
 
@@ -1133,7 +1133,7 @@ def main() -> None:
             try:
                 with timed("CONNECT UNIT"):
                     unit_session = wait_for_ssh(args.host_unit, creds["unit"], timeout=args.winrm_wait_seconds)
-                run_id = "run-" + datetime.now().strftime("%Y%m%d-%H%M%S")
+                run_id = "run-" + datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
                 log_dir = setup_log_dir(1)
 
                 if args.pull_repos:
@@ -1188,7 +1188,7 @@ def main() -> None:
                 log_dir = setup_log_dir(cycle)
 
                 try:
-                    run_id = "run-" + datetime.now().strftime("%Y%m%d-%H%M%S")
+                    run_id = "run-" + datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
 
                     # BUILD
                     if "build" in phases and (not built or args.rebuild):

@@ -24,6 +24,7 @@ port. Full behavioral acceptance is the real VM run.
 from __future__ import annotations
 
 import base64
+import contextlib
 import json
 import os
 import shutil
@@ -47,7 +48,6 @@ from prov.unit_paths import (
     UNIT_SMOKE_DIR,
     UNIT_VALIDATION,
 )
-import contextlib
 
 # --- unit-side literal paths (Windows units; never pathlib) ------------------
 # The shared ones live in prov.unit_paths so the read-only tooling names the same
@@ -241,7 +241,10 @@ class Driver:
             f"Write-Output ('SMBRESULT ' + ($r | ConvertTo-Json -Compress -Depth 6))"
         )
         out = subprocess.run(
-            [_powershell_exe(), "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps], text=True, capture_output=True
+            [_powershell_exe(), "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps],
+            text=True,
+            capture_output=True,
+            check=False,
         )
         res = _marker_json(out.stdout, "SMBRESULT ")
         if res and not res.get("Ok", res.get("ok")):
@@ -764,7 +767,9 @@ class Driver:
             args += ["-TestMode", "-AllowMissingNoMachineLicense"]
         try:
             with build_log.open("wb") as fh:
-                rc = subprocess.run(args, stdout=fh, stderr=subprocess.STDOUT, timeout=BUILD_TIMEOUT_S).returncode
+                rc = subprocess.run(
+                    args, stdout=fh, stderr=subprocess.STDOUT, timeout=BUILD_TIMEOUT_S, check=False
+                ).returncode
         except subprocess.TimeoutExpired:
             self.log.event("BUILD_FAIL", unit=host, reason="timeout", timeout_s=BUILD_TIMEOUT_S, log=str(build_log))
             self.log.activity(host, "BUILD_FAIL", "timeout", dur())
@@ -966,10 +971,10 @@ class Driver:
                     self.log.event("EXECUTE_RECONNECT_WAIT", unit=host, error=f"{type(e2).__name__}: {e2}")
             time.sleep(EXECUTE_POLL_INTERVAL_S)
 
-        try:
+        # Best-effort cleanup: the run's verdict is already decided, and a unit that
+        # cannot delete its own scheduled task must not turn a good run into a bad one.
+        with contextlib.suppress(Exception):
             self._ps_out(session, f"schtasks /delete /tn {DETACHED_TASK} /f", f"execute-cleanup:{host}")
-        except Exception:  # noqa: BLE001
-            pass
 
         if not result or result.get("status") != "done":
             self.log.event("EXECUTE_FAIL", unit=host, reason="timeout", timeout_s=EXECUTE_TIMEOUT_S, duration_s=dur())

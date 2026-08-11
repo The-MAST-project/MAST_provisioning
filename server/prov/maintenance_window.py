@@ -71,7 +71,7 @@ def in_maintenance_window(
     now_utc = now_utc or datetime.now(UTC)
     local, tz_error = _resolve_local(now_utc, tz)
     h = local.hour
-    if start_h <= end_h:
+    if start_h <= end_h:  # noqa: SIM108 -- the ternary buries the wrap-around case
         in_win = start_h <= h < end_h
     else:  # wrap, e.g. 22-06
         in_win = h >= start_h or h < end_h

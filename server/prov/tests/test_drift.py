@@ -71,7 +71,7 @@ def test_legacy_manifest_without_modules_map_targets_everything():
     assert all(m.state is ModuleState.MISSING for m in r.modules)
 
 
-def test_legacy_manifest_with_a_modules_LIST_targets_everything():
+def test_legacy_manifest_with_a_modules_list_targets_everything():
     """The shape mast01-04 actually carry: 'modules' present, but the pre-module_state
     LIST of names rather than a map. Same meaning as the no-key case above -- state
     unknown -- and it must not be walked as if it were a map."""

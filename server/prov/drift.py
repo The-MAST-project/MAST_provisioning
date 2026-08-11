@@ -14,7 +14,7 @@ See ``docs/per-module-tracking-plan.md`` Stage 3, issue #22.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import StrEnum
 
 
@@ -106,7 +106,11 @@ def _parse_ts(value: str | None) -> datetime | None:
     if not value:
         return None
     try:
-        return datetime.strptime(value, _TS_FMT)
+        # _TS_FMT ends in a literal Z, i.e. these are UTC. strptime returns a
+        # NAIVE datetime for that, so attach the zone the format already asserts:
+        # both sides of the comparison in _validation_is_stale come through here,
+        # so aware-vs-aware stays consistent.
+        return datetime.strptime(value, _TS_FMT).replace(tzinfo=UTC)
     except ValueError:
         return None
 

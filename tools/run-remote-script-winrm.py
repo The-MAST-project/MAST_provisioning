@@ -436,7 +436,7 @@ def main() -> int:
         type=int,
         default=900,
         metavar="N",
-        help="Keep polling until WinRM answers on port {} (0 = no wait). Default 900. Use after a unit reboot.".format(WINRM_PORT),
+        help=f"Keep polling until WinRM answers on port {WINRM_PORT} (0 = no wait). Default 900. Use after a unit reboot.",
     )
     ap.add_argument(
         "--wait-winrm-poll-seconds",

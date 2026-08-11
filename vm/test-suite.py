@@ -23,6 +23,7 @@ quotes anywhere in this file.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import re
 import subprocess
@@ -51,7 +52,6 @@ from vm_lib import (
     wait_for_winrm,
     winrm_session,
 )
-import contextlib
 
 # ---------------------------------------------------------------------------
 # Constants

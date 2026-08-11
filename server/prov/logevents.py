@@ -49,7 +49,7 @@ def server_root() -> Path:
     if env:
         return Path(env)
     if os.name == "nt":
-        return Path((os.environ.get("SystemDrive") or "C:") + "\\MAST")
+        return Path((os.environ.get("SYSTEMDRIVE") or "C:") + "\\MAST")
     return Path("/var/lib/mast")
 
 

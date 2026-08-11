@@ -13,6 +13,7 @@ Exit codes: 0 all OK/SKIPPED, 1 one or more units failed, 2 fatal startup error.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import sys
 from pathlib import Path
 
@@ -85,10 +86,10 @@ def _install_stop_event():
         ev.set()
 
     signal.signal(signal.SIGINT, _handler)
-    try:
-        signal.signal(signal.SIGTERM, _handler)  # not deliverable the same way on Windows
-    except (ValueError, AttributeError, OSError):
-        pass
+    # SIGTERM is not deliverable the same way on Windows; registering it is
+    # best-effort and its absence is not an error.
+    with contextlib.suppress(ValueError, AttributeError, OSError):
+        signal.signal(signal.SIGTERM, _handler)
     return ev
 
 

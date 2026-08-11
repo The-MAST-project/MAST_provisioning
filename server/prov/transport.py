@@ -46,8 +46,9 @@ except ImportError as e:
     ) from e
 
 # requests is a hard dependency of pywinrm, so this import is always safe.
-import requests  # type: ignore[import]
 import contextlib
+
+import requests  # type: ignore[import]
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -488,7 +489,7 @@ def _winrm_probe_once(host: str, cred: dict[str, str], users: list[str]) -> tupl
                 return (winrm_session(host, cred), "ok")
         except winrm.exceptions.InvalidCredentialsError:
             rejected = True
-        except Exception:
+        except Exception:  # probing candidates; the next one is tried
             pass
         finally:
             _dispose_winrm_session(s)
