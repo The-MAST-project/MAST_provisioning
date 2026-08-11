@@ -246,6 +246,42 @@ This is the only path operators run by hand. Everything else is autonomous.
 For complete step-by-step instructions starting from a bare Windows machine,
 see **[docs/provisioning-server-setup.md](docs/provisioning-server-setup.md)**.
 
+## Pinning the upstream repos
+
+`tools/mast-repos.tsv` is the single source of truth for which upstream repos a
+machine clones, and for which revision. It is read by both `tools/mast-clone.ps1`
+and `tools/mast-clone.sh`, which must not diverge.
+
+```
+# dir	repo	roles	branch	rev
+common	MAST_common	unit,control,spec	master	v1.4.0
+unit	MAST_unit.2024-12-12	unit	main
+```
+
+The 5th `rev` column is **optional**:
+
+- **Empty (or absent)** — track the branch. `-Update` fast-forwards. This is the
+  historical behaviour, and it means a machine gets whatever the branch head was
+  at the moment *its* clone ran.
+- **Set** — a tag (preferred) or commit SHA. The repo is checked out **detached**
+  at that revision and does **not** move on `-Update`; it moves only when this
+  column moves.
+
+A `-Branch`/`--branch <dir>=<ref>` override **disables** that folder's pin, logged
+loudly, so a developer can follow a feature branch without editing the manifest.
+
+Every run writes `<Top>/clone-manifest.json` recording, per repo, the branch, the
+`rev` as *requested*, and the `resolved_sha` that actually landed —
+`Merge-MastInstalledManifest` folds it into the unit's `installed-manifest.json` as
+`repos`, so a unit can be asked what it is running. The requested/resolved pair is
+what makes a force-moved tag visible.
+
+Why this exists: sibling clones replaced git submodules, which pinned a commit by
+construction. Without a `rev` the fleet can silently diverge — on 2026-08-11 two
+upstream merges landed mid-fleet-run and left three units on two different
+`MAST_common` commits, every run reporting success. See
+`docs/decisions/2026-08-11-mast-clone-pins-a-revision-and-records-what-landed.md`.
+
 ## Tests and CI
 
 ```bash
