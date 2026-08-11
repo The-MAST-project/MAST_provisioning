@@ -12,7 +12,22 @@
 [CmdletBinding()]
 param(
     [int]${MastUnitPort} = 8000,
-    [int]${Phd2RpcPort}  = 4400
+    [int]${Phd2RpcPort}  = 4400,
+    # Assert the unit API answers, instead of reporting it.
+    #
+    # OFF today, deliberately, and this is a dated position rather than a
+    # preference. The fleet's resting state is Stopped/Manual -- enforced by
+    # mast-services-finalize -- and mast-unit is started BY HAND for an observing
+    # session. A unit sitting at rest therefore has no heartbeat, which is correct,
+    # so asserting one fails every healthy unit and holds fully_provisioned false
+    # fleet-wide (the same shape as #67/#68/#69).
+    #
+    # FLIP THIS ON when provisioning is expected to leave the services RUNNING --
+    # i.e. when mast-services-finalize's contract changes and a unit is expected to
+    # come back from a reprovision already serving. Expected within months of
+    # 2026-08-11. At that point an absent heartbeat IS a provisioning failure and
+    # this switch, or its default, should change to say so.
+    [switch]${RequireUnitHeartbeat}
 )
 
 ${ErrorActionPreference} = 'Stop'
@@ -42,6 +57,15 @@ function Add-DiagResult {
     ${line} | Out-File -FilePath ${verifyLog} -Encoding UTF8 -Append
     Write-Host ${line}
     if (-not ${Ok}) { $script:failCount++ }
+}
+
+# A check whose subject provisioning cannot own right now: logged, never counted.
+# Same [WARN] shape the PHD2 port uses, so the two read alike in the log.
+function Add-DiagWarn {
+    param([string]${Name}, [string]${Detail}, [string]${Why})
+    ${line} = ("[WARN] {0}: {1}{2}" -f ${Name}, ${Detail}, $(if (${Why}) { " -- ${Why}" } else { '' }))
+    ${line} | Out-File -FilePath ${verifyLog} -Encoding UTF8 -Append
+    Write-Host ${line}
 }
 
 ${null} = Set-Content -Path ${verifyLog} -Value ("[{0}] diagnostics verify-diagnostics.ps1 started." -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')) -Encoding UTF8
@@ -256,9 +280,24 @@ try {
         }
     }
     ${hbOk} = $null -ne ${resp} -and ${resp}.StatusCode -ge 200 -and ${resp}.StatusCode -lt 300
-    Add-DiagResult -Name 'mast-unit-heartbeat' -Ok ${hbOk} -Detail ("url={0} status={1}" -f ${heartbeatUrl}, $(if ($null -ne ${resp}) { ${resp}.StatusCode } else { 'no-response' }))
+    ${hbDetail} = ("url={0} status={1}" -f ${heartbeatUrl}, $(if ($null -ne ${resp}) { ${resp}.StatusCode } else { 'no-response' }))
+    if (${hbOk} -or ${RequireUnitHeartbeat}) {
+        # Answering always passes; and once the heartbeat is REQUIRED, silence fails.
+        Add-DiagResult -Name 'mast-unit-heartbeat' -Ok ${hbOk} -Detail ${hbDetail}
+    }
+    else {
+        # At rest with the service stopped by design: report, do not assert.
+        Add-DiagWarn -Name 'mast-unit-heartbeat' -Detail ${hbDetail} `
+            -Why 'reported, not asserted: the fleet rests with mast-unit stopped and started by hand. Pass -RequireUnitHeartbeat once a reprovision is expected to leave it serving.'
+    }
 } catch {
-    Add-DiagResult -Name 'mast-unit-heartbeat' -Ok $false -Detail ("exception: {0}" -f $_.Exception.Message)
+    if (${RequireUnitHeartbeat}) {
+        Add-DiagResult -Name 'mast-unit-heartbeat' -Ok $false -Detail ("exception: {0}" -f $_.Exception.Message)
+    }
+    else {
+        Add-DiagWarn -Name 'mast-unit-heartbeat' -Detail ("exception: {0}" -f $_.Exception.Message) `
+            -Why 'reported, not asserted (see -RequireUnitHeartbeat)'
+    }
 }
 
 # --- Summary ---

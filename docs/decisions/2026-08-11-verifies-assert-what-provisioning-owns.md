@@ -49,6 +49,15 @@ with services left at `Stopped/Manual` afterwards.
 **Unsettled:**
 
 - **`diagnostics` still starts `mast-phd2` mid-verify** to give its own check a chance, so a verify continues to have side effects on service state. It survives because `mast-services-finalize` stops it again at 9500, and mast03 was left correct after this validation — but whether a verify may move service state is a convention that should be decided once, not per module. It is the same question raised in #68 and still open.
-- **`mast-unit-heartbeat` in `diagnostics` asserts a runtime property too** — the unit API answering on `:8000`, which needs `mast-unit` running. It passed here only because a service was up from earlier work; on a unit at rest it is the same class of check as the three above. Not touched, because it was not part of the decision, but it is a fourth instance of the pattern.
+- **`mast-unit-heartbeat` is a warning today, and is meant to become an error.** It asserts the unit API answering on `:8000`, which needs `mast-unit` running — the same class of check as the three above, and it passed in the first validation only because a service happened to be up from earlier work. It now reports instead of asserting, behind `-RequireUnitHeartbeat` (off).
+
+  This one is a **dated position, not a preference**. The fleet rests with services `Stopped/Manual` and `mast-unit` started by hand for a session, so a unit at rest correctly has no heartbeat. That changes when provisioning is expected to leave the services running and a unit comes back from a reprovision already serving — expected within months of 2026-08-11. At that point an absent heartbeat *is* a provisioning failure, and the switch (or its default) should flip. The switch exists so that flip is one explicit change rather than an archaeology exercise, and so the intent is legible in the code today.
+
+  Both branches were exercised against identical input on mast03 — a port nothing serves — so the flip is known to work rather than assumed:
+
+  ```
+  -RequireUnitHeartbeat   [FAIL] mast-unit-heartbeat: status=no-response   -> exit 1
+  default                 [WARN] mast-unit-heartbeat: status=no-response   -> exit 0
+  ```
 - **Nothing yet proves the fleet reaches `fully_provisioned = true`.** These three were the known blockers on mast03; whether another module fails once they are cleared is unknown until a full run. The gate is `fully_provisioned`, and it has never been true on a complete set.
 - **`usbpcap`'s driver service is still unregistered on the fleet.** Passing the verify does not install it; #67 stays open against the provider.
