@@ -184,16 +184,47 @@ def test_the_2026_08_11_divergence_is_reported(fdr):
     assert out["drift_repos_by_host"]["mast01"] == []
 
 
-def test_a_repo_the_unit_never_pulled_is_absent_not_divergent(fdr):
+def test_a_repo_the_role_never_pulls_is_na_not_drift(fdr):
+    # 'gui' is control-only, so its absence on a unit means nothing.
     units = [
         _unit_with_repos(fdr, "mast01", [_repo_row("common", _COMMON_NEW), _repo_row("gui", "aaa")]),
         _unit_with_repos(fdr, "mast02", [_repo_row("common", _COMMON_NEW)]),
     ]
-    out = fdr.compare_repos(units, None)
+    out = fdr.compare_repos(units, None, expected={"common"})
     gui = next(r for r in out["matrix"] if r["dir"] == "gui")
-    assert gui["states"]["mast02"] == fdr.REPO_ABSENT
-    # absent is not drift: a role that does not pull gui is not a problem.
+    assert gui["states"]["mast02"] == fdr.REPO_NA
     assert out["drift_repos_by_host"]["mast02"] == []
+
+
+def test_a_repo_the_role_does_pull_is_missing_and_is_drift(fdr):
+    # The case Eli caught: 'claude' has roles unit,control,spec, so a unit without
+    # it is missing something it should have. Treating that as benign hid a real gap.
+    units = [
+        _unit_with_repos(fdr, "mast01", [_repo_row("common", _COMMON_NEW), _repo_row("claude", "3f2a1c8")]),
+        _unit_with_repos(fdr, "mast04", [_repo_row("common", _COMMON_NEW)]),
+    ]
+    out = fdr.compare_repos(units, None, expected={"common", "claude"})
+    claude = next(r for r in out["matrix"] if r["dir"] == "claude")
+
+    assert claude["states"]["mast04"] == fdr.REPO_MISSING
+    assert out["drift_repos_by_host"]["mast04"] == ["claude"]
+    assert "claude" in out["divergent_dirs"]
+
+
+def test_a_repo_absent_from_every_unit_still_gets_a_row(fdr):
+    # Otherwise a repo nobody cloned vanishes from the report entirely, which is the
+    # least visible way to be missing something.
+    units = [_unit_with_repos(fdr, "mast01", [_repo_row("common", _COMMON_NEW)])]
+    out = fdr.compare_repos(units, None, expected={"common", "claude"})
+    assert "claude" in out["dirs"]
+    assert next(r for r in out["matrix"] if r["dir"] == "claude")["states"]["mast01"] == fdr.REPO_MISSING
+
+
+def test_expected_repo_dirs_reads_the_real_manifest(fdr):
+    want = fdr.expected_repo_dirs(_REPO_ROOT, "unit")
+    # From tools/mast-repos.tsv: common/unit/claude are unit-role; gui is control-only.
+    assert {"common", "unit", "claude"} <= want
+    assert "gui" not in want
 
 
 def test_a_pin_not_honoured_is_its_own_state(fdr):
@@ -255,14 +286,15 @@ def test_the_csv_carries_the_repo_columns(fdr, tmp_path):
     assert by_host["mast03"]["repo:common"] == _COMMON_OLD
 
 
-def test_absent_alone_does_not_make_a_repo_divergent(fdr):
-    # Found by rendering a realistic fleet: 'claude' was reported divergent purely
-    # because one unit's role never pulls it, while every unit that HAD it agreed.
+def test_an_unexpected_repo_absence_does_not_make_a_repo_divergent(fdr):
+    # Found by rendering a realistic fleet: a repo was reported divergent purely
+    # because one unit lacked it, while every unit that had it agreed. Only holds for
+    # a repo the role does not pull -- see the MISSING test above for the other half.
     units = [
-        _unit_with_repos(fdr, "mast01", [_repo_row("common", _COMMON_NEW), _repo_row("claude", "3f2a1c8")]),
-        _unit_with_repos(fdr, "mast02", [_repo_row("common", _COMMON_NEW), _repo_row("claude", "3f2a1c8")]),
+        _unit_with_repos(fdr, "mast01", [_repo_row("common", _COMMON_NEW), _repo_row("gui", "3f2a1c8")]),
+        _unit_with_repos(fdr, "mast02", [_repo_row("common", _COMMON_NEW), _repo_row("gui", "3f2a1c8")]),
         _unit_with_repos(fdr, "mast04", [_repo_row("common", _COMMON_NEW)]),
     ]
-    out = fdr.compare_repos(units, None)
+    out = fdr.compare_repos(units, None, expected={"common"})
     assert out["divergent_dirs"] == []
     assert out["consistent_count"] == out["total_count"] == 2

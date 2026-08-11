@@ -275,8 +275,11 @@ loudly, so a developer can follow a feature branch without editing the manifest.
 
 `tools/fleet-drift-report.py` reports these across the fleet under
 **Upstream repos**, flagging `*` for a unit that resolved to a different commit and
-`!` for one where a pin was requested but the checkout is on a branch. A repo that a
-unit's role never pulls shows `absent` and is not counted as drift.
+`!` for one where a pin was requested but the checkout is on a branch. Absence is
+split by whether the unit's **role** pulls that repo, read from the `roles` column of
+the same manifest: `MISSING` (expected and not there — a real gap, counted as drift)
+versus `n/a` (control-only `gui` on a unit, say — benign). `--role` overrides the
+default of `unit`.
 
 Every run writes `<Top>/clone-manifest.json` recording, per repo, the branch, the
 `rev` as *requested*, and the `resolved_sha` that actually landed —

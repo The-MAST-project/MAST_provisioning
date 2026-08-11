@@ -349,11 +349,41 @@ def compare(units: list[UnitRecord], reference: UnitRecord | None) -> dict:
 #: and different fixes.
 REPO_OK = "ok"
 REPO_DIFFERS = "DIFFERS"
-REPO_ABSENT = "absent"
+#: Absent although this unit's ROLE pulls it -- a real gap, and drift. Distinct from
+#: REPO_NA: 'claude' has roles unit,control,spec, so a unit without it is missing
+#: something it should have, while 'gui' is control-only and its absence on a unit
+#: means nothing.
+REPO_MISSING = "MISSING"
+#: Absent and not expected for this role. Benign, never counted as drift.
+REPO_NA = "n/a"
 REPO_UNPINNED = "UNPINNED"
 
 
-def compare_repos(units: list[UnitRecord], reference: UnitRecord | None) -> dict:
+def expected_repo_dirs(repo_root: Path, role: str = "unit") -> set[str]:
+    """Clone dirs that `role` is supposed to pull, from tools/mast-repos.tsv.
+
+    Without this the report cannot tell "absent because this role never pulls it"
+    from "absent although it should be here", and the second is a gap worth
+    flagging. Read from the same file mast-clone reads, so the expectation cannot
+    drift from what the clone step actually does.
+    """
+    manifest = repo_root / "tools" / "mast-repos.tsv"
+    want: set[str] = set()
+    if not manifest.exists():
+        return want
+    for line in manifest.read_text(encoding="utf-8", errors="replace").splitlines():
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        parts = line.split("\t")
+        if len(parts) < 4:
+            continue
+        roles = {r.strip() for r in parts[2].split(",") if r.strip()}
+        if role in roles or "all" in roles:
+            want.add(parts[0].strip())
+    return want
+
+
+def compare_repos(units: list[UnitRecord], reference: UnitRecord | None, expected: set[str] | None = None) -> dict:
     """Cross-unit comparison of the UPSTREAM repo revisions each unit installed.
 
     The module matrix answers "does this unit match the payload"; it says nothing
@@ -368,7 +398,10 @@ def compare_repos(units: list[UnitRecord], reference: UnitRecord | None) -> dict
     """
     ok_units = [u for u in units if u.status == "ok"]
     ref_repos = reference.repos if reference else {}
-    all_dirs = sorted({d for u in ok_units for d in u.repos} | set(ref_repos))
+    want = expected or set()
+    # Union the EXPECTED dirs in too, so a repo missing from every unit still gets a
+    # row instead of vanishing from the report entirely.
+    all_dirs = sorted({d for u in ok_units for d in u.repos} | set(ref_repos) | want)
 
     matrix: list[dict] = []
     drift_repos_by_host: dict[str, list[str]] = {u.host: [] for u in ok_units}
@@ -393,7 +426,10 @@ def compare_repos(units: list[UnitRecord], reference: UnitRecord | None) -> dict
         for u in ok_units:
             row = u.repos.get(d)
             if not row:
-                states[u.host] = REPO_ABSENT
+                # Expected for this role but not there: a gap, and drift.
+                states[u.host] = REPO_MISSING if d in want else REPO_NA
+                if d in want:
+                    drift_repos_by_host[u.host].append(d)
                 continue
             sha = row.get("resolved_sha") or None
             want_rev = row.get("rev") or ""
@@ -420,15 +456,13 @@ def compare_repos(units: list[UnitRecord], reference: UnitRecord | None) -> dict
             }
         )
 
-    # A repo is consistent when every unit that HAS it agrees. REPO_ABSENT is not
-    # drift -- a role that never pulls gui is not a problem -- and counting it as
-    # such reported "claude differs" for a fleet where every unit carrying claude
-    # was on the same commit. drift_repos_by_host already excluded absent; this is
-    # the per-repo verdict catching up with it.
+    # A repo is consistent when every unit that SHOULD have it agrees. REPO_NA is
+    # excluded (a role that never pulls gui is not a problem); REPO_MISSING is not
+    # excluded, because that is the gap this distinction exists to surface.
     consistent = [
         r
         for r in matrix
-        if all(s == REPO_OK for s in r["states"].values() if s != REPO_ABSENT)
+        if all(s == REPO_OK for s in r["states"].values() if s != REPO_NA)
         and any(s == REPO_OK for s in r["states"].values())
     ]
     return {
@@ -560,7 +594,10 @@ def render(
     # --- Upstream repos ---
     if repos and repos.get("any_data"):
         lines.append("")
-        lines.append("=== Upstream repos (resolved revision; '*' = differs, '!' = pin not honoured) ===")
+        lines.append(
+            "=== Upstream repos (resolved revision; '*' = differs, '!' = pin not honoured, "
+            "MISSING = expected for this role, n/a = not) ==="
+        )
         repo_w = max([len(r["dir"]) for r in repos["matrix"]] + [8])
         rhdr = "repo".ljust(repo_w) + "  " + "  ".join(u.host.ljust(9) for u in ok_cols) + "  pin"
         lines.append(rhdr)
@@ -568,10 +605,12 @@ def render(
         for row in repos["matrix"]:
             cells = []
             for u in ok_cols:
-                st = row["states"].get(u.host, REPO_ABSENT)
+                st = row["states"].get(u.host, REPO_NA)
                 sha = _short(row["cells"].get(u.host), 7)
-                if st == REPO_ABSENT:
-                    cells.append("absent".ljust(9))
+                if st == REPO_NA:
+                    cells.append("n/a".ljust(9))
+                elif st == REPO_MISSING:
+                    cells.append("MISSING".ljust(9))
                 elif st == REPO_UNPINNED:
                     cells.append((sha + "!").ljust(9))
                 elif st == REPO_DIFFERS:
@@ -588,6 +627,12 @@ def render(
                 lines.append(
                     f"  [WARN] {row['dir']}: pinned at {row['pinned_rev']} but units resolved to "
                     f"different commits -- the tag moved, or a unit predates the pin."
+                )
+            if any(s == REPO_MISSING for s in row["states"].values()):
+                gone = [h for h, s in row["states"].items() if s == REPO_MISSING]
+                lines.append(
+                    f"  [WARN] {row['dir']}: expected for this role but ABSENT on "
+                    f"{', '.join(gone)} -- the clone did not land, or predates the repo."
                 )
             if any(s == REPO_UNPINNED for s in row["states"].values()):
                 off = [h for h, s in row["states"].items() if s == REPO_UNPINNED]
@@ -694,6 +739,13 @@ def main() -> int:
     ap.add_argument("--hosts", help="Comma-separated hostnames (default: all in unit-registry.json).")
     ap.add_argument("--registry", default=None, help="Path to unit-registry.json (default: server/unit-registry.json).")
     ap.add_argument("--build-manifest", default=None, help="Compare units against this build-manifest.json (desired state).")
+    ap.add_argument(
+        "--role",
+        default="unit",
+        help="Role whose expected upstream repos are read from tools/mast-repos.tsv "
+        "(default: unit -- everything in the unit registry is a unit). Decides whether "
+        "an absent repo reads MISSING or n/a.",
+    )
     ap.add_argument("--connect-timeout", type=int, default=15, help="SSH connect timeout seconds (default 15).")
     ap.add_argument("--json", dest="json_out", default=None, help="Write gathered unit records to this JSON file.")
     ap.add_argument("--csv", dest="csv_out", default=None, help="Write the comparison matrix to this CSV file.")
@@ -753,7 +805,7 @@ def main() -> int:
     cmp = compare_to_build(units, build_doc) if build_doc and build_doc.get("module_state") else compare(units, reference)
     # Independent of the module comparison: a unit can match the payload exactly and
     # still be running a different MAST_common than its neighbour (#75).
-    repos_cmp = compare_repos(units, reference)
+    repos_cmp = compare_repos(units, reference, expected_repo_dirs(_REPO_ROOT, args.role))
     elements_doc = load_bootstrap_elements(_REPO_ROOT)
     boot = bootstrap_gaps(units, elements_doc)
 
