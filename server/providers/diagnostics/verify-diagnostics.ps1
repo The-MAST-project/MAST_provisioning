@@ -209,16 +209,30 @@ try {
         }
     } catch {}
     finally { ${tcpClient}.Close() }
-    # PHD2 only binds its JSON-RPC port after connecting to a camera/guide scope.
-    # In VM test mode (no hardware), treat port not bound as a warning only.
+    # PHD2 only binds its JSON-RPC port after connecting to a camera/guide scope, so
+    # an unbound port means "no observing session right now" -- which is the NORMAL
+    # state of a production unit between sessions, with services at Stopped/Manual
+    # and no camera attached.
+    #
+    # This used to be a hard FAIL off the VM, and a warning only in VM test mode.
+    # That guard was aimed at the wrong axis: what makes the check meaningless is not
+    # "we are in a VM", it is "PHD2 has no camera connection" -- and a real unit at
+    # rest is indistinguishable from a VM with no hardware for this purpose. The
+    # result was diagnostics failing on every healthy unit, every run, which blocked
+    # fully_provisioned fleet-wide and made a permanently-red check nobody could act
+    # on (#69).
+    #
+    # Provisioning can prove PHD2 is installed, registered and launchable -- the
+    # PHD2-launch check above does exactly that. It cannot prove a guide camera is
+    # plugged in. So the port is REPORTED, not asserted.
     if (${tcpOk}) {
         Add-DiagResult -Name 'PHD2-rpc-port' -Ok $true -Detail ("port={0} connected={1}" -f ${Phd2RpcPort}, ${tcpOk})
-    } elseif (${isVmTestRun}) {
-        ${line} = ("[WARN] PHD2-rpc-port: port={0} not bound (VM test mode - no hardware)" -f ${Phd2RpcPort})
+    } else {
+        ${why} = if (${isVmTestRun}) { 'VM test mode - no hardware' } else { 'no camera/guide scope connected' }
+        ${fmt} = "[WARN] PHD2-rpc-port: port={0} not bound ({1}) -- reported, not asserted: provisioning cannot prove a camera is attached."
+        ${line} = ${fmt} -f ${Phd2RpcPort}, ${why}
         ${line} | Out-File -FilePath ${verifyLog} -Encoding UTF8 -Append
         Write-Host ${line}
-    } else {
-        Add-DiagResult -Name 'PHD2-rpc-port' -Ok $false -Detail ("port={0} not bound (requires connected camera/guide scope)" -f ${Phd2RpcPort})
     }
 } catch {
     Add-DiagResult -Name 'PHD2-rpc-port' -Ok $false -Detail ("exception: {0}" -f $_.Exception.Message)

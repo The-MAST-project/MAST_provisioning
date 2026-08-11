@@ -44,9 +44,35 @@ foreach ($p in $candidates) {
 }
 $svc = Get-Service -Name 'USBPcap' -ErrorAction SilentlyContinue
 
-if ($exe -and $svc) {
-    W ("PASS USBPcapCMD={0} svc Status={1} StartType={2}" -f $exe, $svc.Status, $svc.StartType)
-    Write-MastSmokeOk -Module 'usbpcap' | Out-Null
+# USBPcap is DIAGNOSTIC tooling -- USB capture for debugging a camera or mount
+# link -- not part of the observing chain. So the outcome this module is
+# responsible for is "the capture CLI is installed and available", and that is what
+# is asserted. The kernel driver service is REPORTED, not asserted (#67).
+#
+# Why it is not asserted: provide-usbpcap.ps1 runs the NSIS installer as SYSTEM and
+# the driver service registration can silently no-op, which is a real defect --
+# tracked in #67 against the PROVIDER, where it belongs. Asserting it here instead
+# left every unit in the fleet with verify=fail permanently, which blocks
+# fully_provisioned for all of them and, being always on, stops being read at all
+# (the same objection raised when closing #55). A permanently-red check on optional
+# tooling costs more than the thing it is checking.
+#
+# Capture genuinely will not work until the service exists. That is stated in the
+# log every run, so an operator reaching for USB capture is told why it is not
+# there rather than discovering it at the point of need.
+if ($exe) {
+    if ($svc) {
+        W ("PASS USBPcapCMD={0} svc Status={1} StartType={2}" -f $exe, $svc.Status, $svc.StartType)
+        Write-MastSmokeOk -Module 'usbpcap' | Out-Null
+    }
+    else {
+        W ("PASS USBPcapCMD={0} -- CLI present, which is what this module asserts." -f $exe)
+        W ("REPORTED (not asserted): the 'USBPcap' driver service is NOT registered, so USB")
+        W ("  capture will not work until it is. The installer can silently no-op registering")
+        W ("  it; see #67 against provide-usbpcap.ps1. This is diagnostic tooling, so its")
+        W ("  absence does not fail the unit.")
+        Write-MastSmokeOk -Module 'usbpcap' -Value 'usbpcap_ok driver=unregistered' | Out-Null
+    }
     exit 0
 }
 
@@ -56,10 +82,11 @@ if ($exe -and $svc) {
 # registration is deferred to a reboot we are not going to perform inside
 # this WinRM run. exe-absent stays a hard FAIL: that means the installer
 # itself failed and there is no way a reboot would resolve it.
+# -AllowPendingReboot is now subsumed by the exe-present branch above, which passes
+# whether or not the service is registered. Kept as a no-op branch so the flag does
+# not become a silent lie for callers that still pass it (build-mast, vm harness).
 if ($AllowPendingReboot -and $exe -and -not $svc) {
-    W ("SKIP USBPcapCMD={0} but svc 'USBPcap' not registered -- pending reboot. -AllowPendingReboot set; treating as skipped." -f $exe)
-    Write-MastSmokeOk -Module 'usbpcap' -Value 'usbpcap_skipped reason=pending_reboot' | Out-Null
-    exit 0
+    W "note: -AllowPendingReboot is redundant now that the CLI alone is the assertion."
 }
 
 # ---- failure path: dump diagnostics ----
