@@ -192,3 +192,56 @@ def test_cli_config_builder_parses_args():
     assert cfg.proxy_mode == "direct"
     assert cfg.retain_runs == 10
     assert cfg.unit_registry.name == "unit-registry.json"
+
+
+# --- #70: the unit is told an ADDRESS, never this machine's name -------------
+def test_local_address_for_asks_the_kernel_for_the_route(root, monkeypatch):
+    """The source address must come from the OS, not from the interface list.
+
+    This machine has seven IPv4 addresses (one routable, one VirtualBox
+    host-only, five APIPA); a hand-picked one is how 169.254.215.207 was written
+    into three units' hosts files. A UDP connect() sends nothing -- it binds the
+    socket so getsockname() reports the kernel's chosen source.
+    """
+    seen = {}
+
+    class FakeSock:
+        def connect(self, addr):
+            seen["connect"] = addr
+
+        def getsockname(self):
+            return ("10.23.2.34", 51234)
+
+        def close(self):
+            seen["closed"] = True
+
+        def send(self, *a, **kw):  # pragma: no cover -- must never be called
+            raise AssertionError("the probe must not send data")
+
+    monkeypatch.setattr(D.socket, "socket", lambda *a, **kw: FakeSock())
+
+    assert D.Driver._local_address_for("10.23.1.103") == "10.23.2.34"
+    assert seen["connect"] == ("10.23.1.103", D.DISCARD_PORT)
+    assert seen.get("closed") is True
+
+
+def test_local_address_for_returns_empty_when_there_is_no_route(root, monkeypatch):
+    class DeadSock:
+        def connect(self, addr):
+            raise OSError("network is unreachable")
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(D.socket, "socket", lambda *a, **kw: DeadSock())
+    assert D.Driver._local_address_for("10.23.1.103") == ""
+    # An unresolved unit is not probed at all.
+    assert D.Driver._local_address_for("") == ""
+
+
+def test_identity_and_address_start_as_separate_attributes(root):
+    drv = D.Driver(_cfg(root))
+    # Both exist; the address defaults to the identity until a unit is processed,
+    # which is the logged-fallback behaviour, not a silent one.
+    assert drv.prov_identity
+    assert drv.prov_address == drv.prov_identity

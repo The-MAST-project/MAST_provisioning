@@ -5,7 +5,7 @@
 
 .DESCRIPTION
   Runs ON THE UNIT (sent via Invoke-Command -FilePath or as an inline scriptblock).
-  Mounts \\<ProvServer>\mast-staging with explicit SMB credentials, copies the
+  Mounts \\<ProvAddress>\mast-staging with explicit SMB credentials, copies the
   payload with robocopy, then unmounts. Removes stale run dirs and validates
   free space BEFORE pulling, so a large payload cannot fill the unit disk.
 
@@ -14,8 +14,13 @@
     rc       - net use or robocopy exit code
     detail   - trimmed output for logging
 
-.PARAMETER ProvServer
-  Hostname of the provisioning server (SMB host).
+.PARAMETER ProvAddress
+  IP address of the provisioning server, on the route to THIS unit -- not its
+  hostname. The driver derives it per unit (prov.driver._local_address_for) so
+  the unit never has to resolve a name that exists for the server's benefit and
+  that nothing maintains: three units pinned it to a dead APIPA address and
+  every transfer failed with net.exe error 53 (#70). A name still works here if
+  the unit can resolve it, which is the driver's logged fallback.
 
 .PARAMETER UnitHostname
   Hostname being provisioned (used in the source UNC path).
@@ -33,7 +38,7 @@
   Full UNC source path, e.g. \\provserver\mast-staging\mast01\01-provisioning.
 #>
 param(
-    [string]$ProvServer,
+    [string]$ProvAddress,
     [string]$UnitHostname,
     [string]$SmbUser,
     [string]$SmbPass,
@@ -41,7 +46,7 @@ param(
     [string]$SrcUNC
 )
 
-$smbRoot = "\\$ProvServer\mast-staging"
+$smbRoot = "\\$ProvAddress\mast-staging"
 
 <#
 Bounded `net use`: when the host SMB server is misconfigured (e.g. the

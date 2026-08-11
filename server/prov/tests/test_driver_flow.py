@@ -49,6 +49,7 @@ def make_responder(
     smoke: str = 'SMOKE {"git": "ok"}',
     proxy: str = "PROXY {}",
     inventory: str = "",
+    smbreach: str = "SMBREACH ok",
 ):
     """Build a responder(script) -> (rc, stdout) keyed on recognizable phase
     scripts. Every phase has a sane default; a test overrides one to steer a
@@ -58,6 +59,10 @@ def make_responder(
         s = script
         if "Get-NetAdapter" in s:
             return (0, inventory)
+        # Pre-build reachability probe: can the unit open SMB to the staging
+        # address (#70). Defaults to reachable so it does not gate other tests.
+        if "SMBREACH" in s:
+            return (0, smbreach)
         if "-Register" in s:
             return (0, register)
         if "execute-result.json" in s:
@@ -598,3 +603,58 @@ def test_modules_flag_skips_when_no_named_module_needs_work(root, monkeypatch):
     assert "MODULE_TARGET_EMPTY" in log, log
     assert "EXECUTE_START" not in log, f"executed despite nothing to do\n{log}"
     assert code == D.EXIT_OK, log
+
+
+# --- #70: address for transport, name for identity ---------------------------
+def test_staging_unc_uses_the_derived_address_and_lease_keeps_the_name(root, monkeypatch):
+    """The two roles must stay split.
+
+    They were one value (`prov_server`, this machine's COMPUTERNAME), which the
+    unit then had to resolve -- via a hand-placed hosts entry nothing maintains.
+    Three units pinned it to a dead APIPA address and every transfer failed with
+    net.exe error 53 (#70). The lease's held_by is the one place a NAME is right:
+    it identifies who holds the run, and outlives a DHCP change.
+    """
+    drv, sess = _make_driver(root, monkeypatch, make_responder())
+    monkeypatch.setattr(D.Driver, "_local_address_for",
+                        staticmethod(lambda peer_ip: "10.23.2.34"))
+    drv.prov_identity = "AP-PC-PF62XRLL"
+
+    drv.run()
+    log = drv.log.run_log_path.read_text()
+
+    assert "PROV_ADDR" in log and "address=10.23.2.34" in log, log
+    assert r"src_unc=\\10.23.2.34\mast-staging" in log, log
+    assert "AP-PC-PF62XRLL" not in log.split("TRANSFER_START")[1].split("\n")[0], (
+        "the staging UNC must not carry this machine's name\n" + log)
+    # ...while the execute lease still identifies the holder by name.
+    planted = [s for s in sess.scripts if "held_by" in s]
+    assert planted, "no lease/detached-config write seen"
+    assert any("AP-PC-PF62XRLL" in s for s in planted), planted[:1]
+
+
+def test_unreachable_staging_fails_before_the_build(root, monkeypatch):
+    """A run that cannot transfer must not build first.
+
+    The #70 failure spent ~3 minutes building and planning a 403-file transfer
+    before net.exe reported error 53.
+    """
+    built = {"n": 0}
+
+    def counting_build(self, unit, host, modules, dur):
+        built["n"] += 1
+        self._staging_dir = self.cfg.repo_top / "staging"
+        self.log.event("BUILD_OK", unit=host, payload_hash="h", git_sha="s")
+        return "h", "s", {}
+
+    drv, sess = _make_driver(root, monkeypatch,
+                             make_responder(smbreach="SMBREACH timeout"))
+    monkeypatch.setattr(D.Driver, "_build", counting_build)
+
+    code = drv.run()
+    log = drv.log.run_log_path.read_text()
+
+    assert "PREFLIGHT_UNIT_SMB_FAIL" in log, log
+    assert built["n"] == 0, "built a payload the unit cannot pull"
+    assert "BUILD_START" not in log, log
+    assert code == D.EXIT_UNIT_FAIL, log

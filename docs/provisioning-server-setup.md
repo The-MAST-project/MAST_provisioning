@@ -26,7 +26,9 @@ Do not use Home editions (no SMB server capability or local group policy).
 - TCP 5985 (WinRM HTTP) outbound to each unit. TCP 5986 (WinRM HTTPS) if you
   plan to use `-WinRMUseSSL`.
 - TCP 445 (SMB) inbound from the unit subnet so units can pull their staging
-  payload from `\\prov-server\mast-staging`.
+  payload from `\\<prov-server-address>\mast-staging`. The driver hands each unit
+  this server's **IP address on the route to that unit** — not its hostname — so
+  no DNS record or `hosts` entry is needed on the units.
 - ICMP echo (ping) outbound to units for the reachability check.
 
 **Software on the provisioning server:**
@@ -461,16 +463,42 @@ Check in order:
 
 ### TRANSFER_FAIL (robocopy error)
 
-The unit could not connect to `\\prov-server\mast-staging`.
+The unit could not connect to `\\<address>\mast-staging`.
+
+The driver builds that UNC from **the prov server's IP address on the route to
+that unit**, derived per unit and logged as `PROV_ADDR`; it does not use the
+server's hostname, so the unit is not asked to resolve anything. Check `src_unc`
+in `TRANSFER_START` for the address actually used.
 
 1. Confirm the share exists on the prov server: `Get-SmbShare -Name mast-staging`.
-2. From a unit, test the share manually:
+2. From a unit, test the share manually, using the address from `PROV_ADDR`:
    ```powershell
-   net use \\<prov-server>\mast-staging /user:mast-transfer <password>
+   net use \\<address>\mast-staging /user:mast-transfer <password>
    ```
-3. Check TCP 445 inbound is allowed (Step 5 above).
+3. Check TCP 445 inbound is allowed (Step 5 above). A run now probes this from
+   the unit *before* building — see `PREFLIGHT_UNIT_SMB_FAIL`.
 4. Verify the `mast-transfer` password in `vault\creds.json` matches the account
    password: re-run `setup-smb-share.ps1` to synchronize them.
+
+### PREFLIGHT_UNIT_SMB_FAIL
+
+The unit cannot open TCP 445 to the staging address. Checked before the build, so
+a run that cannot transfer does not build a payload first. Reachability only — an
+authentication problem is reported later, by the pull.
+
+1. Read the `address` in the event and confirm the unit's subnet can reach it. A
+   `PROV_ADDR_FALLBACK` event just above means the driver could not derive a route
+   to the unit and fell back to the server's *name*, which the unit must then
+   resolve itself.
+2. From the unit: `Test-NetConnection <address> -Port 445`.
+3. Check the prov server's inbound 445 rule, and that nothing blocks the path
+   between the two subnets.
+
+Historic note: units used to be handed the server's hostname and resolved it
+through a hand-placed `hosts` entry. Three of four had it pinned to a stale APIPA
+address and every transfer failed with `net.exe` error 53; nothing in the repo
+maintained those entries. They are unused now — see
+`docs/decisions/2026-08-11-the-unit-is-told-an-address-not-a-name.md`.
 
 ### EXECUTE_FAIL or smoke failures
 
