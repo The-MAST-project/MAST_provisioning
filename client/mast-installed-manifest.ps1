@@ -74,7 +74,13 @@ function Merge-MastInstalledManifest {
         $Previous,
         [Parameter(Mandatory)]$BuildData,
         [Parameter(Mandatory)]$Outcomes,
-        [Parameter(Mandatory)][string]$InstalledAt
+        [Parameter(Mandatory)][string]$InstalledAt,
+        # Upstream provenance from mast-clone's clone-manifest.json: which revision
+        # of common/unit/... this unit actually has. The provisioning repo's own
+        # git_sha was already recorded; the repos it INSTALLS were not, so the fleet
+        # could diverge with nothing saying so (#75). Optional: a unit provisioned
+        # before mast-clone wrote the sidecar simply has no 'repos' key.
+        $Repos = $null
     )
 
     $modules = [ordered]@{}
@@ -163,6 +169,10 @@ function Merge-MastInstalledManifest {
         fully_provisioned = $fully
         modules           = $modules
     }
+
+    # Carried verbatim, not recomputed: this is a record of what the clone step
+    # reported, and second-guessing it here would just be a second source of truth.
+    if ($null -ne $Repos) { $out['repos'] = $Repos }
 
     # Carry the build's identity fields for reporting.
     foreach ($f in @('built_at', 'git_sha', 'hostname')) {

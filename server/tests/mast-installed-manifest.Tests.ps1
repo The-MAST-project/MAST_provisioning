@@ -233,3 +233,36 @@ Describe 'Merge-MastInstalledManifest -- legacy manifest migration' {
         $r.fully_provisioned | Should Be $true
     }
 }
+
+Describe 'Merge-MastInstalledManifest -- upstream repo provenance (#75)' {
+    It 'omits the repos key entirely when no sidecar was supplied' {
+        $r = Merge-MastInstalledManifest -BuildData (New-BuildData -Modules @('git') -Hashes @{ git = 'h1' }) `
+            -Outcomes (New-Outcomes @{ 'git' = @($true, $true) }) -InstalledAt 'T'
+        $r.PSObject.Properties.Match('repos').Count | Should Be 0
+    }
+    It 'carries the repos block through verbatim' {
+        $repos = @(
+            [pscustomobject]@{ dir='common'; repo='MAST_common'; branch='master'; rev='v1.0.0'
+                               resolved_sha='b4991791aaaa'; head='HEAD' },
+            [pscustomobject]@{ dir='unit'; repo='MAST_unit.2024-12-12'; branch='main'; rev=''
+                               resolved_sha='1cf92164bbbb'; head='main' }
+        )
+        $r = Merge-MastInstalledManifest -BuildData (New-BuildData -Modules @('git') -Hashes @{ git = 'h1' }) `
+            -Outcomes (New-Outcomes @{ 'git' = @($true, $true) }) -InstalledAt 'T' -Repos $repos
+
+        @($r.repos).Count      | Should Be 2
+        $r.repos[0].dir        | Should Be 'common'
+        $r.repos[0].rev        | Should Be 'v1.0.0'
+        $r.repos[0].head       | Should Be 'HEAD'
+        # The unpinned row keeps an empty rev and names the branch it tracked, which
+        # is what makes an accidental divergence readable after the fact.
+        $r.repos[1].rev          | Should Be ''
+        $r.repos[1].resolved_sha | Should Be '1cf92164bbbb'
+    }
+    It 'does not let the repos block affect fully_provisioned' {
+        $repos = @([pscustomobject]@{ dir='common'; resolved_sha='x' })
+        $ok = Merge-MastInstalledManifest -BuildData (New-BuildData -Modules @('git') -Hashes @{ git = 'h1' }) `
+            -Outcomes (New-Outcomes @{ 'git' = @($true, $true) }) -InstalledAt 'T' -Repos $repos
+        $ok.fully_provisioned | Should Be $true
+    }
+}
