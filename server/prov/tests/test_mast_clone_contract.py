@@ -34,7 +34,9 @@ EXPECTED_UNIT_ROWS = {
 EXPECTED_UV_VERSION = "0.11.33"
 
 #: SHA-256 of tools/mast-clone.ps1 -- the coarse backstop that surfaces any edit,
-#: including ones no assertion below covers.
+#: including ones no assertion below covers. Taken over LF-normalized text, not
+#: raw bytes: the CI matrix checks out on both platforms and a Windows checkout
+#: rewrites the line endings, so a byte digest would differ by platform alone.
 EXPECTED_CLONE_PS1_SHA256 = "13ef758a2b025a56651ded258263a79355dedba98c619271296e27056536de19"
 
 #: Parameters provide-mast.ps1 passes, or relies on existing.
@@ -144,7 +146,8 @@ def test_writes_mast_pth() -> None:
 
 
 def test_mast_clone_ps1_is_unchanged() -> None:
-    digest = hashlib.sha256(_CLONE_PS1.read_bytes()).hexdigest()
+    normalized = _CLONE_PS1.read_text(encoding="utf-8").replace("\r\n", "\n").replace("\r", "\n")
+    digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
     assert digest == EXPECTED_CLONE_PS1_SHA256, (
         "tools/mast-clone.ps1 changed. Review the diff for fleet impact, then update "
         "EXPECTED_CLONE_PS1_SHA256 in the same commit."
