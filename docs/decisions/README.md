@@ -60,12 +60,17 @@ supersedes:               # slug(s) this record replaces
 ```
 
 - **`status`** carries the merge lag explicitly instead of leaving the date to imply it.
-  Open a record as `proposed` when the decision is still in review; flip to `accepted` in
-  the same PR that lands the change.
+  Open a record as `proposed` while the decision is not yet built; flip to `accepted` in the
+  PR that lands the change. A `proposed` record may itself merge to `main` ahead of its code
+  -- see *Proposed records ahead of their code* under *Immutability* for what that costs and
+  what it obliges.
 - **`areas`** names what the decision is *about*, at any grain, drawn from the living list in
   `AREAS.md` -- or coined and added there. See below.
 - **`issue`** points at the ticket carrying the discussion. The record carries the
-  outcome; the ticket carries the argument.
+  outcome; the ticket carries the argument. **Required on a `proposed` record**, and
+  optional once a decision is `accepted`: while a decision is still unbuilt the argument is
+  live, and a reader who disagrees with the record needs somewhere to say so that is not a
+  commit on `main`. An accepted record's argument is over, so a missing ticket costs nothing.
 
 ### `areas`: a curated, shifting list
 
@@ -166,37 +171,68 @@ Retrieval works three ways; the prose feeds the first two:
 
 ## Immutability and superseding
 
-A record whose decision has **reached `main`** is never edited -- not for staleness, not
-for cleanup. The value is the historical belief, which an edit destroys.
+**A record freezes when its `status:` becomes `accepted`**, not when the file reaches
+`main`. From that point it is never edited -- not for staleness, not for cleanup. The value
+is the historical belief, which an edit destroys.
 
 When such a decision is reversed or refined, write a **new** record with `supersedes:` set,
 and in the same PR flip the old one's `status:` to `superseded` and fill its
 `superseded_by:`. A superseded entry in the frozen archive has no slug, so name it in prose
 instead and leave the frontmatter alone.
 
-**Until a decision reaches `main`, its record is still editable -- rewrite it in place.**
-A decision that changes mid-review gets **one record stating where it ended up**, not a
-record plus a correction: no second file, no `superseded` status, no in-branch supersession
-chain. `main` is the line rather than any commit, because that is where a decision stops
-being in flight and other people start working against it. While the branch is open, the
-argument about how the decision moved belongs on the PR, which is where it happened; a
-reviewer should read what is proposed, not an archaeology of how it got there. Two records
-were consolidated under this rule on 2026-08-09 -- see
-`2026-08-09-unmerged-decisions-ship-in-the-current-format.md`.
+**While a record is `proposed`, it is editable -- rewrite it in place.** A decision that
+changes before it is accepted gets **one record stating where it ended up**, not a record
+plus a correction: no second file, no `superseded` status, no supersession chain within a
+single decision. The argument about how the decision moved belongs on its PR and its
+`issue:`, which is where it happened; a reader should meet what is proposed, not an
+archaeology of how it got there. Two records were consolidated under this rule on
+2026-08-09 -- see `2026-08-09-unmerged-decisions-ship-in-the-current-format.md`.
 
 Rewriting in place does not mean discarding what was learned: an approach that was tried
 and abandoned during review is usually a **`Rejected` entry**, which is a better home for
 it than a superseded record, because it names something concrete that failed and why.
 
-**Once a record has reached `main`, the permitted edits are exactly three frontmatter
-keys** -- `status:`, `superseded_by:`, and `areas:`. The body is never touched. The line
-this draws: the freeze protects the *historical claim* (what was believed and decided,
-which an edit falsifies), not the *navigation metadata* (which record supersedes this one,
-what subject to find it under). Retagging `creds` to `credentials` while merging synonyms
-in `AREAS.md` changes nothing about what the decision said; rewriting a sentence does.
+**Once a record is `accepted`, the permitted edits are exactly three frontmatter keys** --
+`status:`, `superseded_by:`, and `areas:`. The body is never touched. The line this draws:
+the freeze protects the *historical claim* (what was believed and decided, which an edit
+falsifies), not the *navigation metadata* (which record supersedes this one, what subject to
+find it under). Retagging `creds` to `credentials` while merging synonyms in `AREAS.md`
+changes nothing about what the decision said; rewriting a sentence does.
 
-Before that -- uncommitted, or committed on a branch that has not merged -- edit it freely,
-body included.
+### Proposed records ahead of their code
+
+The common case is a record traveling with its own diff: opened `proposed` when the PR
+opens, flipped to `accepted` in that same PR, frozen on merge. Nothing below applies to it.
+
+A record may also be **merged to `main` while still `proposed`, with none of its code
+written** -- a design agreed as direction, often blocked on defects elsewhere. That is
+allowed, because the alternative is a long-lived branch holding the one artifact the team
+most needs to read while the blockers clear. It carries three obligations, and they exist
+because such a record is a liability in exactly the way an accepted one is not: it describes
+a present tense that does not exist, in a directory whose whole premise is explaining code
+that does.
+
+- **The freeze does not bind it.** It stays editable, body included, for as long as it is
+  `proposed`. This is why the line above is `accepted` and not `main`: a design still under
+  discussion must be able to absorb the discussion, and a merged-but-unbuilt record
+  otherwise leaves amendment with nowhere legal to go.
+- **The landing PR rewrites the body to what shipped, then flips to `accepted`.** Not the
+  intent as agreed months earlier -- the mechanism as built, with the divergences moved into
+  `Rejected` where they belong. Only that rewritten form is frozen, and only it is worth
+  freezing: what is preserved is a belief someone acted on, not one they abandoned on
+  contact with the code.
+- **`issue:` is required**, and the ticket stays open until the flip. A record on `main`
+  reads as settled; the ticket is what says the argument is not.
+
+An agent reading a `proposed` record should treat every identifier in it as **a name for
+something that may not exist yet** -- `git grep` the symbol before believing the code
+matches the account. The status field is the only thing separating the two, and the prose
+of a good record is confident either way.
+
+Two shapes need distinguishing here, because only one of them earns the exception. A design
+the team has committed to and cannot yet build is a decision; a design nobody has agreed to
+is a proposal, and belongs on its ticket until it is one. The test is whether someone would
+object to work being started along these lines, not whether work has started.
 
 ## When to write one
 
@@ -211,12 +247,29 @@ valuable to find.
 
 When in doubt, write it. The bar is low on purpose.
 
+### Where to write it, when the decision spans repos
+
+**A record lands in the repo whose code it decides.** The retrieval story is `git grep`
+inside one clone, so a decision about `app.py`'s lifespan or `PHD2Connector.__init__` is
+unreachable from here no matter how well it is written -- an agent working in `MAST_unit`
+has no reason to read `MAST_provisioning/docs/decisions/`, and the anchoring rule buys
+nothing across a clone boundary.
+
+A design that genuinely spans repos is normal, and splitting it into fragments would destroy
+it. Keep it whole in the repo carrying the **larger share of the change**, and add a short
+record in each other affected repo -- a paragraph on what changes there and why, naming that
+repo's own symbols, citing the full record by slug and repo. The stub is not bookkeeping: it
+is the only thing that makes the decision findable from the code it actually constrains.
+
+Until the other repos adopt this format, cite the full record from that repo's `CLAUDE.md`
+or its issue instead, and say in the record which repos it reaches.
+
 ## Retrieval
 
     git grep -il '<symbol or path>' docs/decisions/    # symbol -> record (and the archive)
     git grep -l '^  - storage$' docs/decisions/        # every record tagged with one area
     ls docs/decisions/2*.md                            # the index (filenames are slugs)
-    grep -l 'status: proposed' docs/decisions/2*.md    # decisions still in review
+    grep -l 'status: proposed' docs/decisions/2*.md    # decided but not yet built -- read as design, not as code
 
 `AREAS.md` lists the area terms in use, and carries the command that re-derives them from the
 records.
