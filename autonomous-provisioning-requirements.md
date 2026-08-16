@@ -143,8 +143,8 @@ depend on are Python and run unmodified on either OS:
 
 - `server/prov/driver.py` (the per-unit loop and the cadence loop), `transport.py`
   (SSH-first via paramiko, WinRM fallback via pywinrm), `drift.py`, `logevents.py`, and the
-  pure-logic modules `retention.py`, `proxy_assert.py`, `staging_size.py`, `winrm_flap.py`
-  and `maintenance_window.py`.
+  pure-logic modules `retention.py`, `proxy_assert.py`, `staging_size.py` and
+  `maintenance_window.py`.
 - **Timezones** are no longer a portability hazard: `maintenance_window.py` resolves the
   registry's IANA IDs through `zoneinfo`, so the IANA->Windows mapping shim the PowerShell
   driver needed is gone rather than ported. Windows has no bundled tz database, which is
