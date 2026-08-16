@@ -228,11 +228,15 @@ The WinRM/SSH transport is the canonical `server/prov/transport.py` (lifted out 
 | `run_ps(session, script, ...)` | Run PS on a unit with heartbeat + hard timeout + resilient retry. |
 | `winrm_session(host, cred, read_timeout_s, op_timeout_s)` | Construct a `winrm.Session`. Never instantiate `winrm.Session` directly outside this factory. |
 
-### The server orchestration is being ported to Python (platform-agnostic)
+### The server orchestration is Python (platform-agnostic)
 
-The server-side control plane is moving from `server/check-and-provision.ps1` to the Python
-package **`server/prov/`** (`MAST_provisioning#10` item 9 / PR #13; rationale in
-`docs/decisions/2026-07-12-port-server-orchestration-to-python.md`). **Standing requirement: the provisioning server must be platform-agnostic — all
+The server-side control plane is the Python package **`server/prov/`**, driven by
+`server/check_and_provision.py`. The PowerShell driver `server/check-and-provision.ps1`,
+its Task Scheduler installer, and the five `server/lib` helpers only it dot-sourced were
+**retired on 2026-08-16** — there is no PowerShell control plane to keep in step, and no
+new server-side orchestration belongs in PowerShell. Rationale in
+`docs/decisions/2026-07-12-port-server-orchestration-to-python.md` and
+`docs/decisions/2026-08-16-the-powershell-driver-is-retired.md`. **Standing requirement: the provisioning server must be platform-agnostic — all
 paths and mechanisms run end-to-end against the Windows units with no per-platform patching or
 extra code.** Consequences for any new server code:
 
@@ -311,7 +315,7 @@ derived from the hostname** -- do not reintroduce hostname->site parsing in prov
 profiles must match the controller's MongoDB `sites` doc (the app cross-checks them at startup).
 The operator picks the site at bootstrap (`bootstrap-winrm.ps1`, default `ns`); it is persisted and
 `onboard-mast-unit.ps1` writes it into the unit's `unit-registry.json` entry, which
-`check-and-provision.ps1` passes to `build-mast.ps1 -Site`. Site is config-only -- never the hostname.
+the driver passes to `build-mast.ps1 -Site`. Site is config-only -- never the hostname.
 
 ## Instrument profiles: PWI4 `.cfg` + PHD2 `.reg` (two stages)
 

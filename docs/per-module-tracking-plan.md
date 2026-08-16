@@ -27,7 +27,7 @@ installed.
   it is **last-payload-only** — a `-Modules <subset>` touch-up overwrites the doc
   with just that subset and it can no longer answer "is this unit *fully*
   provisioned".
-- **Drift:** `server/prov/driver.py` / `check-and-provision.ps1` compare the
+- **Drift:** `server/prov/driver.py` compares the
   single `payload_hash`. `tools/fleet-drift-report.py` prints a `module_versions`
   matrix, trusting the static file.
 - **Per-provider `verify-*.ps1`** already exist (the execute-phase verify steps)

@@ -4,33 +4,35 @@ Automated Windows provisioning for MAST telescope unit machines (`mast01`-`mast2
 
 ## Overview
 
-The provisioning server (a long-lived Windows machine) builds a per-unit staging
+The provisioning server (one long-lived machine) builds a per-unit staging
 payload from this repo, exposes it on an SMB share (`mast-staging`), and triggers
 each unit to pull its own payload via `robocopy` over that share. The unit then runs
 the provisioning script locally. Modules are self-describing via `module.json`
 manifests; the orchestrator never has to know what software lives in which module.
 
-In production this loop runs autonomously every N minutes via a Windows Task
-Scheduler job (`server/check-and-provision.ps1`). In development we test the full
+The driver is Python (`server/prov/`, entry point `server/check_and_provision.py`) and
+runs on either OS; the steps it drives stay PowerShell and run on the units, which are
+Windows throughout. In production it runs as a supervised service in `--loop` mode,
+firing a cycle every N minutes (`server/deploy/`). In development we test the full
 pipeline against a single VirtualBox VM on the same host.
 
 ```
-+-----------------------------------+
-| Windows host (the prov server)    |
-|                                   |
-|   Task Scheduler                  |
-|     -> check-and-provision.ps1    |
-|          -> build-mast.ps1        |
-|          -> SMB pull by unit      |
-|          -> execute on unit       |
-|          -> verify smoke tests    |
-|                                   |
-|   VirtualBox (dev/test only)      |
-|     +-------- mast-unit VM ------+|
-|     |  DHCP / mast01 (DNS)       ||
-|     |  WinRM, HTTPS              ||
-|     +----------------------------+|
-+-----------------------------------+
++---------------------------------------+
+| Prov server (Windows or Linux)        |
+|                                       |
+|   systemd unit / NSSM service         |
+|     -> check_and_provision.py --loop  |
+|          -> build-mast.ps1            |
+|          -> SMB pull by unit          |
+|          -> execute on unit (detached)|
+|          -> verify smoke tests        |
+|                                       |
+|   VirtualBox (dev/test only)          |
+|     +-------- mast-unit VM ----------+|
+|     |  DHCP / mast01 (DNS)           ||
+|     |  SSH (preferred), WinRM        ||
+|     +--------------------------------+|
++---------------------------------------+
 ```
 
 ---
@@ -50,8 +52,9 @@ MAST_provisioning/
 |   |-- lib/mast-log.ps1              # Canonical log path definitions (unit + prov server)
 |   |-- lib/provisioning.psm1         # Shared PS helpers
 |   |-- providers/<module>/...        # Per-module install logic + assets
-|   |-- check-and-provision.ps1       # Autonomous loop -- the production driver
-|   |-- install-scheduled-task.ps1    # Wires check-and-provision.ps1 into Task Scheduler
+|   |-- prov/                         # The driver: orchestration, transport, drift, logging (Python)
+|   |-- check_and_provision.py        # Entry point -- one cycle, or --loop for the autonomous cadence
+|   |-- deploy/                       # Service wrappers: systemd unit + NSSM instructions
 |   |-- setup-smb-share.ps1           # One-time elevated setup: mast-staging share + mast-transfer account
 |   `-- unit-registry.json.template   # Per-unit metadata, copy to unit-registry.json
 |-- tools/
@@ -177,7 +180,7 @@ domain/`[location]`). To add a site, drop `sites/<code>.toml` **and** add `<code
 
 **How the selection flows:** `bootstrap-winrm.ps1` (offline, on the bare unit) records the
 chosen site to `C:\ProgramData\MAST\site.txt` -> `onboard-mast-unit.ps1` reads it and writes
-it into the unit's `unit-registry.json` entry -> `check-and-provision.ps1` passes it to
+it into the unit's `unit-registry.json` entry -> the driver passes it to
 `build-mast.ps1 -Site <code>`, which stages `sites/<code>.toml` for the `config-bootstrap`
 provider to deploy as `C:\WIS\config.toml`.
 
@@ -231,17 +234,22 @@ This is the only path operators run by hand. Everything else is autonomous.
 
 ## Autonomous loop on the prov server
 
-> **Python port in progress (MAST_provisioning#10 item 9).** The server
-> orchestration is being ported to a platform-agnostic Python driver
-> (`server/check_and_provision.py` + the `server/prov/` package) so the prov
-> server can run on any OS while units stay Windows. The PowerShell
-> `check-and-provision.ps1` below **remains authoritative** until the Python
-> driver is validated on a real run. Once landed, run it with
+> **The driver is Python.** The server orchestration is
+> `server/check_and_provision.py` + the `server/prov/` package, so the prov server can run
+> on any OS while units stay Windows. Run one cycle with
 > `python server/check_and_provision.py [--only-hosts ...] [--dry-run]`
-> (`pip install -r server/requirements.txt` first). Tests and lint are described
-> under **[Tests and CI](#tests-and-ci)** below. The **supervised loop** is `--loop` (`--interval-seconds`,
-> `--max-cycles`); run it as a service per **[server/deploy/README.md](server/deploy/README.md)**
-> (systemd unit / NSSM). See `docs/decisions/2026-07-12-loop-mode-is-a-long-lived-service.md`.
+> (`pip install -r server/requirements.txt` first); tests and lint are described under
+> **[Tests and CI](#tests-and-ci)** below. The **supervised loop** is `--loop`
+> (`--interval-seconds`, `--max-cycles`); run it as a service per
+> **[server/deploy/README.md](server/deploy/README.md)** (systemd unit / NSSM). See
+> `docs/decisions/2026-07-12-loop-mode-is-a-long-lived-service.md`.
+>
+> The PowerShell driver `server/check-and-provision.ps1` and its Task Scheduler installer
+> were **retired on 2026-08-16**
+> (`docs/decisions/2026-08-16-the-powershell-driver-is-retired.md`), once the Python driver
+> had been provisioning the production units for a week. What has *not* yet run in
+> production is the **unattended cadence** -- every fleet run so far has been a one-shot
+> invocation, and `--loop` under a supervisor is still VM-only evidence.
 
 For complete step-by-step instructions starting from a bare Windows machine,
 see **[docs/provisioning-server-setup.md](docs/provisioning-server-setup.md)**.
@@ -331,12 +339,14 @@ The abbreviated setup sequence is:
 # 3. One-time elevated setup (SMB shares + mast-transfer account):
 .\server\setup-smb-share.ps1
 
-# 4. Install the Task Scheduler job (runs check-and-provision.ps1 every 30 min):
-.\server\install-scheduled-task.ps1
+# 4. Install the driver's dependencies:
+pip install -r server\requirements.txt
 
-# 5. Trigger the first run and watch logs:
-Start-ScheduledTask -TaskName MAST-CheckAndProvision
+# 5. Trigger the first run by hand and watch logs:
+python server\check_and_provision.py --dry-run
 Get-Content C:\MAST\logs\prov\sessions\run-*\*.log -Wait
+
+# 6. Install the service wrapper for the autonomous cadence -- see server\deploy\README.md
 ```
 
 Each run reads `server/unit-registry.json`, builds a per-unit staging payload,
@@ -377,7 +387,7 @@ computed/live manifest + tiered self-validation are the growth path).
 
 This is the bring-up loop used while debugging modules. The Python orchestrator
 `vm/run-prov-test.py` drives it. It is **dev-only**; the production driver is
-`server/check-and-provision.ps1` running under Task Scheduler.
+`server/check_and_provision.py` running as a supervised `--loop` service.
 
 For the full one-time host setup (prerequisites, vault population, firewall,
 DNS), see **[docs/provisioning-server-setup.md - Dev/test variant](docs/provisioning-server-setup.md#devtest-variant-virtualbox-on-the-same-host)**.

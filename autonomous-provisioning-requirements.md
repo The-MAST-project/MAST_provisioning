@@ -6,13 +6,22 @@
 > but the feature is not complete. Unmarked items under each phase are the remaining work
 > to converge toward.
 >
-> **Important:** The codebase currently has scripts that can perform provisioning steps
-> when invoked manually. The driver now enforces maintenance windows and emits a
-> `module_versions` map in `build-manifest.json` -- the last gating Foundation items
-> for unattended operation. Activating the scheduled task on the prov server is the
-> remaining operator step before the autonomous loop is live. Phase 1 driver
-> self-monitoring (heartbeat + `last-run.json`), lease replacement, and the remaining
-> test-mode exceptions are the next workstreams.
+> **Important:** The driver is `server/prov/driver.py`, a Python package driven by the
+> `server/check_and_provision.py` CLI. It enforces maintenance windows, emits a
+> `module_versions` map in `build-manifest.json`, runs execute detached on the unit, and
+> supports `--loop` for unattended cadence. The gating correctness and robustness batch
+> (`#10`) has landed, and the driver has been provisioning the **production units** since
+> the 2026-08-09 migration runs, including the first full-set provisioning of the fleet on
+> 2026-08-11. What has *not* run in production is the **unattended cadence**: `--loop` as a
+> supervised service has only been exercised on the VM. Switching it on is a deployment
+> step -- install the service wrapper in `server/deploy/` -- not a code step.
+>
+> **The PowerShell driver `server/check-and-provision.ps1` was retired on 2026-08-16**,
+> along with its Task Scheduler installer and the five `server/lib` helpers only it used.
+> Passages below that describe a PowerShell control plane are historical unless they say
+> otherwise; the shipped mechanism is the Python one. See
+> `docs/decisions/2026-08-16-the-powershell-driver-is-retired.md` and
+> `docs/decisions/2026-07-12-port-server-orchestration-to-python.md`.
 
 ## Status key
 
@@ -79,7 +88,7 @@ real DNS already resolves `mastNN`. Operators should never hand-edit `hosts` for
 renewal in automation; the script is the supported dev substitute.
 
 **Integration hint:** after `vbox-recreate-unit.ps1` reports WinRM up, run
-`sync-dev-unit-hosts.ps1` so `check-and-provision.ps1`, `run-prov-test.py`, and
+`sync-dev-unit-hosts.ps1` so the driver, `run-prov-test.py`, and
 `Invoke-Command -ComputerName mast01` all see the same hostname contract as in the field.
 
 ---
@@ -87,91 +96,82 @@ renewal in automation; the script is the supported dev substitute.
 ### Architecture Overview (target)
 
 ```
-Provisioning Server (Windows, long-lived)
+Provisioning Server (Windows or Linux, long-lived)
   |
-  |-- Windows Task Scheduler / NSSM service
-  |     runs: check-and-provision.ps1  (every N minutes)
+  |-- systemd unit / NSSM service     (server/deploy/)
+  |     runs: check_and_provision.py --loop   (cycle, sleep --interval-seconds, repeat)
   |
-  |-- build-mast.ps1          (existing, unchanged)
-  |-- check-and-provision.ps1  (autonomous loop driver)
-  |-- unit-registry.json      (discovery: units to contact -- no cached per-unit installed state)
+  |-- server/prov/                    (the driver: orchestration, transport, drift, logging)
+  |-- build-mast.ps1                  (payload build -- invoked, still PowerShell)
+  |-- unit-registry.json              (discovery: units to contact -- no cached per-unit installed state)
   |
-  +-- WinRM --> MAST Unit 1 (mast01)
-  +-- WinRM --> MAST Unit 2 (mast02)
-  +-- WinRM --> MAST Unit N (mastN)
+  +-- SSH (preferred) / WinRM (fallback) --> MAST Unit 1 (mast01)
+  +-- SSH (preferred) / WinRM (fallback) --> MAST Unit 2 (mast02)
+  +-- SSH (preferred) / WinRM (fallback) --> MAST Unit N (mastN)
   |
-  +-- SSH (optional path for operators) --> same units when enabled
+  +-- SMB pull (units fetch the payload from the staging share)
 ```
+
+The control plane is platform-agnostic Python; the steps it *drives* stay PowerShell and
+run on the units. SSH-first with a WinRM fallback is the shipped transport
+(`docs/decisions/2026-07-12-ssh-first-transport-and-utf8-no-bom.md`).
 
 ---
 
 ### Single provisioning server **[DONE]**
 
-**Requirement:** The fleet uses **exactly one** long-lived Windows provisioning machine.
+**Requirement:** The fleet uses **exactly one** long-lived provisioning machine.
 There is no multi-master orchestration problem to solve at the control-plane layer;
 autonomous design, credentials, logging, and operational runbooks should assume **one**
-authoritative host runs the scheduled provisioning loop (`check-and-provision.ps1` or its
-successor). Other machines may still push git changes or view logs, but **only this
-provisioning server** drives unit updates on cadence.
+authoritative host runs the provisioning loop (`check_and_provision.py --loop`). Other
+machines may still push git changes or view logs, but **only this provisioning server**
+drives unit updates on cadence.
 
 ---
 
-### Running the provisioning server on Linux (OS portability)
+### Running the provisioning server on Linux (OS portability) **[PARTIAL]**
 
-> **Status: assessment, not committed work.** Everything above assumes the single
-> provisioning server is **Windows** (see **Single provisioning server** and the
-> Architecture Overview). This subsection records what would have to change to run the
-> **control plane** on a **Linux** host instead. It is scoped to the prov server only --
-> the MAST units stay Windows IoT, and nothing about the unit-side scripts
-> (`client/*.ps1`), the WinRM contract, or the SMB-pull transfer *protocol* changes.
+> **Status: the control plane shipped; the surrounding host services did not.** This
+> subsection used to be a speculative assessment of a port. The port happened -- the
+> orchestration moved from `check-and-provision.ps1` to the Python package `server/prov/`
+> and merged on 2026-08-09 -- so what follows records the shipped shape and what is still
+> Windows-coupled around it. The MAST units stay Windows IoT throughout; nothing about the
+> unit-side scripts (`client/*.ps1`) or the SMB-pull transfer *protocol* changes.
 
-**Why capture this now:** the Windows dependency is concentrated in a handful of
-server-side setup scripts, not in the core loop. Writing the coupling down keeps a future
-port cheap and stops new Windows-only assumptions from leaking into
-`check-and-provision.ps1` unnoticed.
+**What is portable now [DONE].** The driver, the transport, and every piece of logic they
+depend on are Python and run unmodified on either OS:
 
-#### Already portable (no work)
+- `server/prov/driver.py` (the per-unit loop and the cadence loop), `transport.py`
+  (SSH-first via paramiko, WinRM fallback via pywinrm), `drift.py`, `logevents.py`, and the
+  pure-logic modules `retention.py`, `proxy_assert.py`, `staging_size.py`, `winrm_flap.py`
+  and `maintenance_window.py`.
+- **Timezones** are no longer a portability hazard: `maintenance_window.py` resolves the
+  registry's IANA IDs through `zoneinfo`, so the IANA->Windows mapping shim the PowerShell
+  driver needed is gone rather than ported. Windows has no bundled tz database, which is
+  why `server/requirements.txt` pulls `tzdata` there and only there.
+- **Paths** come off a configurable root -- `MAST_SERVER_ROOT`, defaulting to
+  `<SystemDrive>\MAST` on Windows -- instead of a hardcoded `C:\MAST\...`.
+- **Supervision** is a per-OS wrapper around one platform-agnostic loop: a systemd unit or
+  an NSSM service running `check_and_provision.py --loop`. Both are in `server/deploy/`,
+  and `install-scheduled-task.ps1` was retired with the PowerShell driver.
 
-- **WinRM client to units.** Both transports work from Linux: the Python orchestrators
-  (`tools/run-remote-script-winrm.py`, `vm/vm_lib.py`) use `pywinrm`, and
-  `check-and-provision.ps1`'s `New-PSSession` / `Invoke-Command` over HTTP 5985 + Basic
-  runs under PowerShell 7+ (`pwsh`) on Linux. No WSMan or Windows-only client API is
-  required. (This is the one place the repo's "target Windows PowerShell 5.1" rule in
-  `CLAUDE.md` is relaxed -- the *driver* would run under `pwsh`, while the unit-side
-  scripts it invokes remain 5.1.)
-- **Hash compare / drift detection**, module resolution (`server/lib/mast-modules.psm1`),
-  and DNS resolution (`[System.Net.Dns]::GetHostAddresses`) are `pwsh`-portable as-is.
-
-#### Hard blockers (require replacement, not a port)
+**What is still Windows-coupled.** Two of the three original hard blockers survive the
+port, because they are host services rather than control-plane logic:
 
 | # | Area | Windows-coupled today | Linux replacement |
 |---|------|-----------------------|-------------------|
-| L1 | **SMB share hosting** (`mast-staging`) | `server/setup-smb-share.ps1` uses `New-SmbShare` / `Get-SmbShare` / `Set-SmbShare -EncryptData`, NTFS ACLs (`Get-Acl` / `Set-Acl` / `SecurityIdentifier`), and `New-LocalUser` / `Set-LocalUser` for the transfer account; `server/lib/preflight-smb.ps1` uses `Get-SmbServerConfiguration` / `Get-SmbServerNetworkInterface` / `Get-Service LanmanServer`. | **Samba**: `smb.conf` share, `smbpasswd` / `pdbedit` for the `mast-transfer` account, share-level `valid users` / `read only`, SMB3 encryption settings. The unit pulls the same UNC path; only the server end changes. See **Transfer: Prov Server -> Unit**. |
-| L2 | **Scheduling / process supervision** | `server/install-scheduled-task.ps1` (`Register-ScheduledTask`, `-Execute powershell.exe`, `-RepetitionInterval`, `-UserId SYSTEM`, battery/wake settings). | A **long-lived supervised service** is preferred over both Task Scheduler and cron -- see **Driver as a long-lived service (preferred over Task Scheduler / cron)** under Components. On Linux that is a **systemd** service unit running the driver as a daemon; the "scheduled task fired but driver never wrote `last-run.json`" detection (**Driver self-monitoring**) re-expresses as a systemd `WatchdogSec=` / `OnFailure=` + journal check. |
-| L3 | **Build tooling** | `build/build-mast.ps1` shells to `robocopy`, `cmd /c mklink /J` and `mklink /H` (the hardlink dedup path in **Staging area lifecycle and shared-payload deduplication**), `Split-Path -Qualifier` + `Get-PSDrive` for free space, and a `WindowsPrincipal` admin check. | `rsync` / `cp`, `ln -s` / `ln`, `df` / `stat`, `id -u`. |
+| L1 | **SMB share hosting** (`mast-staging`) | `server/setup-smb-share.ps1` uses `New-SmbShare` / `Get-SmbShare` / `Set-SmbShare -EncryptData`, NTFS ACLs (`Get-Acl` / `Set-Acl` / `SecurityIdentifier`), and `New-LocalUser` / `Set-LocalUser` for the transfer account; `server/lib/preflight-smb.ps1` uses `Get-SmbServerConfiguration` / `Get-SmbServerNetworkInterface` / `Get-Service LanmanServer`. The driver already treats the preflight as Windows-only and skips it elsewhere. | **Samba**: `smb.conf` share, `smbpasswd` / `pdbedit` for the `mast-transfer` account, share-level `valid users` / `read only`, SMB3 encryption settings. The unit pulls the same UNC path; only the server end changes. See **Transfer: Prov Server -> Unit**. |
+| L3 | **Build tooling** | `build/build-mast.ps1` shells to `robocopy`, `cmd /c mklink /J` and `mklink /H` (the hardlink dedup path in **Staging area lifecycle and shared-payload deduplication**), `Split-Path -Qualifier` + `Get-PSDrive` for free space, and a `WindowsPrincipal` admin check. The driver invokes it as a subprocess, so a Linux prov server needs `pwsh` plus Linux equivalents for those four tools. | `rsync` / `cp`, `ln -s` / `ln`, `df` / `stat`, `id -u`. |
 
-#### Medium blockers (logic + doc changes)
+L2 (scheduling / process supervision) is closed by the service wrappers above.
 
-- **Timezone IDs -- silent correctness bug.** `check-and-provision.ps1` calls
-  `[System.TimeZoneInfo]::FindSystemTimeZoneById($tz)` on each unit's `timezone`, and
-  `docs/provisioning-server-setup.md` tells operators to use **Windows** TZ names
-  (`tzutil /l`, e.g. `"Israel Standard Time"`). Those IDs do not exist on Linux .NET, so
-  the lookup fails and falls back to server-local time -- **quietly defeating the
-  already-shipped maintenance-window enforcement**. Fix: store **IANA** IDs
-  (`Asia/Jerusalem`) in `unit-registry.json` and update the setup doc, or add a
-  Windows->IANA mapping layer. (The example registry in **Components** already shows
-  `America/Los_Angeles`, which is IANA -- so the registry format is *already* inconsistent
-  with the setup doc, independent of any port.)
-- **Credential model.** `ConvertTo-SecureString -AsPlainText` + `PSCredential` work under
-  `pwsh` but there is no DPAPI on Linux, and the **Open Questions** entry on git/LFS
-  credentials lists Windows Credential Manager as an option. Pick a Linux secret story
-  (`chmod 600` on `vault/`, `pass`, systemd credentials, or a deploy key) and resolve that
-  open question for the Linux case.
-- **Path / identity assumptions.** Hardcoded `C:\MAST\...`, `$env:SystemDrive`,
-  `$env:USERNAME -eq 'SYSTEM'`, and UNC `\\server\share` strings appear across the server
-  scripts and `server/lib/mast-log.ps1` log roots. Parameterize a root (e.g. `/var/mast`),
-  translate the UNC pull path to the Samba export, and change the SYSTEM identity check to
-  the Linux service account / `root`.
+**Credentials** are the remaining cross-cutting question. `ConvertTo-SecureString` +
+`PSCredential` and the unit-side DPAPI-`LocalMachine` blob used by
+`client/mast-run-detached.ps1` are Windows mechanisms; the unit side stays Windows and
+keeps them, but a Linux prov server needs its own secret story for the vault under
+`vault/` (`chmod 600`, `pass`, systemd credentials, or a deploy key). The **Open
+Questions** entry on git/LFS credentials still lists Windows Credential Manager as an
+option and is unresolved for the Linux case.
 
 #### Phase 2/3 items that assume Windows on the server
 
@@ -185,14 +185,12 @@ and bakes in Windows:
 - **Prov-server observability** (**Observability agents** -> Prov-server side) names
   `windows-exporter-monitoring` for the server itself -- on Linux that is `node_exporter`.
 
-#### Suggested order if the port is ever taken on
+#### Order if a Linux prov server is actually stood up
 
 1. Samba share + transfer account (L1) -- the loop cannot deliver payloads without it.
-2. Long-lived service wrapper (L2; systemd on Linux, see Components).
-3. `build-mast.ps1` tool swaps (L3) -- needed before any build runs.
-4. Timezone IDs -- small fix, but a silent bug that defeats a shipped feature.
-5. Path / credential parameterization -- cross-cutting; do alongside the above.
-6. Defer the Phase 3 observability pieces (Event Log / exporter) with the rest of Phase 3.
+2. `build-mast.ps1` under `pwsh` with the four tool swaps (L3) -- needed before any build runs.
+3. A secret story for `vault/`, replacing the Windows credential handling.
+4. Defer the Phase 3 observability pieces (Event Log / exporter) with the rest of Phase 3.
 
 ---
 
@@ -272,7 +270,7 @@ landed rather than freezing at the last fully-clean payload.
 
 `fully_provisioned` is derived (every module the build declares is present, hash-matched,
 `provide = pass`, and not `verify = fail`), and the aggregate `payload_hash` --  the fast
-path `check-and-provision.ps1` and `server/prov/driver.py` compare -- is published **only**
+path `server/prov/driver.py` compares -- is published **only**
 when that holds. A partial run leaves it absent, so the fast path misses and the unit falls
 through to a run rather than being skipped as current. Merge semantics live in
 `client/mast-installed-manifest.ps1`; tests in
@@ -288,67 +286,81 @@ cycle -- the documented one-time migration for mast01-04.
 written record above is the tier-1 fast check; the computed tier-2 probe re-running each
 provider's `verify-*.ps1` is #22 Stage 4.
 
-#### 4. `check-and-provision.ps1` (prov server driver) **[PARTIAL]**
+#### 4. `server/prov/driver.py` (prov server driver) **[DONE]**
 
-The script implements the full provisioning control flow using WinRM Basic HTTP (port 5985,
-no `TrustedHosts` elevation required) and SMB pull for payload transfer. The workflow runs
-end-to-end against a VirtualBox unit. It writes `activity.csv` with the documented schema
-and manages `availability.json` on the unit. **Maintenance window enforcement is
-implemented** (see the Phase 1 section of the same name): outside a unit's
-`maintenance_window`, the hash check still runs but disruptive steps are skipped with a
-`MAINT_SKIP` event and a `SKIP_MAINTENANCE` activity row.
+The driver implements the full provisioning control flow. Transport is **SSH-first with a
+WinRM fallback** (`server/prov/transport.py`); payload transfer is an **SMB pull** the unit
+performs. It writes `activity.csv` with the documented schema and manages
+`availability.json` on the unit. **Maintenance window enforcement is implemented** (see the
+Phase 1 section of the same name): outside a unit's `maintenance_window`, the hash check
+still runs but disruptive steps are skipped with a `MAINT_SKIP` event and a
+`SKIP_MAINTENANCE` activity row.
 
-**Remaining gap:** the task scheduler job (see item 5) is not yet activated on the
-production server, and the Phase 1 driver self-monitoring work (mid-cycle heartbeat +
-`last-run.json`) is outstanding. The intended control flow is:
+The entry point is `server/check_and_provision.py`, a thin argparse wrapper: one cycle by
+default, `--loop` for the supervised cadence (item 6), `--test-mode` for the dev-only
+relaxations (see **Test-mode exceptions**). `Driver.run()` walks the registry and calls
+`_process_unit` per unit; the per-unit flow is:
 
 ```
 for each unit in unit-registry.json:
-  1. Ping / WinRM reachability check
+  1. Reachability probe (SSH 22 / WinRM 5985) + inventory
      - unreachable -> log warning, skip, continue to next unit
+     - reclaim this driver's own or a stale availability lease
 
   2. Build latest payload for this unit
-     - run build-mast.ps1 -HostName <hostname>
+     - subprocess build-mast.ps1 -HostName <hostname>, under a phase watchdog
      - reads build-manifest.json from staging output
 
-  3. Query the unit's installed-manifest.json via WinRM
-     - if payload_hash matches -> log "up to date", skip
+  3. Compare the unit's installed-manifest.json (per-module drift, prov.drift)
+     - if payload_hash matches and no module drifted -> log "up to date", skip
 
   4. Transfer staging payload to unit via SMB pull
-     - Invoke-Command -> net use \\prov-server\mast-staging + robocopy
+     - upload + run client/mast-pull-staging.ps1 on the unit (robocopy from the share)
 
-  5. Execute provisioning on unit
-     - Invoke-Command -> execute-mast-provisioning.ps1
+  5. Execute provisioning on the unit, DETACHED from the transport session
+     - client/mast-run-detached.ps1 launches execute-mast-provisioning.ps1 as a
+       scheduled task; the driver polls execute-result.json and reconnects if the
+       session drops, so a link blip no longer kills the run
 
-  6. Verify smoke tests
-     - check C:\MAST\logs\smoke\*-smoke.txt on unit
+  6. Verify smoke tests, then assert the unit's end-of-run proxy posture
 
-  7. Log result (activity.csv + session log)
+  7. Release availability, archive the unit's session logs into this run's dir,
+     prune old run dirs (--retain-runs), log result (activity.csv + session log)
 ```
 
-#### 5. Scheduling **[PARTIAL]**
+Every phase carries a hard timeout and fails with a structured event
+(`BUILD_FAIL` / `TRANSFER_FAIL` / `EXECUTE_FAIL reason=timeout`) rather than hanging.
 
-`server/install-scheduled-task.ps1` exists and can register a Task Scheduler job to run
-`check-and-provision.ps1` every 30 minutes under SYSTEM. **Activation prerequisites are
-now met** -- maintenance window enforcement landed (the previously gating Foundation
-work), so an unattended fire on a 30-minute cadence will respect each unit's window.
-The task has **not** yet been installed on the provisioning server; that is a one-time
-operator step (elevated `.\server\install-scheduled-task.ps1`, documented in
-`docs/provisioning-server-setup.md` Step 7). Phase 1 driver self-monitoring (heartbeat
-+ `last-run.json`) can land before or after this activation -- it is not gating.
+This control flow has run against the production units -- the 2026-08-09 migration runs and
+the 2026-08-11 full-set fleet provisioning -- and the defects those runs surfaced (`#60`,
+`#63`, `#68`, `#69`, `#70`) are fixed.
 
-**Preferred direction:** a periodic-fire scheduler (Task Scheduler or cron) is the
-*current* mechanism, but the better long-term shape is a **long-lived supervised
-service** that owns the loop internally rather than a fresh process spun up every N
-minutes. See **6. Driver as a long-lived service** below.
+**Remaining gap:** every production run so far has been a **one-shot** invocation. The
+unattended cadence has not been switched on against the fleet, so `--loop` under a real
+supervisor is still VM-only evidence. Phase 1 driver self-monitoring (mid-cycle heartbeat +
+watchdog integration) is also outstanding; see item 6.
 
-#### 6. Driver as a long-lived service (preferred over Task Scheduler / cron)
+#### 5. Scheduling **[DONE]**
 
-**Requirement (target):** run the autonomous loop as a **single long-lived, supervised
-service process** -- a first-class daemon that starts at boot, owns the provisioning
-cadence itself, and is restarted by a service supervisor if it dies. This is preferred
-over Task Scheduler (Windows) and cron (Linux), both of which fire a **new** process per
-cycle and treat the driver as a stateless one-shot.
+Cadence lives **inside** the driver: `check_and_provision.py --loop --interval-seconds N`
+runs a fresh cycle, sleeps, and repeats (`prov.driver.run_loop`). A cycle that throws is
+logged and does not stop the loop; SIGINT/SIGTERM stop it gracefully by setting a stop
+event checked before each cycle and each sleep. `--max-cycles N` bounds a run for tests and
+supervised one-shots.
+
+There is no periodic-fire scheduler any more. `server/install-scheduled-task.ps1` --
+which registered a Task Scheduler job to run the PowerShell driver every 30 minutes under
+SYSTEM -- was **retired on 2026-08-16** with the driver it wrapped. Installing the service
+wrapper (item 6) is the one-time operator step in its place; see
+`docs/provisioning-server-setup.md`.
+
+#### 6. Driver as a long-lived service **[PARTIAL]**
+
+**Requirement:** run the autonomous loop as a **single long-lived, supervised service
+process** -- a daemon that starts at boot, owns the provisioning cadence itself, and is
+restarted by a service supervisor if it dies. This was chosen over Task Scheduler (Windows)
+and cron (Linux), both of which fire a **new** process per cycle and treat the driver as a
+stateless one-shot.
 
 **Why a service beats a periodic-fire scheduler:**
 
@@ -366,8 +378,8 @@ cycle and treat the driver as a stateless one-shot.
   if a cycle runs long. That removes a whole class of "two drivers touching the same unit"
   races at the source rather than guarding against them with a lock.
 - **Owned lifecycle for sessions and resources.** Ties directly to **Long-lived hosts and
-  no resource leaks** (Phase 2): the service disposes WinRM / PSSession handles at the end
-  of every cycle and self-recycles on a cap (see below) so slow leaks cannot accumulate.
+  no resource leaks** (Phase 2): the service disposes transport sessions at the end of
+  every cycle and self-recycles on a cap (see below) so slow leaks cannot accumulate.
 - **Clean restart and boot recovery.** Auto-start at boot means a prov-server reboot
   resumes the loop with no operator action; restart-on-failure with backoff means a
   transient crash self-heals.
@@ -375,50 +387,38 @@ cycle and treat the driver as a stateless one-shot.
   a Task Scheduler trigger or crontab line, so changing it (or pausing the loop for
   maintenance) is a config edit, not a re-registration.
 
-**Driver refactor (single source of truth):** add a daemon entry mode to the driver while
-keeping the per-cycle body identical to the one-shot path -- the loop simply calls the
-same cycle function repeatedly:
+**Single source of truth [DONE]:** the cycle body is not forked between modes. `--loop`
+calls the same `Driver(cfg).run()` that a one-shot invocation calls, once per cycle:
 
 ```
-check-and-provision.ps1 -Loop -LoopIntervalSeconds 1800   # service mode: cycle, sleep, repeat, forever
-check-and-provision.ps1 -Once                              # manual / dry-run: exactly one cycle, then exit (today's behavior)
+check_and_provision.py --loop --interval-seconds 1800   # service mode: cycle, sleep, repeat
+check_and_provision.py                                  # manual / dry-run: exactly one cycle, then exit
 ```
 
-`-Once` (the existing behavior) stays the supported path for manual runs, dry-runs, and
-CI. The service wrapper invokes `-Loop`. Do **not** fork the cycle logic between the two
-modes; `-Loop` is `while ($true) { Invoke-Cycle; Start-Sleep ... }` around the same code
-`-Once` runs.
-
-**Supervisor by platform:**
+**Supervisor by platform [DONE]** -- the wrapper is the only per-OS part, and both examples
+ship in `server/deploy/` with a README:
 
 | Platform | Supervisor | Key settings |
 |----------|-----------|--------------|
-| **Windows** | **NSSM-managed service** (same pattern the units already use for `MAST_unit` / `PWI4` / `PWShutter`) or a native Windows service wrapper. | Auto-start; `AppRestartDelay` backoff; stdout/stderr to rotating logs; runs under the non-elevated service account from **Provisioning server privilege model**. |
-| **Linux** | **systemd service unit** (`Type=notify` so the driver can `sd_notify` readiness + watchdog pings). | `Restart=on-failure`, `RestartSec=`, `WatchdogSec=` (cycle pings `WATCHDOG=1`), `RuntimeMaxSec=` as a periodic self-recycle backstop, journald capture, `User=` service account. |
+| **Windows** | **NSSM-managed service** (same pattern the units already use). | Auto-start; `AppStopMethodConsole` so NSSM's stop arrives as the Ctrl-C the loop handles gracefully; `AppDirectory` at the repo root; `MAST_SERVER_ROOT` if the default `<SystemDrive>\MAST` is wrong. |
+| **Linux** | **systemd service unit** (`mast-provision.service`). | `Restart=on-failure`, `RestartSec=30`, `KillSignal=SIGTERM` + `TimeoutStopSec=600` so a cycle finishes before the stop is forced, `User=`, `MAST_SERVER_ROOT=`. |
 
-**Self-monitoring / watchdog integration:** each cycle emits the **Driver self-monitoring**
-heartbeat *and* pings the supervisor watchdog. A cycle that hangs past the watchdog
-interval is killed and the service restarted, converting today's silent-hang failure mode
-into an automatic recovery plus a logged restart. `last-run.json` is still written at
-every cycle exit so external consumers and Phase 3 alerting keep their freshness check.
+**Still target, not shipped:**
 
-**Resource-leak backstop:** even with per-cycle session disposal, a long-lived process
-should **self-recycle** on a bound (e.g. `RuntimeMaxSec=` on Linux, or an internal "exit
-after N cycles / M hours so the supervisor restarts me" on Windows). A fresh process
-periodically is cheap insurance against slow handle/memory growth in a host expected to
-run for weeks.
-
-**Migration note:** `server/install-scheduled-task.ps1` and the Task Scheduler path remain
-valid and are the lower-effort option today; the service is the recommended end state.
-Because both just invoke the same driver, moving from scheduler to service is a wrapper
-swap, not a driver rewrite -- which is also why this lands cleanly alongside the Linux port
-(L2 in **Running the provisioning server on Linux**), where systemd is the supervisor.
+- **Watchdog integration.** The systemd unit is `Type=simple` with no `WatchdogSec=`, and
+  the driver emits no `sd_notify` ping, so a cycle that hangs past its phase timeouts is
+  still not converted into an automatic restart. Wiring `Type=notify` + a per-cycle
+  `WATCHDOG=1` is the remaining half of **Driver self-monitoring**.
+- **Resource-leak backstop.** No self-recycle bound (`RuntimeMaxSec=`, or an internal
+  "exit after N cycles / M hours so the supervisor restarts me"). A fresh process
+  periodically is cheap insurance against slow handle/memory growth in a host expected to
+  run for weeks.
 
 ---
 
 ### Transfer: Prov Server -> Unit **[DONE]**
 
-`check-and-provision.ps1` uses **SMB pull**: the unit connects to
+The driver uses **SMB pull**: the unit connects to
 `\\<prov-server>\mast-staging` and copies its payload using `net use` + `robocopy` via a
 short WinRM command sent by the orchestrator. `Copy-Item -ToSession` (WinRM push) is no
 longer used. No credential forwarding or CredSSP is required on the provisioning server
@@ -460,7 +460,8 @@ double-hop problem and keeps the prov server's WinRM client unprivileged.
 > against the build (`--build-manifest`), sharing `prov.drift.classify` with the
 > driver so the report cannot disagree with what the next cycle will do.
 
-The logic is present in `check-and-provision.ps1` (hash compare at lines ~234-294)
+The logic is present in the driver (payload-hash compare in `server/prov/driver.py`,
+per-module drift in `server/prov/drift.py`)
 and verified end-to-end via `vm/run-prov-test.py`. It is exercised on every manual
 driver invocation today; it becomes a continuous fleet guarantee once the scheduled
 task is activated on the prov server (Components #5 above). No driver-side gaps remain
@@ -515,7 +516,7 @@ A unit comes online in two moves, with a clean split of responsibility.
 
 2. **Server side -- paperwork only.** Add the unit to `server/unit-registry.json` on
    the provisioning server (hostname, IP, module list). That single registry entry is
-   the entire post-bootstrap action. The autonomous `check-and-provision.ps1` loop
+   the entire post-bootstrap action. The autonomous provisioning loop
    reads the registry and, on its next cycle, builds -> transfers (SMB pull) ->
    executes -> smoke-tests the unit. The prov server drives provisioning; the unit
    never provisions itself.
@@ -532,7 +533,7 @@ required for the canonical flow above.
 onboard-mast-unit.ps1  (optional, post-bootstrap)
   |
   +-- Stage 0  PREFLIGHT   Verify admin + that bootstrap ran (mast account, WinRM HTTP) + prov reachable
-  +-- Stage 1  PROVISION   Trigger check-and-provision.ps1 on the prov server for this unit
+  +-- Stage 1  PROVISION   Trigger a provisioning run on the prov server for this unit
   +-- Stage 2  REGISTER    Add unit to unit-registry.json on the prov server
   +-- Stage 3  HANDOFF     Write availability.json {available: true}
 ```
@@ -579,7 +580,7 @@ until Phase 1 lands.
 ### Unit Availability During Maintenance **[DONE]**
 
 Stage 3 (HANDOFF) of the optional `onboard-mast-unit.ps1` writes `availability.json` with
-`available: true`. `check-and-provision.ps1` and related automation write status changes during
+`available: true`. The driver and related automation write status changes during
 maintenance and provisioning runs.
 
 **Mechanism:** `C:\MAST\status\availability.json`
@@ -719,7 +720,7 @@ required for core operation.
    **TrustedHosts** for workgroup targets). Updating machine-wide WinRM client settings
    typically requires **administrator** rights on the **provisioning server**.
 
-2. **Remote execution without elevating the prov server:** `check-and-provision.ps1` uses
+2. **Remote execution without elevating the prov server:** the driver uses
    **WinRM over HTTP (5985) with Basic authentication** -- the same surface enabled by
    `client/bootstrap-winrm.ps1` on the unit. This does **not** depend on local
    `TrustedHosts` or `Enable-PSRemoting` on the orchestrator machine. **[DONE]**
@@ -730,7 +731,7 @@ required for core operation.
    forwarding or CredSSP is required on the provisioning server side. See **Transfer:
    Prov Server -> Unit** for share setup and credential handling. **[DONE]**
 
-4. **`check-and-provision.ps1`** no longer uses `New-PSSession` with `TrustedHosts` or
+4. **The driver** no longer uses `New-PSSession` with `TrustedHosts` or
    `Copy-Item -ToSession`. The current implementation achieves the target end state of
    **non-elevated service + WinRM Basic HTTP + SMB pull transfer**. **[DONE]**
 
@@ -792,7 +793,7 @@ cleanup + new `C:\MAST\execute.lock` create/throw) and line 252 (`finally` delet
 ### Availability state recovery (stuck-on-provisioning guard)
 
 The lock-file liability has a **mirror image** in `availability.json`: if
-`check-and-provision.ps1` writes `available: false, reason: provisioning` and then
+The driver writes `available: false, reason: provisioning` and then
 crashes (process kill, prov-server reboot, WinRM blip mid-cycle) before its post-run
 `available: true` write, the unit stays excluded from MAST scheduling until someone
 notices and rewrites the file by hand. This silently removes a unit from the fleet --
@@ -800,7 +801,7 @@ exactly the failure mode autonomous operation must avoid.
 
 **Requirement:** every writer of `availability.json` with `available: false` must include
 a bounded `expected_return_utc` and a `lease_owner` (run_id), and every reader (both
-`check-and-provision.ps1` on its next cycle and the MAST scheduler) must treat the file
+the driver on its next cycle, and the MAST scheduler) must treat the file
 as **stale** once `now > expected_return_utc + grace`.
 
 **Behavior on the next driver cycle:**
@@ -842,7 +843,7 @@ units are touched, and nothing notices until an operator pulls up `activity.csv`
 **Requirement:** the autonomous loop emits a heartbeat that downstream alerting can
 watch.
 
-- Each `check-and-provision.ps1` cycle writes `RUN_START` at entry and `RUN_END` at exit
+- Each driver cycle writes `RUN_START` at entry and `RUN_END` at exit
   (already done). Add a **mid-cycle progress** line every 60 s during the long-running
   per-unit steps so a stuck cycle is distinguishable from a cycle that legitimately
   takes 30 min to provision a unit.
@@ -961,7 +962,7 @@ closing the gap where only the prov server could answer "is mast03 correctly pro
 
 ---
 
-### Maintenance window enforcement in `check-and-provision.ps1` **[DONE]**
+### Maintenance window enforcement in the driver **[DONE]**
 
 `unit-registry.json` carries `maintenance_window: { start_hour, end_hour }` and
 `timezone` per unit. The driver enforces these windows: disruptive steps (SMB pull,
@@ -969,18 +970,20 @@ execute, reboot) are skipped outside the window. Non-disruptive steps (hash chec
 skip-if-current) run at any time -- the gate is placed **after** the hash check, so
 "already current" outcomes are still logged when outside the window.
 
-**Implementation:** helper `Test-InMaintenanceWindow` in
-`server/check-and-provision.ps1` resolves the unit's `timezone` via
-`[System.TimeZoneInfo]::FindSystemTimeZoneById`, converts `UtcNow` to that zone, and
-returns allowed/current/window/tz. The wrap case (`end_hour < start_hour`, e.g. 22-06)
-is handled. A unit with **no** `maintenance_window` field is allowed at any time
-(preserves prior behavior for partially configured registries); an invalid timezone
+**Implementation:** `in_maintenance_window` in `server/prov/maintenance_window.py`
+resolves the unit's `timezone` with `zoneinfo.ZoneInfo` -- the registry's IANA IDs
+natively, on either OS -- converts `now(UTC)` to that zone, and returns
+allowed/current/window/tz. The wrap case (`end_hour < start_hour`, e.g. 22-06) is
+handled. A unit with **no** `maintenance_window` field is allowed at any time
+(preserves prior behavior for partially configured registries); an unresolvable timezone
 falls back to server local time with a `MAINT_TZ_WARN` log so a typo never blocks the
-loop.
+loop. The PowerShell driver needed an IANA->Windows mapping shim here and silently fell
+back to server-local time when it missed; `zoneinfo` removed the shim rather than fixing
+it (`docs/decisions/2026-07-09-registry-timezones-stay-iana.md`).
 
-**Script parameters:** `-MaintenanceWindowStart` and `-MaintenanceWindowEnd` (24-hour
-local, default `-1` = unset). When both are supplied, they override the per-unit
-registry values for an ad-hoc fleet-wide push.
+**CLI options:** `--maint-window-start` and `--maint-window-end` (24-hour local, default
+`-1` = unset). When both are supplied, they override the per-unit registry values for an
+ad-hoc fleet-wide push.
 
 **Log line:**
 
@@ -997,7 +1000,7 @@ from `SKIP` (already-current / dry-run).
 
 A scannable index of every known way the dev test harness
 (`vm/run-prov-test.py` driving a VirtualBox VM from this host) differs from
-the production autonomous loop (`server/check-and-provision.ps1` driving real
+the production autonomous loop (`server/prov/driver.py` driving real
 physical units from the on-campus prov server).
 
 The point of this table is to give an auditor or future-self a single place
@@ -1022,9 +1025,9 @@ scenario in `vm/test-suite.py` and reference it from the row.
 | 4 | Astrometry payload (`astrometry.tgz` + .img) | `-TestMode`; optional, sometimes absent; smoke degrades to skip                                             | Payload mandatory and version-verified; failure to fetch blocks the run                                                      | blocker (Exception #4)    | scenario `full-provision` (when payload present)    |
 | 5 | Bootstrap security posture                   | WinRM HTTP (5985) + Basic + AllowUnencrypted=true                                                           | HTTPS (5986) + cert-validated transport; HTTP only for first-boot onboarding                                                 | blocker (Exception #5)    | needs scenario                                      |
 | 6 | Proxy mode end-to-end                        | `--proxy-mode direct` (dev VM on home network can't reach bcproxy)                                          | `--proxy-mode weizmann` (default); WinINet + WinHTTP route through `bcproxy.weizmann.ac.il:8080` (cygwin setup.exe no longer downloads: astrometry-dependencies installs offline from the frozen staged cache, issue #20) | blocker (Exception #6)    | STUB `proxy-weizmann-on-campus`                     |
-| 7 | Reboot orchestration                         | `provide-reboot.ps1` detects pending reboot and writes `C:\MAST\state\reboot-requested.flag`; harness ignores it and resets the VM to snapshot at end of cycle | `check-and-provision.ps1` consumes the flag, schedules the reboot inside the maintenance window, waits for WinRM to return, re-verifies smoke state | blocker (Exception #7)    | STUB `reboot-occurs-and-unit-recovers`              |
+| 7 | Reboot orchestration                         | `provide-reboot.ps1` detects pending reboot and writes `C:\MAST\state\reboot-requested.flag`; harness ignores it and resets the VM to snapshot at end of cycle | the driver consumes the flag, schedules the reboot inside the maintenance window, waits for WinRM to return, re-verifies smoke state | blocker (Exception #7)    | STUB `reboot-occurs-and-unit-recovers`              |
 | 8 | Cycle isolation                              | VM snapshot reset between cycles -- every cycle starts from `post-prepare`                                  | No rollback; unit state persists across runs. Idempotency is load-bearing.                                                   | covered indirectly        | scenarios `idempotent-after-manifest-wipe`, `idempotent-reprovision` (STUB) |
-| 9 | Maintenance window enforcement               | Harness runs whenever invoked; windows not honored                                                          | `check-and-provision.ps1` honors per-unit `maintenance_window`; outside the window units get `outcome=SKIP_MAINTENANCE`      | **DONE** in prod driver   | not exercisable in harness (driver-only)            |
+| 9 | Maintenance window enforcement               | Harness runs whenever invoked; windows not honored                                                          | the driver honors per-unit `maintenance_window`; outside the window units get `outcome=SKIP_MAINTENANCE`      | **DONE** in prod driver   | not exercisable in harness (driver-only)            |
 | 10 | Availability lease / TTL                    | Harness writes `available=true` at start, doesn't always honor stale leases                                 | Lease + TTL + stale-recover path is load-bearing for "stuck on provisioning" autonomy                                        | covered                   | needs scenario `availability-stale-recover` (STUB)  |
 | 11 | Windows Updates                             | Auto-update **disabled** during runs (`Disable-WindowsAutoUpdate` in prepare)                               | Steady-state policy (Phase 2): scheduled in maintenance window, capped reboot loops, etc.                                    | Phase 2 not landed        | not exercisable yet                                 |
 | 12 | MAST application repo authentication        | None -- every The-MAST-project repo is public; `provide-mast.ps1` clones anonymously over HTTPS             | n/a                                                                                                                          | closed 2026-08-02         | reverses if a repo goes private                     |
@@ -1043,7 +1046,7 @@ provisioning system is declared production-ready for physical units.
 
 #### 1. SMB share / transfer mechanism **[DONE]**
 
-`check-and-provision.ps1` uses SMB pull exclusively; `Copy-Item -ToSession` is no longer
+The driver uses SMB pull exclusively; `Copy-Item -ToSession` is no longer
 present. `build-mast.ps1` does not have a `-SkipSmbShare` parameter. Share account
 credentials must still be provisioned and stored securely on the unit for production use,
 but the code path is correct. This exception is resolved.
@@ -1141,7 +1144,7 @@ but the code path is correct. This exception is resolved.
 - **Exit criteria:** a documented test scenario that:
   1. Drives a full provision that **deliberately** leaves the unit with the reboot
      flag set (e.g. force a pending file rename, install something with `/norestart`).
-  2. Hands off to a driver path that consumes the flag (`check-and-provision.ps1` or
+  2. Hands off to a driver path that consumes the flag (the cadence loop or
      a thin equivalent in the harness).
   3. Observes that `Restart-Computer` was actually issued, the unit drops off WinRM,
      and a new WinRM session establishes within the boot SLA.
@@ -1173,7 +1176,7 @@ but the code path is correct. This exception is resolved.
   necessary, or fail entirely. The whole point of this project is consistency
   and reliability; relying on an external CDN for a setup step we can ship
   ourselves contradicts that.
-- **Exit criteria:** in production builds (`server/check-and-provision.ps1` and
+- **Exit criteria:** in production builds (`server/prov/driver.py` and
   any non-dev driver) `-AllowMissingNetFx3Sxs` is NOT passed, the SxS bundle is
   present at `server/providers/ascom/assets/sxs/`, and the bundle matches the
   Windows IoT 11 LTSC 2024 version of the target image. The provider's runtime
@@ -1192,7 +1195,7 @@ human to log into a unit to "clean up" before the next cycle can succeed.
 
 | Failure mode | Current behavior | Required behavior |
 |--------------|------------------|-------------------|
-| `check-and-provision.ps1` crashes between `availability=false` write and post-run `availability=true` write | `availability.json` stays `false` with `reason=provisioning` until next successful run completes the cycle (which may never happen if the same crash recurs). Unit is excluded from scheduling indefinitely. | Availability writer must include a **TTL or `expected_return_utc`** that downstream consumers honor as a stale-after timestamp; the next driver run must detect stale `provisioning`/`maintenance` state and either resume or reset it. |
+| the driver crashes between `availability=false` write and post-run `availability=true` write | `availability.json` stays `false` with `reason=provisioning` until next successful run completes the cycle (which may never happen if the same crash recurs). Unit is excluded from scheduling indefinitely. | Availability writer must include a **TTL or `expected_return_utc`** that downstream consumers honor as a stale-after timestamp; the next driver run must detect stale `provisioning`/`maintenance` state and either resume or reset it. |
 | Unit-side `execute-mast-provisioning.ps1` killed mid-run (process kill, reboot, power loss) | `C:\MAST\execute.lock` left in place; all subsequent runs throw immediately on the lock check and require **manual deletion** to recover. | See **Unit-side provisioning execution control** above -- lease/TTL with stale-holder recovery. |
 | `installed-manifest.json` partially written or corrupt | Hash compare reads garbage; behavior depends on Read-Manifest error handling. | Atomic write (already done via tmp+rename); reader must treat parse failure as "unknown installed state" and reprovision rather than skip. |
 | WinRM session drops mid-execute (network blip, listener restart) | Orchestrator gets a SOAP error; activity row written as `EXECUTE_FAIL`; next cycle reprovisions. **OK** but the unit-side run may continue after the orchestrator gives up, racing with the next cycle. | Unit-side execution must be **idempotent across orchestrator retries** -- the lease/TTL replacement is what guarantees this. |
@@ -1353,7 +1356,7 @@ be built for the next action.
   that run.
 - **Monitoring systems** (Prometheus time series, log aggregation) store **history for
   humans and alerts**; that is **telemetry**, not the authoritative "installed state"
-  database for `check-and-provision`. Avoid duplicating "current manifest" rows on the
+  database for the driver. Avoid duplicating "current manifest" rows on the
   prov server **for automation** -- use live inspection or metrics emitted **from** the
   unit.
 
@@ -1361,7 +1364,7 @@ be built for the next action.
 
 ### Windows Updates and Scheduled Reboots
 
-The flow below is the **intended** maintenance-window behavior once `check-and-provision.ps1`
+The flow below is the **intended** maintenance-window behavior once the driver
 implements scheduling integration and update orchestration.
 
 #### Principle: daylight hours only
@@ -1401,7 +1404,7 @@ Start-Service wuauserv
 #### Windows Update policy (steady-state)
 
 Configure each unit via Group Policy or registry to **download but not install** updates
-automatically. Installation is triggered by `check-and-provision.ps1` during the
+automatically. Installation is triggered by the driver during the
 maintenance window so the provisioning server controls timing.
 
 ```powershell
@@ -1412,7 +1415,7 @@ Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\
 
 #### Update + reboot sequence (inside maintenance window only)
 
-**Target:** `check-and-provision.ps1` runs this sequence after all units are provisioned:
+**Target:** the driver runs this sequence after all units are provisioned:
 
 ```
 for each unit in unit-registry.json (inside maintenance window):
@@ -1433,7 +1436,7 @@ for each unit in unit-registry.json (inside maintenance window):
 
 #### PSWindowsUpdate module
 
-`check-and-provision.ps1` will depend on the
+The driver will depend on the
 [PSWindowsUpdate](https://www.powershellgallery.com/packages/PSWindowsUpdate) module on
 each unit, installed once during initial provisioning:
 
@@ -1507,7 +1510,7 @@ lands:
 - Per-unit overrides remain possible (e.g. `"modules_add": ["zwo-asi294"]`,
   `"modules_remove": ["phd2"]`) so a single divergent unit does not force a new
   profile, but the **default** is "inherit from profile".
-- `build-mast.ps1` and `check-and-provision.ps1` resolve the effective module list
+- `build-mast.ps1` and the driver resolve the effective module list
   per unit by merging `profile.modules` with `modules_add`/`modules_remove` at build
   time. Drift detection continues to operate on the resolved list, so two units on
   the same profile share a `payload_hash` when their override sets are equal.
@@ -1702,7 +1705,7 @@ Datadog, etc.) can pick up outcomes without parsing log files.
 
 ### Alerting
 
-`check-and-provision.ps1` should accept an optional `-AlertEmail` parameter. If set, it
+The driver should accept an optional `--alert-email` option. If set, it
 sends a plain-text summary via `Send-MailMessage` when any unit ends `FAIL` or
 `UNREACHABLE`. Subject line example: `[MAST] Provisioning alert: mast02 FAIL (smoke:ascom)`.
 No email on all-OK or all-SKIP runs.
@@ -1723,7 +1726,7 @@ a compatible pull-based collector) and rendered on a **central command dashboard
 2. **Same truth as provisioning:** Metrics that describe **installed payload hash**,
    **module versions**, and **drift** must align with the **effective** manifest described
    under **Unit provisioning manifest** so the dashboard never contradicts
-   `check-and-provision` decisions.
+   the driver decisions.
 3. **Low-cardinality labels:** Use stable label keys (`hostname`, `site`, `module`,
    `service`, `component`). Avoid unbounded label values (full file paths, raw error
    stacks).
@@ -1913,7 +1916,7 @@ agents -- `windows-exporter-monitoring` for OS metrics, plus a `prov-server-expo
 reads `last-run.json`, tails `activity.csv` and `package-timings.csv`, and emits
 the `mast_prov_*` and `mast_pkg_*` metrics specified under **Package
 installation timing and statistics** and **Heartbeats and liveness**. The prov
-server is not provisioned by `check-and-provision.ps1` (it would be circular),
+server is not provisioned by the driver (it would be circular),
 so this is a separate installer script under `server/install-observability.ps1`
 rather than a provider module. Versioning still tracked through `build-manifest`
 so the fleet sees a consistent observability surface.
@@ -2035,16 +2038,16 @@ remain the **deep dive** for incidents. Prometheus and the central dashboard pro
 | # | Task | Status |
 |---|------|--------|
 | 1 | Replace `execute.lock` with lease record at `C:\MAST\status\execute-lease.json` (TTL, run_id, atomic rename, stale recovery, 60s renewal) | **[DONE]** |
-| 1a | Extend `availability.json` writers with mandatory `expected_return_utc` and `lease_owner`; add `AVAIL_STALE_RECOVER` path in `check-and-provision.ps1` | **[DONE]** |
+| 1a | Extend `availability.json` writers with mandatory `expected_return_utc` and `lease_owner`; add `AVAIL_STALE_RECOVER` path in the driver | **[DONE]** |
 | 1b | Prov-server heartbeat: write `C:\MAST\status\last-run.json` at every cycle exit; emit 60s in-cycle progress lines so a hung driver is distinguishable from a slow one | **[DONE]** |
 | 2 | `payload_hash` generation in `build-mast.ps1` -> write `build-manifest.json` with git ref fields | **[DONE]** |
 | 3 | Unit-side effective state: inspection-based probe (or hardened `installed-manifest.json`) | **Phase 1** |
 | 3a | Unit self-validation dispatcher (`client/validate-unit.ps1`): tiered `-Level liveness\|inventory\|configuration\|functional`, reuses each provider's `verify-<name>.ps1` + the computed manifest, writes `C:\MAST\status\validation.json`; runnable on the unit without the prov server | **Phase 1** |
 | 4 | Per-module uninstall/reinstall paths; `build-mast.ps1` support for pinned git refs and rollback | **Phase 2** |
-| 5 | Migrate `check-and-provision.ps1` to non-elevated WinRM Basic + SMB pull transfer (retire `Copy-Item -ToSession`; provision share credentials) | **[DONE]** |
+| 5 | Migrate the driver to non-elevated WinRM Basic + SMB pull transfer (retire `Copy-Item -ToSession`; provision share credentials) | **[DONE]** |
 | 6 | Confirm `git lfs pull` works on prov server (deploy key or stored credential) | **Phase 1** |
 | 7 | Task Scheduler trigger (or service wrapper) on the prov server | **[PARTIAL]** - installer script exists; task not yet active |
-| 8 | Manual dry-runs (`check-and-provision.ps1 -DryRun`) to validate discovery + hash logic | **Phase 1** |
+| 8 | Manual dry-runs (`check_and_provision.py --dry-run`) to validate discovery + hash logic | **Phase 1** |
 | 9 | Enable live runs; monitor logs / CSV for a week before treating as production | **Phase 3** |
 | 10 | Prometheus scrape targets on units and prov server; wire Grafana dashboards and Alertmanager | **Phase 3** |
 | 11 | Install and harden OpenSSH Server on fleet units; document firewall, auth, and smoke checks | **Phase 2** |
@@ -2078,12 +2081,12 @@ remain the **deep dive** for incidents. Prometheus and the central dashboard pro
   cache; pay for additional quota.) The failure mode must be recognizable in logs so
   alerts route differently than a transient build break.
 - **Lease/availability TTL semantics:** what `expected_return_utc` value should
-  `check-and-provision.ps1` write when entering the `provisioning` state -- a fixed
+  the driver write when entering the `provisioning` state -- a fixed
   conservative cap (e.g. now + 2 h), or a value derived from recent successful run
   durations in `activity.csv`? The MAST scheduler needs a defined grace before it can
   treat a stuck `available: false` as stale.
 - **Driver self-monitoring:** the autonomous loop on the prov server is itself a
-  long-lived process. If `check-and-provision.ps1` (or its scheduled-task wrapper) hangs
+  long-lived process. If the driver (or its scheduled-task wrapper) hangs
   -- not crashes -- there is currently nothing to detect that. Phase 3 alerting should
   cover "no `RUN_END` in N expected cycles" and not only per-unit outcomes.
 - **Clock skew between prov server and units:** maintenance window logic uses unit-local

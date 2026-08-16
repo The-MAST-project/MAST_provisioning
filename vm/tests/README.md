@@ -49,10 +49,13 @@ PowerShell 5.1 (3.x: `Should Be`, not 5.x `Should -Be`):
 ```
 Invoke-Pester -Path server\tests\mast-pull-staging.Tests.ps1
 ```
-Ten suites are implemented today: `build-manifest-lib`, `build-staging-lib`,
-`mast-installed-manifest`, `mast-log-archive`, `mast-proxy-assert`,
-`mast-pull-staging`, `mast-staging-size`, `mast-timezone`, `mast-winrm-warn`,
-and `proxy-lib`.
+Six suites are implemented today: `build-manifest-lib`, `build-staging-lib`,
+`mast-installed-manifest`, `mast-pull-staging`, `mast-repos-manifest`, and
+`proxy-lib`. The five covering the PowerShell driver's pure logic
+(`mast-log-archive`, `mast-proxy-assert`, `mast-staging-size`, `mast-timezone`,
+`mast-winrm-warn`) were retired with the driver on 2026-08-16; that logic is Python
+under `server/prov/` now and is covered by pytest. Pester's remaining scope is the
+build and the unit-side scripts -- what still runs on Windows.
 
 `mast-pull-staging.Tests.ps1` is the pattern the rest follow: it covers the pull
 script's pure decisions `Get-RobocopyOutcome` (rc>=8 -> ROBOCOPY_ERROR) and
