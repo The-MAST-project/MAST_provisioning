@@ -235,7 +235,7 @@ if ($WaitForDevWinRm) {
 
     Write-Host "`nDone. WinRM HTTP is up - bootstrap-winrm.cmd has done all first-time prep (no separate prepare step)." -ForegroundColor Green
     Write-Host '  Register the guest hostname on this PC (elevated): tools\sync-dev-unit-hosts.ps1'
-    Write-Host '  The unit is then ready for provisioning (check-and-provision.ps1 loop, or onboard-mast-unit.ps1 on the unit).'
+    Write-Host '  The unit is then ready for provisioning (the provisioning loop, or onboard-mast-unit.ps1 on the unit).'
 } else {
     Write-Host "`nDone (no WinRM wait). After Windows finishes: log in, run bootstrap-winrm.cmd from the autounattend ISO (or USB) as Administrator with -MastHostName mastNN (or pass args via cmd.exe), confirm [OK], then tools\sync-dev-unit-hosts.ps1 on the host. Bootstrap does all first-time prep; no separate prepare step." -ForegroundColor Green
 }

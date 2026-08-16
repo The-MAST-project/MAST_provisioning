@@ -9,7 +9,7 @@
   vault/creds.json) and exposes the staging/ directory as \\<server>\mast-staging
   with least-privilege NTFS and share permissions.
 
-  check-and-provision.ps1 triggers units to pull from this share via robocopy.
+  The driver triggers units to pull from this share via robocopy.
   Nothing in the normal provisioning cycle needs to re-run this script.
 
 .PARAMETER Top
@@ -266,5 +266,5 @@ Write-Host "  Units reach it:   by UNC only -- provisioning maps NO drive letter
 Write-Host "                    Z: belongs to the operational share on the site"
 Write-Host "                    controller (\\<controller_host>\mast-share); see issue #25."
 Write-Host "=========================================="
-Write-Host "Setup complete. Run install-scheduled-task.ps1 to activate the autonomous loop."
+Write-Host "Setup complete. Install the service wrapper (server\deploy\README.md) to activate the autonomous loop."
 Write-Host "=========================================="

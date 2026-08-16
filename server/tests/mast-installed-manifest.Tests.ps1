@@ -95,7 +95,7 @@ Describe 'Merge-MastInstalledManifest -- partial runs' {
         $r.modules.git.provide    | Should Be 'pass'
     }
     It 'withholds payload_hash on a partial run so the fast path cannot skip the unit' {
-        # check-and-provision.ps1 / driver.py compare payload_hash to decide
+        # server/prov/driver.py compares payload_hash to decide
         # "nothing changed". Publishing it after a partial run would strand a
         # unit that still needs work.
         $build = New-BuildData -Modules @('git', 'python') -Hashes @{ git = 'h-git'; python = 'h-py' }

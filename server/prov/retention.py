@@ -1,4 +1,4 @@
-"""Per-run provisioning-log retention (port of server/lib/mast-log-archive.ps1).
+"""Per-run provisioning-log retention (ported from the retired server/lib/mast-log-archive.ps1).
 
 The driver writes each run's logs under C:\\MAST\\logs\\prov\\sessions\\<run-id>\\.
 On a host up for weeks-to-years that grows without bound, so at end of run the

@@ -182,7 +182,7 @@ Assert-BootstrapKnownSitesInSync -ClientRoot ${clientRoot} -ProvidersRoot ${prov
 # If no -Modules were passed (or the normalization above collapsed to empty),
 # default to the providers discovered on disk. Get-AllProviderModules lives in
 # server/lib/mast-modules.psm1 (no admin required) so build-mast can call it
-# even when running non-elevated; check-and-provision.ps1 imports the same
+# even when running non-elevated; the driver resolves the same
 # module so both use the single source of truth.
 if ($null -eq ${Modules} -or ${Modules}.Count -eq 0) {
     ${Modules} = Get-AllProviderModules -ProvidersRoot ${providersRoot}
@@ -677,7 +677,7 @@ if (${Modules} -contains 'astrometry-dependencies') {
 
 # ---------------------------------------------------------------------------
 # build-manifest.json - payload fingerprint for autonomous drift detection.
-# Consumed by check-and-provision.ps1 to decide whether a unit needs an update,
+# Consumed by the driver to decide whether a unit needs an update,
 # and copied to C:\MAST\installed-manifest.json on the unit by
 # execute-mast-provisioning.ps1 once provisioning succeeds.
 # Hash helpers (Get-PayloadHash, Get-ModuleContentHash) live in the

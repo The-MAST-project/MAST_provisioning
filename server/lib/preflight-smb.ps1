@@ -2,7 +2,7 @@
 #
 # Lives in server/lib/ and is dot-sourceable from anywhere (no admin
 # requirement to *read*; the checks themselves do not modify state).
-# Dotted by check-and-provision.ps1 (runs before TRANSFER on every cycle)
+# Invoked by the driver (server/prov/driver.py) before TRANSFER on every cycle,
 # and by setup-smb-share.ps1 (runs at end of one-time setup to assert the
 # host is actually in a state where units can pull).
 #
@@ -126,7 +126,7 @@ function Test-MastSmbHostReady {
             # Drop any stale loopback mapping first. cmd-level redirect: when no
             # mapping exists, net.exe writes "connection could not be found" to
             # stderr, which a caller running EAP=Stop turns into a TERMINATING
-            # error (killed check-and-provision before its first unit).
+            # error (killed the run before its first unit).
             & cmd.exe /c "net use $unc /delete /yes >nul 2>&1"
             $job = Start-Job -ScriptBlock {
                 param($u, $p, $user)

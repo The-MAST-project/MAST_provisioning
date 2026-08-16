@@ -83,7 +83,7 @@ function Write-MastSmokeOk {
 
 # ---------------------------------------------------------------------------
 # Provisioning-server log paths (C:\MAST\logs\prov\)
-# Dot-source this file in check-and-provision.ps1 instead of duplicating paths.
+# Dot-source this file in unit-side scripts and providers instead of duplicating paths.
 # ---------------------------------------------------------------------------
 
 function Get-MastProvLogsBase {

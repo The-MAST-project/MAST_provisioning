@@ -1,4 +1,4 @@
-"""Staging-payload size accounting (port of server/lib/mast-staging-size.ps1).
+"""Staging-payload size accounting (ported from the retired server/lib/mast-staging-size.ps1).
 
 The driver logs TRANSFER_START bytes and computes TRANSFER_PROGRESS pct/ETA
 against a pre-scan of the server-side staging tree. robocopy on the unit copies

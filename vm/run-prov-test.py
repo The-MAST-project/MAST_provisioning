@@ -3,8 +3,8 @@
 
 This is throwaway test scaffolding for the Stage C/D bring-up of MAST
 provisioning on a Windows 11 host with a single VirtualBox unit VM.
-It is retired once `server/check-and-provision.ps1` (the autonomous
-driver) is working - see autonomous-provisioning.md.
+It predates the autonomous driver and is retired once `server/prov/driver.py`
+covers the dev cycle too - see autonomous-provisioning-requirements.md.
 
 Drives a full MAST provisioning cycle:
   1. BUILD    - host runs build-mast.ps1 locally (no VM, no WinRM)
@@ -177,8 +177,7 @@ def _discover_all_modules() -> list[str]:
     Get-AllProviderModules in server/lib/mast-modules.psm1.
 
     Why subprocess instead of a Python-side JSON walk: the same discovery is
-    needed by build-mast.ps1 and check-and-provision.ps1 (both PowerShell),
-    so the canonical reader lives there. Per CLAUDE.md's DRY rule, "the PS
+    needed by build-mast.ps1 (PowerShell), so the canonical reader lives there. Per CLAUDE.md's DRY rule, "the PS
     file is the source of truth; Python is the caller" -- having a parallel
     Python implementation that happens to agree today is exactly the seam
     where drift creeps in once the PS impl gains a feature (e.g. filtering
@@ -505,7 +504,7 @@ def phase_transfer(
         # cleanup + disk-check logic it exceeds the ~8 KB WinRM EncodedCommand
         # cmdline limit that inline (minified) dispatch is bounded by. Upload it
         # in small base64 chunks (each run_ps stays well under the limit), then
-        # invoke it by path. (check-and-provision.ps1 already uses -FilePath.)
+        # invoke it by path. (The driver uploads and invokes it the same way.)
         script_text = pull_script.read_text(encoding="ascii")
         b64 = base64.b64encode(script_text.encode("utf-8")).decode("ascii")
         remote_ps = "C:\\mast-staging\\mast-pull-staging.ps1"

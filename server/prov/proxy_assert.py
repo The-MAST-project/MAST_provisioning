@@ -1,4 +1,4 @@
-"""Proxy-posture classification (port of server/lib/mast-proxy-assert.ps1).
+"""Proxy-posture classification (ported from the retired server/lib/mast-proxy-assert.ps1).
 
 Proxy state on a unit is owned solely by the `proxy` provider. This is the
 READ-ONLY decision half of the driver's end-of-run guard: given the proxy

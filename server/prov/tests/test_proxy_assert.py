@@ -1,6 +1,6 @@
 """Tests for prov.proxy_assert -- the READ-ONLY proxy-posture classifier.
 
-Mirrors server/tests/mast-proxy-assert.Tests.ps1.
+Ported from server/tests/mast-proxy-assert.Tests.ps1, retired with its subject.
 """
 
 from prov.proxy_assert import ProxyPosture, get_proxy_dirty_surfaces

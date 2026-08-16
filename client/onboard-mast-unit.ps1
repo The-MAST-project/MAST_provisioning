@@ -16,7 +16,7 @@
 
   Stages:
     0  PREFLIGHT  Verify admin + that bootstrap ran (mast account, WinRM) + prov reachable
-    1  PROVISION  Trigger check-and-provision.ps1 on the prov server for this unit
+    1  PROVISION  Trigger a provisioning run on the prov server for this unit
     2  REGISTER   Append this unit to the prov server's unit-registry.json
     3  HANDOFF    Mark availability=true (ready for the autonomous loop)
 
@@ -226,7 +226,7 @@ function Stage-Preflight {
 }
 
 # ---------------------------------------------------------------------------
-# Stage 1 - PROVISION  (trigger check-and-provision.ps1 on the prov server)
+# Stage 1 - PROVISION  (trigger a provisioning run on the prov server)
 # ---------------------------------------------------------------------------
 function Stage-Provision {
     if (-not $script:ProvSession) {
@@ -242,14 +242,22 @@ function Stage-Provision {
         if (-not (Test-Path $repo)) {
             throw "Prov server repo not found at $repo"
         }
-        $script = Join-Path $repo 'server\check-and-provision.ps1'
-        $args = @('-OnlyHosts', $hostname, '-Force')
-        if ($modulesArg) { $args += @('-Modules', $modulesArg) }
-        & $script @args
+        # The driver is Python. Resolve the interpreter explicitly rather than
+        # trusting PATH in a remote session, and say so when it is missing --
+        # the prov server needs `pip install -r server\requirements.txt`.
+        $py = (Get-Command python.exe -ErrorAction SilentlyContinue).Source
+        if (-not $py) { $py = (Get-Command py.exe -ErrorAction SilentlyContinue).Source }
+        if (-not $py) {
+            throw "No Python interpreter on the prov server (looked for python.exe, py.exe). The driver requires Python 3.12 + server\requirements.txt."
+        }
+        $driver = Join-Path $repo 'server\check_and_provision.py'
+        $driverArgs = @($driver, '--only-hosts', $hostname, '--force')
+        if ($modulesArg) { $driverArgs += @('--modules', $modulesArg) }
+        & $py @driverArgs
         return $LASTEXITCODE
     } -ArgumentList $HostName, $modulesArg
     if ([int]$rc -ne 0) {
-        throw "Remote check-and-provision.ps1 returned exit code $rc"
+        throw "Remote provisioning driver returned exit code $rc"
     }
     Log-Event 'ACTION_OK' @{ step='trigger_remote_provision'; exit_code=0 }
 }
