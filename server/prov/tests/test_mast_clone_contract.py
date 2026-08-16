@@ -129,8 +129,10 @@ def test_https_transport_is_accepted() -> None:
     assert "ValidateSet('ssh', 'https')" in script
 
 
-def test_prefers_a_staged_uv_over_bootstrapping() -> None:
-    """Stage 4 vendors uv.exe into the payload so provisioning needs no CDN."""
+def test_consults_the_staged_uv() -> None:
+    """Stage 4 vendors uv.exe into <Top>\\.tools so a provisioning run needs no CDN.
+    It is consulted after `uv` on PATH, and either candidate is taken only on an
+    exact match against the manifest pin."""
     script = _CLONE_PS1.read_text(encoding="utf-8")
     assert ".tools\\uv.exe" in script
 
