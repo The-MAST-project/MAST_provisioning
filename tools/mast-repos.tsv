@@ -52,10 +52,15 @@
 # Directive lines start with '#!' and are parsed by both scripts. They are
 # comments to anything else that reads this file.
 #
-# uv-version: the uv release used by --bootstrap-uv / -BootstrapUv. Pinned for
-# the same reason the branches are: an unpinned bootstrap installs whatever is
-# current that day, so two machines provisioned a month apart get different
-# resolvers and the fleet drifts -- which is what these scripts exist to stop.
+# uv-version: the exact uv release the venv is resolved with. No flag selects
+# it -- both scripts check `uv` on PATH and then <Top>/.tools/uv.exe, accept a
+# candidate ONLY if its version matches this line exactly, and otherwise
+# download that version into <Top>/.tools themselves. Pinned for the same
+# reason the branches are: an unpinned bootstrap installs whatever is current
+# that day, so two machines provisioned a month apart get different resolvers
+# and the fleet drifts -- which is what these scripts exist to stop. A
+# developer box carrying its own newer uv is the normal case, and that version
+# check ignores it rather than letting it resolve differently.
 # Bump this line to move the fleet; the download is checksum-verified against
 # the .sha256 GitHub publishes beside each artifact.
 #!uv-version	0.11.33

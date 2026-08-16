@@ -8,6 +8,12 @@
 > the `verify-mast` legacy-tree check, and the NSSM re-point branch in
 > `provide-mast.ps1` — was deleted the same day (#41).
 >
+> **Test ownership (locked decision 9) landed later**, on 2026-08-16: the stages
+> above completed without the dev-drift alarm this plan makes them conditional on.
+> It is now `server/prov/tests/test_mast_clone_contract.py` — see
+> `docs/decisions/2026-08-16-the-mast-clone-drift-alarm-is-static.md`, which also
+> records why it is static rather than `-DryRun`-driven as suggested below.
+>
 > **Kept as a design record, not as instructions.** Nothing here should be
 > followed: the stages are done and the tooling to execute them is gone. It is
 > retained because several providers cite it for *why* they call `mast-clone`
