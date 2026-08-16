@@ -111,20 +111,36 @@ this file and have it cite the record.
 `(Get-Date).ToString('yyyy-MM-dd')` (PowerShell). Never guess. `decided:` is when the call
 was made, not when the PR merges; git records the latter.
 
-**Immutability:** the body of a record is never edited **once its decision has reached
-`main`**. To reverse or refine such a record, write a new one with `supersedes:` set and
-flip the old one's `status:` to `superseded` with `superseded_by:` filled (an archive entry
-has no slug, so name it in prose instead). From that point exactly three frontmatter keys
-may be edited -- `status:`, `superseded_by:`, `areas:` (the last so synonyms can be merged
-during `AREAS.md` curation). The freeze protects the historical claim, not the navigation
-metadata.
+**Immutability:** the body of a record is never edited **once its `status:` is
+`accepted`** -- the freeze binds on the flip, not on reaching `main`. To reverse or refine
+such a record, write a new one with `supersedes:` set and flip the old one's `status:` to
+`superseded` with `superseded_by:` filled (an archive entry has no slug, so name it in prose
+instead). From that point exactly three frontmatter keys may be edited -- `status:`,
+`superseded_by:`, `areas:` (the last so synonyms can be merged during `AREAS.md` curation).
+The freeze protects the historical claim, not the navigation metadata. See
+`docs/decisions/2026-08-16-a-record-freezes-when-accepted-not-when-merged.md`.
 
-**Before `main`, rewrite in place -- do not supersede.** A record on an open branch is
-freely editable, body included. If the decision changes mid-review, the record is rewritten
-to state where it ended up: one record, no correction file, no `superseded` status. The
-argument about how it moved lives on the PR. An approach tried and abandoned during review
-usually belongs as a `Rejected` entry in the rewritten record. See
+**While `proposed`, rewrite in place -- do not supersede.** A `proposed` record is freely
+editable, body included, whether it sits on a branch or on `main`. If the decision changes
+before it is accepted, the record is rewritten to state where it ended up: one record, no
+correction file, no `superseded` status. The argument about how it moved lives on the PR and
+on the record's `issue:`. An approach tried and abandoned during review usually belongs as a
+`Rejected` entry in the rewritten record. See
 `docs/decisions/2026-08-09-unmerged-decisions-ship-in-the-current-format.md`.
+
+**A `proposed` record may merge ahead of its code** -- a design agreed as direction but
+blocked or unbuilt. Three obligations come with it: `issue:` is **required** and its ticket
+stays open until the flip; the landing PR **rewrites the body to what actually shipped**
+(divergences into `Rejected`) before flipping to `accepted`; and only that rewritten form is
+frozen. When reading one, treat every identifier in it as a name for something that **may not
+exist yet** -- `git grep` the symbol before believing the code matches the account. The
+standing list is `grep -l 'status: proposed' docs/decisions/2*.md`.
+
+**A record lands in the repo whose code it decides.** `git grep` does not cross a clone
+boundary, so a decision about another repo's symbols is unreachable from the code it
+constrains no matter how well it is anchored. Keep a cross-repo design whole where the larger
+share of the change is, and add a short citing record in each other affected repo -- or, until
+those repos adopt the format, cite it from their `CLAUDE.md` or their issue.
 
 ## Every PR body states why, not just what
 

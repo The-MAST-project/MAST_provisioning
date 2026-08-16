@@ -1,9 +1,10 @@
 ---
 decided: 2026-08-12
 status: proposed
+issue: MAST_provisioning#82
 areas:
   - services
-  - session isolation
+  - service logon sessions
   - the operational share
   - hardware startup
 ---
