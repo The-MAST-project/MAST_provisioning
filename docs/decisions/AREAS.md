@@ -48,6 +48,13 @@ front. Expect it to be wrong in places and to shift.
 | `the operational share` | The site controller's science share, and the contract units have with it |
 | `operator tooling` | What a person standing at a unit uses, with no controller and no network |
 | `fleet migration` | One-time, supervised changes applied across production units |
+| `hardware startup` | When a device is powered, homed or moved, relative to when software starts -- process lifetime versus hardware lifetime, and who commands the transition |
+
+Added 2026-08-16 with the supervision record, which is the first decision to turn on the
+distinction. It is not `instruments`: that term covers the devices themselves -- binding,
+profiles, calibration -- where this one covers *when* they act. A process start that opens
+the mirror covers is a `hardware startup` decision; the mount's COM binding is an
+`instruments` one.
 
 Added 2026-08-09 with the 27 rewritten v3-branch records. Four of them
 (`platform independence`, `service logon sessions`, `the operational share`, `drive
@@ -68,6 +75,7 @@ where it went instead of a dead end.
 | Was | Now | When | Why |
 |-----|-----|------|-----|
 | `how this repo records decisions` | `docs-process` | 2026-08-07 | Same subject, and the seeded term was already there -- caught by the first inventory run, on the first record |
+| `session isolation` | `service logon sessions` | 2026-08-16 | Same subject under a shorter name: session 0 versus the interactive session, and what each can see. Coined on the supervision record without checking the list, which is the failure mode this file exists to catch |
 
 ## Keeping this list honest
 
