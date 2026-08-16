@@ -3,7 +3,7 @@
 # build; build-mast.ps1 dot-sources this file (single source of truth).
 
 # Rolling SHA-256 over every staged file: the whole-payload "anything changed
-# at all?" gate consumed by check-and-provision.ps1 / server/prov/driver.py.
+# at all?" gate consumed by server/prov/driver.py.
 function Get-PayloadHash {
     param([Parameter(Mandatory)][string]$StagingDir)
 

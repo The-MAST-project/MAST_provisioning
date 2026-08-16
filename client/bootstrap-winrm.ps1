@@ -40,7 +40,7 @@
 
     This script performs ALL first-time prep; there is no separate prepare step. After it
     completes successfully, the operator verifies the summary and reboots if prompted. The unit
-    is then ready for provisioning (the prov server's check-and-provision.ps1 loop picks it up
+    is then ready for provisioning (the prov server's provisioning loop picks it up
     once it is in unit-registry.json, or run client\onboard-mast-unit.ps1 on the unit).
 
     USB / DVD: copy client\bootstrap-winrm.cmd, bootstrap-winrm.ps1, and the Npcap installer
@@ -403,7 +403,7 @@ function Write-BootstrapDesktopReport([string]$HostNm, [string]$SiteCode) {
         '--- NEXT: provisioning handoff ---',
         ('1) Ensure the prov server resolves {0} (DNS or hosts entry).' -f $HostNm),
         ('2) Register {0} (hostname + site) in server\unit-registry.json on the' -f $HostNm),
-        '   prov server and run check-and-provision.ps1; or run',
+        '   prov server and run the provisioning driver; or run',
         ('   onboard-mast-unit.ps1 -HostName {0} -ProvServer <prov-ip> on this unit.' -f $HostNm),
         '3) After provisioning + hardware hookup: run the "MAST Instrument',
         '   Calibration" desktop shortcut to bind instrument COM ports.',
@@ -477,7 +477,7 @@ function Show-BootstrapNextSteps([string]$HostNm) {
     Write-BootstrapMsg '  No prepare step remains.' 'Green'
     Write-BootstrapMsg "  1) Ensure the prov server resolves $HostNm (DNS or hosts entry)." 'Green'
     Write-BootstrapMsg "  2) Add $HostNm to server\unit-registry.json on the prov server; the autonomous" 'Green'
-    Write-BootstrapMsg '     check-and-provision.ps1 loop will provision it on its next cycle.' 'Green'
+    Write-BootstrapMsg '     provisioning loop will provision it on its next cycle.' 'Green'
     Write-BootstrapMsg '     Or, if client\onboard-mast-unit.ps1 was shipped to this unit, run it to' 'Green'
     Write-BootstrapMsg '     provision + register now (example):' 'Green'
     $obLine = '       .\onboard-mast-unit.ps1 -HostName ' + $HostNm + ' -ProvServer ' + $ProvServerIP

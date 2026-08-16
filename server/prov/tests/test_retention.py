@@ -1,6 +1,6 @@
 """Tests for prov.retention -- the pure keep-newest-N selector and the fs runner.
 
-Mirrors server/tests/mast-log-archive.Tests.ps1 (the PowerShell original).
+Ported from server/tests/mast-log-archive.Tests.ps1, retired with its subject.
 """
 
 import pytest

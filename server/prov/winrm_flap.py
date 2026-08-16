@@ -1,4 +1,4 @@
-"""WinRM/PSRP link-flap warning classification (port of mast-winrm-warn.ps1).
+"""WinRM/PSRP link-flap warning classification (ported from the retired mast-winrm-warn.ps1).
 
 During a long remote command over a flaky link, PowerShell's robust-connection
 layer emits "connection ... interrupted" / "... restored" WARNING lines -- on a

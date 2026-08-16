@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """CLI entry for the platform-agnostic Python provisioning driver.
 
-Thin argparse wrapper over prov.driver. Replaces server/check-and-provision.ps1
-(kept alongside until the Python driver is validated on a real run). Run from
-anywhere:
+Thin argparse wrapper over prov.driver. This is the only provisioning driver:
+the PowerShell one it replaced was retired on 2026-08-16. Run from anywhere:
 
     python server/check_and_provision.py [--only-hosts mast04] [--dry-run] ...
 

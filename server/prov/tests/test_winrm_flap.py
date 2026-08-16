@@ -1,4 +1,4 @@
-"""Tests for prov.winrm_flap. Mirrors server/tests/mast-winrm-warn.Tests.ps1."""
+"""Tests for prov.winrm_flap. Ported from the retired server/tests/mast-winrm-warn.Tests.ps1."""
 
 from prov.winrm_flap import measure_winrm_flap
 

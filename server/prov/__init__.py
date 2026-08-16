@@ -1,7 +1,7 @@
 """MAST provisioning server orchestration (platform-agnostic Python).
 
 This package is the Python port of the server-side autonomous provisioning
-driver, formerly server/check-and-provision.ps1. The orchestration control
+driver, which replaced the retired server/check-and-provision.ps1. The orchestration control
 plane (scheduling, session management, logging/telemetry, retention) lives here
 and is platform-agnostic; the Windows-tethered steps it *drives* -- build
 (build-mast.ps1), the SMB-pull transfer, and execute-mast-provisioning.ps1 --

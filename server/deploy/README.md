@@ -37,6 +37,8 @@ a graceful shutdown. On Windows the driver's log/status root defaults to
 `<SystemDrive>\MAST`; set `MAST_SERVER_ROOT` to override.
 
 > The loop is platform-agnostic Python; only this wrapper differs per OS. The
-> steps it drives stay Windows/PowerShell on the units (see DECISIONS.md
-> 2026-07-12). This replaces the older `install-scheduled-task.ps1` +
-> `check-and-provision.ps1` path once the PowerShell driver is retired.
+> steps it drives stay Windows/PowerShell on the units (see
+> `docs/decisions/2026-07-12-port-server-orchestration-to-python.md`). This is now the
+> only supported deployment path: the `install-scheduled-task.ps1` +
+> `check-and-provision.ps1` route was retired on 2026-08-16
+> (`docs/decisions/2026-08-16-the-powershell-driver-is-retired.md`).

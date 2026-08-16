@@ -200,8 +200,7 @@ SCENARIOS: list[Scenario] = [
     Scenario(
         name="idempotent-reprovision",
         description=(
-            "Two full provisions; second should be UNIT_SKIP. Requires the "
-            "check-and-provision.ps1 driver, not run-prov-test.py."
+            "Two full provisions; second should be UNIT_SKIP. Requires the server/prov driver, not run-prov-test.py."
         ),
         phases="",
         modules="",
@@ -277,7 +276,7 @@ SCENARIOS: list[Scenario] = [
     #      flag set (force a PendingFileRenameOperations, or schedule any
     #      /norestart install whose post-step requires reboot)
     #   2. invoke the prod-style reboot driver path (either
-    #      check-and-provision.ps1 or a thin equivalent in the harness that
+    #      the driver or a thin equivalent in the harness that
     #      reads C:\MAST\state\reboot-requested.flag and calls
     #      Restart-Computer on the unit)
     #   3. observe the unit drops off WinRM (poll TCP :5985 closes)

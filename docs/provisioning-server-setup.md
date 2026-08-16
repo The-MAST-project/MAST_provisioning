@@ -37,12 +37,15 @@ Do not use Home editions (no SMB server capability or local group policy).
 |------|--------------|-------|
 | Git 2.x | Cloning the repo | winget install Git.Git |
 | Git LFS | Binary assets (installers, archives) | winget install GitHub.GitLFS |
-| Python 3.12 | tools/run-remote-script-winrm.py | winget install Python.Python.3.12 |
-| pywinrm | Python WinRM client | pip install pywinrm |
+| Python 3.12 | the driver itself (`server/prov/`), tools/run-remote-script-winrm.py | winget install Python.Python.3.12 |
+| pywinrm + paramiko + tzdata | the driver's two transports and IANA timezone resolution | pip install -r server\requirements.txt |
+| NSSM | supervising the loop as a Windows service | winget install NSSM.NSSM |
 
-Python and pywinrm are only needed on the provisioning server if you use
-`run-remote-script-winrm.py` for ad hoc unit operations. The autonomous loop
-itself (`check-and-provision.ps1`) is pure PowerShell.
+Python is required on the provisioning server: the driver itself is Python
+(`server/check_and_provision.py` + the `server/prov/` package). Install its
+dependencies with `pip install -r server\requirements.txt` -- pywinrm and paramiko for
+the two transports, plus `tzdata` on Windows so `zoneinfo` can resolve the registry's
+IANA timezone ids.
 
 ---
 
@@ -124,9 +127,9 @@ Copy one `.lic` file per unit into `vault\nomachine-licenses\`. The build script
 allocates licenses to hostnames and tracks the assignment in
 `server\providers\nomachine\assets\licenses\allocated.csv`.
 
-If you are setting up a dev/test server that uses throwaway VMs, pass
-`-AllowMissingNoMachineLicense` to `check-and-provision.ps1` or the Python
-test orchestrator to skip license checks.
+If you are setting up a dev/test server that uses throwaway VMs, pass `--test-mode`
+to the driver (or use the VM test orchestrator) to skip license checks. A production run
+passes no such relaxation and fails loudly on a missing input.
 
 ---
 
@@ -172,12 +175,11 @@ Notes:
   `mast20`). Do not use IP addresses.
 - `timezone` should be an **IANA** timezone id (e.g. `Asia/Jerusalem`; full
   list at the [IANA tz database](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones)).
-  IANA ids keep the registry portable (a future Linux prov server resolves them
-  natively). The driver maps the fleet's IANA ids to Windows ids for the
-  Windows PowerShell 5.1 (.NET Framework) `TimeZoneInfo`, which does not know
-  IANA ids natively -- see `server/lib/mast-timezone.ps1`. A raw Windows name
-  (from `tzutil /l`) also resolves, but IANA is the canonical form; add a new
-  IANA id to the map in `mast-timezone.ps1` if the fleet grows into a new zone.
+  IANA ids keep the registry portable and the driver resolves them natively on either
+  OS through `zoneinfo` (`server/prov/maintenance_window.py`); on Windows that needs the
+  `tzdata` package, which `server/requirements.txt` pulls in. The IANA->Windows mapping
+  the retired PowerShell driver carried is gone, so a raw Windows name from `tzutil /l`
+  no longer resolves -- use the IANA form.
 - `maintenance_window` hours are in the unit's local time. Set `start_hour: 0,
   end_hour: 24` to allow provisioning at any time (useful while setting up).
 - `modules` (optional) controls which providers `build-mast.ps1` stages.
@@ -304,44 +306,54 @@ VM boot (it updates the Windows `hosts` file):
 
 ---
 
-## Step 7 - Install the Task Scheduler job (elevated, once)
+## Step 7 - Install the loop as a supervised service (elevated, once)
 
 **Prerequisite -- review maintenance windows.** Each entry in
 `server\unit-registry.json` carries a `maintenance_window: { start_hour, end_hour }`
-and `timezone`. The driver now **enforces** these: outside the window, the hash
+and `timezone`. The driver **enforces** these: outside the window, the hash
 check still runs but disruptive steps (SMB pull, execute, reboot) are skipped
 with a `MAINT_SKIP` log event and a `SKIP_MAINTENANCE` row in `activity.csv`.
 Confirm every unit's window reflects the operator's intent before activation. A
 unit with **no** `maintenance_window` field is allowed at any time; if you need
 strict gating, populate the field. For an ad-hoc fleet-wide push outside the
 configured windows, invoke the driver manually with
-`-MaintenanceWindowStart 0 -MaintenanceWindowEnd 24`.
+`--maint-window-start 0 --maint-window-end 24`.
+
+The cadence lives inside the driver (`--loop`), so there is no scheduled task to
+register -- what you install is a service wrapper that keeps that one process alive.
+`server\install-scheduled-task.ps1` was retired with the PowerShell driver on 2026-08-16.
 
 ```powershell
-# From the repo root, elevated:
-.\server\install-scheduled-task.ps1
+# From the repo root, elevated. Install the driver's dependencies first:
+pip install -r server\requirements.txt
+
+nssm install MAST-Provision "C:\Python312\python.exe" "server\check_and_provision.py --loop"
+nssm set MAST-Provision AppDirectory "C:\repos\MAST_provisioning"
+nssm set MAST-Provision AppStopMethodConsole 15000
+nssm start MAST-Provision
 ```
 
-This registers the `MAST-CheckAndProvision` task to run every 30 minutes as
-`SYSTEM`. The task will fire for the first time approximately 5 minutes after
-registration.
+`AppStopMethodConsole` matters: NSSM's stop arrives as a console Ctrl-C, which the loop
+handles by finishing the current cycle and exiting cleanly. The default cadence is 1800 s
+(`--interval-seconds`). On a Linux prov server the equivalent is the systemd unit in
+`server/deploy/`; both are documented in **[server/deploy/README.md](../server/deploy/README.md)**.
 
-Verify the task is registered:
+Verify the service is running:
 
 ```powershell
-Get-ScheduledTask -TaskName MAST-CheckAndProvision
-Get-ScheduledTask -TaskName MAST-CheckAndProvision | Get-ScheduledTaskInfo
+nssm status MAST-Provision
+Get-Service MAST-Provision
 ```
 
 ---
 
 ## Step 8 - First manual run
 
-Before waiting for the scheduler, trigger a run manually and watch the log:
+Before starting the service, run one cycle by hand and watch the log:
 
 ```powershell
-# Trigger the task (runs as SYSTEM, same as the autonomous loop):
-Start-ScheduledTask -TaskName MAST-CheckAndProvision
+# One cycle, then exit -- the same code path each loop cycle runs:
+python server\check_and_provision.py
 
 # Stream the current run log in near-real-time:
 $logDir = 'C:\MAST\logs\prov\sessions'
@@ -392,15 +404,18 @@ Import-Csv C:\MAST\logs\prov\activity.csv |
     Format-Table timestamp_utc, unit, outcome, reason
 ```
 
-**Task Scheduler status:**
+**Service status:**
 
 ```powershell
-Get-ScheduledTask -TaskName MAST-CheckAndProvision | Get-ScheduledTaskInfo |
-    Select LastRunTime, LastTaskResult, NextRunTime
+nssm status MAST-Provision            # SERVICE_RUNNING when the loop is alive
+Get-Content C:\MAST\logs\prov\service-out.log -Tail 20   # [loop] cycle N start / end exit_code=...
 ```
 
-`LastTaskResult 0` means the run completed without a fatal error.
-`LastTaskResult 1` means at least one unit failed or was unreachable.
+The loop prints `[loop] cycle N start` and `[loop] cycle N end exit_code=<n>` per cycle.
+`exit_code=0` means the cycle completed without a fatal error; `1` means at least one unit
+failed or was unreachable. A cycle that throws is logged as `[loop] cycle N ERROR ...` and
+does **not** stop the service -- check `activity.csv` for which unit it was. On Linux the
+same lines land in the journal (`journalctl -u mast-provision -f`).
 
 ---
 
@@ -411,28 +426,30 @@ Get-ScheduledTask -TaskName MAST-CheckAndProvision | Get-ScheduledTaskInfo |
 1. Onboard the physical unit (see README "Production path").
 2. Edit `server\unit-registry.json` - append a new entry with the unit hostname,
    timezone, maintenance window, and module list.
-3. The next scheduled run picks up the new entry automatically.
+3. The next loop cycle picks up the new entry automatically.
 
 ### Force-provision a single unit now (manual)
 
 ```powershell
 cd C:\repos\MAST_provisioning
-powershell.exe -ExecutionPolicy Bypass -File server\check-and-provision.ps1 `
-    -OnlyHosts mast03 -Force
+python server\check_and_provision.py --only-hosts mast03 --force
 ```
 
-`-Force` skips the hash comparison and re-runs provisioning even if the unit
-appears current. Useful after a suspected install corruption.
+`--force` skips the hash comparison and re-runs provisioning even if the unit
+appears current. Useful after a suspected install corruption. `--only-hosts` takes a
+comma-separated list.
 
 ### Pause the autonomous loop
 
 ```powershell
-# Disable (task will not fire until re-enabled):
-Disable-ScheduledTask -TaskName MAST-CheckAndProvision
+# Stop (the current cycle finishes first, then the process exits):
+nssm stop MAST-Provision
 
-# Re-enable:
-Enable-ScheduledTask  -TaskName MAST-CheckAndProvision
+# Resume:
+nssm start MAST-Provision
 ```
+
+On Linux: `sudo systemctl stop mast-provision` / `start`.
 
 ### Rotate the SMB password
 
@@ -597,7 +614,7 @@ python .\vm\run-prov-test.py --host-unit mast01 --hostname mast01
 
 Cycle logs land under `C:\MAST\logs\dev\<timestamp>-cycle<N>\`.
 
-When you are ready to test the full production flow (SMB pull, Task Scheduler),
-run `setup-smb-share.ps1` and `install-scheduled-task.ps1` as described in the
+When you are ready to test the full production flow (SMB pull, the supervised loop),
+run `setup-smb-share.ps1` and install the service wrapper as described in the
 production steps above. The VM unit and the real prov server use the same
-`check-and-provision.ps1` code path.
+`server/prov/driver.py` code path.

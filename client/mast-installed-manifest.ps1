@@ -179,7 +179,7 @@ function Merge-MastInstalledManifest {
         if ($BuildData.PSObject.Properties.Match($f).Count) { $out[$f] = $BuildData.$f }
     }
 
-    # The aggregate payload_hash is the EXISTING fast path: check-and-provision.ps1
+    # The aggregate payload_hash is the EXISTING fast path: the driver
     # and server/prov/driver.py compare it to decide "nothing changed, skip".
     # Publishing it after a partial run would assert the whole payload is
     # installed when it is not, and the loop would skip a unit that still needs

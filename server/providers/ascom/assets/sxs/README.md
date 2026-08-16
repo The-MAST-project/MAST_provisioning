@@ -59,7 +59,7 @@ The dev/test override exists so the VirtualBox dev VM can build without
 the SxS bundle on hand. `vm/run-prov-test.py` passes
 `-AllowMissingNetFx3Sxs` automatically; when that override is in effect,
 the provider falls back to the online DISM path with a one-line warning.
-**Production builds (`server/check-and-provision.ps1`) do NOT pass the
+**Production builds (the driver without `--test-mode`) do NOT pass the
 override** -- the build fails loudly if the SxS bundle isn't present.
 
 ## Why not check the .cab into git
