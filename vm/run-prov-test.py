@@ -14,9 +14,27 @@ Drives a full MAST provisioning cycle:
   4. VERIFY   - smoke-test markers and pass criteria checked (criteria differ in verify-only mode)
   5. RESET    - unit VM stopped, snapshot restored, restarted
 
+--host-unit is the MACHINE THIS INSTALLS ON; --hostname is only the identity the
+payload is BUILT for. They are not interchangeable, and the difference matters:
+
+  --host-unit   where to connect and provision. For the dev cycle this must be the
+                VirtualBox VM, which sits on the host-only network and has no DNS
+                record, so it is addressed by IP. Read the current one from
+                `VBoxManage guestproperty enumerate mast-unit` (Net/0/V4/IP) -- it
+                is a DHCP lease and does change.
+  --hostname    which unit the payload is built as -- the VM stands in for `mastw`,
+                so `--hostname mastw` is right even though the VM answers to its
+                own name.
+
+DO NOT pass a bare unit name to --host-unit. Unit names resolve through institute
+DNS to REAL machines, one of which is a prototype attached to a real telescope, and
+pointing this harness at one installs software on it. Two runs on 2026-08-17 took a
+bare name from the example that used to be here and reached that prototype before
+failing at the SMB mount. Resolve any name you did not read off the VM first.
+
 Usage (Windows PowerShell, run from anywhere):
     python MAST_provisioning\\vm\\run-prov-test.py ^
-        --host-unit mastw ^
+        --host-unit <VM host-only IP> ^
         --hostname  mastw ^
         [--modules python,ascom,mast] ^
         [--repeat 3] ^
@@ -34,20 +52,20 @@ Phase selection (--phases supersedes --build-only, --execute-only, --build-trans
 
 Quick module debug loop (no VM reset between runs):
     python MAST_provisioning\\vm\\run-prov-test.py ^
-        --host-unit mast-wis-01 --hostname mast-wis-01 ^
+        --host-unit <VM host-only IP> --hostname mastw ^
         --modules stage ^
         --phases build,transfer,execute,verify ^
         --no-reset
 
 Re-run execute + verify only (reuse last transfer, no rebuild):
     python MAST_provisioning\\vm\\run-prov-test.py ^
-        --host-unit mast-wis-01 --hostname mast-wis-01 ^
+        --host-unit <VM host-only IP> --hostname mastw ^
         --modules stage ^
         --phases execute,verify
 
 Verify current unit state without running anything:
     python MAST_provisioning\\vm\\run-prov-test.py ^
-        --host-unit mast-wis-01 --phases verify
+        --host-unit <VM host-only IP> --phases verify
 
 Credentials read from vault/creds.json (gitignored):
     {
@@ -488,6 +506,32 @@ def phase_build(hostname: str, modules: list[str], proxy_mode: str) -> None:
             raise RuntimeError(f"BUILD failed with exit code {proc.returncode}")
 
 
+def _unit_expected_to_serve(unit: UnitSession) -> bool:
+    """Whether mast-unit is running, or set to start itself, on the unit.
+
+    Every unit HAS the four mast-* services -- finalize registers them and leaves
+    them Stopped/Manual -- so presence proves nothing. Only a service that is up, or
+    set to come up, owes an answer on the API; at rest it is started by hand for a
+    session. Mirrors the diagnostics provider's rule, which reports the
+    authoritative verdict. Errs toward "expected" if the probe itself fails, so a
+    broken probe cannot mask a genuinely dead unit.
+    """
+    try:
+        r = run_ps(
+            unit,
+            "$s = Get-Service -Name 'mast-unit' -ErrorAction SilentlyContinue; "
+            "$m = (Get-CimInstance Win32_Service -Filter \"Name='mast-unit'\" -ErrorAction SilentlyContinue).StartMode; "
+            "if ($null -ne $s -and ($s.Status -eq 'Running' -or $m -eq 'Auto')) { 'expected' } else { 'inert' }",
+            label="unit-service-probe",
+            echo=False,
+            timeout_s=60,
+        )
+        return r.std_out.decode(errors="replace").strip() != "inert"
+    except Exception as e:
+        log(f"  [unit-health] service probe failed ({e}); treating the unit as expected to serve")
+        return True
+
+
 def phase_transfer(
     unit: Any,
     hostname: str,
@@ -776,8 +820,16 @@ def phase_verify(
                 results["unit_health_ok"] = True
                 results["unit_health_detail"] = f"api_version={body.get('api_version')!r}"
             except Exception as e:
-                results["unit_health_ok"] = False
-                results["unit_health_detail"] = str(e)
+                # Silence only fails the cycle if mast-unit was expected to serve.
+                # At rest (Stopped/Manual, the fleet's state) it owes no answer, and
+                # failing the cycle for that would mean no cycle can pass. Same rule
+                # as the diagnostics provider's heartbeat check.
+                if _unit_expected_to_serve(unit):
+                    results["unit_health_ok"] = False
+                    results["unit_health_detail"] = str(e)
+                else:
+                    results["unit_health_ok"] = True
+                    results["unit_health_detail"] = f"inert, mast-unit at rest ({e})"
         else:
             results["unit_health_ok"] = True
             results["unit_health_detail"] = "(not checked)"

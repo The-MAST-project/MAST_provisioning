@@ -638,14 +638,14 @@ def test_staging_unc_uses_the_derived_address_and_lease_keeps_the_name(root, mon
     it identifies who holds the run, and outlives a DHCP change.
     """
     drv, sess = _make_driver(root, monkeypatch, make_responder())
-    monkeypatch.setattr(D.transport, "local_address_for", lambda peer_ip: "10.23.2.34")
+    monkeypatch.setattr(D.transport, "local_address_for", lambda peer_ip: "192.0.2.34")
     drv.prov_identity = "AP-PC-PF62XRLL"
 
     drv.run()
     log = drv.log.run_log_path.read_text()
 
-    assert "PROV_ADDR" in log and "address=10.23.2.34" in log, log
-    assert r"src_unc=\\10.23.2.34\mast-staging" in log, log
+    assert "PROV_ADDR" in log and "address=192.0.2.34" in log, log
+    assert r"src_unc=\\192.0.2.34\mast-staging" in log, log
     assert "AP-PC-PF62XRLL" not in log.split("TRANSFER_START")[1].split("\n")[0], (
         "the staging UNC must not carry this machine's name\n" + log
     )

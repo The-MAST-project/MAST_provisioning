@@ -116,12 +116,12 @@ def test_pull_staging_args_match_the_script():
         re.findall(
             r"-(\w+) '",
             T.pull_staging_args(
-                prov_address="10.23.2.34",
+                prov_address="192.0.2.34",
                 unit_hostname="mastw",
                 smb_user="mast-transfer",
                 smb_pass="pw",
                 unit_stage=r"C:\mast-staging\run-1",
-                src_unc=r"\\10.23.2.34\mast-staging\mastw\01-provisioning",
+                src_unc=r"\\192.0.2.34\mast-staging\mastw\01-provisioning",
             ),
         )
     )
@@ -135,7 +135,7 @@ def test_pull_staging_args_quote_every_value():
     # quoted literal with embedded quotes doubled -- the SMB password in
     # particular is arbitrary text.
     args = T.pull_staging_args(
-        prov_address="10.23.2.34",
+        prov_address="192.0.2.34",
         unit_hostname="mastw",
         smb_user="mast-transfer",
         smb_pass="pa'ss",

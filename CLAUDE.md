@@ -416,6 +416,29 @@ When adding any new `client/*.ps1` that is needed at provisioning or bootstrap t
 
 Skipping either step means the script is missing at runtime on the unit.
 
+## `--host-unit` is a machine, and `mastw` is a real telescope
+
+`vm/run-prov-test.py` installs software on whatever `--host-unit` resolves to. Two of
+its flags read alike and are not:
+
+- **`--host-unit`** -- the machine to connect to and provision. For the dev cycle this
+  is the VirtualBox VM, which is on the host-only network with **no DNS record**, so
+  it is addressed by IP. Read the current one from `VBoxManage guestproperty enumerate
+  mast-unit` (`Net/0/V4/IP`); it is a DHCP lease and does change.
+- **`--hostname`** -- only the identity the payload is *built* for. The VM stands in
+  for `mastw`, so `--hostname mastw` is correct even though the VM answers to its own
+  name.
+
+**Never pass a bare unit name to `--host-unit`.** Unit names resolve through institute
+DNS to real machines, and one of them is a prototype attached to a real telescope, so a
+"dev" cycle aimed there provisions it. This is not hypothetical: on 2026-08-17 two runs
+took a bare name from the harness's own usage example and reached that prototype,
+stopping only because the SMB mount failed. The examples now carry a placeholder;
+resolve any name you did not read off the VM before using it.
+
+The same care applies to the driver: `--only-hosts` names entries in
+`server/unit-registry.json`, and every name in it is a real machine.
+
 ## Do not edit the staging area
 
 Do **not** make edits to files under `staging/`. That directory is generated automatically by the build process and any manual changes will be overwritten.
@@ -513,8 +536,9 @@ run-prov-test's SSH fallback rides on). Then WinRM connects again.
 **But a service restart does NOT guarantee reachability across subnets.** Windows' built-in
 "Windows Remote Management (HTTP-In)" firewall rule is scoped to `RemoteAddress = LocalSubnet`
 (the default, notably for the Public profile). So when the caller is on a different subnet than
-the unit (e.g. labcomp on `132.76.x` calling mast02 on `10.23.1.x`), 5985 stays refused even
-though the listener is up and bound locally -- while SSH (port 22, scoped Any) keeps working.
+the unit (e.g. the prov workstation on the campus network calling a unit on its site VLAN),
+5985 stays refused even though the listener is up and bound locally -- while SSH (port 22,
+scoped Any) keeps working.
 Confirm with `Test-NetConnection <unit> -Port 5985` vs `-Port 22` from the caller.
 
 **Do NOT "fix" this by widening the WinRM rule to the whole network** (`-RemoteAddress Any`) --

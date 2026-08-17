@@ -13,20 +13,11 @@
 param(
     [int]${MastUnitPort} = 8000,
     [int]${Phd2RpcPort}  = 4400,
-    # Assert the unit API answers, instead of reporting it.
+    # Assert the unit API answers even while mast-unit is at rest.
     #
-    # OFF today, deliberately, and this is a dated position rather than a
-    # preference. The fleet's resting state is Stopped/Manual -- enforced by
-    # mast-services-finalize -- and mast-unit is started BY HAND for an observing
-    # session. A unit sitting at rest therefore has no heartbeat, which is correct,
-    # so asserting one fails every healthy unit and holds fully_provisioned false
-    # fleet-wide (the same shape as #67/#68/#69).
-    #
-    # FLIP THIS ON when provisioning is expected to leave the services RUNNING --
-    # i.e. when mast-services-finalize's contract changes and a unit is expected to
-    # come back from a reprovision already serving. Expected within months of
-    # 2026-08-11. At that point an absent heartbeat IS a provisioning failure and
-    # this switch, or its default, should change to say so.
+    # Rarely needed: the check decides for itself from the service's state (see
+    # section 7). This forces the assertion on a unit that is Stopped/Manual, to
+    # prove one is serving when it is meant to be.
     [switch]${RequireUnitHeartbeat}
 )
 
@@ -263,11 +254,30 @@ try {
 }
 
 # --- 7. mast-unit HTTP heartbeat ---
+# Checked while the service is up; inert while it is at rest.
+#
+# Every unit HAS these services -- mast-services-finalize registers all four and
+# leaves them Stopped/Manual, which is the fleet's resting state -- so presence
+# says nothing. What matters is whether this one is EXPECTED to be serving: running
+# now, or set to start itself. Either way an unanswered API is provisioning's
+# failure. Stopped and Manual is inert by design, and asserting a heartbeat there
+# would fail every healthy unit (the shape of #67/#68/#69).
+#
+# Deliberately does NOT start the service to test it: that would fight the resting
+# state finalize just established, and a heartbeat this check manufactured proves
+# nothing about how the unit comes up. When the Supervision epic (#82) changes the
+# topology so units are expected to come back serving, this begins asserting on its
+# own with no edit here.
 try {
     ${mastSvc} = Get-Service -Name 'mast-unit' -ErrorAction SilentlyContinue
-    if ($null -ne ${mastSvc} -and ${mastSvc}.Status -ne 'Running') {
-        Start-Service -Name 'mast-unit' -ErrorAction SilentlyContinue
+    ${svcStatus} = 'absent'
+    ${svcStart} = 'absent'
+    if ($null -ne ${mastSvc}) {
+        ${svcStatus} = [string]${mastSvc}.Status
+        ${cim} = Get-CimInstance Win32_Service -Filter "Name='mast-unit'" -ErrorAction SilentlyContinue
+        if ($null -ne ${cim}) { ${svcStart} = [string]${cim}.StartMode }
     }
+    ${svcExpectedUp} = (${svcStatus} -eq 'Running') -or (${svcStart} -eq 'Auto')
     ${heartbeatUrl} = ("http://127.0.0.1:{0}/mast/api/v1/unit/status" -f ${MastUnitPort})
     ${resp} = $null
     # Poll up to 60s to allow for service startup after a recent restart.
@@ -280,15 +290,16 @@ try {
         }
     }
     ${hbOk} = $null -ne ${resp} -and ${resp}.StatusCode -ge 200 -and ${resp}.StatusCode -lt 300
-    ${hbDetail} = ("url={0} status={1}" -f ${heartbeatUrl}, $(if ($null -ne ${resp}) { ${resp}.StatusCode } else { 'no-response' }))
-    if (${hbOk} -or ${RequireUnitHeartbeat}) {
-        # Answering always passes; and once the heartbeat is REQUIRED, silence fails.
+    ${hbDetail} = ("url={0} status={1} service={2}/{3}" -f ${heartbeatUrl}, $(if ($null -ne ${resp}) { ${resp}.StatusCode } else { 'no-response' }), ${svcStatus}, ${svcStart})
+    if (${hbOk} -or ${svcExpectedUp} -or ${RequireUnitHeartbeat}) {
+        # Answering always passes. A service that is up, or set to bring itself up,
+        # and still will not answer is provisioning's failure to report.
         Add-DiagResult -Name 'mast-unit-heartbeat' -Ok ${hbOk} -Detail ${hbDetail}
     }
     else {
-        # At rest with the service stopped by design: report, do not assert.
+        # Stopped and Manual: at rest by design, started by hand for a session.
         Add-DiagWarn -Name 'mast-unit-heartbeat' -Detail ${hbDetail} `
-            -Why 'reported, not asserted: the fleet rests with mast-unit stopped and started by hand. Pass -RequireUnitHeartbeat once a reprovision is expected to leave it serving.'
+            -Why 'inert: mast-unit is Stopped/Manual, the fleet resting state, so it owes no heartbeat. Asserted automatically once it is Running or set to Auto; -RequireUnitHeartbeat forces it now.'
     }
 } catch {
     if (${RequireUnitHeartbeat}) {
