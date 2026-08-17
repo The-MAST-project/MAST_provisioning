@@ -245,6 +245,9 @@ The WinRM/SSH transport is the canonical `server/prov/transport.py` (lifted out 
 | Helper | Purpose |
 |--------|---------|
 | `_ps_escape(s)` | Escape a string for embedding in a PS single-quoted string (`'` -> `''`). Never inline `.replace("'", "''")`. |
+| `ps_lit(s)` | A value as a complete PS single-quoted literal. Use for every value interpolated into a remote command, not just the ones that look risky. |
+| `local_address_for(peer_ip)` | This machine's address on the route to a unit, from the kernel. **Never send a unit this machine's name** (`COMPUTERNAME` / `gethostname()`) and never pick from the interface list — see the #70 record. |
+| `pull_staging_args(...)` | The argument list for `client/mast-pull-staging.ps1`. The only place that names its parameters; both the driver and the `vm/` harness call it. Add a parameter there and here, never at a call site. |
 | `connect_unit(host, cred)` | WinRM-preferred, SSH-fallback session to a unit. Prefer over `winrm_session` for real work. |
 | `run_ps(session, script, ...)` | Run PS on a unit with heartbeat + hard timeout + resilient retry. |
 | `winrm_session(host, cred, read_timeout_s, op_timeout_s)` | Construct a `winrm.Session`. Never instantiate `winrm.Session` directly outside this factory. |
