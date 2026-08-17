@@ -212,7 +212,7 @@ def test_local_address_for_asks_the_kernel_for_the_route(root, monkeypatch):
             seen["connect"] = addr
 
         def getsockname(self):
-            return ("10.23.2.34", 51234)
+            return ("192.0.2.34", 51234)
 
         def close(self):
             seen["closed"] = True
@@ -222,8 +222,8 @@ def test_local_address_for_asks_the_kernel_for_the_route(root, monkeypatch):
 
     monkeypatch.setattr(T.socket, "socket", lambda *a, **kw: FakeSock())
 
-    assert T.local_address_for("10.23.1.103") == "10.23.2.34"
-    assert seen["connect"] == ("10.23.1.103", T.DISCARD_PORT)
+    assert T.local_address_for("198.51.100.103") == "192.0.2.34"
+    assert seen["connect"] == ("198.51.100.103", T.DISCARD_PORT)
     assert seen.get("closed") is True
 
 
@@ -236,7 +236,7 @@ def test_local_address_for_returns_empty_when_there_is_no_route(root, monkeypatc
             pass
 
     monkeypatch.setattr(T.socket, "socket", lambda *a, **kw: DeadSock())
-    assert T.local_address_for("10.23.1.103") == ""
+    assert T.local_address_for("198.51.100.103") == ""
     # An unresolved unit is not probed at all.
     assert T.local_address_for("") == ""
 
