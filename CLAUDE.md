@@ -396,6 +396,28 @@ When adding any new `client/*.ps1` that is needed at provisioning or bootstrap t
 
 Skipping either step means the script is missing at runtime on the unit.
 
+## `--host-unit` is a machine, and `mastw` is a real telescope
+
+`vm/run-prov-test.py` installs software on whatever `--host-unit` resolves to. Two of
+its flags read alike and are not:
+
+- **`--host-unit`** -- the machine to connect to and provision. For the dev cycle this
+  is the VirtualBox VM, which is on the host-only network with **no DNS record**, so
+  it is addressed by IP (`192.168.56.113` at the time of writing; confirm with
+  `VBoxManage guestproperty enumerate mast-unit`).
+- **`--hostname`** -- only the identity the payload is *built* for. The VM stands in
+  for `mastw`, so `--hostname mastw` is correct even though the VM is `mast-wis-01`.
+
+**Never pass a bare unit name to `--host-unit` on campus.** `mastw` resolves through
+Weizmann DNS to `10.23.3.72` -- a real prototype unit attached to a real telescope --
+so a "dev" cycle aimed there provisions it. This is not hypothetical: on 2026-08-17
+two runs took `--host-unit mastw` from the harness's own usage example and reached the
+prototype, stopping only because the SMB mount failed. The examples now use the VM's
+address; keep it that way.
+
+The same care applies to the driver: `--only-hosts` names entries in
+`server/unit-registry.json`, and every name in it is a real machine.
+
 ## Do not edit the staging area
 
 Do **not** make edits to files under `staging/`. That directory is generated automatically by the build process and any manual changes will be overwritten.

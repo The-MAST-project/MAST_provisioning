@@ -14,9 +14,27 @@ Drives a full MAST provisioning cycle:
   4. VERIFY   - smoke-test markers and pass criteria checked (criteria differ in verify-only mode)
   5. RESET    - unit VM stopped, snapshot restored, restarted
 
+--host-unit is the MACHINE THIS INSTALLS ON; --hostname is only the identity the
+payload is BUILT for. They are not interchangeable, and the difference matters:
+
+  --host-unit   where to connect and provision. For the dev cycle this must be the
+                VirtualBox VM, which sits on the host-only network and has no DNS
+                record. Address it by IP (192.168.56.113 at the time of writing;
+                confirm with `VBoxManage guestproperty enumerate mast-unit`).
+  --hostname    which unit the payload is built as -- the VM stands in for `mastw`,
+                so `--hostname mastw` is right even though the VM's own name is
+                mast-wis-01.
+
+DO NOT pass a bare unit name to --host-unit on campus. `mastw` resolves through
+Weizmann DNS to 10.23.3.72, a REAL prototype machine attached to a real telescope;
+pointing this harness at it installs software on it. (`mast-wis-01` does not resolve
+at all, so it merely fails.) Two runs on 2026-08-17 targeted `mastw` from the
+example that used to be here and reached the prototype before failing at the SMB
+mount.
+
 Usage (Windows PowerShell, run from anywhere):
     python MAST_provisioning\\vm\\run-prov-test.py ^
-        --host-unit mastw ^
+        --host-unit 192.168.56.113 ^
         --hostname  mastw ^
         [--modules python,ascom,mast] ^
         [--repeat 3] ^
@@ -34,20 +52,20 @@ Phase selection (--phases supersedes --build-only, --execute-only, --build-trans
 
 Quick module debug loop (no VM reset between runs):
     python MAST_provisioning\\vm\\run-prov-test.py ^
-        --host-unit mast-wis-01 --hostname mast-wis-01 ^
+        --host-unit 192.168.56.113 --hostname mastw ^
         --modules stage ^
         --phases build,transfer,execute,verify ^
         --no-reset
 
 Re-run execute + verify only (reuse last transfer, no rebuild):
     python MAST_provisioning\\vm\\run-prov-test.py ^
-        --host-unit mast-wis-01 --hostname mast-wis-01 ^
+        --host-unit 192.168.56.113 --hostname mastw ^
         --modules stage ^
         --phases execute,verify
 
 Verify current unit state without running anything:
     python MAST_provisioning\\vm\\run-prov-test.py ^
-        --host-unit mast-wis-01 --phases verify
+        --host-unit 192.168.56.113 --phases verify
 
 Credentials read from vault/creds.json (gitignored):
     {
