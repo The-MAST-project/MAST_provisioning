@@ -15,11 +15,11 @@ what lets IANA ids resolve, preserving item 1's fix.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+from prov.registry import MaintenanceWindow
 
 
 @dataclass(frozen=True)
@@ -44,29 +44,31 @@ def _resolve_local(now_utc: datetime, tz: str | None) -> tuple[datetime, str | N
 
 
 def in_maintenance_window(
-    unit: Mapping[str, Any],
     *,
+    window: MaintenanceWindow | None,
+    timezone: str | None = None,
     override_start: int = -1,
     override_end: int = -1,
     now_utc: datetime | None = None,
 ) -> WindowResult:
-    """Decide whether ``unit`` is inside its maintenance window right now.
+    """Decide whether a unit with this window is inside it right now.
+
+    Takes the window and timezone rather than a whole registry entry: nothing here
+    needs to know what a unit is, and its tests should not have to invent one.
 
     ``override_start``/``override_end`` (>=0) force a fleet-wide window. Otherwise
-    the unit's ``maintenance_window.{start_hour,end_hour}`` is used; a unit with
-    no window (or missing fields) is allowed at any time.
+    ``window`` is used, and a unit with no window is allowed at any time. There is
+    no half-specified-window case: MaintenanceWindow requires both bounds, so the
+    registry read rejects an entry carrying one.
     """
-    tz = unit.get("timezone") or None
+    tz = timezone or None
 
     if override_start >= 0 and override_end >= 0:
         start_h, end_h = override_start, override_end
+    elif window is None:
+        return WindowResult(allowed=True, reason="no_window_configured", tz=tz)
     else:
-        mw = unit.get("maintenance_window")
-        if not mw:
-            return WindowResult(allowed=True, reason="no_window_configured", tz=tz)
-        if "start_hour" not in mw or "end_hour" not in mw:
-            return WindowResult(allowed=True, reason="window_fields_missing", tz=tz)
-        start_h, end_h = int(mw["start_hour"]), int(mw["end_hour"])
+        start_h, end_h = window.start_hour, window.end_hour
 
     now_utc = now_utc or datetime.now(UTC)
     local, tz_error = _resolve_local(now_utc, tz)

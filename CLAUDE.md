@@ -255,6 +255,26 @@ The WinRM/SSH transport is the canonical `server/prov/transport.py` (lifted out 
 | `UnitSession` | The type of a session to a unit — the union of `SshSession` and `winrm.Session`. **Annotate every session parameter with this**, never `winrm.Session` (which breaks `isinstance` narrowing — see the record) and never `Any`. |
 | `UnitResponse` | What `run_ps` / `_resilient_run_ps` return, and what `check_rc` takes: the `status_code` / `std_out` / `std_err` protocol both transports' responses satisfy. Never annotate a shared path `winrm.Response`. |
 
+### The unit registry is a model (`server/prov/registry.py`)
+
+`server/unit-registry.json` is read and written through **pydantic models**, matching
+MAST_common's config layer — not a dict, and not a TypedDict.
+
+| Helper | Purpose |
+|--------|---------|
+| `UnitEntry` | One registry entry. **Annotate anything taking one `registry.UnitEntry`**, never `dict`, and reach fields by attribute (`unit.hostname`). |
+| `MaintenanceWindow` | A unit's provisioning hours. Both bounds are required, so no caller handles a half-specified window. |
+| `load_unit_registry(path)` | The validating read. Raises `TypeError` naming the file, like the JSON readers in `transport`. |
+| `dump_unit_registry(entries)` | JSON-ready dicts for writing the file back. **Always write through this** — it preserves `_comment` and omits absent keys rather than stamping `null` over a hand-edited file. |
+
+Both models are **closed** (`extra="forbid"`): every key the file may carry is
+declared, `_comment` included. A misspelled key is an error at the read, not a value
+silently ignored. Adding a field means editing the model AND
+`unit-registry.json.template` — a test asserts they agree.
+
+`hostname` and `site` are **required**; a site-less entry is rejected rather than
+defaulted (this reverses the 2026-06-29 archived decision — see the record).
+
 ### The server orchestration is Python (platform-agnostic)
 
 The server-side control plane is the Python package **`server/prov/`**, driven by
