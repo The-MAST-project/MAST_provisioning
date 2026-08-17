@@ -759,6 +759,8 @@ def main() -> int:
     if args.build_manifest:
         try:
             build_doc = _load_json(Path(args.build_manifest))
+            if not isinstance(build_doc, dict):
+                raise TypeError(f"expected a JSON object, got {type(build_doc).__name__}")
             reference = _manifest_from_obj("BUILD (reference)", build_doc)
         except Exception as exc:  # noqa: BLE001
             print(f"ERROR: could not load --build-manifest: {exc}", file=sys.stderr)

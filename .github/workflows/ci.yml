@@ -1,9 +1,11 @@
 # Continuous integration for MAST_provisioning.
 #
-# Three jobs, not the siblings' two, because this repo has two test languages:
+# Four jobs, not the siblings' two, because this repo has two test languages:
 # pytest for the platform-agnostic Python server, and Pester for the PowerShell
 # libraries the units run. They are separate jobs so the signals stay
 # independent -- a red lint must not hide which of the two broke, and vice versa.
+# `types` is separate from `lint` for that same reason, and because unlike ruff
+# the type checker resolves imports from the environment, so it needs the deps.
 #
 # Lint is BLOCKING and, unlike MAST_common and MAST_unit, currently GREEN: the
 # debt (195 findings, 27 files unformatted) was cleared when the fleet ruff
@@ -29,6 +31,12 @@
 # never collected. And it needs server/requirements.txt installed, because a
 # missing paramiko does not fail a test -- it kills collection with an
 # INTERNALERROR and zero tests report.
+#
+# The type check lands GREEN and BLOCKING on the same reasoning as lint: 50
+# findings were cleared first (#87), with only the transport session model
+# deferred, line-scoped at each site and tracked as stage 2 of that issue. One
+# ubuntu runner covers both platforms because pyrightconfig.json sets
+# pythonPlatform: "All" -- there is no need to matrix it.
 name: CI
 
 on:
@@ -154,3 +162,30 @@ jobs:
 
       - name: Lint
         run: ruff check .
+
+  types:
+    name: types
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            server/requirements.txt
+            requirements-dev.txt
+
+      - name: Install dependencies
+        # Runtime deps as well, unlike the lint job: pyright resolves imports from
+        # the environment, so without pywinrm/paramiko/requests installed it
+        # reports reportMissingImports for the whole transport layer and proves
+        # nothing about the code.
+        run: python -m pip install --upgrade pip -r server/requirements.txt -r requirements-dev.txt
+
+      - name: Type check
+        # Config (include paths, platform, mode) is pyrightconfig.json at the root;
+        # the version is pinned in requirements-dev.txt. Non-zero on any error.
+        run: basedpyright

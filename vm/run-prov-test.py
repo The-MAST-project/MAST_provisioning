@@ -80,7 +80,7 @@ from pathlib import Path
 from typing import Any, TextIO
 
 try:
-    import paramiko  # type: ignore[import]  # noqa: F401 -- SSH transport (transport.SshSession)
+    import paramiko  # noqa: F401 -- SSH transport (transport.SshSession)
 except ImportError:
     sys.exit(
         "ERROR: paramiko is required for the SSH transport.\n"
@@ -366,7 +366,9 @@ class ExecuteLogPoller:
     ) -> None:
         self._host = host
         self._cred = cred
-        self._session = self._new_session()
+        # Explicitly Any: the poller drops the attribute to None between
+        # reconnects, and _new_session() hands back either transport's session.
+        self._session: Any = self._new_session()
         self._log_filename = log_filename
         self._step_timer = step_timer
         self._stop = threading.Event()
@@ -394,7 +396,7 @@ class ExecuteLogPoller:
             log("WARNING: ExecuteLogPoller did not stop in time; leaving poller WinRM session open to avoid races.")
             return
         _dispose_winrm_session(self._session)
-        self._session = None  # type: ignore[assignment]
+        self._session = None
 
     def _run(self) -> None:
         consecutive_errors = 0
@@ -422,7 +424,7 @@ class ExecuteLogPoller:
                 consecutive_errors += 1
                 log(f"  [poller] warning ({consecutive_errors}): {e}")
                 _dispose_winrm_session(self._session)
-                self._session = None  # type: ignore[assignment]
+                self._session = None
                 try:
                     self._session = self._new_session()
                     log("  [poller] reconnected.")
@@ -1205,6 +1207,9 @@ def main() -> None:
                     if not non_build:
                         log("No non-build phases selected; stopping after build.")
                         break
+                    # non_build is truthy here, so either CONNECT just ran or a
+                    # previous cycle's session is still live.
+                    assert unit_session is not None
 
                     # TRANSFER
                     unit_stage = ""

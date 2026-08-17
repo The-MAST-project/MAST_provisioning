@@ -159,6 +159,27 @@ decision record. The ticket carries the discussion; the PR carries the ratified 
 > Provisional here, pending promotion to `mast-claude-config` -- PR conventions are
 > genuinely cross-repo, and this is being proven on one repo first.
 
+## Python is type-checked, and the checker is pyright
+
+`basedpyright` (pyright plus a stricter default rule set) is a **blocking, green** CI job.
+Config is `pyrightconfig.json` at the repo root; the version is pinned in
+`requirements-dev.txt` beside `ruff`. Run it as `basedpyright` from the repo root — no
+arguments, it reads the config. Pylance in VS Code reads that same file, so what the editor
+shows is what CI enforces. Rationale, and why not mypy:
+`docs/decisions/2026-08-17-pyright-not-mypy-for-the-python-server.md` (#87).
+
+- **The suppression dialect is pyright's**, not mypy's: `# pyright: ignore[reportCallIssue]`,
+  scoped to the rule. A bare `# type: ignore` still works but suppresses *everything* on the
+  line, so don't reach for it. mypy-style `# type: ignore[arg-type]` codes are read as a
+  blanket suppression — the bracket contents mean nothing to pyright.
+- **Every suppression names why, and names its ticket if it is deferred work.** The waivers
+  from the adoption are line-scoped for exactly this reason (see stage 2 of #87); do not
+  widen a rule off in `pyrightconfig.json` to clear a finding.
+- **Don't add `-> Any` or an unparameterized `dict` to quiet the checker.** Both re-blind
+  every call site downstream, which is the state this repo was in before the adoption.
+- **New code lands green.** The mode is `standard`; raising it is a separate argument, and
+  `recommended` (2508 warnings here) is not the starting point.
+
 ## Single source of truth / DRY
 
 Logic that exists in more than one place will diverge. Strongly prefer one canonical
@@ -227,6 +248,7 @@ The WinRM/SSH transport is the canonical `server/prov/transport.py` (lifted out 
 | `connect_unit(host, cred)` | WinRM-preferred, SSH-fallback session to a unit. Prefer over `winrm_session` for real work. |
 | `run_ps(session, script, ...)` | Run PS on a unit with heartbeat + hard timeout + resilient retry. |
 | `winrm_session(host, cred, read_timeout_s, op_timeout_s)` | Construct a `winrm.Session`. Never instantiate `winrm.Session` directly outside this factory. |
+| `load_json_object(path)` / `load_json_list(path)` | BOM-tolerant JSON read with the top-level shape asserted (`dict` / list-of-dicts), raising `TypeError` naming the path otherwise. **Prefer these over `load_json_file`**, which returns `object` and forces a narrow at every call site. |
 
 ### The server orchestration is Python (platform-agnostic)
 
@@ -244,8 +266,8 @@ extra code.** Consequences for any new server code:
   (Path mangles them on a non-Windows server). Only local server paths use `Path`/`os`.
 - **Transfer is SMB for all platforms** (unit pulls via `net use`+robocopy; Samba serves the share
   on Linux). Don't add a non-SMB transfer path.
-- **Read PS-written JSON BOM-tolerantly** (`transport.load_json_file` / `parse_json_text`); write
-  plain UTF-8 + LF and rename atomically (`os.replace`).
+- **Read PS-written JSON BOM-tolerantly** (`transport.load_json_object` / `load_json_list` /
+  `parse_json_text`); write plain UTF-8 + LF and rename atomically (`os.replace`).
 - Resolve the PowerShell exe portably (`pwsh` on Linux, `powershell.exe` on Windows).
 - On Windows, `zoneinfo` needs the `tzdata` pip package (else IANA tz ids fall back to server-local).
 - The steps the driver *drives* stay PowerShell (`build-mast.ps1`, `mast-pull-staging.ps1`,

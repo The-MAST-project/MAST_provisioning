@@ -1,0 +1,47 @@
+// Pyright configuration for MAST_provisioning's Python half (the server, the
+// dev-VM harness and tools/). PowerShell is gated separately -- a parse sweep
+// today, PSScriptAnalyzer under #73.
+//
+// The checker is pinned in requirements-dev.txt (basedpyright==1.39.10, which is
+// pyright 1.1.412 plus a stricter default rule set). As with the ruff pin, the
+// version pins WHAT COUNTS as a finding, not just the wording -- so CI, every
+// workstation and Pylance in the editor agree.
+//
+// Why pyright and not mypy: #87. Short version -- mypy's plugin system is its
+// exclusive advantage and this repo uses no framework that needs one, the test
+// suite is unannotated so mypy's default skips its bodies, and Pylance already
+// runs pyright in the editor, so this file makes CI enforce what is on screen.
+{
+    // server/ holds the driver package; vm/ and tools/ are scripts, and both have
+    // caught real None-dereferences here, so neither is excluded.
+    "include": [
+        "server",
+        "tools",
+        "vm"
+    ],
+    // staging/ is generated payload (see CLAUDE.md "Do not edit the staging area").
+    "exclude": [
+        "**/staging",
+        "**/.venv",
+        "**/__pycache__"
+    ],
+    // `from prov import ...` resolves with server/ on sys.path rather than as an
+    // installed package -- the same reason ruff.toml names `prov` as first-party.
+    // vm/ is here because its tests import vm_lib and run-prov-test as siblings.
+    "extraPaths": [
+        "server",
+        "vm"
+    ],
+    // In step with ruff.toml's target-version and the CI matrix.
+    "pythonVersion": "3.12",
+    // Check the Windows AND POSIX branches in one pass. The server is
+    // platform-agnostic with a Linux target while the units are Windows, so a
+    // single-platform check would silently skip half the branches -- the same
+    // reason the test job is a two-OS matrix. mypy would need two --platform runs.
+    "pythonPlatform": "All",
+    // Explicit, and NOT basedpyright's default `recommended`: that mode reports
+    // 135 errors + 2508 warnings on this tree (mostly the reportUnknown*/reportAny
+    // families). Raising the mode is a rule-selection argument to have on its own
+    // evidence, once `standard` is green and holding.
+    "typeCheckingMode": "standard"
+}

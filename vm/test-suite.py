@@ -506,12 +506,15 @@ def run_prov_subprocess(args: list[str], label: str) -> tuple[int, float]:
                 errors="replace",
             )
             assert proc.stdout is not None
+            # Bound to a local for the closure: the narrowing above does not
+            # survive into _reader, which runs on another thread.
+            proc_stdout = proc.stdout
 
             def _reader():
                 nonlocal line_count, last_line_seen
                 # readline() returns '' only on EOF; reliable line-at-a-time
                 # without the iterator's read-ahead buffering.
-                for line in iter(proc.stdout.readline, ""):
+                for line in iter(proc_stdout.readline, ""):
                     f.write(line)
                     f.flush()  # flush each line to disk so tail -f works
                     line_count += 1
@@ -631,9 +634,12 @@ def _unit_read_installed_manifest(host_unit: str, creds: dict) -> dict | None:
     if not text:
         return None
     try:
-        return parse_json_text(text)
+        doc = parse_json_text(text)
     except json.JSONDecodeError as e:
         raise RuntimeError(f"installed-manifest.json on unit is not valid JSON: {e}")
+    if not isinstance(doc, dict):
+        raise RuntimeError(f"installed-manifest.json on unit is a {type(doc).__name__}, expected a JSON object")
+    return doc
 
 
 def _unit_delete_installed_manifest(host_unit: str, creds: dict) -> None:

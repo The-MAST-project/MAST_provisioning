@@ -182,8 +182,8 @@ class Driver:
             self.log.event("FATAL", reason="vault_creds_missing", path=self.cfg.vault_creds)
             return EXIT_FATAL
 
-        units = [u for u in (transport.load_json_file(self.cfg.unit_registry) or []) if u and u.get("hostname")]
-        creds = transport.load_json_file(self.cfg.vault_creds)
+        units = [u for u in transport.load_json_list(self.cfg.unit_registry) if u.get("hostname")]
+        creds = transport.load_json_object(self.cfg.vault_creds)
         if not creds.get("unit"):
             self.log.event("FATAL", reason="creds_unit_missing")
             return EXIT_FATAL
@@ -430,9 +430,10 @@ class Driver:
                     return
 
                 # Phase 4 -- build (always).
-                payload_hash, git_sha, build_manifest = self._build(unit, host, modules, dur)
-                if payload_hash is None:
+                built_hash, git_sha, build_manifest = self._build(unit, host, modules, dur)
+                if built_hash is None:
                     return  # BUILD_FAIL already logged
+                payload_hash = built_hash
 
                 # Phase 5 -- decide what (if anything) to run.
                 #
@@ -700,7 +701,7 @@ class Driver:
 
     def _persist_mac(self, unit: dict, mac: str) -> None:
         try:
-            units = transport.load_json_file(self.cfg.unit_registry)
+            units = transport.load_json_list(self.cfg.unit_registry)
             for u in units:
                 if u.get("hostname") == unit["hostname"]:
                     u["mac"] = mac
@@ -736,7 +737,7 @@ class Driver:
                 stale=is_stale,
             )
 
-    def _build(self, unit: dict, host: str, modules: list[str], dur) -> tuple[str | None, str | None, dict]:
+    def _build(self, unit: dict, host: str, modules: list[str], dur) -> tuple[str | None, str, dict[str, Any]]:
         # test_mode in the event is the auditable record of whether this build
         # passed -AllowMissing* (dev/test) or ran as a production build that
         # fails loud on any missing input (item 7). Production omits --test-mode.
@@ -774,15 +775,18 @@ class Driver:
             self.log.event("BUILD_FAIL", unit=host, reason="timeout", timeout_s=BUILD_TIMEOUT_S, log=str(build_log))
             self.log.activity(host, "BUILD_FAIL", "timeout", dur())
             self.exit_code = EXIT_UNIT_FAIL
-            return None, None, {}
+            return None, "", {}
         if rc != 0:
             self.log.event("BUILD_FAIL", unit=host, exit_code=rc, log=str(build_log))
             self.log.activity(host, "BUILD_FAIL", "exception", dur())
             self.exit_code = EXIT_UNIT_FAIL
-            return None, None, {}
+            return None, "", {}
         staging_dir = self.cfg.repo_top / "staging" / host / "01-provisioning"
-        bm = transport.load_json_file(staging_dir / "build-manifest.json")
-        payload_hash, git_sha = bm.get("payload_hash"), bm.get("git_sha")
+        bm = transport.load_json_object(staging_dir / "build-manifest.json")
+        # payload_hash keeps its None sentinel -- _process_unit treats it as
+        # BUILD_FAIL. git_sha has no such role: absent is "", matching the seed in
+        # _process_unit and logevents.activity()'s own default.
+        payload_hash, git_sha = bm.get("payload_hash"), bm.get("git_sha", "")
         self.log.event("BUILD_OK", unit=host, payload_hash=payload_hash, git_sha=git_sha)
         self._staging_dir = staging_dir
         # The manifest is returned rather than stashed on self: it describes the
@@ -850,12 +854,15 @@ class Driver:
         # whitelists success instead
         # (docs/decisions/2026-07-19-transfer-phase-fails-closed.md).
         if outcome != "OK":
-            reason = {
+            # Keyed on the JSON-derived outcome, so the mapping takes any key: a
+            # missing or garbled marker lands on the default rather than raising.
+            reason_by_outcome: dict[Any, str] = {
                 "NET_USE_FAIL": "net_use_failed",
                 "NET_USE_HUNG": "net_use_hung",
                 "ROBOCOPY_ERROR": "robocopy_error",
                 "DISK_INSUFFICIENT": "disk_insufficient",
-            }.get(outcome, "unrecognized_pull_result")
+            }
+            reason = reason_by_outcome.get(outcome, "unrecognized_pull_result")
             self.log.event(
                 "TRANSFER_FAIL",
                 unit=host,
@@ -869,7 +876,8 @@ class Driver:
             self.exit_code = EXIT_UNIT_FAIL
             return False
         # outcome == 'OK': robocopy rc 0-7 (0 no-op, 1 copied, 2-7 info/warning).
-        note = {0: "no_changes", 1: "files_copied"}.get(rc, f"robocopy_warning_rc_{rc}")
+        note_by_rc: dict[Any, str] = {0: "no_changes", 1: "files_copied"}
+        note = note_by_rc.get(rc, f"robocopy_warning_rc_{rc}")
         self.log.event("TRANSFER_OK", unit=host, bytes=size.bytes, robocopy_rc=rc, note=note)
         self._unit_stage = unit_stage
         return True

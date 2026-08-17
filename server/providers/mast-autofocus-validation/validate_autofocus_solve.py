@@ -77,7 +77,7 @@ def start_ps3cli_server(port: int):
     uses, honoring PS3CLI_DIR/PS3CLI_CATALOG then default locations. Returns the
     Popen handle; caller must terminate it. Requires --unit-src already on sys.path.
     """
-    from PlaneWave.ps3cli_locate import locate_ps3cli_catalog, locate_ps3cli_dir
+    from PlaneWave.ps3cli_locate import locate_ps3cli_catalog, locate_ps3cli_dir  # type: ignore  # unit-side (PWI4)
 
     ps3dir = locate_ps3cli_dir()
     if ps3dir is None:
@@ -95,7 +95,7 @@ def start_ps3cli_server(port: int):
 
 
 def validate_series(name: str, files: list[str], expected: dict, host: str, port: int, timeout: float) -> bool:
-    from focus_analysis import FocusAnalysisError, analyze_focus_files
+    from focus_analysis import FocusAnalysisError, analyze_focus_files  # type: ignore  # unit-side (MAST_unit)
 
     print(f"\n=== series '{name}' ({len(files)} images) ===")
     for f in files:

@@ -47,7 +47,7 @@ def _resolve_controller() -> tuple[bool, str, str]:
     before the path is set up.
     """
     try:
-        from common.config.local import load_local_config
+        from common.config.local import load_local_config  # type: ignore  # unit-side (MAST_common)
     except Exception as e:
         return False, "", f"import_failed ({e})"
     try:
