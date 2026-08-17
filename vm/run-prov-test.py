@@ -488,6 +488,32 @@ def phase_build(hostname: str, modules: list[str], proxy_mode: str) -> None:
             raise RuntimeError(f"BUILD failed with exit code {proc.returncode}")
 
 
+def _unit_expected_to_serve(unit: UnitSession) -> bool:
+    """Whether mast-unit is running, or set to start itself, on the unit.
+
+    Every unit HAS the four mast-* services -- finalize registers them and leaves
+    them Stopped/Manual -- so presence proves nothing. Only a service that is up, or
+    set to come up, owes an answer on the API; at rest it is started by hand for a
+    session. Mirrors the diagnostics provider's rule, which reports the
+    authoritative verdict. Errs toward "expected" if the probe itself fails, so a
+    broken probe cannot mask a genuinely dead unit.
+    """
+    try:
+        r = run_ps(
+            unit,
+            "$s = Get-Service -Name 'mast-unit' -ErrorAction SilentlyContinue; "
+            "$m = (Get-CimInstance Win32_Service -Filter \"Name='mast-unit'\" -ErrorAction SilentlyContinue).StartMode; "
+            "if ($null -ne $s -and ($s.Status -eq 'Running' -or $m -eq 'Auto')) { 'expected' } else { 'inert' }",
+            label="unit-service-probe",
+            echo=False,
+            timeout_s=60,
+        )
+        return r.std_out.decode(errors="replace").strip() != "inert"
+    except Exception as e:
+        log(f"  [unit-health] service probe failed ({e}); treating the unit as expected to serve")
+        return True
+
+
 def phase_transfer(
     unit: Any,
     hostname: str,
@@ -776,8 +802,16 @@ def phase_verify(
                 results["unit_health_ok"] = True
                 results["unit_health_detail"] = f"api_version={body.get('api_version')!r}"
             except Exception as e:
-                results["unit_health_ok"] = False
-                results["unit_health_detail"] = str(e)
+                # Silence only fails the cycle if mast-unit was expected to serve.
+                # At rest (Stopped/Manual, the fleet's state) it owes no answer, and
+                # failing the cycle for that would mean no cycle can pass. Same rule
+                # as the diagnostics provider's heartbeat check.
+                if _unit_expected_to_serve(unit):
+                    results["unit_health_ok"] = False
+                    results["unit_health_detail"] = str(e)
+                else:
+                    results["unit_health_ok"] = True
+                    results["unit_health_detail"] = f"inert, mast-unit at rest ({e})"
         else:
             results["unit_health_ok"] = True
             results["unit_health_detail"] = "(not checked)"
