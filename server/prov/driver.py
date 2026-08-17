@@ -75,11 +75,6 @@ AVAIL_TTL_S = 7200  # 2 h; matches execute-lease default
 WINRM_PORT = transport.WINRM_PORT
 SMB_PORT = 445
 
-#: RFC 863 discard. A UDP connect() to it sends nothing; it only binds the socket
-#: so getsockname() reveals the kernel's chosen source address. See
-#: Driver._local_address_for.
-DISCARD_PORT = 9
-
 # Phase watchdogs (item 6): each long phase has a hard timeout so a hung step
 # fails with a structured event instead of blocking the loop forever. Quick
 # remote reads (inventory/availability/manifest/smoke/proxy/archive) get a short
@@ -101,7 +96,7 @@ EXECUTE_EXIT_LEASE_HELD = 10
 
 def _ps_lit(s: str) -> str:
     """A value as a PowerShell single-quoted string literal (doubles quotes)."""
-    return "'" + transport._ps_escape("" if s is None else str(s)) + "'"
+    return transport.ps_lit(s)
 
 
 def _powershell_exe() -> str:
@@ -164,7 +159,7 @@ class Driver:
         self.execute_refused = False
         #: This machine's NAME. Used only where an identity is wanted -- the
         #: execute lease's held_by, and log lines. Deliberately NOT used as an
-        #: address: see prov_address and _local_address_for.
+        #: address: see prov_address and transport.local_address_for.
         self.prov_identity = os.environ.get("COMPUTERNAME") or socket.gethostname()
         #: This machine's ADDRESS as seen from the unit currently being processed,
         #: set per unit by _process_unit. The staging UNC is built from this.
@@ -360,7 +355,7 @@ class Driver:
         # nothing in this repo maintains that mapping -- three units pinned it to
         # a dead APIPA address and every transfer failed with net.exe error 53
         # (#70). Derived per unit because the answer is per route.
-        self.prov_address = self._local_address_for(resolved)
+        self.prov_address = transport.local_address_for(resolved)
         if self.prov_address:
             self.log.event("PROV_ADDR", unit=host, address=self.prov_address, via_unit_ip=resolved)
         else:
@@ -605,38 +600,7 @@ class Driver:
             self.exit_code = EXIT_UNIT_FAIL
 
     # -- phase helpers ------------------------------------------------------
-    @staticmethod
-    def _local_address_for(peer_ip: str) -> str:
-        """This machine's address on the route to ``peer_ip``, or '' if unknown.
-
-        Asks the kernel rather than choosing from the interface list. A UDP
-        ``connect`` sends nothing -- it only binds the socket, which makes
-        getsockname() report the source address the OS would actually use to
-        reach that peer.
-
-        Choosing from the interface list is what must be avoided: this machine
-        has seven IPv4 addresses (one routable, one VirtualBox host-only, five
-        APIPA), and a hand-picked one is how 169.254.215.207 came to be written
-        into three units' hosts files (#70). Route-based selection has no
-        heuristic to get wrong, and is also correct for a dev VM on the
-        host-only network, which legitimately sees a different address than a
-        production unit does.
-
-        Stdlib only, and identical on Linux and Windows, so it does not owe the
-        platform-agnostic server a per-platform branch.
-        """
-        if not peer_ip:
-            return ""
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        try:
-            s.connect((peer_ip, DISCARD_PORT))
-            return s.getsockname()[0] or ""
-        except OSError:
-            return ""
-        finally:
-            s.close()
-
-    def _unit_can_reach_staging(self, session: Any, host: str) -> bool:
+    def _unit_can_reach_staging(self, session: transport.UnitSession, host: str) -> bool:
         """Can the UNIT open SMB to the staging address we are about to hand it?
 
         Asked from the unit, not the server: Test-MastSmbHostReady already checks
@@ -662,14 +626,14 @@ class Driver:
         except OSError:
             return False
 
-    def _ps_out(self, session: Any, script: str, label: str, timeout_s: int = PROBE_TIMEOUT_S) -> str:
+    def _ps_out(self, session: transport.UnitSession, script: str, label: str, timeout_s: int = PROBE_TIMEOUT_S) -> str:
         # tee_stdout=False: these are internal probes whose stdout is a marker the
         # caller parses -- keep them out of the controller log (esp. the big
         # base64 archive pull). timeout_s bounds a hung remote read (watchdog).
         r = transport.run_ps(session, script, label=label, echo=False, tee_stdout=False, timeout_s=timeout_s)
         return (r.std_out or b"").decode("utf-8", "replace")
 
-    def _inventory(self, session: Any, unit: dict) -> None:
+    def _inventory(self, session: transport.UnitSession, unit: dict) -> None:
         """Lean functional port of the inventory phase: collect NICs + identity,
         write a per-unit JSON, persist the primary MAC to the registry. Non-fatal."""
         host = unit["hostname"]
@@ -711,7 +675,7 @@ class Driver:
         except Exception as e:  # noqa: BLE001
             self.log.event("REGISTRY_MAC_WARN", unit=unit["hostname"], error=f"{type(e).__name__}: {e}")
 
-    def _reclaim_availability(self, session: Any, host: str) -> None:
+    def _reclaim_availability(self, session: transport.UnitSession, host: str) -> None:
         avail = _parse_json_or_none(
             self._ps_out(
                 session, f"if (Test-Path '{UNIT_AVAIL}') {{ Get-Content '{UNIT_AVAIL}' -Raw }} else {{ '' }}", "avail"
@@ -794,7 +758,7 @@ class Driver:
         # args), and this object loops over every unit.
         return payload_hash, git_sha, bm
 
-    def _set_unavailable(self, session: Any, host: str, payload_hash: str) -> None:
+    def _set_unavailable(self, session: transport.UnitSession, host: str, payload_hash: str) -> None:
         since = datetime.now(UTC)
         expected = since + timedelta(seconds=AVAIL_TTL_S)
         self._write_unit_json(
@@ -818,7 +782,7 @@ class Driver:
             lease_owner=self.run_id,
         )
 
-    def _transfer(self, session: Any, host: str, dur, payload_hash: str, git_sha: str) -> bool:
+    def _transfer(self, session: transport.UnitSession, host: str, dur, payload_hash: str, git_sha: str) -> bool:
         unit_stage = rf"C:\mast-staging\{self.run_id}"
         src_unc = rf"\\{self.prov_address}\mast-staging\{host}\01-provisioning"
         size = staging_payload_size(self._staging_dir)
@@ -828,11 +792,16 @@ class Driver:
         # Ship the pull script (it runs before the payload arrives), then run it.
         pull_src = (self.cfg.repo_top / "client" / "mast-pull-staging.ps1").read_text(encoding="utf-8")
         transport.upload_file(session, UNIT_PULL_SCRIPT, pull_src, label="pull-script")
+        args = transport.pull_staging_args(
+            prov_address=self.prov_address,
+            unit_hostname=host,
+            smb_user=self.smb_user,
+            smb_pass=self.smb_pass,
+            unit_stage=unit_stage,
+            src_unc=src_unc,
+        )
         script = (
-            f"$r = & {_ps_lit(UNIT_PULL_SCRIPT)} -ProvAddress {_ps_lit(self.prov_address)} "
-            f"-UnitHostname {_ps_lit(host)} -SmbUser {_ps_lit(self.smb_user)} "
-            f"-SmbPass {_ps_lit(self.smb_pass)} -UnitStage {_ps_lit(unit_stage)} "
-            f"-SrcUNC {_ps_lit(src_unc)}; "
+            f"$r = & {_ps_lit(UNIT_PULL_SCRIPT)} {args}; "
             f"Write-Output ('PULLRESULT ' + ($r | ConvertTo-Json -Compress -Depth 6))"
         )
         try:
@@ -882,7 +851,9 @@ class Driver:
         self._unit_stage = unit_stage
         return True
 
-    def _write_detached_inputs(self, session: Any, stage: str, target_modules: list[str] | None = None) -> None:
+    def _write_detached_inputs(
+        self, session: transport.UnitSession, stage: str, target_modules: list[str] | None = None
+    ) -> None:
         """Write the detached runner's inputs. No secret travels here: execute no
         longer maps any drive (issue #25), so it needs no SMB credential."""
         # 'modules' is the targeted subset from the per-module drift compare, or
@@ -901,7 +872,7 @@ class Driver:
             },
         )
 
-    def _write_shared_cred(self, session: Any) -> None:
+    def _write_shared_cred(self, session: transport.UnitSession) -> None:
         """Plant the operational-share credential the mast-shared-mount provider needs,
         as a machine-bound DPAPI-LocalMachine blob.
 
@@ -926,7 +897,13 @@ class Driver:
         transport.run_ps(session, enc, label="shared-dpapi-blob", echo=False, tee_stdout=False, timeout_s=PROBE_TIMEOUT_S)
 
     def _execute(
-        self, session: Any, host: str, dur, payload_hash: str, git_sha: str, target_modules: list[str] | None = None
+        self,
+        session: transport.UnitSession,
+        host: str,
+        dur,
+        payload_hash: str,
+        git_sha: str,
+        target_modules: list[str] | None = None,
     ) -> tuple[bool, Any]:
         """Detached execute (item 6): run execute-mast-provisioning.ps1 as a
         detached scheduled task (via client/mast-run-detached.ps1) and poll its
@@ -1031,7 +1008,9 @@ class Driver:
         self.log.event("EXECUTE_OK", unit=host, duration_s=dur(), mode="detached")
         return True, session
 
-    def _smoke(self, session: Any, host: str, modules: list[str], dur, payload_hash: str, git_sha: str) -> bool:
+    def _smoke(
+        self, session: transport.UnitSession, host: str, modules: list[str], dur, payload_hash: str, git_sha: str
+    ) -> bool:
         self.log.event("SMOKE_START", unit=host)
         mod_lits = ",".join(_ps_lit(m) for m in modules)
         script = (
@@ -1057,7 +1036,7 @@ class Driver:
             return False
         return True
 
-    def _proxy_assert(self, session: Any, host: str, dur, payload_hash: str, git_sha: str) -> bool:
+    def _proxy_assert(self, session: transport.UnitSession, host: str, dur, payload_hash: str, git_sha: str) -> bool:
         script = (
             "$r = [ordered]@{ "
             "http_proxy=[Environment]::GetEnvironmentVariable('http_proxy','Machine'); "
@@ -1100,7 +1079,7 @@ class Driver:
                 self.log.event("PROXY_ASSERT_OK", unit=host, mode="weizmann")
         return True
 
-    def _set_available(self, session: Any, host: str) -> None:
+    def _set_available(self, session: transport.UnitSession, host: str) -> None:
         self._write_unit_json(
             session,
             UNIT_AVAIL,
@@ -1111,7 +1090,7 @@ class Driver:
         )
         self.log.event("AVAIL_SET", unit=host, available="true")
 
-    def _release_and_archive(self, session: Any, host: str, lease_held: bool) -> None:
+    def _release_and_archive(self, session: transport.UnitSession, host: str, lease_held: bool) -> None:
         if session is None:
             return
         if lease_held:
@@ -1143,7 +1122,7 @@ class Driver:
         except Exception as e:  # noqa: BLE001
             self.log.event("UNIT_LOGS_ARCHIVE_WARN", unit=host, error=f"{type(e).__name__}: {e}")
 
-    def _download_dir(self, session: Any, unit_dir: str, dest: Path) -> None:
+    def _download_dir(self, session: transport.UnitSession, unit_dir: str, dest: Path) -> None:
         """Pull a unit directory's text files back by base64 over the session."""
         dest.mkdir(parents=True, exist_ok=True)
         script = (
@@ -1160,7 +1139,7 @@ class Driver:
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(base64.b64decode(b64))
 
-    def _write_unit_json(self, session: Any, unit_path: str, obj: dict) -> None:
+    def _write_unit_json(self, session: transport.UnitSession, unit_path: str, obj: dict) -> None:
         j = json.dumps(obj)  # JSON uses double quotes -> safe inside a PS single-quoted literal
         d = unit_path.rsplit("\\", 1)[0]
         script = (

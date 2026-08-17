@@ -37,6 +37,13 @@
 .PARAMETER SrcUNC
   Full UNC source path, e.g. \\provserver\mast-staging\mast01\01-provisioning.
 #>
+# CmdletBinding makes an unrecognized -Flag a parameter-binding ERROR. Without it
+# this is a simple function: PowerShell swallows extra named arguments into $args,
+# leaves the declared variable empty, and the failure surfaces far away -- when
+# -ProvServer became -ProvAddress the vm/ harness kept passing the old flag, so
+# $ProvAddress came through empty and every dev cycle failed at `net use` against
+# \\\mast-staging with System error 67. Nothing here reads $args.
+[CmdletBinding()]
 param(
     [string]$ProvAddress,
     [string]$UnitHostname,

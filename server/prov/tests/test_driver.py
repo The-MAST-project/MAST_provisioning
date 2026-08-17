@@ -10,6 +10,7 @@ import json
 import pytest
 
 from prov import driver as D
+from prov import transport as T
 
 
 @pytest.fixture
@@ -219,10 +220,10 @@ def test_local_address_for_asks_the_kernel_for_the_route(root, monkeypatch):
         def send(self, *a, **kw):  # pragma: no cover -- must never be called
             raise AssertionError("the probe must not send data")
 
-    monkeypatch.setattr(D.socket, "socket", lambda *a, **kw: FakeSock())
+    monkeypatch.setattr(T.socket, "socket", lambda *a, **kw: FakeSock())
 
-    assert D.Driver._local_address_for("10.23.1.103") == "10.23.2.34"
-    assert seen["connect"] == ("10.23.1.103", D.DISCARD_PORT)
+    assert T.local_address_for("10.23.1.103") == "10.23.2.34"
+    assert seen["connect"] == ("10.23.1.103", T.DISCARD_PORT)
     assert seen.get("closed") is True
 
 
@@ -234,10 +235,10 @@ def test_local_address_for_returns_empty_when_there_is_no_route(root, monkeypatc
         def close(self):
             pass
 
-    monkeypatch.setattr(D.socket, "socket", lambda *a, **kw: DeadSock())
-    assert D.Driver._local_address_for("10.23.1.103") == ""
+    monkeypatch.setattr(T.socket, "socket", lambda *a, **kw: DeadSock())
+    assert T.local_address_for("10.23.1.103") == ""
     # An unresolved unit is not probed at all.
-    assert D.Driver._local_address_for("") == ""
+    assert T.local_address_for("") == ""
 
 
 def test_identity_and_address_start_as_separate_attributes(root):
