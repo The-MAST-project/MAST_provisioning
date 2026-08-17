@@ -19,22 +19,22 @@ payload is BUILT for. They are not interchangeable, and the difference matters:
 
   --host-unit   where to connect and provision. For the dev cycle this must be the
                 VirtualBox VM, which sits on the host-only network and has no DNS
-                record. Address it by IP (192.168.56.113 at the time of writing;
-                confirm with `VBoxManage guestproperty enumerate mast-unit`).
+                record, so it is addressed by IP. Read the current one from
+                `VBoxManage guestproperty enumerate mast-unit` (Net/0/V4/IP) -- it
+                is a DHCP lease and does change.
   --hostname    which unit the payload is built as -- the VM stands in for `mastw`,
-                so `--hostname mastw` is right even though the VM's own name is
-                mast-wis-01.
+                so `--hostname mastw` is right even though the VM answers to its
+                own name.
 
-DO NOT pass a bare unit name to --host-unit on campus. `mastw` resolves through
-Weizmann DNS to 10.23.3.72, a REAL prototype machine attached to a real telescope;
-pointing this harness at it installs software on it. (`mast-wis-01` does not resolve
-at all, so it merely fails.) Two runs on 2026-08-17 targeted `mastw` from the
-example that used to be here and reached the prototype before failing at the SMB
-mount.
+DO NOT pass a bare unit name to --host-unit. Unit names resolve through institute
+DNS to REAL machines, one of which is a prototype attached to a real telescope, and
+pointing this harness at one installs software on it. Two runs on 2026-08-17 took a
+bare name from the example that used to be here and reached that prototype before
+failing at the SMB mount. Resolve any name you did not read off the VM first.
 
 Usage (Windows PowerShell, run from anywhere):
     python MAST_provisioning\\vm\\run-prov-test.py ^
-        --host-unit 192.168.56.113 ^
+        --host-unit <VM host-only IP> ^
         --hostname  mastw ^
         [--modules python,ascom,mast] ^
         [--repeat 3] ^
@@ -52,20 +52,20 @@ Phase selection (--phases supersedes --build-only, --execute-only, --build-trans
 
 Quick module debug loop (no VM reset between runs):
     python MAST_provisioning\\vm\\run-prov-test.py ^
-        --host-unit 192.168.56.113 --hostname mastw ^
+        --host-unit <VM host-only IP> --hostname mastw ^
         --modules stage ^
         --phases build,transfer,execute,verify ^
         --no-reset
 
 Re-run execute + verify only (reuse last transfer, no rebuild):
     python MAST_provisioning\\vm\\run-prov-test.py ^
-        --host-unit 192.168.56.113 --hostname mastw ^
+        --host-unit <VM host-only IP> --hostname mastw ^
         --modules stage ^
         --phases execute,verify
 
 Verify current unit state without running anything:
     python MAST_provisioning\\vm\\run-prov-test.py ^
-        --host-unit 192.168.56.113 --phases verify
+        --host-unit <VM host-only IP> --phases verify
 
 Credentials read from vault/creds.json (gitignored):
     {
