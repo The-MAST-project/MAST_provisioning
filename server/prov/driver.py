@@ -36,7 +36,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from prov import drift, transport
+from prov import drift, registry, transport
 from prov import logevents as L
 from prov.maintenance_window import in_maintenance_window
 from prov.proxy_assert import ProxyPosture, get_proxy_dirty_surfaces
@@ -177,7 +177,7 @@ class Driver:
             self.log.event("FATAL", reason="vault_creds_missing", path=self.cfg.vault_creds)
             return EXIT_FATAL
 
-        units = [u for u in transport.load_unit_registry(self.cfg.unit_registry) if u.get("hostname")]
+        units = registry.load_unit_registry(self.cfg.unit_registry)
         creds = transport.load_json_object(self.cfg.vault_creds)
         if not creds.get("unit"):
             self.log.event("FATAL", reason="creds_unit_missing")
@@ -209,10 +209,8 @@ class Driver:
         self._preflight_smb()
 
         if self.cfg.only_hosts:
-            units = [u for u in units if u["hostname"] in self.cfg.only_hosts]
-        self.log.event(
-            "RUN_PLAN", units=",".join(u["hostname"] for u in units), dry_run=self.cfg.dry_run, force=self.cfg.force
-        )
+            units = [u for u in units if u.hostname in self.cfg.only_hosts]
+        self.log.event("RUN_PLAN", units=",".join(u.hostname for u in units), dry_run=self.cfg.dry_run, force=self.cfg.force)
 
         for unit in units:
             self._process_unit(unit)
@@ -287,7 +285,7 @@ class Driver:
                 found.append(d.name)
         return found
 
-    def _resolve_modules(self, unit: transport.UnitEntry) -> list[str]:
+    def _resolve_modules(self, unit: registry.UnitEntry) -> list[str]:
         """The unit's COMPLETE module set -- what a full provisioning of it means.
 
         Deliberately ignores ``--modules``. This set is what gets built, and the
@@ -298,7 +296,7 @@ class Driver:
         list is different: it says what this unit's full set IS, so it belongs
         here. Targeting is applied later, by _filter_targets.
         """
-        declared = unit.get("modules")
+        declared = unit.modules
         if declared:
             return list(declared)
         providers = self.cfg.repo_top / "server" / "providers"
@@ -336,9 +334,9 @@ class Driver:
                 out.append(name)
         return sorted(out, key=lambda n: (order.get(n, 0), n))
 
-    def _process_unit(self, unit: transport.UnitEntry) -> None:
+    def _process_unit(self, unit: registry.UnitEntry) -> None:
         self.units_checked += 1
-        host = unit["hostname"]
+        host = unit.hostname
         unit_start = datetime.now(UTC)
         modules = self._resolve_modules(unit)
         payload_hash = ""
@@ -522,7 +520,10 @@ class Driver:
 
                 # Phase 5b -- maintenance window.
                 mw = in_maintenance_window(
-                    unit, override_start=self.cfg.maint_window_start, override_end=self.cfg.maint_window_end
+                    window=unit.maintenance_window,
+                    timezone=unit.timezone,
+                    override_start=self.cfg.maint_window_start,
+                    override_end=self.cfg.maint_window_end,
                 )
                 if mw.tz_error:
                     self.log.event("MAINT_TZ_WARN", unit=host, tz=mw.tz, err=mw.tz_error)
@@ -634,10 +635,10 @@ class Driver:
         r = transport.run_ps(session, script, label=label, echo=False, tee_stdout=False, timeout_s=timeout_s)
         return (r.std_out or b"").decode("utf-8", "replace")
 
-    def _inventory(self, session: transport.UnitSession, unit: transport.UnitEntry) -> None:
+    def _inventory(self, session: transport.UnitSession, unit: registry.UnitEntry) -> None:
         """Lean functional port of the inventory phase: collect NICs + identity,
         write a per-unit JSON, persist the primary MAC to the registry. Non-fatal."""
-        host = unit["hostname"]
+        host = unit.hostname
         try:
             script = (
                 "$a = Get-NetAdapter -Physical | ForEach-Object { [ordered]@{ name=$_.Name; "
@@ -658,23 +659,23 @@ class Driver:
                 for a in inv.get("adapters", [])
                 if str(a.get("status")).lower() == "up" and "802.3" in str(a.get("media", ""))
             ]
-            self.log.event("INVENTORY_OK", unit=host, site=unit["site"], macs_up=len(macs_up))
-            if macs_up and unit.get("mac") != macs_up[0]:
+            self.log.event("INVENTORY_OK", unit=host, site=unit.site, macs_up=len(macs_up))
+            if macs_up and unit.mac != macs_up[0]:
                 self._persist_mac(unit, macs_up[0])
         except Exception as e:  # noqa: BLE001 -- inventory never fails the run
             self.log.event("INVENTORY_WARN", unit=host, error=f"{type(e).__name__}: {e}")
 
-    def _persist_mac(self, unit: transport.UnitEntry, mac: str) -> None:
+    def _persist_mac(self, unit: registry.UnitEntry, mac: str) -> None:
         try:
-            units = transport.load_unit_registry(self.cfg.unit_registry)
+            units = registry.load_unit_registry(self.cfg.unit_registry)
             for u in units:
-                if u.get("hostname") == unit["hostname"]:
-                    u["mac"] = mac
-            L.write_status_atomic(self.cfg.unit_registry, units)
-            unit["mac"] = mac
-            self.log.event("REGISTRY_MAC_SET", unit=unit["hostname"], mac=mac)
+                if u.hostname == unit.hostname:
+                    u.mac = mac
+            L.write_status_atomic(self.cfg.unit_registry, registry.dump_unit_registry(units))
+            unit.mac = mac
+            self.log.event("REGISTRY_MAC_SET", unit=unit.hostname, mac=mac)
         except Exception as e:  # noqa: BLE001
-            self.log.event("REGISTRY_MAC_WARN", unit=unit["hostname"], error=f"{type(e).__name__}: {e}")
+            self.log.event("REGISTRY_MAC_WARN", unit=unit.hostname, error=f"{type(e).__name__}: {e}")
 
     def _reclaim_availability(self, session: transport.UnitSession, host: str) -> None:
         avail = _parse_json_or_none(
@@ -702,9 +703,7 @@ class Driver:
                 stale=is_stale,
             )
 
-    def _build(
-        self, unit: transport.UnitEntry, host: str, modules: list[str], dur
-    ) -> tuple[str | None, str, dict[str, Any]]:
+    def _build(self, unit: registry.UnitEntry, host: str, modules: list[str], dur) -> tuple[str | None, str, dict[str, Any]]:
         # test_mode in the event is the auditable record of whether this build
         # passed -AllowMissing* (dev/test) or ran as a production build that
         # fails loud on any missing input (item 7). Production omits --test-mode.
@@ -727,7 +726,7 @@ class Driver:
         ]
         # No SITE_MISSING fallback: load_unit_registry rejects an entry without a
         # site, so there is no path here with one absent.
-        args += ["-Site", unit["site"]]
+        args += ["-Site", unit.site]
         if modules:
             args += ["-Modules", ",".join(modules)]
         if self.cfg.test_mode:

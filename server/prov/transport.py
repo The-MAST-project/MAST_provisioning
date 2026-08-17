@@ -32,7 +32,7 @@ import time
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, NotRequired, Protocol, TypedDict, cast
+from typing import TYPE_CHECKING, Any, Protocol
 
 try:
     import winrm
@@ -242,59 +242,6 @@ def load_json_list(path: Path) -> list[dict[str, Any]]:
         if not isinstance(entry, dict):
             raise TypeError(f"{path}: entry {i} is {type(entry).__name__}, expected a JSON object")
     return data
-
-
-class MaintenanceWindow(TypedDict):
-    """A unit's provisioning window, in the unit's own ``timezone``."""
-
-    start_hour: int
-    end_hour: int
-
-
-class UnitEntry(TypedDict):
-    """One entry in ``server/unit-registry.json``.
-
-    ``hostname`` and ``site`` are required; the rest are optional and read with
-    ``.get()``. ``site`` selects the bootstrap config profile and is the
-    operator's explicit choice, never derived from the hostname -- so an entry
-    without one is rejected rather than defaulted (see the decision record).
-    ``mac`` is also *written* here, by the driver's inventory phase.
-    """
-
-    hostname: str
-    site: str
-    timezone: NotRequired[str]
-    maintenance_window: NotRequired[MaintenanceWindow]
-    ip: NotRequired[str]
-    mac: NotRequired[str]
-    modules: NotRequired[list[str]]
-
-
-def load_unit_registry(path: Path) -> list[UnitEntry]:
-    """The unit registry, with every entry's required keys validated.
-
-    The closing ``cast`` is unavoidable at a JSON boundary, but it sits *behind*
-    the checks rather than in place of them. A bare cast is the cheaper option and
-    the wrong one: it tells the checker a shape holds without establishing it,
-    which is how a config-shape mismatch surfaces as an AttributeError deep inside
-    production code instead of at the read (observed 2026-08-17 in MAST_unit's ROI
-    config, three weeks after the models diverged).
-
-    Not everything is checked -- the optional string keys are taken on trust, and
-    only ``maintenance_window``'s shape is verified among the nested values.
-    """
-    entries = load_json_list(path)
-    for i, entry in enumerate(entries):
-        for key in ("hostname", "site"):
-            value = entry.get(key)
-            if not isinstance(value, str) or not value.strip():
-                raise TypeError(f"{path}: entry {i} needs a non-empty {key!r} (got {value!r})")
-        window = entry.get("maintenance_window")
-        if window is not None and not (
-            isinstance(window, dict) and all(isinstance(window.get(k), int) for k in ("start_hour", "end_hour"))
-        ):
-            raise TypeError(f"{path}: {entry['hostname']} has a malformed maintenance_window: {window!r}")
-    return cast(list[UnitEntry], entries)
 
 
 def parse_json_text(text: str) -> object:
@@ -1286,10 +1233,8 @@ __all__ = [
     "WINRM_CALL_TIMEOUT_S",
     "WINRM_ENCODED_CMD_MAX",
     "WINRM_PORT",
-    "MaintenanceWindow",
     "SshSession",
     # session / response types
-    "UnitEntry",
     "UnitResponse",
     "UnitSession",
     "assert_inline_dispatchable",
@@ -1302,7 +1247,6 @@ __all__ = [
     "load_json_file",
     "load_json_list",
     "load_json_object",
-    "load_unit_registry",
     # this machine's address, as the unit sees it
     "local_address_for",
     # log sinks (rebindable)
