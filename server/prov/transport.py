@@ -127,6 +127,83 @@ def _ps_escape(s: str) -> str:
     return s.replace("'", "''")
 
 
+def ps_lit(s: str | None) -> str:
+    """A value as a PowerShell single-quoted string literal (doubles quotes)."""
+    return "'" + _ps_escape("" if s is None else str(s)) + "'"
+
+
+# ---------------------------------------------------------------------------
+# This machine's address, as the unit sees it
+# ---------------------------------------------------------------------------
+#: RFC 863 discard. A UDP connect() to it sends nothing; it only binds the socket
+#: so getsockname() reveals the kernel's chosen source address.
+DISCARD_PORT = 9
+
+
+def local_address_for(peer_ip: str) -> str:
+    """This machine's address on the route to ``peer_ip``, or '' if unknown.
+
+    Asks the kernel rather than choosing from the interface list. A UDP
+    ``connect`` sends nothing -- it only binds the socket, which makes
+    getsockname() report the source address the OS would actually use to
+    reach that peer.
+
+    Choosing from the interface list is what must be avoided: this machine
+    has seven IPv4 addresses (one routable, one VirtualBox host-only, five
+    APIPA), and a hand-picked one is how 169.254.215.207 came to be written
+    into three units' hosts files (#70). Route-based selection has no
+    heuristic to get wrong, and is also correct for a dev VM on the
+    host-only network, which legitimately sees a different address than a
+    production unit does.
+
+    Stdlib only, and identical on Linux and Windows, so it does not owe the
+    platform-agnostic server a per-platform branch.
+    """
+    if not peer_ip:
+        return ""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect((peer_ip, DISCARD_PORT))
+        return s.getsockname()[0] or ""
+    except OSError:
+        return ""
+    finally:
+        s.close()
+
+
+def pull_staging_args(
+    *,
+    prov_address: str,
+    unit_hostname: str,
+    smb_user: str,
+    smb_pass: str,
+    unit_stage: str,
+    src_unc: str,
+) -> str:
+    """The argument list for ``client/mast-pull-staging.ps1``, as PS literals.
+
+    One place names that script's parameters. Its two callers legitimately differ
+    in how they *invoke* it -- the driver by path, the vm/ harness as a
+    scriptblock built from the file's text (the unit's ExecutionPolicy) -- and in
+    how they read the result, so only the arguments are shared. Those are what
+    drifted: the ``-ProvServer`` -> ``-ProvAddress`` rename (4f58726, the #70
+    address-not-name change) updated the driver and left the harness passing a
+    flag the script no longer declares, which with no ``[CmdletBinding()]`` went
+    into ``$args`` and produced the UNC ``\\\\\\mast-staging``. Every dev VM cycle
+    failed at transfer for six days.
+
+    Guarded by ``test_pull_staging_args_match_the_script``.
+    """
+    return (
+        f"-ProvAddress {ps_lit(prov_address)} "
+        f"-UnitHostname {ps_lit(unit_hostname)} "
+        f"-SmbUser {ps_lit(smb_user)} "
+        f"-SmbPass {ps_lit(smb_pass)} "
+        f"-UnitStage {ps_lit(unit_stage)} "
+        f"-SrcUNC {ps_lit(src_unc)}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # JSON helpers (BOM-tolerant)
 # ---------------------------------------------------------------------------
@@ -1143,6 +1220,7 @@ def upload_file(session: Any, remote_path: str, content: str, label: str = "file
 # and its tests use) so existing `from vm_lib import ...` call sites keep working.
 # ---------------------------------------------------------------------------
 __all__ = [
+    "DISCARD_PORT",
     "HEARTBEAT_ESCALATE_GAP_S",
     "HEARTBEAT_ESCALATE_S",
     "HEARTBEAT_INTERVAL_S",
@@ -1169,10 +1247,15 @@ __all__ = [
     "load_json_file",
     "load_json_list",
     "load_json_object",
+    # this machine's address, as the unit sees it
+    "local_address_for",
     # log sinks (rebindable)
     "log_fn",
     "log_raw_fn",
     "parse_json_text",
+    "ps_lit",
+    # the pull script's argument contract
+    "pull_staging_args",
     "run_ps",
     "ssh_session",
     "upload_file",

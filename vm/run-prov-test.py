@@ -110,8 +110,9 @@ from vm_lib import (
     UnitSession,
     _dispose_winrm_session,
     _minify_ps,
-    _ps_escape,
     load_creds,
+    local_address_for,
+    pull_staging_args,
     reset_to_clean_snapshot,
     run_ps,
     ssh_session,
@@ -493,6 +494,7 @@ def phase_transfer(
     run_id: str,
     smb_user: str,
     smb_pass: str,
+    host_unit: str,
 ) -> str:
     """Pull staging payload from the SMB share to the unit. Returns the unit staging path."""
     with timed("TRANSFER PHASE"):
@@ -502,8 +504,18 @@ def phase_transfer(
         files = [f for f in staging_dir.iterdir() if f.is_file()]
         total_bytes = sum(f.stat().st_size for f in files)
         unit_stage = f"C:\\mast-staging\\{run_id}"
-        src_unc = f"\\\\{PROV_SERVER}\\mast-staging\\{hostname}\\01-provisioning"
-        smb_pass_ps = _ps_escape(smb_pass)
+        # An ADDRESS on the unit's route, not this machine's name (#70, and the
+        # 2026-08-11 address-not-name record). For a host-only dev VM that is the
+        # VirtualBox host address, which no name reliably resolves to from inside
+        # the guest. Falls back to the name, as the driver falls back to its
+        # prov_identity.
+        resolved = ""
+        try:
+            resolved = socket.gethostbyname(host_unit)
+        except OSError:
+            pass
+        prov_address = local_address_for(resolved) or PROV_SERVER
+        src_unc = f"\\\\{prov_address}\\mast-staging\\{hostname}\\01-provisioning"
 
         log(f"{len(files)} files, {total_bytes / 1_048_576:.1f} MB  via SMB pull from {src_unc}")
 
@@ -552,15 +564,19 @@ def phase_transfer(
         # ExecutionPolicy ("running scripts is disabled"), whereas a scriptblock
         # does not. This also keeps the invocation command tiny (the body lives
         # on the unit's disk, not on the command line).
+        # The argument list comes from prov.transport so this caller and the driver
+        # cannot drift apart on the script's parameter names again (#87).
+        pull_args = pull_staging_args(
+            prov_address=prov_address,
+            unit_hostname=hostname,
+            smb_user=smb_user,
+            smb_pass=smb_pass,
+            unit_stage=unit_stage,
+            src_unc=src_unc,
+        )
         ps = (
             f"$sb = [scriptblock]::Create((Get-Content -LiteralPath '{remote_ps}' -Raw))\n"
-            f"$r = & $sb"
-            f" -ProvServer '{PROV_SERVER}'"
-            f" -UnitHostname '{hostname}'"
-            f" -SmbUser '{smb_user}'"
-            f" -SmbPass '{smb_pass_ps}'"
-            f" -UnitStage '{unit_stage}'"
-            f" -SrcUNC '{src_unc}'\n"
+            f"$r = & $sb {pull_args}\n"
             f"if(-not $r){{Write-Error 'Transfer: null result from pull script';exit 1}}\n"
             f"if($r.outcome -ne 'OK'){{\n"
             f'    Write-Error "Transfer failed outcome=$($r.outcome) rc=$($r.rc) $($r.detail)"\n'
@@ -569,7 +585,7 @@ def phase_transfer(
             f"Write-Host 'UNIT_STAGE={unit_stage}'\n"
         )
 
-        log(f"[transfer] mast-pull-staging.ps1 (file-dispatch) -ProvServer '{PROV_SERVER}' -UnitStage '{unit_stage}'")
+        log(f"[transfer] mast-pull-staging.ps1 (file-dispatch) -ProvAddress '{prov_address}' -UnitStage '{unit_stage}'")
         r = run_ps(unit, ps, label="transfer", timeout_s=60 * 60, echo=False)
         if r.status_code != 0:
             raise RuntimeError(f"Transfer failed (exit code: {r.status_code})")
@@ -1162,6 +1178,7 @@ def main() -> None:
                         run_id,
                         creds["smb"]["user"],
                         creds["smb"]["pass"],
+                        args.host_unit,
                     )
                     phase_clear_unit_logs(unit_session)
                     phase_run_rebuild_repos(unit_session, unit_stage)
@@ -1226,6 +1243,7 @@ def main() -> None:
                             run_id,
                             creds["smb"]["user"],
                             creds["smb"]["pass"],
+                            args.host_unit,
                         )
                     elif "execute" in phases or "verify-run" in phases:
                         # No transfer: probe for newest existing staging dir

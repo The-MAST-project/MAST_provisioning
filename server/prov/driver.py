@@ -75,11 +75,6 @@ AVAIL_TTL_S = 7200  # 2 h; matches execute-lease default
 WINRM_PORT = transport.WINRM_PORT
 SMB_PORT = 445
 
-#: RFC 863 discard. A UDP connect() to it sends nothing; it only binds the socket
-#: so getsockname() reveals the kernel's chosen source address. See
-#: Driver._local_address_for.
-DISCARD_PORT = 9
-
 # Phase watchdogs (item 6): each long phase has a hard timeout so a hung step
 # fails with a structured event instead of blocking the loop forever. Quick
 # remote reads (inventory/availability/manifest/smoke/proxy/archive) get a short
@@ -101,7 +96,7 @@ EXECUTE_EXIT_LEASE_HELD = 10
 
 def _ps_lit(s: str) -> str:
     """A value as a PowerShell single-quoted string literal (doubles quotes)."""
-    return "'" + transport._ps_escape("" if s is None else str(s)) + "'"
+    return transport.ps_lit(s)
 
 
 def _powershell_exe() -> str:
@@ -164,7 +159,7 @@ class Driver:
         self.execute_refused = False
         #: This machine's NAME. Used only where an identity is wanted -- the
         #: execute lease's held_by, and log lines. Deliberately NOT used as an
-        #: address: see prov_address and _local_address_for.
+        #: address: see prov_address and transport.local_address_for.
         self.prov_identity = os.environ.get("COMPUTERNAME") or socket.gethostname()
         #: This machine's ADDRESS as seen from the unit currently being processed,
         #: set per unit by _process_unit. The staging UNC is built from this.
@@ -360,7 +355,7 @@ class Driver:
         # nothing in this repo maintains that mapping -- three units pinned it to
         # a dead APIPA address and every transfer failed with net.exe error 53
         # (#70). Derived per unit because the answer is per route.
-        self.prov_address = self._local_address_for(resolved)
+        self.prov_address = transport.local_address_for(resolved)
         if self.prov_address:
             self.log.event("PROV_ADDR", unit=host, address=self.prov_address, via_unit_ip=resolved)
         else:
@@ -605,37 +600,6 @@ class Driver:
             self.exit_code = EXIT_UNIT_FAIL
 
     # -- phase helpers ------------------------------------------------------
-    @staticmethod
-    def _local_address_for(peer_ip: str) -> str:
-        """This machine's address on the route to ``peer_ip``, or '' if unknown.
-
-        Asks the kernel rather than choosing from the interface list. A UDP
-        ``connect`` sends nothing -- it only binds the socket, which makes
-        getsockname() report the source address the OS would actually use to
-        reach that peer.
-
-        Choosing from the interface list is what must be avoided: this machine
-        has seven IPv4 addresses (one routable, one VirtualBox host-only, five
-        APIPA), and a hand-picked one is how 169.254.215.207 came to be written
-        into three units' hosts files (#70). Route-based selection has no
-        heuristic to get wrong, and is also correct for a dev VM on the
-        host-only network, which legitimately sees a different address than a
-        production unit does.
-
-        Stdlib only, and identical on Linux and Windows, so it does not owe the
-        platform-agnostic server a per-platform branch.
-        """
-        if not peer_ip:
-            return ""
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        try:
-            s.connect((peer_ip, DISCARD_PORT))
-            return s.getsockname()[0] or ""
-        except OSError:
-            return ""
-        finally:
-            s.close()
-
     def _unit_can_reach_staging(self, session: transport.UnitSession, host: str) -> bool:
         """Can the UNIT open SMB to the staging address we are about to hand it?
 
@@ -828,11 +792,16 @@ class Driver:
         # Ship the pull script (it runs before the payload arrives), then run it.
         pull_src = (self.cfg.repo_top / "client" / "mast-pull-staging.ps1").read_text(encoding="utf-8")
         transport.upload_file(session, UNIT_PULL_SCRIPT, pull_src, label="pull-script")
+        args = transport.pull_staging_args(
+            prov_address=self.prov_address,
+            unit_hostname=host,
+            smb_user=self.smb_user,
+            smb_pass=self.smb_pass,
+            unit_stage=unit_stage,
+            src_unc=src_unc,
+        )
         script = (
-            f"$r = & {_ps_lit(UNIT_PULL_SCRIPT)} -ProvAddress {_ps_lit(self.prov_address)} "
-            f"-UnitHostname {_ps_lit(host)} -SmbUser {_ps_lit(self.smb_user)} "
-            f"-SmbPass {_ps_lit(self.smb_pass)} -UnitStage {_ps_lit(unit_stage)} "
-            f"-SrcUNC {_ps_lit(src_unc)}; "
+            f"$r = & {_ps_lit(UNIT_PULL_SCRIPT)} {args}; "
             f"Write-Output ('PULLRESULT ' + ($r | ConvertTo-Json -Compress -Depth 6))"
         )
         try:

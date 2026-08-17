@@ -638,7 +638,7 @@ def test_staging_unc_uses_the_derived_address_and_lease_keeps_the_name(root, mon
     it identifies who holds the run, and outlives a DHCP change.
     """
     drv, sess = _make_driver(root, monkeypatch, make_responder())
-    monkeypatch.setattr(D.Driver, "_local_address_for", staticmethod(lambda peer_ip: "10.23.2.34"))
+    monkeypatch.setattr(D.transport, "local_address_for", lambda peer_ip: "10.23.2.34")
     drv.prov_identity = "AP-PC-PF62XRLL"
 
     drv.run()
