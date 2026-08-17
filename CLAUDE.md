@@ -254,6 +254,7 @@ The WinRM/SSH transport is the canonical `server/prov/transport.py` (lifted out 
 | `load_json_object(path)` / `load_json_list(path)` | BOM-tolerant JSON read with the top-level shape asserted (`dict` / list-of-dicts), raising `TypeError` naming the path otherwise. **Prefer these over `load_json_file`**, which returns `object` and forces a narrow at every call site. |
 | `UnitSession` | The type of a session to a unit — the union of `SshSession` and `winrm.Session`. **Annotate every session parameter with this**, never `winrm.Session` (which breaks `isinstance` narrowing — see the record) and never `Any`. |
 | `UnitResponse` | What `run_ps` / `_resilient_run_ps` return, and what `check_rc` takes: the `status_code` / `std_out` / `std_err` protocol both transports' responses satisfy. Never annotate a shared path `winrm.Response`. |
+| `UnitEntry` / `load_unit_registry(path)` | The declared shape of a `unit-registry.json` entry, and the validating reader. **Annotate anything taking a registry entry `UnitEntry`**, never `dict`. `hostname` and `site` are required and checked at the read; everything else is `NotRequired` and must be reached with `.get()`. Adding a field means editing the TypedDict AND the template — a test asserts they agree. |
 
 ### The server orchestration is Python (platform-agnostic)
 

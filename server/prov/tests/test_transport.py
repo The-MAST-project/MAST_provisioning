@@ -9,6 +9,7 @@ vm/ harness imports.
 """
 
 import base64
+import json
 import re
 
 import pytest
@@ -101,6 +102,62 @@ def test_run_with_heartbeat_escalates_and_rate_limits():
     finally:
         for k, v in orig.items():
             setattr(T, k, v)
+
+
+def test_unit_entry_matches_the_registry_template(tmp_path):
+    # The template is what an operator copies, so it and UnitEntry must agree: a
+    # key added to one and not the other is how the registry and the code that
+    # reads it drift. `_comment` is documentation and is deliberately not a field.
+    template = json.loads((T.REPO_ROOT / "server" / "unit-registry.json.template").read_text(encoding="utf-8-sig"))
+    assert len(template) == 1
+    keys = set(template[0]) - {"_comment"}
+    declared = set(T.UnitEntry.__annotations__)
+    assert keys <= declared, f"template keys absent from UnitEntry: {sorted(keys - declared)}"
+    # Everything the loader requires must be in the template, or the copied entry
+    # is rejected the first time it is read. Spelled out rather than taken from
+    # UnitEntry.__required_keys__: prov.transport uses `from __future__ import
+    # annotations`, so its annotations are strings and TypedDict cannot resolve
+    # NotRequired at runtime -- __required_keys__ there reports every key. pyright
+    # reads the source and gets it right, which is what actually gates the code;
+    # do not trust runtime introspection of these TypedDicts.
+    assert {"hostname", "site"} <= keys
+
+    # And the template entry itself must load.
+    p = tmp_path / "unit-registry.json"
+    p.write_text(json.dumps(template), encoding="utf-8")
+    assert [e["hostname"] for e in T.load_unit_registry(p)] == [template[0]["hostname"]]
+
+
+@pytest.mark.parametrize(
+    ("entry", "expected"),
+    [
+        ({"site": "ns"}, "hostname"),
+        ({"hostname": "mast01"}, "site"),
+        ({"hostname": "mast01", "site": "   "}, "site"),
+        ({"hostname": "mast01", "site": 7}, "site"),
+        ({"hostname": "mast01", "site": "ns", "maintenance_window": {"start_hour": 0}}, "maintenance_window"),
+        (
+            {"hostname": "mast01", "site": "ns", "maintenance_window": {"start_hour": 0, "end_hour": "6"}},
+            "maintenance_window",
+        ),
+    ],
+    ids=["no hostname", "no site", "blank site", "non-string site", "half a window", "string hour"],
+)
+def test_load_unit_registry_rejects_a_malformed_entry(tmp_path, entry, expected):
+    # Rejected at the read, naming the file: a registry the driver cannot trust
+    # must not reach the phase that would provision from it.
+    p = tmp_path / "unit-registry.json"
+    p.write_text(json.dumps([entry]), encoding="utf-8")
+    with pytest.raises(TypeError, match=expected):
+        T.load_unit_registry(p)
+
+
+def test_load_unit_registry_accepts_the_optional_keys_absent(tmp_path):
+    p = tmp_path / "unit-registry.json"
+    p.write_text(json.dumps([{"hostname": "mast01", "site": "ns"}]), encoding="utf-8")
+    (entry,) = T.load_unit_registry(p)
+    assert entry["hostname"] == "mast01"
+    assert entry.get("mac") is None
 
 
 def test_pull_staging_args_match_the_script():

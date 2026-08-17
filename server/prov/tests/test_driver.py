@@ -51,9 +51,9 @@ def test_resolve_modules_precedence(root):
     for name in ("ascom", "git", "mast"):
         (drv.cfg.repo_top / "server" / "providers" / name).mkdir(parents=True)
         (drv.cfg.repo_top / "server" / "providers" / name / "module.json").write_text("{}")
-    assert drv._resolve_modules({"hostname": "m"}) == ["ascom", "git", "mast"]
+    assert drv._resolve_modules({"hostname": "m", "site": "wis"}) == ["ascom", "git", "mast"]
     # A registry entry says what this unit's full set IS, so it wins over discovery.
-    assert drv._resolve_modules({"hostname": "m", "modules": ["git"]}) == ["git"]
+    assert drv._resolve_modules({"hostname": "m", "site": "wis", "modules": ["git"]}) == ["git"]
 
 
 def test_resolve_modules_ignores_the_cli_subset(root):
@@ -69,9 +69,9 @@ def test_resolve_modules_ignores_the_cli_subset(root):
         (drv.cfg.repo_top / "server" / "providers" / name).mkdir(parents=True)
         (drv.cfg.repo_top / "server" / "providers" / name / "module.json").write_text("{}")
     drv.cfg.modules = ["git"]
-    assert drv._resolve_modules({"hostname": "m"}) == ["ascom", "git", "mast"]
+    assert drv._resolve_modules({"hostname": "m", "site": "wis"}) == ["ascom", "git", "mast"]
     # ...and it does not override a registry-declared full set either.
-    assert drv._resolve_modules({"hostname": "m", "modules": ["ascom"]}) == ["ascom"]
+    assert drv._resolve_modules({"hostname": "m", "site": "wis", "modules": ["ascom"]}) == ["ascom"]
 
 
 def _write_module(root, name, order, always=False):

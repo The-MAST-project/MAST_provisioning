@@ -177,7 +177,7 @@ class Driver:
             self.log.event("FATAL", reason="vault_creds_missing", path=self.cfg.vault_creds)
             return EXIT_FATAL
 
-        units = [u for u in transport.load_json_list(self.cfg.unit_registry) if u.get("hostname")]
+        units = [u for u in transport.load_unit_registry(self.cfg.unit_registry) if u.get("hostname")]
         creds = transport.load_json_object(self.cfg.vault_creds)
         if not creds.get("unit"):
             self.log.event("FATAL", reason="creds_unit_missing")
@@ -287,7 +287,7 @@ class Driver:
                 found.append(d.name)
         return found
 
-    def _resolve_modules(self, unit: dict) -> list[str]:
+    def _resolve_modules(self, unit: transport.UnitEntry) -> list[str]:
         """The unit's COMPLETE module set -- what a full provisioning of it means.
 
         Deliberately ignores ``--modules``. This set is what gets built, and the
@@ -298,8 +298,9 @@ class Driver:
         list is different: it says what this unit's full set IS, so it belongs
         here. Targeting is applied later, by _filter_targets.
         """
-        if unit.get("modules"):
-            return list(unit["modules"])
+        declared = unit.get("modules")
+        if declared:
+            return list(declared)
         providers = self.cfg.repo_top / "server" / "providers"
         return sorted(p.name for p in providers.iterdir() if (p / "module.json").exists()) if providers.is_dir() else []
 
@@ -335,7 +336,7 @@ class Driver:
                 out.append(name)
         return sorted(out, key=lambda n: (order.get(n, 0), n))
 
-    def _process_unit(self, unit: dict) -> None:
+    def _process_unit(self, unit: transport.UnitEntry) -> None:
         self.units_checked += 1
         host = unit["hostname"]
         unit_start = datetime.now(UTC)
@@ -633,7 +634,7 @@ class Driver:
         r = transport.run_ps(session, script, label=label, echo=False, tee_stdout=False, timeout_s=timeout_s)
         return (r.std_out or b"").decode("utf-8", "replace")
 
-    def _inventory(self, session: transport.UnitSession, unit: dict) -> None:
+    def _inventory(self, session: transport.UnitSession, unit: transport.UnitEntry) -> None:
         """Lean functional port of the inventory phase: collect NICs + identity,
         write a per-unit JSON, persist the primary MAC to the registry. Non-fatal."""
         host = unit["hostname"]
@@ -657,15 +658,15 @@ class Driver:
                 for a in inv.get("adapters", [])
                 if str(a.get("status")).lower() == "up" and "802.3" in str(a.get("media", ""))
             ]
-            self.log.event("INVENTORY_OK", unit=host, site=unit.get("site", ""), macs_up=len(macs_up))
+            self.log.event("INVENTORY_OK", unit=host, site=unit["site"], macs_up=len(macs_up))
             if macs_up and unit.get("mac") != macs_up[0]:
                 self._persist_mac(unit, macs_up[0])
         except Exception as e:  # noqa: BLE001 -- inventory never fails the run
             self.log.event("INVENTORY_WARN", unit=host, error=f"{type(e).__name__}: {e}")
 
-    def _persist_mac(self, unit: dict, mac: str) -> None:
+    def _persist_mac(self, unit: transport.UnitEntry, mac: str) -> None:
         try:
-            units = transport.load_json_list(self.cfg.unit_registry)
+            units = transport.load_unit_registry(self.cfg.unit_registry)
             for u in units:
                 if u.get("hostname") == unit["hostname"]:
                     u["mac"] = mac
@@ -701,7 +702,9 @@ class Driver:
                 stale=is_stale,
             )
 
-    def _build(self, unit: dict, host: str, modules: list[str], dur) -> tuple[str | None, str, dict[str, Any]]:
+    def _build(
+        self, unit: transport.UnitEntry, host: str, modules: list[str], dur
+    ) -> tuple[str | None, str, dict[str, Any]]:
         # test_mode in the event is the auditable record of whether this build
         # passed -AllowMissing* (dev/test) or ran as a production build that
         # fails loud on any missing input (item 7). Production omits --test-mode.
@@ -722,10 +725,9 @@ class Driver:
             "-ProxyMode",
             self.cfg.proxy_mode,
         ]
-        if unit.get("site"):
-            args += ["-Site", unit["site"]]
-        else:
-            self.log.event("SITE_MISSING", unit=host, note="no site in registry entry; build-mast default applies")
+        # No SITE_MISSING fallback: load_unit_registry rejects an entry without a
+        # site, so there is no path here with one absent.
+        args += ["-Site", unit["site"]]
         if modules:
             args += ["-Modules", ",".join(modules)]
         if self.cfg.test_mode:
