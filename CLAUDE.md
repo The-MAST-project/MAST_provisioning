@@ -249,6 +249,8 @@ The WinRM/SSH transport is the canonical `server/prov/transport.py` (lifted out 
 | `run_ps(session, script, ...)` | Run PS on a unit with heartbeat + hard timeout + resilient retry. |
 | `winrm_session(host, cred, read_timeout_s, op_timeout_s)` | Construct a `winrm.Session`. Never instantiate `winrm.Session` directly outside this factory. |
 | `load_json_object(path)` / `load_json_list(path)` | BOM-tolerant JSON read with the top-level shape asserted (`dict` / list-of-dicts), raising `TypeError` naming the path otherwise. **Prefer these over `load_json_file`**, which returns `object` and forces a narrow at every call site. |
+| `UnitSession` | The type of a session to a unit — the union of `SshSession` and `winrm.Session`. **Annotate every session parameter with this**, never `winrm.Session` (which breaks `isinstance` narrowing — see the record) and never `Any`. |
+| `UnitResponse` | What `run_ps` / `_resilient_run_ps` return, and what `check_rc` takes: the `status_code` / `std_out` / `std_err` protocol both transports' responses satisfy. Never annotate a shared path `winrm.Response`. |
 
 ### The server orchestration is Python (platform-agnostic)
 

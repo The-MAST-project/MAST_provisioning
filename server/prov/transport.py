@@ -32,7 +32,7 @@ import time
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 try:
     import winrm
@@ -236,7 +236,7 @@ def winrm_session(
     )
 
 
-def _dispose_winrm_session(sess: Any | None) -> None:
+def _dispose_winrm_session(sess: UnitSession | None) -> None:
     """Close a unit session (best-effort). Handles both a pywinrm Session
     (close pooled HTTP connections) and an SshSession (close the transport)."""
     if sess is None:
@@ -304,6 +304,20 @@ class _SshResponse:
         self.status_code = status_code
         self.std_out = std_out
         self.std_err = std_err
+
+
+class UnitResponse(Protocol):
+    """What every transport's response has in common.
+
+    winrm.Response and _SshResponse are unrelated classes that share exactly these
+    three members, so the shared run paths return this rather than claiming one of
+    them. Structural, not inherited: pywinrm's class cannot be made to declare a
+    base of ours. test_transport pins both directions.
+    """
+
+    status_code: int
+    std_out: bytes
+    std_err: bytes
 
 
 def _require_transport(client: paramiko.SSHClient) -> paramiko.Transport:
@@ -483,6 +497,17 @@ class SshSession:
     def close(self) -> None:
         with contextlib.suppress(Exception):
             self._client.close()
+
+
+#: A session to a unit, either transport. Written as a union rather than a Protocol
+#: on purpose: the union is what lets `isinstance(session, SshSession)` narrow to
+#: SshSession alone. Annotate the parameter winrm.Session and the same isinstance
+#: instead yields a synthesized `<subclass of Session and SshSession>` whose MRO
+#: puts pywinrm first, so run_ps resolves to the signature WITHOUT timeout_s and
+#: every SSH call site reads as a type error (#87 stage 1 waived two of them).
+#: Plain assignment, not a PEP 695 `type` statement -- vm_lib re-exports this and
+#: there is no reason to put a 3.12 syntax floor in the shared surface.
+UnitSession = SshSession | winrm.Session
 
 
 def ssh_session(host: str, cred: dict[str, str], port: int = SSH_PORT, connect_timeout_s: int = 30) -> SshSession:
@@ -818,13 +843,13 @@ def _resilient_get_command_output(
 
 
 def _resilient_run_ps(
-    session: winrm.Session,
+    session: UnitSession,
     script: str,
     *,
     log_label: str,
     transient_retry_budget_s: int = _TRANSIENT_RETRY_BUDGET_S,
     timeout_s: float | None = None,
-) -> winrm.Response:
+) -> UnitResponse:
     """Drop-in replacement for ``session.run_ps`` that survives transient
     WinRM HTTP failures without abandoning the running command on the unit.
 
@@ -860,12 +885,7 @@ def _resilient_run_ps(
         # already landed.
         for attempt in range(SSH_RECONNECT_ATTEMPTS + 1):
             try:
-                # The declared parameter type is winrm.Session, but SSH-first means
-                # an SshSession arrives here and only SshSession.run_ps takes
-                # timeout_s. Deferred to stage 2 of #87 (a Session protocol or an
-                # explicit union), because retyping this transport is its own
-                # reviewable change.
-                return session.run_ps(script, timeout_s=timeout_s)  # pyright: ignore[reportCallIssue]
+                return session.run_ps(script, timeout_s=timeout_s)
             except TimeoutError:
                 # A live-but-stuck command (deadline hit); re-running it is wrong
                 # (would restart a 42-min execute). NB: TimeoutError subclasses
@@ -911,7 +931,10 @@ def _resilient_run_ps(
 
     # Match pywinrm's stderr post-processing for parity with session.run_ps.
     if stderr:
-        stderr = session._clean_error_msg(stderr)  # type: ignore[attr-defined]
+        # Private, and pywinrm-only -- reached in the WinRM branch, where the union
+        # has narrowed to winrm.Session. Kept as a reach into pywinrm's internals
+        # rather than a reimplementation so the two stay in step.
+        stderr = session._clean_error_msg(stderr)  # pyright: ignore[reportPrivateUsage]
     return winrm.Response((stdout, stderr, return_code))
 
 
@@ -963,7 +986,7 @@ def _minify_ps(raw: str) -> str:
 
 
 def run_ps(
-    session: winrm.Session,
+    session: UnitSession,
     script: str,
     *,
     label: str = "",
@@ -971,7 +994,7 @@ def run_ps(
     echo: bool = True,
     tee_stdout: bool = True,
     step_timer: list[float] | None = None,
-) -> winrm.Response:
+) -> UnitResponse:
     """Run a PowerShell script via WinRM with heartbeat logging and a hard timeout.
 
     Uses _resilient_run_ps under the hood so a transient WinRM hiccup during
@@ -1007,7 +1030,7 @@ def run_ps(
     return r
 
 
-def check_rc(r: winrm.Response, phase: str) -> None:
+def check_rc(r: UnitResponse, phase: str) -> None:
     if r.status_code != 0:
         raise RuntimeError(f"{phase} failed with exit code {r.status_code}")
 
@@ -1070,7 +1093,7 @@ def wait_for_winrm(host: str, cred: dict[str, str], timeout: int = WINRM_BOOT_TI
 
 
 def upload_file_b64(
-    session: winrm.Session,
+    session: UnitSession,
     remote_path: str,
     content: str,
     label: str = "file",
@@ -1133,6 +1156,9 @@ __all__ = [
     "WINRM_ENCODED_CMD_MAX",
     "WINRM_PORT",
     "SshSession",
+    # session / response types
+    "UnitResponse",
+    "UnitSession",
     "assert_inline_dispatchable",
     "check_rc",
     "connect_unit",

@@ -11,6 +11,7 @@ vm/ harness imports.
 import base64
 
 import pytest
+import winrm
 
 from prov import transport as T
 
@@ -99,6 +100,22 @@ def test_run_with_heartbeat_escalates_and_rate_limits():
     finally:
         for k, v in orig.items():
             setattr(T, k, v)
+
+
+def test_unit_response_protocol_covers_both_transports():
+    # UnitResponse is what the shared run paths (run_ps, _resilient_run_ps) return,
+    # because the SSH path yields _SshResponse and the WinRM path a winrm.Response.
+    # The two annotated bindings are the real guard and the type checker enforces
+    # them: add a member to UnitResponse that one class lacks, or drop one from
+    # either class, and this file fails `basedpyright` at review rather than at the
+    # first SSH-path caller that reads it. The asserts below cover the runtime half
+    # -- that the members carry what the callers expect, in pywinrm's tuple order.
+    ssh: T.UnitResponse = T._SshResponse(0, b"out", b"err")
+    wire: T.UnitResponse = winrm.Response((b"out", b"err", 0))
+    for r in (ssh, wire):
+        assert r.status_code == 0
+        assert r.std_out == b"out"
+        assert r.std_err == b"err"
 
 
 def test_upload_file_routes_ssh_to_sftp_else_b64(monkeypatch):
@@ -274,10 +291,7 @@ def test_resilient_run_ps_reconnects_and_retries_on_ssh_drop(monkeypatch):
             self.reconnects += 1
 
     s = _FlakySsh()
-    # _resilient_run_ps still declares session: winrm.Session even though SSH is
-    # the default transport, so every SshSession call site reads as a type error.
-    # Deferred to stage 2 of #87, which retypes the parameter.
-    r = T._resilient_run_ps(s, "Write-Host hi", log_label="t", timeout_s=5)  # pyright: ignore[reportArgumentType]
+    r = T._resilient_run_ps(s, "Write-Host hi", log_label="t", timeout_s=5)
     assert r.status_code == 0 and r.std_out == b"ok"
     assert s.calls == 2, "should re-run once after the drop"
     assert s.reconnects == 1, "should reconnect before the retry"
@@ -349,8 +363,7 @@ def test_resilient_run_ps_does_not_retry_on_timeout(monkeypatch):
 
     s = _StuckSsh()
     with pytest.raises(TimeoutError):
-        # Same stage-2-of-#87 parameter type as above.
-        T._resilient_run_ps(s, "x", log_label="t", timeout_s=5)  # pyright: ignore[reportArgumentType]
+        T._resilient_run_ps(s, "x", log_label="t", timeout_s=5)
     assert s.calls == 1, "a live-but-stuck command must not be re-run"
     assert s.reconnects == 0
 

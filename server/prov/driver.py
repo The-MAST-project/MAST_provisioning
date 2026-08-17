@@ -636,7 +636,7 @@ class Driver:
         finally:
             s.close()
 
-    def _unit_can_reach_staging(self, session: Any, host: str) -> bool:
+    def _unit_can_reach_staging(self, session: transport.UnitSession, host: str) -> bool:
         """Can the UNIT open SMB to the staging address we are about to hand it?
 
         Asked from the unit, not the server: Test-MastSmbHostReady already checks
@@ -662,14 +662,14 @@ class Driver:
         except OSError:
             return False
 
-    def _ps_out(self, session: Any, script: str, label: str, timeout_s: int = PROBE_TIMEOUT_S) -> str:
+    def _ps_out(self, session: transport.UnitSession, script: str, label: str, timeout_s: int = PROBE_TIMEOUT_S) -> str:
         # tee_stdout=False: these are internal probes whose stdout is a marker the
         # caller parses -- keep them out of the controller log (esp. the big
         # base64 archive pull). timeout_s bounds a hung remote read (watchdog).
         r = transport.run_ps(session, script, label=label, echo=False, tee_stdout=False, timeout_s=timeout_s)
         return (r.std_out or b"").decode("utf-8", "replace")
 
-    def _inventory(self, session: Any, unit: dict) -> None:
+    def _inventory(self, session: transport.UnitSession, unit: dict) -> None:
         """Lean functional port of the inventory phase: collect NICs + identity,
         write a per-unit JSON, persist the primary MAC to the registry. Non-fatal."""
         host = unit["hostname"]
@@ -711,7 +711,7 @@ class Driver:
         except Exception as e:  # noqa: BLE001
             self.log.event("REGISTRY_MAC_WARN", unit=unit["hostname"], error=f"{type(e).__name__}: {e}")
 
-    def _reclaim_availability(self, session: Any, host: str) -> None:
+    def _reclaim_availability(self, session: transport.UnitSession, host: str) -> None:
         avail = _parse_json_or_none(
             self._ps_out(
                 session, f"if (Test-Path '{UNIT_AVAIL}') {{ Get-Content '{UNIT_AVAIL}' -Raw }} else {{ '' }}", "avail"
@@ -794,7 +794,7 @@ class Driver:
         # args), and this object loops over every unit.
         return payload_hash, git_sha, bm
 
-    def _set_unavailable(self, session: Any, host: str, payload_hash: str) -> None:
+    def _set_unavailable(self, session: transport.UnitSession, host: str, payload_hash: str) -> None:
         since = datetime.now(UTC)
         expected = since + timedelta(seconds=AVAIL_TTL_S)
         self._write_unit_json(
@@ -818,7 +818,7 @@ class Driver:
             lease_owner=self.run_id,
         )
 
-    def _transfer(self, session: Any, host: str, dur, payload_hash: str, git_sha: str) -> bool:
+    def _transfer(self, session: transport.UnitSession, host: str, dur, payload_hash: str, git_sha: str) -> bool:
         unit_stage = rf"C:\mast-staging\{self.run_id}"
         src_unc = rf"\\{self.prov_address}\mast-staging\{host}\01-provisioning"
         size = staging_payload_size(self._staging_dir)
@@ -882,7 +882,9 @@ class Driver:
         self._unit_stage = unit_stage
         return True
 
-    def _write_detached_inputs(self, session: Any, stage: str, target_modules: list[str] | None = None) -> None:
+    def _write_detached_inputs(
+        self, session: transport.UnitSession, stage: str, target_modules: list[str] | None = None
+    ) -> None:
         """Write the detached runner's inputs. No secret travels here: execute no
         longer maps any drive (issue #25), so it needs no SMB credential."""
         # 'modules' is the targeted subset from the per-module drift compare, or
@@ -901,7 +903,7 @@ class Driver:
             },
         )
 
-    def _write_shared_cred(self, session: Any) -> None:
+    def _write_shared_cred(self, session: transport.UnitSession) -> None:
         """Plant the operational-share credential the mast-shared-mount provider needs,
         as a machine-bound DPAPI-LocalMachine blob.
 
@@ -926,7 +928,13 @@ class Driver:
         transport.run_ps(session, enc, label="shared-dpapi-blob", echo=False, tee_stdout=False, timeout_s=PROBE_TIMEOUT_S)
 
     def _execute(
-        self, session: Any, host: str, dur, payload_hash: str, git_sha: str, target_modules: list[str] | None = None
+        self,
+        session: transport.UnitSession,
+        host: str,
+        dur,
+        payload_hash: str,
+        git_sha: str,
+        target_modules: list[str] | None = None,
     ) -> tuple[bool, Any]:
         """Detached execute (item 6): run execute-mast-provisioning.ps1 as a
         detached scheduled task (via client/mast-run-detached.ps1) and poll its
@@ -1031,7 +1039,9 @@ class Driver:
         self.log.event("EXECUTE_OK", unit=host, duration_s=dur(), mode="detached")
         return True, session
 
-    def _smoke(self, session: Any, host: str, modules: list[str], dur, payload_hash: str, git_sha: str) -> bool:
+    def _smoke(
+        self, session: transport.UnitSession, host: str, modules: list[str], dur, payload_hash: str, git_sha: str
+    ) -> bool:
         self.log.event("SMOKE_START", unit=host)
         mod_lits = ",".join(_ps_lit(m) for m in modules)
         script = (
@@ -1057,7 +1067,7 @@ class Driver:
             return False
         return True
 
-    def _proxy_assert(self, session: Any, host: str, dur, payload_hash: str, git_sha: str) -> bool:
+    def _proxy_assert(self, session: transport.UnitSession, host: str, dur, payload_hash: str, git_sha: str) -> bool:
         script = (
             "$r = [ordered]@{ "
             "http_proxy=[Environment]::GetEnvironmentVariable('http_proxy','Machine'); "
@@ -1100,7 +1110,7 @@ class Driver:
                 self.log.event("PROXY_ASSERT_OK", unit=host, mode="weizmann")
         return True
 
-    def _set_available(self, session: Any, host: str) -> None:
+    def _set_available(self, session: transport.UnitSession, host: str) -> None:
         self._write_unit_json(
             session,
             UNIT_AVAIL,
@@ -1111,7 +1121,7 @@ class Driver:
         )
         self.log.event("AVAIL_SET", unit=host, available="true")
 
-    def _release_and_archive(self, session: Any, host: str, lease_held: bool) -> None:
+    def _release_and_archive(self, session: transport.UnitSession, host: str, lease_held: bool) -> None:
         if session is None:
             return
         if lease_held:
@@ -1143,7 +1153,7 @@ class Driver:
         except Exception as e:  # noqa: BLE001
             self.log.event("UNIT_LOGS_ARCHIVE_WARN", unit=host, error=f"{type(e).__name__}: {e}")
 
-    def _download_dir(self, session: Any, unit_dir: str, dest: Path) -> None:
+    def _download_dir(self, session: transport.UnitSession, unit_dir: str, dest: Path) -> None:
         """Pull a unit directory's text files back by base64 over the session."""
         dest.mkdir(parents=True, exist_ok=True)
         script = (
@@ -1160,7 +1170,7 @@ class Driver:
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(base64.b64decode(b64))
 
-    def _write_unit_json(self, session: Any, unit_path: str, obj: dict) -> None:
+    def _write_unit_json(self, session: transport.UnitSession, unit_path: str, obj: dict) -> None:
         j = json.dumps(obj)  # JSON uses double quotes -> safe inside a PS single-quoted literal
         d = unit_path.rsplit("\\", 1)[0]
         script = (

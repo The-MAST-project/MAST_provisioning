@@ -106,6 +106,8 @@ import vm_lib
 from vm_lib import (
     WINRM_BOOT_TIMEOUT_S,
     WINRM_CALL_TIMEOUT_S,
+    SshSession,
+    UnitSession,
     _dispose_winrm_session,
     _minify_ps,
     _ps_escape,
@@ -317,7 +319,7 @@ def timed(label: str) -> Generator[None, None, None]:
 # ---------------------------------------------------------------------------
 
 
-def _find_unit_log_path(session: Any, log_filename: str) -> str:
+def _find_unit_log_path(session: UnitSession, log_filename: str) -> str:
     """Return the full path of log_filename inside the newest sessions/ subdir, or ''."""
     r = session.run_ps(
         "$b = Join-Path $env:SystemDrive 'MAST\\logs\\sessions'; "
@@ -366,16 +368,15 @@ class ExecuteLogPoller:
     ) -> None:
         self._host = host
         self._cred = cred
-        # Explicitly Any: the poller drops the attribute to None between
-        # reconnects, and _new_session() hands back either transport's session.
-        self._session: Any = self._new_session()
+        # None only transiently, while the reconnect in _run swaps sessions.
+        self._session: SshSession | None = self._new_session()
         self._log_filename = log_filename
         self._step_timer = step_timer
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._lines_seen = 0
 
-    def _new_session(self) -> Any:
+    def _new_session(self) -> SshSession:
         # SSH-only: the poller streams the execute log over its own SSH session
         # (a second paramiko connection, parallel to the main execute channel).
         # This replaces the WinRM session whose Basic-auth reconnect storm locked
@@ -402,11 +403,16 @@ class ExecuteLogPoller:
         consecutive_errors = 0
         while not self._stop.wait(timeout=EXECUTE_POLL_INTERVAL_S):
             try:
-                path = _find_unit_log_path(self._session, self._log_filename)
+                session = self._session
+                if session is None:
+                    # Only reachable after stop(), which joins this thread before
+                    # nulling the attribute -- so this is the shutdown path.
+                    return
+                path = _find_unit_log_path(session, self._log_filename)
                 if not path:
                     consecutive_errors = 0
                     continue
-                r = self._session.run_ps(
+                r = session.run_ps(
                     f"$lines = Get-Content -LiteralPath '{path}' -ErrorAction SilentlyContinue; "
                     f"if ($lines) {{ $lines | Select-Object -Skip {self._lines_seen} }}",
                 )
@@ -651,7 +657,7 @@ def phase_run_verify_only(
         return r
 
 
-def _fetch_session_log_tail(unit: Any, log_filename: str, lines: int = 40) -> None:
+def _fetch_session_log_tail(unit: UnitSession, log_filename: str, lines: int = 40) -> None:
     try:
         path = _find_unit_log_path(unit, log_filename)
         if not path:
@@ -818,7 +824,7 @@ def phase_reset(
     host_unit: str,
     unit_cred: dict[str, str],
     winrm_wait_s: int = WINRM_BOOT_TIMEOUT_S,
-) -> Any:
+) -> SshSession:
     with timed("RESET PHASE"):
         reset_to_clean_snapshot(
             vbox_vm,
@@ -1127,7 +1133,7 @@ def main() -> None:
         log(f"SSH wait: {args.winrm_wait_seconds}s")
 
         cycle_results: list[bool] = []
-        unit_session: Any | None = None
+        unit_session: UnitSession | None = None
 
         # --- one-shot special modes: --pull-repos and --rebuild-repos ---
         if args.pull_repos or args.rebuild_repos:
