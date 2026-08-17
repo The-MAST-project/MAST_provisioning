@@ -22,6 +22,7 @@ sys.path.insert(0, str(VM_DIR))
 def _load_run_prov_test():
     path = VM_DIR / "run-prov-test.py"
     spec = importlib.util.spec_from_file_location("run_prov_test", path)
+    assert spec and spec.loader
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)  # must NOT spawn PowerShell (lazy all_modules)
     return mod

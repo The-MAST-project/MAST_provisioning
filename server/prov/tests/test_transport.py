@@ -155,7 +155,7 @@ def test_ssh_run_ps_returns_on_exit_status_not_eof():
             self._out = [b"OK\r\n"]
             self._err = []
             self.closed = False
-            self.exec_cmd = None
+            self.exec_cmd = ""
 
         def exec_command(self, cmd):
             self.exec_cmd = cmd
@@ -270,11 +270,14 @@ def test_resilient_run_ps_reconnects_and_retries_on_ssh_drop(monkeypatch):
                 raise ConnectionError("dropped")
             return T._SshResponse(0, b"ok", b"")
 
-        def reconnect(self):
+        def reconnect(self, max_wait_s: float = 0.0):
             self.reconnects += 1
 
     s = _FlakySsh()
-    r = T._resilient_run_ps(s, "Write-Host hi", log_label="t", timeout_s=5)
+    # _resilient_run_ps still declares session: winrm.Session even though SSH is
+    # the default transport, so every SshSession call site reads as a type error.
+    # Deferred to stage 2 of #87, which retypes the parameter.
+    r = T._resilient_run_ps(s, "Write-Host hi", log_label="t", timeout_s=5)  # pyright: ignore[reportArgumentType]
     assert r.status_code == 0 and r.std_out == b"ok"
     assert s.calls == 2, "should re-run once after the drop"
     assert s.reconnects == 1, "should reconnect before the retry"
@@ -341,12 +344,13 @@ def test_resilient_run_ps_does_not_retry_on_timeout(monkeypatch):
             self.calls += 1
             raise TimeoutError("stuck")
 
-        def reconnect(self):
+        def reconnect(self, max_wait_s: float = 0.0):
             self.reconnects += 1
 
     s = _StuckSsh()
     with pytest.raises(TimeoutError):
-        T._resilient_run_ps(s, "x", log_label="t", timeout_s=5)
+        # Same stage-2-of-#87 parameter type as above.
+        T._resilient_run_ps(s, "x", log_label="t", timeout_s=5)  # pyright: ignore[reportArgumentType]
     assert s.calls == 1, "a live-but-stuck command must not be re-run"
     assert s.reconnects == 0
 
@@ -394,7 +398,9 @@ def test_missing_pywinrm_raises_importerror_not_systemexit():
 
     saved = sys.modules.get("winrm")
     try:
-        sys.modules["winrm"] = None  # makes `import winrm` raise ImportError
+        # A None entry in sys.modules is the documented way to force ImportError;
+        # the annotation says ModuleType, so this one stays suppressed for good.
+        sys.modules["winrm"] = None  # pyright: ignore[reportArgumentType]
         with pytest.raises(ImportError):
             importlib.reload(T)
     finally:

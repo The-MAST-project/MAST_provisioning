@@ -49,6 +49,13 @@ front. Expect it to be wrong in places and to shift.
 | `operator tooling` | What a person standing at a unit uses, with no controller and no network |
 | `fleet migration` | One-time, supervised changes applied across production units |
 | `hardware startup` | When a device is powered, homed or moved, relative to when software starts -- process lifetime versus hardware lifetime, and who commands the transition |
+| `static analysis` | What is checked without running the code: lint, formatting, type checking, the PowerShell parse sweep -- rule selection, what is deferred, and whether the gate blocks |
+
+Added 2026-08-17 with the pyright record. Distinct from `reproducibility`, which covers the
+*pins* that make a checker's verdict stable, and from `docs-process`, which the earlier CI
+record reached for because nothing better existed. The recurring subject is the gating
+itself -- the ruff adoption, its deferred families (#72), PSScriptAnalyzer (#73) and now the
+type checker are four decisions about the same thing.
 
 Added 2026-08-16 with the supervision record, which is the first decision to turn on the
 distinction. It is not `instruments`: that term covers the devices themselves -- binding,

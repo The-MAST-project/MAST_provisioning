@@ -32,11 +32,12 @@ import time
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 try:
-    import winrm  # type: ignore[import]
-    from winrm.exceptions import WinRMOperationTimeoutError  # type: ignore[import]
+    import winrm
+    import winrm.exceptions
+    from winrm.exceptions import WinRMOperationTimeoutError
 except ImportError as e:
     # Raise (catchable) rather than sys.exit at import time: this module claims
     # import-purity, and killing the process on import breaks any tool/test that
@@ -48,7 +49,12 @@ except ImportError as e:
 # requests is a hard dependency of pywinrm, so this import is always safe.
 import contextlib
 
-import requests  # type: ignore[import]
+import requests
+
+if TYPE_CHECKING:
+    # paramiko is imported lazily at every use site (it is optional at runtime for
+    # WinRM-only callers), so its types are only available to the checker.
+    import paramiko
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -137,6 +143,30 @@ def load_json_file(path: Path) -> object:
     return json.loads(Path(path).read_text(encoding="utf-8-sig"))
 
 
+def load_json_object(path: Path) -> dict[str, Any]:
+    """``load_json_file`` for a file whose top level must be a JSON object."""
+    data = load_json_file(path)
+    if not isinstance(data, dict):
+        raise TypeError(f"{path}: expected a JSON object, got {type(data).__name__}")
+    return data
+
+
+def load_json_list(path: Path) -> list[dict[str, Any]]:
+    """``load_json_file`` for a file whose top level must be an array of objects.
+
+    A malformed registry raises here rather than at the first ``entry.get(...)``
+    hundreds of lines later -- or, worse, provisioning nothing and reporting a
+    clean run.
+    """
+    data = load_json_file(path)
+    if not isinstance(data, list):
+        raise TypeError(f"{path}: expected a JSON array, got {type(data).__name__}")
+    for i, entry in enumerate(data):
+        if not isinstance(entry, dict):
+            raise TypeError(f"{path}: entry {i} is {type(entry).__name__}, expected a JSON object")
+    return data
+
+
 def parse_json_text(text: str) -> object:
     """Parse a JSON string, tolerating a leading UTF-8 BOM."""
     text = text.removeprefix("\ufeff")
@@ -161,7 +191,7 @@ def load_creds() -> dict[str, dict[str, str]]:
             "Create vault/creds.json with the format:\n"
             '  { "unit": { "user": ".\\\\mast", "pass": "..." } }'
         )
-    return load_json_file(VAULT_CREDS)  # type: ignore[return-value]
+    return load_json_object(VAULT_CREDS)
 
 
 # WSMan per-Receive timeout. This is NOT the overall script timeout -- pywinrm
@@ -276,6 +306,20 @@ class _SshResponse:
         self.std_err = std_err
 
 
+def _require_transport(client: paramiko.SSHClient) -> paramiko.Transport:
+    """The client's transport, or ConnectionError if it has none.
+
+    ``get_transport()`` returns None when the client was never connected or was
+    closed under us. Reporting that as ConnectionError -- the same class raised on
+    a mid-command drop -- lets _resilient_run_ps reconnect and retry instead of
+    failing the phase on an AttributeError.
+    """
+    transport = client.get_transport()
+    if transport is None:
+        raise ConnectionError("SSH client has no active transport (not connected)")
+    return transport
+
+
 class SshSession:
     """pywinrm-Session-compatible wrapper over a paramiko SSH connection.
 
@@ -385,7 +429,7 @@ class SshSession:
         # so without its own deadline the thread + channel would leak across
         # --loop cycles (#10 "bound the SSH exec channel"). On the deadline we
         # raise and the finally tears the channel down.
-        transport = self._client.get_transport()
+        transport = _require_transport(self._client)
         chan = transport.open_session()
         try:
             chan.exec_command(cmd)
@@ -816,7 +860,12 @@ def _resilient_run_ps(
         # already landed.
         for attempt in range(SSH_RECONNECT_ATTEMPTS + 1):
             try:
-                return session.run_ps(script, timeout_s=timeout_s)
+                # The declared parameter type is winrm.Session, but SSH-first means
+                # an SshSession arrives here and only SshSession.run_ps takes
+                # timeout_s. Deferred to stage 2 of #87 (a Session protocol or an
+                # explicit union), because retyping this transport is its own
+                # reviewable change.
+                return session.run_ps(script, timeout_s=timeout_s)  # pyright: ignore[reportCallIssue]
             except TimeoutError:
                 # A live-but-stuck command (deadline hit); re-running it is wrong
                 # (would restart a 42-min execute). NB: TimeoutError subclasses
@@ -1092,6 +1141,8 @@ __all__ = [
     "load_creds",
     # json helpers
     "load_json_file",
+    "load_json_list",
+    "load_json_object",
     # log sinks (rebindable)
     "log_fn",
     "log_raw_fn",

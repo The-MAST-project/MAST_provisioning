@@ -21,6 +21,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 def _load_report_module():
     sys.path.insert(0, str(_REPO_ROOT / "server"))
     spec = importlib.util.spec_from_file_location("fleet_drift_report", _REPO_ROOT / "tools" / "fleet-drift-report.py")
+    assert spec and spec.loader
     mod = importlib.util.module_from_spec(spec)
     # Register before exec: the module defines dataclasses, and @dataclass looks
     # its own module up in sys.modules while the class body is being processed.

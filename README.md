@@ -307,6 +307,7 @@ upstream merges landed mid-fleet-run and left three units on two different
 pip install -r server/requirements.txt -r requirements-dev.txt   # both, see below
 python -m pytest -q -ra                                          # from the REPO ROOT
 ruff format --check . && ruff check .
+basedpyright                                                     # type check
 ```
 
 ```powershell
@@ -314,7 +315,7 @@ Import-Module Pester -RequiredVersion 3.4.0 -Force                # NOT a bare I
 Invoke-Pester -Path server\tests
 ```
 
-Three things are easy to get wrong, and CI (`.github/workflows/ci.yml`) encodes all three:
+Four things are easy to get wrong, and CI (`.github/workflows/ci.yml`) encodes all four:
 
 - **Install the runtime deps too, not just `requirements-dev.txt`.** `prov.transport`
   imports `pywinrm` and `vm/run-prov-test.py` imports `paramiko` at module level, so
@@ -324,11 +325,23 @@ Three things are easy to get wrong, and CI (`.github/workflows/ci.yml`) encodes 
 - **Pin Pester to 3.4.0.** The suites are Pester 3 syntax (`Should Be`, not
   `Should -Be`); Windows ships 5.x alongside 3.4.0 and a bare `Import-Module Pester`
   picks 5.x, where every assertion is a syntax error. Windows PowerShell 5.1, not `pwsh`.
+- **The type check needs the runtime deps too, for a different reason than pytest.**
+  Pyright resolves imports from the environment, so without `pywinrm`/`paramiko` it
+  reports `reportMissingImports` across the whole transport layer and proves nothing about
+  the code. (`ruff` never imports anything, which is why the `lint` job installs less.)
 
 Lint uses the fleet-wide `ruff.toml` (shared with MAST_common and MAST_unit) with
 `ruff` pinned in `requirements-dev.txt` — the pin matters for the default rule set, not
 only formatter output. CI also parse-checks every `.ps1`/`.psm1`; see
 `docs/decisions/2026-08-11-ci-is-three-jobs-and-lands-green.md`.
+
+Types are checked by `basedpyright` (pyright plus a stricter default rule set), pinned in
+`requirements-dev.txt` and configured by `pyrightconfig.json` at the repo root:
+`typeCheckingMode: "standard"` set explicitly, and `pythonPlatform: "All"` so one Linux
+run covers the Windows branches as well. Blocking, and green. Pylance in VS Code reads the
+same config file, so the editor and CI agree on what counts. Why pyright and not mypy, and
+what the first 50 findings turned out to be:
+`docs/decisions/2026-08-17-pyright-not-mypy-for-the-python-server.md`.
 
 The abbreviated setup sequence is:
 

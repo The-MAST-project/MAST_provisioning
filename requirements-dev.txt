@@ -8,3 +8,9 @@ pytest
 # The pin covers the default rule set too, not just formatter output -- 0.16.0
 # enables substantially more by default than 0.15.x.
 ruff==0.16.0
+# Type checker (rules in pyrightconfig.json; the choice is argued in #87).
+# basedpyright is pyright plus a stricter default rule set, packaged as a wheel
+# that bundles node -- so it pins and installs like any other dep, with no npm
+# fetch. Pinned for the same reason ruff is: the version decides what counts as a
+# finding. Keep it in step with the Pylance in the editor, which is pyright 1.1.x.
+basedpyright==1.39.10
