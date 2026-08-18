@@ -62,6 +62,88 @@ def test_status_matrix_keys_on_hash_not_version(fdr):
     assert cells["desktop-shortcuts"] == {"mast01": "STALE", "mast02": "ok"}
 
 
+_GOLDEN = Path(__file__).parent / "data" / "fleet_report_golden.txt"
+
+
+def _golden_fixture(fdr):
+    """A fleet that exercises every section render() can emit.
+
+    Deliberately rich: a reference column, a drifted unit, an in-sync unit, an
+    unreachable one carrying an error, tier-2 results both present and never-run,
+    repo divergence with an unhonoured pin, and all three bootstrap states. If a
+    section stops being reachable from this fixture, the golden stops covering it.
+    """
+
+    def entry(h, v="1.0"):
+        return {"version": v, "hash": h, "provide": "pass", "verify": "pass"}
+
+    repos = {
+        "common": {"repo": "MAST_common", "branch": "master", "rev": "", "resolved_sha": "aaaaaaaaaaaa", "head": "master"},
+        "unit": {"repo": "MAST_unit", "branch": "main", "rev": "v1.2", "resolved_sha": "bbbbbbbbbbbb", "head": "main"},
+    }
+    repos_drift = dict(repos)
+    repos_drift["unit"] = {**repos["unit"], "resolved_sha": "cccccccccccc"}
+
+    u1 = fdr.UnitRecord(
+        host="mast01",
+        status="ok",
+        payload_hash="agg1234567890",
+        git_sha="gitsha123456",
+        installed_at="2026-08-01T10:00:00Z",
+        modules={"git": entry("h-git"), "desktop-shortcuts": entry("OLD")},
+        bootstrap_version=3,
+        repos=repos,
+        validated_at="2026-08-02T09:00:00Z",
+        validation={"git": "pass", "desktop-shortcuts": "fail"},
+    )
+    u2 = fdr.UnitRecord(
+        host="mast02",
+        status="ok",
+        payload_hash="agg1234567890",
+        git_sha="gitsha123456",
+        installed_at="2026-08-01T11:00:00Z",
+        modules={"git": entry("h-git"), "desktop-shortcuts": entry("NEW")},
+        bootstrap_version=2,
+        repos=repos_drift,
+    )
+    u3 = fdr.UnitRecord(host="mast03", status="unreachable", error="no route to host")
+    ref = fdr.UnitRecord(
+        host="BUILD (reference)",
+        status="ok",
+        payload_hash="agg1234567890",
+        git_sha="gitsha123456",
+        installed_at="2026-08-01T09:00:00Z",
+        modules={"git": entry("h-git"), "desktop-shortcuts": entry("NEW")},
+    )
+    units = [u1, u2, u3]
+    build = {
+        "payload_hash": "agg1234567890",
+        "modules": ["git", "desktop-shortcuts"],
+        "module_state": {
+            "git": {"version": "2.52", "hash": "h-git"},
+            "desktop-shortcuts": {"version": "1.0", "hash": "NEW"},
+        },
+    }
+    return {
+        "units": units,
+        "reference": ref,
+        "cmp": fdr.compare_to_build(units, build),
+        "boot": fdr.bootstrap_gaps(units, {"current_version": 3, "elements": {}}),
+        "repo_boot_v": 4,
+        "repos": fdr.compare_repos(units, ref, expected={"common", "unit"}),
+    }
+
+
+def test_render_output_is_byte_for_byte_unchanged(fdr):
+    """The report IS the interface -- an operator reads it, and #72's refactor of
+    render() must not move a single space. Regenerate deliberately with
+    tools/../make it fail, read the diff, and only then update the golden.
+    """
+    got = fdr.render(**_golden_fixture(fdr))
+    expected = _GOLDEN.read_text(encoding="utf-8").rstrip("\n")
+    assert got == expected, "render() output changed; diff it against the golden before updating"
+
+
 def test_csv_and_text_report_agree(fdr, tmp_path):
     """One run must not emit a text report saying STALE and a CSV saying nothing."""
     stale = _unit(fdr, "mast01", **{"desktop-shortcuts": _entry("OLD")})
