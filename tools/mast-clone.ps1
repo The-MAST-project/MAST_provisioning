@@ -323,6 +323,7 @@ foreach ($row in $rows) {
     if (Test-Path -LiteralPath (Join-Path $dest '.git')) {
         # Idempotent re-run. Never merge implicitly -- local work is sacred.
         $actual = ''
+        # pssa-ignore: PSUseDeclaredVarsMoreThanAssignments -- read below; the rule does not follow ForEach-Object, whose scriptblock runs in the caller's scope
         & git -C $dest remote get-url origin 2>$null | ForEach-Object { $actual = $_ }
         if ($actual -notlike "*$($row.Repo)*") {
             Write-Warn ("{0}: origin is '{1}', expected a {2} remote -- skipping" -f $row.Dir, $actual, $row.Repo)
@@ -424,7 +425,9 @@ if (-not $DryRun) {
         $head = ''
         $d = Join-Path $topAbs $pr.dir
         if (Test-Path -LiteralPath (Join-Path $d '.git')) {
+            # pssa-ignore: PSUseDeclaredVarsMoreThanAssignments -- read below; the rule does not follow ForEach-Object, whose scriptblock runs in the caller's scope
             & git -C $d rev-parse HEAD 2>$null | ForEach-Object { $sha = $_.Trim() }
+            # pssa-ignore: PSUseDeclaredVarsMoreThanAssignments -- read below; the rule does not follow ForEach-Object, whose scriptblock runs in the caller's scope
             & git -C $d rev-parse --abbrev-ref HEAD 2>$null | ForEach-Object { $head = $_.Trim() }
         }
         $repoRecords += [pscustomobject]@{
