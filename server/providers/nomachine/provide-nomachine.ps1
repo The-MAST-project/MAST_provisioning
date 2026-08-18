@@ -226,7 +226,7 @@ function Restart-NoMachineServer {
   }
 }
 
-function Try-InstallExe {
+function Install-Exe {
   param(
     [Parameter(Mandatory)][string]${FilePath},
     [string[]]${ArgsList} = @('/verysilent /usbinstall="0" /printerinstall="0"'),
@@ -313,7 +313,7 @@ if (Test-NoMachineInstalled) {
   # are in place. Use a success probe + grace + forced terminate to avoid hangs.
   ${desktopProbe} = { Test-NoMachineInstalled }
 
-  if (-not (Try-InstallExe -FilePath ${serverExe} -Tag 'NoMachine Enterprise Desktop' -TimeoutSec 600 -SuccessProbe ${desktopProbe})) {
+  if (-not (Install-Exe -FilePath ${serverExe} -Tag 'NoMachine Enterprise Desktop' -TimeoutSec 600 -SuccessProbe ${desktopProbe})) {
     Write-Warning "NoMachine Enterprise Desktop (server) install may have failed. Check logs."
   }
 }

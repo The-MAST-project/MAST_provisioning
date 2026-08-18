@@ -219,7 +219,7 @@ yet provide, add it to the lib rather than defining it locally.
 
 | File | What it provides |
 |------|-----------------|
-| `server/lib/mast-log.ps1` | `Get-MastLog*` path helpers; `Now-Utc`; `Write-MastLog -Message -LogFile` |
+| `server/lib/mast-log.ps1` | `Get-MastLog*` path helpers; `Get-UtcNow`; `Write-MastLog -Message -LogFile` |
 | `client/mast-client-util.ps1` | `Disable-WindowsAutoUpdate` |
 | `client/mast-invoke-child.ps1` | `Invoke-MastChildCommandLine`, `Import-MastCommandsFromJson` |
 

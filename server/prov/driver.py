@@ -2,7 +2,7 @@
 
 Successor to the retired server/check-and-provision.ps1. Runs on the prov server (any OS) and
 provisions the Windows units over the transport in prov.transport (SSH-first,
-WinRM fallback). It matches the PowerShell driver's phase order, Log-Event
+WinRM fallback). It matches the retired PowerShell driver's phase order, log-event
 strings, activity outcomes, and exit-code semantics (see docs/decisions/2026-07-12-port-server-orchestration-to-python.md
 and the behavioral spec the port was written against).
 

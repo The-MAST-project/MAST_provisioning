@@ -36,14 +36,14 @@ function Add-ToSystemPath {
   if (${pathVal} -notmatch [Regex]::Escape(${Dir})) {
     ${newPath} = (${pathVal}.TrimEnd(';') + ';' + ${Dir}).Trim(';')
     Set-ItemProperty -Path ${envKey} -Name PATH -Value ${newPath}
-    Broadcast-Environment
+    Publish-Environment
     Write-Verbose "PATH += ${Dir}"
   } else {
     Write-Verbose "PATH already contains ${Dir}"
   }
 }
 
-function Broadcast-Environment {
+function Publish-Environment {
   $sig = @"
 using System;
 using System.Runtime.InteropServices;

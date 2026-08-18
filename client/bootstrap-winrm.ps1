@@ -259,7 +259,7 @@ function Set-MastAdaptersToDhcp {
     }
 }
 
-function Ensure-MastWinRmFirewallRule5985 {
+function Initialize-MastWinRmFirewallRule5985 {
     param([string]$RuleDisplayName = 'MAST - WinRM HTTP')
     if (Test-MastNetFirewallRuleExists -DisplayName $RuleDisplayName) {
         Write-BootstrapMsg "  Firewall rule '$RuleDisplayName' already exists." 'Green'
@@ -1221,7 +1221,7 @@ try {
 
     Write-BootstrapMsg '' 'Cyan'
     Write-BootstrapMsg '--- Firewall TCP 5985 ---' 'Cyan'
-    Ensure-MastWinRmFirewallRule5985 -RuleDisplayName 'MAST - WinRM HTTP'
+    Initialize-MastWinRmFirewallRule5985 -RuleDisplayName 'MAST - WinRM HTTP'
 
     Write-BootstrapMsg '' 'Cyan'
     Write-BootstrapMsg '--- Persist Private network profile across reboots ---' 'Cyan'

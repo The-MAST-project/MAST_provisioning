@@ -122,7 +122,7 @@ function Wait-ForDriveRoot {
     return $false
 }
 
-function Build-SparseIndexImage {
+function New-SparseIndexImage {
     param([Parameter(Mandatory)][string]${ImagePath},
           [Parameter(Mandatory)][string]${SeedDir},
           [Parameter(Mandatory)][long]${SizeBytes},
@@ -304,7 +304,7 @@ try {
     if (Test-Path -LiteralPath ${ImagePath}) {
         Write-ImDiskLog ("Index image already present at {0} ({1:N2} GB logical); reusing as-is." -f ${ImagePath}, ((Get-Item ${ImagePath}).Length / 1GB))
     } elseif (Test-Path -LiteralPath ${IndexSeedDir}) {
-        Build-SparseIndexImage -ImagePath ${ImagePath} -SeedDir ${IndexSeedDir} `
+        New-SparseIndexImage -ImagePath ${ImagePath} -SeedDir ${IndexSeedDir} `
             -SizeBytes ${DiskSizeBytes} -SizeArg ${DiskSize} -ImdiskExe ${imdiskExe} -IndexSubdir ${IndexSubdir}
     } else {
         Write-ImDiskLog ("[WARN] No image at {0} and no index seed at {1}. D:\{2} will be empty; astrometry + mast-validation will FAIL." -f ${ImagePath}, ${IndexSeedDir}, ${IndexSubdir})

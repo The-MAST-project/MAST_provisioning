@@ -34,7 +34,7 @@ _ACTIVITY_HEADER = [
 
 
 def now_utc() -> str:
-    """UTC timestamp in the driver's canonical form (matches PS Now-Utc)."""
+    """UTC timestamp in the driver's canonical form (matches the PowerShell helper)."""
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
@@ -93,14 +93,14 @@ def write_status_atomic(path: Path, obj: object) -> None:
 
 def _fmt_event(event_type: str, fields: dict[str, object]) -> str:
     """Render one event line: '[utc]  TYPE  k=v  k=v' (two-space separated),
-    matching the PowerShell Log-Event format."""
+    matching the PowerShell log-event format."""
     parts = [f"[{now_utc()}]", event_type]
     parts += [f"{k}={v}" for k, v in fields.items()]
     return "  ".join(parts)
 
 
 class RunLog:
-    """Per-run logging + telemetry state (the driver's Log-Event / Log-Activity).
+    """Per-run logging + telemetry state (the driver's event log + activity CSV).
 
     Holds the run's log dir + paths, tees events to the run log and stdout, and
     installs itself as prov.transport's log sink so transport heartbeats land in
