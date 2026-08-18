@@ -54,6 +54,34 @@
         # the same script. Documentation value here is close to zero.
         'PSUseOutputTypeCorrectly',
 
+        # 12 findings, 12 of them WRONG -- verified individually. The rule does not
+        # understand a param() block inside a scriptblock, which is how every
+        # Start-Job and Invoke-Command in this repo passes its values:
+        #
+        #     Start-Job { param($a) & net.exe @a } -ArgumentList (,$ArgsList)
+        #
+        # It flags $a as needing $using:. It does not. The clincher: fixing a real
+        # bug ($host shadowed in an Invoke-Command block, renamed to $unitHost)
+        # ADDED a 12th false finding, because the automatic variable had been
+        # invisible to the rule and a normal one is not. A rule that manufactures
+        # findings from correct fixes cannot gate a codebase that is mostly
+        # scriptblocks.
+        'PSUseUsingScopeModifierInNewRunspaces',
+
+        # 19 findings: 11 false (the parameter IS used, inside a switch body or a
+        # scriptblock the rule's scope analysis does not follow -- build-mast's
+        # -Site and -ImdiskMountType among them) and 8 real but harmless, every one
+        # of the form "a caller passes a value this script ignores". Zero defects
+        # in 19 findings, and the same scriptblock blindness as the rule above.
+        #
+        # The 8 are worth knowing even so, and are recorded in the decision record:
+        # provide-phd2, provide-stage and provide-vscode ignore an -InstallRoot
+        # their module.json passes; provide-npcap ignores -AssetsRoot;
+        # mast-pull-staging ignores -UnitHostname (which transport.pull_staging_args
+        # sends); and provide-openssh-server's -MastUser plus
+        # provide-mast-validation's -TimeoutSeconds are accepted from nobody.
+        'PSReviewUnusedParameter',
+
         # 113, and DEFERRED rather than dismissed -- this is the highest-value rule
         # in the set for this repo, because a swallowed error is precisely the
         # failure mode #55, #62 and #67-#69 all describe. It is scoped out here

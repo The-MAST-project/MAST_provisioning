@@ -96,6 +96,11 @@
   .\build-autounattend-iso.ps1 -ExtraScripts client\onboard-mast-unit.ps1
 #>
 
+# An autounattend.xml embeds the account password in cleartext -- that is the
+# format Windows setup reads, so a SecureString parameter could not be written
+# into the answer file this script exists to produce.
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingPlainTextForPassword', 'MastPassword',
+    Justification = 'The value is written into autounattend.xml, which is cleartext by format.')]
 [CmdletBinding()]
 param(
     [string]   $OutputIso       = '',

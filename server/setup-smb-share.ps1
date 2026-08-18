@@ -24,6 +24,11 @@
   .\server\setup-smb-share.ps1 -Top C:\repos\MAST_provisioning
 #>
 
+# The mast-transfer account is created from a vault-supplied password, and
+# New-LocalUser only accepts a SecureString -- so the conversion is required,
+# not incidental.
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingConvertToSecureStringWithPlainText', '',
+    Justification = 'New-LocalUser requires a SecureString; the vault supplies the password as text.')]
 [CmdletBinding()]
 param(
     [string]$Top = ''

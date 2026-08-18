@@ -19,6 +19,10 @@ would fall back to C: even with Z: mapped correctly.
 Idempotent: an already-correct, reachable mapping is left alone.
 ASCII-only; Windows PowerShell 5.1 safe.
 #>
+# CredCfg is a PATH to a JSON file naming the share account, not a password --
+# the rule matches on the parameter's name. See the comment on it below.
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingPlainTextForPassword', 'CredCfg',
+    Justification = 'CredCfg is a file path, not a credential; flagged on the name alone.')]
 [CmdletBinding()]
 param(
     [string]${ConfigPath} = 'C:\WIS\config.toml',
