@@ -15,9 +15,12 @@
     PSScriptAnalyzer has no per-line suppression comment, so this script reads one
     of its own. An accepted finding is annotated AT THE LINE:
 
-        # pssa-ignore: PSUseDeclaredVarsMoreThanAssignments -- read on the next line;
-        # the rule does not follow ForEach-Object into the caller's scope
+        # pssa-ignore: <RuleName> -- why this one is accepted
         & git -C $dest remote get-url origin | ForEach-Object { $actual = $_ }
+
+    ...with a real rule name in place of <RuleName>. The example is written with a
+    placeholder on purpose: this script scans itself, so a literal one here would be
+    read as an annotation, match no finding, and be reported stale.
 
     The annotation may sit on the flagged line as a trailing comment or on the line
     immediately above it. It must name the rule -- there is no blanket form -- and
