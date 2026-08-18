@@ -6,6 +6,8 @@
 # independent -- a red lint must not hide which of the two broke, and vice versa.
 # `types` is separate from `lint` for that same reason, and because unlike ruff
 # the type checker resolves imports from the environment, so it needs the deps.
+# `pssa` is separate for the same reason again, and because it needs Windows: the
+# PowerShell rule set is evaluated by PSScriptAnalyzer under 5.1, not by ruff.
 #
 # Lint is BLOCKING and, unlike MAST_common and MAST_unit, currently GREEN: the
 # debt (195 findings, 27 files unformatted) was cleared when the fleet ruff
@@ -162,6 +164,29 @@ jobs:
 
       - name: Lint
         run: ruff check .
+
+  pssa:
+    name: pssa
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: PSScriptAnalyzer
+        # One entry point shared with a workstation, so "green" means the same in
+        # both places -- the same reason `lint` runs the pinned ruff rather than a
+        # hand-rolled command. The script owns the version pin (1.25.0) and scans
+        # `git ls-files`, not -Recurse: staging\ holds copies of every provider
+        # script and would double-count the tree.
+        #
+        # Landed GREEN, like lint and types: 742 findings at adoption became zero
+        # unaccepted -- 39 real cleanups, six style families and one deferred rule
+        # excluded with a reason each in PSScriptAnalyzerSettings.psd1, five
+        # credential findings suppressed at the site, three false positives in
+        # tools/pssa-baseline.txt. What is deferred is PSAvoidUsingEmptyCatchBlock
+        # (113 sites), tracked separately.
+        shell: powershell
+        run: .\tools\invoke-psscriptanalyzer.ps1
 
   types:
     name: types

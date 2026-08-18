@@ -313,6 +313,7 @@ basedpyright                                                     # type check
 ```powershell
 Import-Module Pester -RequiredVersion 3.4.0 -Force                # NOT a bare Import-Module
 Invoke-Pester -Path server\tests
+.\tools\invoke-psscriptanalyzer.ps1                               # PowerShell lint
 ```
 
 Four things are easy to get wrong, and CI (`.github/workflows/ci.yml`) encodes all four:
@@ -334,6 +335,19 @@ Lint uses the fleet-wide `ruff.toml` (shared with MAST_common and MAST_unit) wit
 `ruff` pinned in `requirements-dev.txt` — the pin matters for the default rule set, not
 only formatter output. CI also parse-checks every `.ps1`/`.psm1`; see
 `docs/decisions/2026-08-11-ci-is-three-jobs-and-lands-green.md`.
+
+PowerShell is linted by **PSScriptAnalyzer**, pinned to 1.25.0 by
+`tools/install-psscriptanalyzer.ps1` (which owns both install paths -- `Install-Module`
+on CI, a direct `.nupkg` fetch where PowerShellGet's NuGet bootstrap fails behind a
+proxy). Rules live in `PSScriptAnalyzerSettings.psd1`; run it with
+`tools/invoke-psscriptanalyzer.ps1`, the same entry point CI uses. Blocking and green.
+
+Accepted findings are declared **at the site** with
+`[Diagnostics.CodeAnalysis.SuppressMessageAttribute]` and a justification, because
+PSScriptAnalyzer has no per-line suppression comment; where a finding has no function
+or param block to attach one to it goes in `tools/pssa-baseline.txt` instead. Why these
+rules and not others, and which two were excluded for finding nothing real:
+`docs/decisions/2026-08-18-powershell-is-linted-by-psscriptanalyzer.md`.
 
 Types are checked by `basedpyright` (pyright plus a stricter default rule set), pinned in
 `requirements-dev.txt` and configured by `pyrightconfig.json` at the repo root:

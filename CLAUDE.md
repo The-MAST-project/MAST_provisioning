@@ -159,6 +159,32 @@ decision record. The ticket carries the discussion; the PR carries the ratified 
 > Provisional here, pending promotion to `mast-claude-config` -- PR conventions are
 > genuinely cross-repo, and this is being proven on one repo first.
 
+## PowerShell is linted, and suppression is not a comment
+
+`PSScriptAnalyzer` is a **blocking, green** CI job (`pssa`). Run it exactly as CI does:
+
+```powershell
+.\tools\invoke-psscriptanalyzer.ps1
+```
+
+The pin (1.25.0) and both install paths live in `tools/install-psscriptanalyzer.ps1`;
+the rule set and every exclusion's reason live in `PSScriptAnalyzerSettings.psd1`.
+Rationale: `docs/decisions/2026-08-18-powershell-is-linted-by-psscriptanalyzer.md`.
+
+- **There is no `# noqa` for PowerShell.** Accept a finding with
+  `[Diagnostics.CodeAnalysis.SuppressMessageAttribute('<Rule>', '<Target>', Justification = '...')]`
+  on the function or param block, and **always** write the justification. Only when
+  there is nothing to attach it to does the finding go in `tools/pssa-baseline.txt`,
+  with a reason above it.
+- **Do not widen `ExcludeRules` to clear a finding.** That stops enforcing the rule
+  on every file including new ones. Two rules ARE excluded there, each because it was
+  measured to report nothing real -- not because its findings were inconvenient.
+- **`Write-Host` is correct in provider and client scripts** and its rule is off:
+  their output is the operator interface, not a pipeline.
+- **New code lands green**, and a finding is read before it is suppressed. The
+  adoption's own numbers say why: of eight rules kept, one produced 12 findings that
+  were all wrong and another 19 that contained no defect.
+
 ## Python is type-checked, and the checker is pyright
 
 `basedpyright` (pyright plus a stricter default rule set) is a **blocking, green** CI job.
