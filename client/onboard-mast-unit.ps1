@@ -138,6 +138,7 @@ function Send-ProvServerLine {
         } -ArgumentList $HostName, $Line -ErrorAction Stop
     } catch {
         # Don't let mirror failures break onboarding
+        Write-Verbose "ignored: $($_.Exception.Message)"
     }
 }
 

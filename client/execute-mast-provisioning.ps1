@@ -115,7 +115,7 @@ if (Test-Path ${leasePath}) {
     }
     if (${existing}) {
         ${expiresUtc} = $null
-        try { ${expiresUtc} = [datetime]::Parse(${existing}.expires_utc).ToUniversalTime() } catch {}
+        try { ${expiresUtc} = [datetime]::Parse(${existing}.expires_utc).ToUniversalTime() } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
         ${pidAlive} = $false
         if (${existing}.PSObject.Properties.Name -contains 'pid' -and ${existing}.pid) {
             ${pidAlive} = [bool](Get-Process -Id ${existing}.pid -ErrorAction SilentlyContinue)
@@ -270,7 +270,7 @@ try {
                 ${smokeTestFile} = Join-Path ${smokeDir} "$($cmd.module)-smoke.txt"
                 ${existingBody} = $null
                 if (Test-Path -LiteralPath ${smokeTestFile}) {
-                    try { ${existingBody} = Get-Content -LiteralPath ${smokeTestFile} -Raw -ErrorAction Stop } catch {}
+                    try { ${existingBody} = Get-Content -LiteralPath ${smokeTestFile} -Raw -ErrorAction Stop } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
                 }
                 if ([string]::IsNullOrWhiteSpace(${existingBody})) {
                     Set-Content -Path ${smokeTestFile} -Value "success" -Force
@@ -400,7 +400,7 @@ finally {
     try {
         if (Test-Path ${leasePath}) {
             ${current} = $null
-            try { ${current} = Get-Content ${leasePath} -Raw -ErrorAction Stop | ConvertFrom-Json } catch {}
+            try { ${current} = Get-Content ${leasePath} -Raw -ErrorAction Stop | ConvertFrom-Json } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
             if (${current} -and ${current}.run_id -eq ${RunId}) {
                 Remove-Item -Force ${leasePath} -ErrorAction SilentlyContinue
                 Write-Log "LEASE_RELEASE run_id=${RunId}"
@@ -466,7 +466,7 @@ function Write-TeardownBreadcrumb {
         ${ts} = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
         ${line} = "${ts} | TEARDOWN ${Stage} pid=$PID"
         Add-Content -LiteralPath ${logFile} -Value ${line} -ErrorAction SilentlyContinue
-    } catch {}
+    } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
 }
 
 Write-TeardownBreadcrumb -Stage 'reached_exit_point'

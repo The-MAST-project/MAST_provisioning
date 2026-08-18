@@ -59,11 +59,11 @@ try {
         }
         ${finished} = ${p}.WaitForExit(${timeoutMs})
         if (-not ${finished}) {
-            try { & taskkill.exe /T /F /PID $(${p}.Id) 2>$null | Out-Null } catch {}
-            try { ${p}.Kill() } catch {}
+            try { & taskkill.exe /T /F /PID $(${p}.Id) 2>$null | Out-Null } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
+            try { ${p}.Kill() } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
             throw ("VS Code installer timed out after 30 minutes (process tree killed). See Inno log: {0}" -f ${innoLog})
         }
-        try { ${p}.Refresh() } catch {}
+        try { ${p}.Refresh() } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
         Write-VscodeLog ("VS Code setup exit code: {0}" -f ${p}.ExitCode)
 
         Start-Sleep -Seconds 5
@@ -110,11 +110,11 @@ try {
             -RedirectStandardOutput ${OutLog} -RedirectStandardError ("{0}.err" -f ${OutLog})
         if (-not ${proc}) { throw ("Start-Process returned no object for code CLI ({0})" -f ${Tag}) }
         if (-not ${proc}.WaitForExit(${extTimeoutMs})) {
-            try { & taskkill.exe /T /F /PID $(${proc}.Id) 2>$null | Out-Null } catch {}
-            try { ${proc}.Kill() } catch {}
+            try { & taskkill.exe /T /F /PID $(${proc}.Id) 2>$null | Out-Null } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
+            try { ${proc}.Kill() } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
             throw ("VS Code CLI timed out ({0}); process tree killed. See {1}" -f ${Tag}, ${OutLog})
         }
-        try { ${proc}.Refresh() } catch {}
+        try { ${proc}.Refresh() } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
         return ${proc}.ExitCode
     }
 

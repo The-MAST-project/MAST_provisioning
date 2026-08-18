@@ -19,15 +19,15 @@ Set-ItemProperty -Path ${au} -Name 'NoAutoRebootWithLoggedOnUsers' -Value 1 -Typ
 #    likely be denied and it may re-enable itself) -- we still try; the daily re-run
 #    corrects drift. wuauserv/UsoSvc disable is what actually blocks scans in practice.
 foreach (${svc} in 'wuauserv', 'UsoSvc', 'WaaSMedicSvc', 'uhssvc') {
-    try { Stop-Service -Name ${svc} -Force -ErrorAction SilentlyContinue } catch {}
-    try { Set-Service  -Name ${svc} -StartupType Disabled -ErrorAction SilentlyContinue } catch {}
+    try { Stop-Service -Name ${svc} -Force -ErrorAction SilentlyContinue } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
+    try { Set-Service  -Name ${svc} -StartupType Disabled -ErrorAction SilentlyContinue } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
 }
 
 # 3) Disable the scheduled tasks that trigger scans/downloads/installs/reboots. The OS
 #    can re-create them, so this is re-asserted on every run too.
 foreach (${p} in '\Microsoft\Windows\UpdateOrchestrator\', '\Microsoft\Windows\WindowsUpdate\') {
     foreach (${t} in (Get-ScheduledTask -TaskPath ${p} -ErrorAction SilentlyContinue)) {
-        try { Disable-ScheduledTask -TaskName ${t}.TaskName -TaskPath ${t}.TaskPath -ErrorAction SilentlyContinue | Out-Null } catch {}
+        try { Disable-ScheduledTask -TaskName ${t}.TaskName -TaskPath ${t}.TaskPath -ErrorAction SilentlyContinue | Out-Null } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
     }
 }
 

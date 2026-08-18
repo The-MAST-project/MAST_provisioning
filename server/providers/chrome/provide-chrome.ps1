@@ -51,7 +51,7 @@ try {
     ${msiArgs} = @('/i', ${installerPath}, '/qn', '/norestart', '/L*v', ${msiLog})
     Write-ChromeLog ("Installing Chrome Enterprise MSI: msiexec.exe {0}" -f (${msiArgs} -join ' '))
     ${p} = Start-Process -FilePath 'msiexec.exe' -ArgumentList ${msiArgs} -PassThru -Wait -WindowStyle Hidden
-    try { ${p}.Refresh() } catch {}
+    try { ${p}.Refresh() } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
     ${exit} = ${p}.ExitCode
     Write-ChromeLog ("msiexec exited. ExitCode={0}" -f ${exit})
     # 0 = success; 3010 = success, reboot required. A $null ExitCode is treated as

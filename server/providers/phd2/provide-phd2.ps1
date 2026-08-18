@@ -47,12 +47,12 @@ try {
             -PassThru -WindowStyle Hidden
         Write-Phd2Log ("Installer PID: {0}; waiting up to 300s..." -f ${p}.Id)
         ${finished} = ${p}.WaitForExit(300000)
-        try { ${p}.Refresh() } catch {}
+        try { ${p}.Refresh() } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
         if (-not ${finished}) {
             # Inno relaunches an elevated child that the parent handle alone does
             # not cover; kill the whole tree so a wedged installer cannot hang the run.
-            try { & taskkill.exe /T /F /PID $(${p}.Id) 2>$null | Out-Null } catch {}
-            try { ${p}.Kill() } catch {}
+            try { & taskkill.exe /T /F /PID $(${p}.Id) 2>$null | Out-Null } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
+            try { ${p}.Kill() } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
             throw "PHD2 installer timed out after 300s (process tree killed)."
         }
         Write-Phd2Log ("PHD2 installer exited. ExitCode={0}" -f ${p}.ExitCode)

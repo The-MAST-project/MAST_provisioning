@@ -21,7 +21,7 @@ function Start-ProvisionLog {
 
 function Stop-ProvisionLog {
   [CmdletBinding()] param()
-  try { Stop-Transcript | Out-Null } catch {}
+  try { Stop-Transcript | Out-Null } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
 }
 
 # ---------------------------
@@ -92,7 +92,7 @@ function Invoke-Exe {
   )
   Write-Verbose "${Tag}: ${FilePath} ${Arguments}"
   ${p} = Start-Process -FilePath ${FilePath} -ArgumentList ${Arguments} -PassThru -Wait -WindowStyle Hidden
-  try { ${p}.Refresh() } catch {}
+  try { ${p}.Refresh() } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
   if ($null -eq ${p}.ExitCode) {
     throw "${Tag}: missing ExitCode after Wait (treat as failure)"
   }
@@ -167,7 +167,7 @@ function Read-SimpleCsv2 {
   ${first} = ${content}[0]
   ${hasHeader} = (${first} -match ',') -and (-not (${first} -match '\.lic,')) # crude heuristic
   if (${hasHeader}) {
-    try { return (Import-Csv -Path ${Path}) } catch {}
+    try { return (Import-Csv -Path ${Path}) } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
   }
   # manual
   ${rows} = @()
@@ -324,7 +324,7 @@ function Invoke-ExeAsSystem {
     if (${st}.State -eq 'Running') {
       ${timedOut} = $true
       Write-Warning ("Invoke-ExeAsSystem: task still Running after {0}m; killing." -f ${TimeoutMinutes})
-      try { Stop-ScheduledTask -TaskName ${taskName} -ErrorAction SilentlyContinue } catch {}
+      try { Stop-ScheduledTask -TaskName ${taskName} -ErrorAction SilentlyContinue } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
       # Give the process a moment to actually exit + flush its redirected
       # streams to disk before we read them. Without this the stdout file
       # is often empty even though the process has been writing to it.
@@ -354,7 +354,7 @@ function Invoke-ExeAsSystem {
     # inner exe's exit code in single-command (/c) mode.
     return [long](Get-ScheduledTaskInfo -TaskName ${taskName}).LastTaskResult
   } finally {
-    try { Stop-ScheduledTask -TaskName ${taskName} -ErrorAction SilentlyContinue } catch {}
+    try { Stop-ScheduledTask -TaskName ${taskName} -ErrorAction SilentlyContinue } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
     Start-Sleep -Milliseconds 500
     Unregister-ScheduledTask -TaskName ${taskName} -Confirm:$false -ErrorAction SilentlyContinue
     # Leave stdout/stderr logs on disk for post-mortem (operator can grep

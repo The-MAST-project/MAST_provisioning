@@ -77,7 +77,7 @@ Set-Content -LiteralPath ${verifyLog} -Encoding UTF8 `
 try {
     Set-Service -Name w32time -StartupType Automatic -ErrorAction SilentlyContinue
     Start-Service -Name w32time -ErrorAction SilentlyContinue
-} catch {}
+} catch { Write-Verbose "ignored: $($_.Exception.Message)" }
 
 # --- Discover the provisioning server (its NTP server) for the one-time sync ---
 # The unit holds an SMB connection to the prov server from the mast-staging pull,
@@ -90,7 +90,7 @@ if (-not ${ProvServer}) {
             Where-Object { $_.ShareName -eq 'mast-shared' -or $_.ShareName -eq 'mast-staging' } |
             Select-Object -First 1
         if (${conn}) { ${ProvServer} = ${conn}.ServerName }
-    } catch {}
+    } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
 }
 
 # --- Build the ordered priority tiers (skip blanks) ---------------------------

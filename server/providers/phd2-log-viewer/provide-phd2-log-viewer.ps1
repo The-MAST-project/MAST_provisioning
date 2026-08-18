@@ -77,7 +77,7 @@ try {
     ${p} = Start-Process -FilePath ${installerPath} `
         -ArgumentList @('/VERYSILENT', '/SP-', '/SUPPRESSMSGBOXES', '/NORESTART', "/LOG=`"${innoLog}`"") `
         -PassThru -Wait -WindowStyle Hidden
-    try { ${p}.Refresh() } catch {}
+    try { ${p}.Refresh() } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
     ${rc} = ${p}.ExitCode
     Write-Host ("PHDLogView installer exit code: {0}" -f ${rc})
     if (Test-Path -LiteralPath ${innoLog}) {

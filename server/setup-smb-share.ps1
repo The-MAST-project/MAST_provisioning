@@ -106,7 +106,7 @@ if (-not $existingUser) {
 # Remove from Users group (least-privilege hardening).
 try {
     Remove-LocalGroupMember -Group "Users" -Member $smbUser -ErrorAction SilentlyContinue
-} catch {}
+} catch { Write-Verbose "ignored: $($_.Exception.Message)" }
 
 # ---------------------------------------------------------------------------
 # SMB share

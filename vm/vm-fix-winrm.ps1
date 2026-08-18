@@ -23,7 +23,7 @@ try {
 }
 try {
   Get-Service WinRM | Format-Table Status, StartType, Name -AutoSize
-} catch {}
+} catch { Write-Verbose "ignored: $($_.Exception.Message)" }
 
 Step "Quickconfig (rebuild default HTTP listener + firewall)"
 try {
@@ -62,7 +62,7 @@ $cert = $null
 $activeName = $env:COMPUTERNAME
 try {
   $activeName = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\ComputerName\ActiveComputerName').ComputerName
-} catch {}
+} catch { Write-Verbose "ignored: $($_.Exception.Message)" }
 try {
   $cert = Get-ChildItem Cert:\LocalMachine\My | Where-Object {
     if (-not $_.HasPrivateKey) { return $false }
@@ -71,11 +71,11 @@ try {
       try {
         [void][System.Net.IPAddress]::Parse($u)
         return $true
-      } catch {}
+      } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
     }
     return $false
   } | Sort-Object NotAfter -Descending | Select-Object -First 1
-} catch {}
+} catch { Write-Verbose "ignored: $($_.Exception.Message)" }
 
 if (-not $cert) {
   Write-Host "ERROR: no suitable cert found for this machine name or IPv4 in Cert:\LocalMachine\My" -ForegroundColor Red
@@ -86,7 +86,7 @@ if (-not $cert) {
   try {
     # Best-effort: delete existing HTTPS listeners (ignore failures)
     & winrm.cmd delete winrm/config/Listener?Address=*+Transport=HTTPS 2>$null | Out-Null
-  } catch {}
+  } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
 
   try {
     # winrm.cmd expects: @{KEY="VALUE";KEY="VALUE"}
@@ -98,8 +98,8 @@ if (-not $cert) {
 }
 
 Step "Show listeners + service status"
-try { & winrm.cmd enumerate winrm/config/listener } catch {}
-try { Get-Service WinRM | Format-Table Status, StartType -AutoSize } catch {}
+try { & winrm.cmd enumerate winrm/config/listener } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
+try { Get-Service WinRM | Format-Table Status, StartType -AutoSize } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
 
 Write-Host ""
 Write-Host "Done. If the hostname rename is pending, reboot later to apply it." -ForegroundColor Green

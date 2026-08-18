@@ -42,9 +42,9 @@ try {
         -RedirectStandardOutput ${stdoutLog} -RedirectStandardError ${stderrLog}
     Write-WiresharkLog ("Installer PID: {0}; waiting up to 300s..." -f ${p}.Id)
     ${finished} = ${p}.WaitForExit(300000)
-    try { ${p}.Refresh() } catch {}
+    try { ${p}.Refresh() } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
     if (-not ${finished}) {
-        try { ${p}.Kill() } catch {}
+        try { ${p}.Kill() } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
         throw "Wireshark installer timed out after 300s (process killed)."
     }
     Write-WiresharkLog ("Wireshark installer exited. ExitCode={0}" -f ${p}.ExitCode)

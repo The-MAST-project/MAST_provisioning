@@ -109,7 +109,7 @@ try {
         Start-Sleep -Seconds 3
         try {
             if (-not ${p}.HasExited) { ${p}.Kill() }
-        } catch {}
+        } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
         Add-DiagResult -Name 'ASCOM-diagnostics' -Ok ${started} -Detail ("exe={0} pid={1}" -f ${ascomDiagExe}, $(if (${started}) { ${p}.Id } else { 'none' }))
     }
 } catch {
@@ -137,7 +137,7 @@ try {
         ${p} = Start-Process -FilePath ${asiExe} -PassThru -WindowStyle Hidden -ErrorAction Stop
         ${started} = $null -ne ${p} -and ${p}.Id -gt 0
         Start-Sleep -Seconds 5
-        try { if (-not ${p}.HasExited) { ${p}.Kill() } } catch {}
+        try { if (-not ${p}.HasExited) { ${p}.Kill() } } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
         Add-DiagResult -Name 'ASIStudio-launch' -Ok ${started} -Detail ("exe={0} pid={1}" -f ${asiExe}, $(if (${started}) { ${p}.Id } else { 'none' }))
     }
 } catch {
@@ -165,7 +165,7 @@ try {
         ${p} = Start-Process -FilePath ${pwiExe} -PassThru -WindowStyle Hidden -ErrorAction Stop
         ${started} = $null -ne ${p} -and ${p}.Id -gt 0
         Start-Sleep -Seconds 5
-        try { if (-not ${p}.HasExited) { ${p}.Kill() } } catch {}
+        try { if (-not ${p}.HasExited) { ${p}.Kill() } } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
         Add-DiagResult -Name 'PWI4-launch' -Ok ${started} -Detail ("exe={0} pid={1}" -f ${pwiExe}, $(if (${started}) { ${p}.Id } else { 'none' }))
     }
 } catch {
@@ -197,7 +197,7 @@ try {
         ${p} = Start-Process -FilePath ${xlabExe} -PassThru -WindowStyle Hidden -ErrorAction Stop
         ${started} = $null -ne ${p} -and ${p}.Id -gt 0
         Start-Sleep -Seconds 5
-        try { if (-not ${p}.HasExited) { ${p}.Kill() } } catch {}
+        try { if (-not ${p}.HasExited) { ${p}.Kill() } } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
         Add-DiagResult -Name 'XILabs-launch' -Ok ${started} -Detail ("exe={0} pid={1}" -f ${xlabExe}, $(if (${started}) { ${p}.Id } else { 'none' }))
     }
     } # end else (stage provisioned)
@@ -221,7 +221,7 @@ try {
             ${tcpClient}.EndConnect(${ar})
             ${tcpOk} = $true
         }
-    } catch {}
+    } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
     finally { ${tcpClient}.Close() }
     # PHD2 only binds its JSON-RPC port after connecting to a camera/guide scope, so
     # an unbound port means "no observing session right now" -- which is the NORMAL

@@ -37,11 +37,11 @@ function Invoke-ZwoInstaller {
     if (-not ${finished}) {
         # NSIS/Inno may spawn children the parent handle alone does not cover;
         # kill the whole tree so a wedged installer cannot hang the run.
-        try { & taskkill.exe /T /F /PID $(${p}.Id) 2>$null | Out-Null } catch {}
-        try { ${p}.Kill() } catch {}
+        try { & taskkill.exe /T /F /PID $(${p}.Id) 2>$null | Out-Null } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
+        try { ${p}.Kill() } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
         throw ("{0} timed out after {1}s (process tree killed)." -f ${Label}, ${TimeoutSec})
     }
-    try { ${p}.Refresh() } catch {}
+    try { ${p}.Refresh() } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
     Write-ZwoLog ("{0} exit code: {1}" -f ${Label}, ${p}.ExitCode)
     if ($null -ne ${p}.ExitCode -and ${p}.ExitCode -ne 0) {
         throw ("{0} failed with exit code {1}." -f ${Label}, ${p}.ExitCode)

@@ -60,7 +60,7 @@ try {
 
     Write-Host ("Installing Git for Windows from {0} ..." -f ${installerPath})
     ${p} = Start-Process -FilePath ${installerPath} -ArgumentList @('/VERYSILENT', '/NORESTART') -PassThru -Wait -WindowStyle Hidden
-    try { ${p}.Refresh() } catch {}
+    try { ${p}.Refresh() } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
     if ($null -ne ${p}.ExitCode -and ${p}.ExitCode -ne 0) {
         throw ("Git installer exited with code {0}" -f ${p}.ExitCode)
     }

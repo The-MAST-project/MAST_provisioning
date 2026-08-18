@@ -150,7 +150,7 @@ function Stop-ProcessTree {
     # Kill leaves first
     [array]::Reverse(${order})
     foreach (${pidToKill} in ${order}) {
-      try { Stop-Process -Id ${pidToKill} -Force -ErrorAction SilentlyContinue } catch {}
+      try { Stop-Process -Id ${pidToKill} -Force -ErrorAction SilentlyContinue } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
     }
   } catch {
     Write-Warning "Stop-ProcessTree: $($_.Exception.Message)"
@@ -265,15 +265,15 @@ function Install-Exe {
           Stop-ProcessTree -RootPid ${p}.Id
           Start-Sleep -Seconds 2
           if (${SuccessProbe}) {
-            try { if (& ${SuccessProbe}) { return $true } } catch {}
+            try { if (& ${SuccessProbe}) { return $true } } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
           }
           break
         }
         Start-Sleep -Seconds 2
       }
-      try { ${p}.Refresh() } catch {}
+      try { ${p}.Refresh() } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
       ${exit} = $null
-      try { ${exit} = ${p}.ExitCode } catch {}
+      try { ${exit} = ${p}.ExitCode } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
       if ($null -eq ${exit} -or ${exit} -eq 0) { return $true }
       Write-Warning "${Tag}: exit code ${exit} with args '${a}'"
     } catch {
@@ -352,7 +352,7 @@ try {
       Write-Host "NoMachine installed under: ${nxInstallDir}"
     }
   }
-} catch { }
+} catch { Write-Verbose "ignored: $($_.Exception.Message)" }
 
 Write-Host "NoMachine provisioning finished. Log: ${LogFile}"
 Stop-Transcript | Out-Null

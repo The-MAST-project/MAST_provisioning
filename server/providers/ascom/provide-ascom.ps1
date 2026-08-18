@@ -162,7 +162,7 @@ function Invoke-Proc {
   while (-not $p.WaitForExit($HeartbeatSeconds * 1000)) {
     Write-Host ("[{0}] still running, elapsed={1:N0}s, pid={2}" -f $LogTag, $sw.Elapsed.TotalSeconds, $p.Id)
   }
-  try { $p.Refresh() } catch {}
+  try { $p.Refresh() } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
   Write-Host ("[{0}] exited with code {1} after {2:N0}s" -f $LogTag, $p.ExitCode, $sw.Elapsed.TotalSeconds)
   $stdOut = (Get-Content -LiteralPath $stdoutPath -Raw -ErrorAction SilentlyContinue)
   $stdErr = (Get-Content -LiteralPath $stderrPath -Raw -ErrorAction SilentlyContinue)

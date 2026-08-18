@@ -143,7 +143,7 @@ function Invoke-MastChildCommandLine {
         }
         if (${argStr} -ne '') { ${startArgs}['ArgumentList'] = ${argStr} }
         ${p} = Start-Process @startArgs
-        try { ${p}.Refresh() } catch {}
+        try { ${p}.Refresh() } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
         ${merged} = New-Object System.Collections.ArrayList
         if (Test-Path -LiteralPath ${so}) {
             ${null} = ${merged}.AddRange(@(Get-Content -LiteralPath ${so}))
