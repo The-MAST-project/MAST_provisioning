@@ -131,7 +131,7 @@ try {
     Write-Host ("Running ${setupPath} offline for packages: ${Packages} (cache: {0})" -f ${pkgCache})
     ${proc} = Start-Process -FilePath ${setupPath} -ArgumentList ${setupArgs} `
         -Wait -PassThru -NoNewWindow
-    try { ${proc}.Refresh() } catch {}
+    try { ${proc}.Refresh() } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
     ${exit} = ${proc}.ExitCode
     if ($null -eq ${exit}) {
         throw "setup-x86_64.exe did not report an exit code (treating as failure)."

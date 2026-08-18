@@ -92,7 +92,7 @@ if (-not (Test-Path -Path $Top -PathType Container)) {
 ${OutDrive} = Split-Path -Qualifier ${OutRoot}
 ${minFreeGb} = 20
 ${freeBytes} = $null
-try { ${freeBytes} = (Get-PSDrive -Name (${OutDrive}.TrimEnd(':')) -ErrorAction Stop).Free } catch { }
+try { ${freeBytes} = (Get-PSDrive -Name (${OutDrive}.TrimEnd(':')) -ErrorAction Stop).Free } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
 if ($null -eq ${freeBytes}) {
     Write-Warning ("[disk] could not resolve staging drive {0}; skipping free-space check." -f ${OutDrive})
 } else {
@@ -212,7 +212,7 @@ function New-LinkOrCopy {
 
     # Prefer junction for directories (no Developer Mode needed)
     if ($isDir) {
-        try { cmd /c "mklink /J `"$LinkPath`" `"$Target`"" | Out-Null; return } catch {}
+        try { cmd /c "mklink /J `"$LinkPath`" `"$Target`"" | Out-Null; return } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
     } else {
         # Try hardlink for files (same volume required)
         # A hardlink shares the target's single ACL. The asset-cache files have
@@ -226,7 +226,7 @@ function New-LinkOrCopy {
                 cmd /c "icacls `"$LinkPath`" /inheritance:e" | Out-Null
                 return
             }
-        } catch {}
+        } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
     }
 
     # Try symlink
@@ -237,7 +237,7 @@ function New-LinkOrCopy {
             New-Item -ItemType SymbolicLink -Path $LinkPath -Target $Target -Force | Out-Null
         }
         return
-    } catch {}
+    } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
 
     # Fallback: copy (may fail for large files on VirtFS - non-fatal, orchestrator sources directly)
     if ($isDir) {

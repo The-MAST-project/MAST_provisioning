@@ -54,13 +54,13 @@ function Invoke-Native {
     ${stderrTask} = ${proc}.StandardError.ReadToEndAsync()
     ${timedOut} = -not ${proc}.WaitForExit(${TimeoutMs})
     if (${timedOut}) {
-        try { & taskkill.exe /T /F /PID $(${proc}.Id) 2>$null | Out-Null } catch {}
-        try { ${proc}.Kill() } catch {}
+        try { & taskkill.exe /T /F /PID $(${proc}.Id) 2>$null | Out-Null } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
+        try { ${proc}.Kill() } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
     } else {
         ${proc}.WaitForExit()   # drain the async readers before touching ExitCode
     }
-    try { Set-Content -LiteralPath ${out} -Encoding UTF8 -Value ${stdoutTask}.Result } catch {}
-    try { Set-Content -LiteralPath ("{0}.err" -f ${out}) -Encoding UTF8 -Value ${stderrTask}.Result } catch {}
+    try { Set-Content -LiteralPath ${out} -Encoding UTF8 -Value ${stdoutTask}.Result } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
+    try { Set-Content -LiteralPath ("{0}.err" -f ${out}) -Encoding UTF8 -Value ${stderrTask}.Result } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
     if (${timedOut}) {
         throw ("{0} timed out; process tree killed. See {1}" -f ${Tag}, ${out})
     }

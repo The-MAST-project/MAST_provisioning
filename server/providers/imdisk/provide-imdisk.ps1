@@ -152,7 +152,7 @@ function New-SparseIndexImage {
     # mounts (immediate + boot task) use -t vm. Do not add -t vm here.
     ${mountArgs} = @('-a', '-m', ${scratchVol}, '-s', ${SizeArg}, '-f', ${ImagePath})
     ${mp} = Start-Process -FilePath ${ImdiskExe} -ArgumentList ${mountArgs} -PassThru -Wait -WindowStyle Hidden
-    try { ${mp}.Refresh() } catch {}
+    try { ${mp}.Refresh() } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
     if ($null -eq ${mp}.ExitCode -or ${mp}.ExitCode -ne 0) {
         throw ("imdisk -a -m {0} -s {1} (scratch build mount) failed (exit {2})." -f ${scratchVol}, ${SizeArg}, ${mp}.ExitCode)
     }
@@ -169,7 +169,7 @@ function New-SparseIndexImage {
         Write-ImDiskLog ("Quick-formatting {0} as NTFS (label {1})..." -f ${scratchVol}, ${IndexSubdir})
         ${fmtArgs} = @(${scratchVol}, '/FS:NTFS', '/Q', '/Y', ('/V:{0}' -f ${IndexSubdir}))
         ${fp} = Start-Process -FilePath 'format.com' -ArgumentList ${fmtArgs} -PassThru -Wait -WindowStyle Hidden
-        try { ${fp}.Refresh() } catch {}
+        try { ${fp}.Refresh() } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
         if ($null -eq ${fp}.ExitCode -or ${fp}.ExitCode -ne 0) {
             throw ("format {0} /FS:NTFS /Q failed (exit {1})." -f ${scratchVol}, ${fp}.ExitCode)
         }
@@ -362,7 +362,7 @@ try {
         ${mountErrFile} = Join-Path ${env:TEMP} 'imdisk-mount-stderr.txt'
         ${mp} = Start-Process -FilePath ${imdiskExe} -ArgumentList ${mountArgs} `
             -PassThru -Wait -WindowStyle Hidden -RedirectStandardError ${mountErrFile}
-        try { ${mp}.Refresh() } catch {}
+        try { ${mp}.Refresh() } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
         ${mountExit} = ${mp}.ExitCode
         ${mountErr} = ''
         if (Test-Path -LiteralPath ${mountErrFile}) {

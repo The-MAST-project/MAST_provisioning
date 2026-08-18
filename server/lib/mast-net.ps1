@@ -25,7 +25,7 @@ function Disable-WinINetCertRevocationCheck {
     $k = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings'
     if (-not (Test-Path $k)) { New-Item -Path $k -Force | Out-Null }
     $prev = $null
-    try { $prev = (Get-ItemProperty -Path $k -Name 'CertificateRevocation' -ErrorAction Stop).CertificateRevocation } catch {}
+    try { $prev = (Get-ItemProperty -Path $k -Name 'CertificateRevocation' -ErrorAction Stop).CertificateRevocation } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
     Set-ItemProperty -Path $k -Name 'CertificateRevocation' -Type DWord -Value 0
     return $prev
 }

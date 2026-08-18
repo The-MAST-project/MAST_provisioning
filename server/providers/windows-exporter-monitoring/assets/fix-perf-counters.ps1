@@ -141,6 +141,7 @@ try {
     $memoryWorks = $true
 } catch {
     # expected on broken systems
+    Write-Verbose "ignored: $($_.Exception.Message)"
 }
 Write-Log "Memory counter query works: $memoryWorks"
 

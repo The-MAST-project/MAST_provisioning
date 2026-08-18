@@ -21,7 +21,7 @@ $fail = @()
 $ds9Exe = Join-Path $InstallRoot 'ds9.exe'
 if (Test-Path -LiteralPath $ds9Exe) {
     $ver = ''
-    try { $ver = (Get-Item -LiteralPath $ds9Exe).VersionInfo.ProductVersion } catch { }
+    try { $ver = (Get-Item -LiteralPath $ds9Exe).VersionInfo.ProductVersion } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
     W ("ds9.exe present at {0} (ProductVersion={1})" -f $ds9Exe, $ver)
 } else {
     $fail += "ds9.exe not found at $ds9Exe"

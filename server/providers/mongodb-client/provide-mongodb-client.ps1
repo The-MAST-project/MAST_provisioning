@@ -124,7 +124,7 @@ function Invoke-MongoClientExe {
   param([string]${FilePath}, [string]${Arguments}, [int[]]${OkCodes} = @(0), [string]${Tag} = "proc")
   Write-Verbose "${Tag}: ${FilePath} ${Arguments}"
   ${p} = Start-Process -FilePath ${FilePath} -ArgumentList ${Arguments} -PassThru -Wait -WindowStyle Hidden
-  try { ${p}.Refresh() } catch {}
+  try { ${p}.Refresh() } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
   if ($null -ne ${p}.ExitCode -and ${OkCodes} -notcontains ${p}.ExitCode) {
     throw ("{0} exit code {1}" -f ${Tag}, ${p}.ExitCode)
   }
@@ -238,7 +238,7 @@ if (-not ${NoCompass}) {
   # ----- Phase 1: wait for the GUI to appear (proves extraction reached
   # the "launch the app for firstrun" stage). Do NOT kill anything here.
   while (${sw}.Elapsed.TotalSeconds -lt ${waitForGuiSec}) {
-    try { ${installer}.Refresh() } catch {}
+    try { ${installer}.Refresh() } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
     ${gui} = @(Get-Process -Name 'MongoDBCompass','Compass' -ErrorAction SilentlyContinue)
     if (${gui}.Count -gt 0) {
       ${guiAppeared}   = $true
@@ -254,7 +254,7 @@ if (-not ${NoCompass}) {
   }
   if (-not ${guiAppeared} -and -not ${installer}.HasExited) {
     Write-Warning ("  Compass GUI never appeared within {0}s; killing installer." -f ${waitForGuiSec})
-    try { Stop-Process -Id ${installer}.Id -Force -ErrorAction Stop } catch {}
+    try { Stop-Process -Id ${installer}.Id -Force -ErrorAction Stop } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
   }
 
   # ----- Phase 2: grace period. Compass's --squirrel-firstrun handler
@@ -274,7 +274,7 @@ if (-not ${NoCompass}) {
   Write-Host ("  Phase 3: kill GUI + wait for installer exit (budget={0}s)..." -f ${killBudgetSec})
   while (${sw}.Elapsed.TotalSeconds -lt (${killStartSec} + ${killBudgetSec}) -and
          ${sw}.Elapsed.TotalSeconds -lt ${overallBudgetSec}) {
-    try { ${installer}.Refresh() } catch {}
+    try { ${installer}.Refresh() } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
     ${gui} = @(Get-Process -Name 'MongoDBCompass','Compass' -ErrorAction SilentlyContinue)
     foreach (${p} in ${gui}) {
       try {
@@ -294,13 +294,13 @@ if (-not ${NoCompass}) {
 
   if (-not ${installer}.HasExited) {
     Write-Warning ("Compass installer still running at t={0:N0}s; force-killing PID={1}." -f ${sw}.Elapsed.TotalSeconds, ${installer}.Id)
-    try { Stop-Process -Id ${installer}.Id -Force -ErrorAction Stop } catch {}
+    try { Stop-Process -Id ${installer}.Id -Force -ErrorAction Stop } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
   }
 
   # Final sweep.
   Start-Sleep -Seconds 2
   foreach (${p} in @(Get-Process -Name 'MongoDBCompass','Compass' -ErrorAction SilentlyContinue)) {
-    try { Stop-Process -Id ${p}.Id -Force -ErrorAction Stop } catch {}
+    try { Stop-Process -Id ${p}.Id -Force -ErrorAction Stop } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
   }
 
   # Verification: wrapper + app dir + extracted app size + Start Menu shortcut

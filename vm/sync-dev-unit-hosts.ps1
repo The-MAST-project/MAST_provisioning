@@ -138,19 +138,20 @@ function Test-MastWinRmHttpOpen {
         $iar = $client.BeginConnect($ComputerName, 5985, $null, $null)
         $wait = $iar.AsyncWaitHandle.WaitOne($TimeoutMs, $false)
         if (-not $wait) {
-            try { $client.Close() } catch {}
+            try { $client.Close() } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
         } else {
             try {
                 $client.EndConnect($iar)
                 $ok = $true
             } catch {
-                try { $client.Close() } catch {}
+                try { $client.Close() } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
             }
             if ($ok) {
-                try { $client.Close() } catch {}
+                try { $client.Close() } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
             }
         }
     } catch {
+        Write-Verbose "ignored: $($_.Exception.Message)"
     } finally {
         $sw.Stop()
         if (-not $Quiet) {

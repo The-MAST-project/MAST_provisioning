@@ -72,7 +72,7 @@ Write-Step ("Mounting {0} read-only at {1}..." -f ${ImagePath}, ${scratchVol})
 ${mp} = Start-Process -FilePath ${imdiskExe} `
     -ArgumentList @('-a', '-m', ${scratchVol}, '-o', 'ro', '-f', ${ImagePath}) `
     -PassThru -Wait -WindowStyle Hidden
-try { ${mp}.Refresh() } catch {}
+try { ${mp}.Refresh() } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
 if ($null -eq ${mp}.ExitCode -or ${mp}.ExitCode -ne 0) {
     throw ("imdisk attach (read-only) failed (exit {0})." -f ${mp}.ExitCode)
 }

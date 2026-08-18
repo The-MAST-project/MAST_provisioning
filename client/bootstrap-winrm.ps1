@@ -263,7 +263,7 @@ function Set-MastAdaptersToDhcp {
     if ($changed -gt 0) {
         # Acquire a fresh lease before WinRM / network-profile work runs.
         Write-BootstrapMsg ("  Renewing DHCP lease on {0} adapter(s)..." -f $changed) 'DarkGray'
-        try { $null = cmd.exe /c 'ipconfig /renew' 2>&1 } catch { }
+        try { $null = cmd.exe /c 'ipconfig /renew' 2>&1 } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
     }
 }
 
@@ -335,7 +335,7 @@ try { Restart-Service nlasvc -Force } catch {}
 
     $triggers = @()
     $startup = New-ScheduledTaskTrigger -AtStartup
-    try { $startup.Delay = 'PT20S' } catch {}   # let NLA settle before re-asserting
+    try { $startup.Delay = 'PT20S' } catch { Write-Verbose "ignored: $($_.Exception.Message)" }   # let NLA settle before re-asserting
     $triggers += $startup
     try {
         # Fire on NetworkProfile "connected" (Operational event 10000) so a
@@ -355,7 +355,7 @@ try { Restart-Service nlasvc -Force } catch {}
     Write-BootstrapMsg "  Scheduled task '$taskName' registered (re-asserts Private at boot + on network change)." 'Green'
 
     # Run it once now so the current session is Private immediately.
-    try { & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $helper } catch {}
+    try { & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $helper } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
 }
 
 function Show-BootstrapUserFixNetwork {
@@ -567,7 +567,7 @@ function Sync-MastSystemTime {
                         $webUtc = [DateTime]::ParseExact($dateHeader, 'R', [System.Globalization.CultureInfo]::InvariantCulture, ([System.Globalization.DateTimeStyles]::AssumeUniversal -bor [System.Globalization.DateTimeStyles]::AdjustToUniversal))
                         break
                     }
-                } catch { }
+                } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
             }
             if ($webUtc) {
                 $delta = $webUtc - [DateTime]::UtcNow
@@ -860,7 +860,7 @@ try {
                     -TaskName $taskName -ErrorAction SilentlyContinue | Out-Null
                 Write-BootstrapMsg ("  Disabled backup task: {0}" -f $taskName) 'Green'
             }
-        } catch { }
+        } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
     }
 
     # Apply HKCU notification suppressions for the mast user.
@@ -873,7 +873,7 @@ try {
                 $p = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\$sid"
                 if (Test-Path $p) { (Get-ItemProperty -Path $p).ProfileImagePath } else { '' }
             })
-    } catch { }
+    } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
 
     $hiveLoaded = $false
     $hivePath = ''
@@ -883,7 +883,7 @@ try {
         try {
             & reg.exe load $hiveKey $hivePath 2>&1 | Out-Null
             if ($LASTEXITCODE -eq 0) { $hiveLoaded = $true }
-        } catch { }
+        } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
     }
 
     # Helper: set a DWORD in either HKU hive (if loaded) or HKCU (if running as mast already)
@@ -916,7 +916,7 @@ try {
     if ($hiveLoaded) {
         try {
             & reg.exe unload 'HKU\MAST_BOOTSTRAP_HIVE' 2>&1 | Out-Null
-        } catch { }
+        } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
     }
 
     Write-BootstrapMsg '  Windows popup/notification suppressions applied.' 'Green'
@@ -986,7 +986,7 @@ try {
                 $intlHiveTargets += @{ Label = "mast user ($MastUser)"; Dat = $mastDat; Key = 'MAST_INTL_MAST' }
             }
         }
-    } catch { }
+    } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
     if (-not ($intlHiveTargets | Where-Object { $_.Key -eq 'MAST_INTL_MAST' })) {
         Write-BootstrapMsg "  mast profile not created yet; it will inherit en-US from the Default-user template at first login." 'DarkGray'
     }
@@ -996,7 +996,7 @@ try {
         try {
             & reg.exe load ("HKU\{0}" -f $h.Key) $h.Dat 2>&1 | Out-Null
             if ($LASTEXITCODE -eq 0) { $loaded = $true }
-        } catch { }
+        } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
         if (-not $loaded) {
             Write-BootstrapMsg ("  WARN: could not load {0} hive ({1}); skipping." -f $h.Label, $h.Dat) 'Yellow'
             continue
@@ -1009,7 +1009,7 @@ try {
         } finally {
             # Drop our references before unloading or reg.exe reports the hive busy.
             [System.GC]::Collect()
-            try { & reg.exe unload ("HKU\{0}" -f $h.Key) 2>&1 | Out-Null } catch { }
+            try { & reg.exe unload ("HKU\{0}" -f $h.Key) 2>&1 | Out-Null } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
         }
     }
     Write-BootstrapMsg ("  en-US regional format applied to {0} user scope(s)." -f $intlScopes) 'Green'
@@ -1152,7 +1152,7 @@ try {
             try {
                 $p = Get-NetConnectionProfile -InterfaceIndex $a.ifIndex -ErrorAction Stop
                 Set-NetConnectionProfile -InputObject $p -NetworkCategory Private -ErrorAction Stop
-            } catch { }
+            } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
         }
     } catch {
         Write-BootstrapMsg ("  WARN: per-adapter profile: {0}" -f $_.Exception.Message) 'Yellow'
@@ -1162,14 +1162,14 @@ try {
         Get-ChildItem $nlProfiles -ErrorAction SilentlyContinue | ForEach-Object {
             try {
                 Set-ItemProperty -LiteralPath $_.PSPath -Name 'Category' -Value 1 -Type DWord -Force -ErrorAction Stop
-            } catch { }
+            } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
         }
         Write-BootstrapMsg '  Registry fallback: NetworkList Profiles Category=Private where possible.' 'DarkGray'
     }
     try {
         Restart-Service nlasvc -Force -ErrorAction Stop
         Start-Sleep -Seconds 3
-    } catch { }
+    } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
 
     # Re-run idempotency: Enable-PSRemoting (via its internal
     # Set-WSManQuickConfig) can fail on an already-configured machine, and the
@@ -1187,7 +1187,7 @@ try {
                 $winrmAlready = $tcpProbe.ConnectAsync('127.0.0.1', 5985).Wait(3000)
             } finally { $tcpProbe.Close() }
         }
-    } catch { }
+    } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
     if ($winrmAlready) {
         Write-BootstrapMsg '  WinRM service running and port 5985 answering; skipping Enable-PSRemoting.' 'Green'
     } else {
@@ -1204,7 +1204,7 @@ try {
         $script:AllowUnencryptedOk = $true
     } catch {
         Write-BootstrapMsg ("  WARN: AllowUnencrypted not set: {0}" -f $_.Exception.Message) 'Yellow'
-        try { Restart-Service nlasvc -Force; Start-Sleep -Seconds 4 } catch { }
+        try { Restart-Service nlasvc -Force; Start-Sleep -Seconds 4 } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
         try {
             Set-Item WSMan:\localhost\Service\AllowUnencrypted -Value $true -Force
             $script:AllowUnencryptedOk = $true
@@ -1395,7 +1395,7 @@ try {
             try {
                 $npcapProc = Start-Process -FilePath $npcapInstaller -PassThru -Wait
                 $npcapExit = $null
-                try { $npcapExit = $npcapProc.ExitCode } catch { }
+                try { $npcapExit = $npcapProc.ExitCode } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
                 $reSvc = Get-Service -Name 'npcap' -ErrorAction SilentlyContinue
                 if ($null -ne $reSvc) {
                     Write-BootstrapMsg ("  Npcap installed (service Status={0}, installer exit={1})." -f $reSvc.Status, $npcapExit) 'Green'

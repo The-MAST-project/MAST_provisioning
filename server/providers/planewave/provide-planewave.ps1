@@ -52,7 +52,7 @@ try {
             ('/LOG="{0}"' -f ${innoLog})
         )
         ${p} = Start-Process -FilePath ${pwi4InstallerPath} -ArgumentList ${argList} -PassThru -Wait -NoNewWindow
-        try { ${p}.Refresh() } catch {}
+        try { ${p}.Refresh() } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
         Write-MastPwLog ("Setup_PWI_4.1.6_Final.exe exit code: {0}" -f ${p}.ExitCode)
         Start-Sleep -Seconds 5
         ${pwi4ExePath} = Get-ChildItem -Path 'C:\Program Files', 'C:\Program Files (x86)' `
@@ -111,7 +111,7 @@ try {
         Write-MastPwLog "Launching PWShutter setup (silent install)."
         ${argListShutter} = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-')
         ${pShutter} = Start-Process -FilePath ${pwShutterInstallerPath} -ArgumentList ${argListShutter} -PassThru -Wait -NoNewWindow
-        try { ${pShutter}.Refresh() } catch {}
+        try { ${pShutter}.Refresh() } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
         Write-MastPwLog ("Setup_PWShutter_1.15.0.exe exit code: {0}" -f ${pShutter}.ExitCode)
         Start-Sleep -Seconds 3
         ${pwShutterExePath} = Get-ChildItem -Path 'C:\Program Files', 'C:\Program Files (x86)' `

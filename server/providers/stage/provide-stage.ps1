@@ -192,7 +192,7 @@ catch {
         try {
             Write-Host ("[stage] catch-cleanup taskkill /F /T /PID {0}" -f ${installerPid})
             & taskkill /F /T /PID ${installerPid} 2>&1 | Out-Null
-        } catch {}
+        } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
     }
     exit 1
 }

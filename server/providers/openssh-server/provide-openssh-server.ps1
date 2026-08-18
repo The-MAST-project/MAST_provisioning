@@ -61,7 +61,7 @@ try {
         }
         Write-SshLog ("sshd not registered; installing bundled Win32-OpenSSH: {0}" -f ${msi})
         ${mp} = Start-Process -FilePath 'msiexec.exe' -ArgumentList @('/i', ('"{0}"' -f ${msi}), '/qn', '/norestart') -PassThru -Wait -WindowStyle Hidden
-        try { ${mp}.Refresh() } catch {}
+        try { ${mp}.Refresh() } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
         if ($null -eq ${mp}.ExitCode -or ((${mp}.ExitCode -ne 0) -and (${mp}.ExitCode -ne 3010))) {
             throw ("OpenSSH MSI install failed (msiexec exit {0})." -f ${mp}.ExitCode)
         }

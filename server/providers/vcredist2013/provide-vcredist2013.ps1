@@ -37,10 +37,10 @@ function Invoke-VcrInstaller {
     if (-not ${p}) { throw ("Start-Process returned no object for {0}" -f ${Path}) }
     ${finished} = ${p}.WaitForExit(300000)
     if (-not ${finished}) {
-        try { ${p}.Kill() } catch {}
+        try { ${p}.Kill() } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
         throw ("VC++ 2013 {0} installer timed out after 300s." -f ${Arch})
     }
-    try { ${p}.Refresh() } catch {}
+    try { ${p}.Refresh() } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
     Write-VcrLog ("VC++ 2013 {0} installer exit code: {1}" -f ${Arch}, ${p}.ExitCode)
     # Exit code 3010 = success, reboot required (acceptable).
     if ($null -ne ${p}.ExitCode -and ${p}.ExitCode -ne 0 -and ${p}.ExitCode -ne 3010) {

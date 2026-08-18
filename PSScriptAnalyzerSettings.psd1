@@ -81,15 +81,6 @@
         # mast-pull-staging ignores -UnitHostname (which transport.pull_staging_args
         # sends); and provide-openssh-server's -MastUser plus
         # provide-mast-validation's -TimeoutSeconds are accepted from nobody.
-        'PSReviewUnusedParameter',
-
-        # 113, and DEFERRED rather than dismissed -- this is the highest-value rule
-        # in the set for this repo, because a swallowed error is precisely the
-        # failure mode #55, #62 and #67-#69 all describe. It is scoped out here
-        # only because 113 sites cannot be read inside the adoption that
-        # introduces the tool, and each needs reading: some are deliberate
-        # best-effort cleanup, some are bugs. Same shape as ruff's BLE001
-        # deferral, and tracked with it in #92.
-        'PSAvoidUsingEmptyCatchBlock'
-    )
+        'PSReviewUnusedParameter'
+)
 }

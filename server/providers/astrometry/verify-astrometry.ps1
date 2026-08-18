@@ -71,7 +71,7 @@ ${bannerErr} = Join-Path ${env:TEMP} 'astro-banner-err.txt'
 ${p1} = Start-Process -FilePath ${solveField} `
     -NoNewWindow -Wait -PassThru `
     -RedirectStandardOutput ${bannerOut} -RedirectStandardError ${bannerErr}
-try { ${p1}.Refresh() } catch {}
+try { ${p1}.Refresh() } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
 if ($null -eq ${p1}.ExitCode) {
     Write-VLog "FAIL: solve-field banner exit code was null"
     exit 1
@@ -183,15 +183,15 @@ ${p2} = Start-Process -FilePath ${solveField} -ArgumentList ${solveArgs} `
     -RedirectStandardOutput ${solveOut} -RedirectStandardError ${solveErr}
 ${finished} = ${p2}.WaitForExit(${SolveTimeoutSeconds} * 1000)
 if (-not ${finished}) {
-    try { ${p2}.Kill() } catch {}
+    try { ${p2}.Kill() } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
     Write-VLog ("FAIL: solve-field timed out after {0}s" -f ${SolveTimeoutSeconds})
     exit 1
 }
 # The WaitForExit(ms) overload can return $true while ExitCode is momentarily
 # unreadable ($null) under PS 5.1. A parameterless WaitForExit() after it flushes
 # the redirected streams and guarantees ExitCode is populated, closing the race.
-try { ${p2}.WaitForExit() } catch {}
-try { ${p2}.Refresh() } catch {}
+try { ${p2}.WaitForExit() } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
+try { ${p2}.Refresh() } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
 ${rc} = ${p2}.ExitCode
 if ($null -eq ${rc}) {
     ${baseNameTmp} = [IO.Path]::GetFileNameWithoutExtension(${SmokeFitsPath})

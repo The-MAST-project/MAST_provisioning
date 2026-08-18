@@ -181,7 +181,7 @@ if (${Interactive}) {
     ${useForce} = $false
     while ($true) {
         ${bp} = New-Plan -DoForce ${useForce}
-        try { Clear-Host } catch { }
+        try { Clear-Host } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
         Write-Host '==================================================' -ForegroundColor Cyan
         Write-Host '        MAST Instrument Calibration' -ForegroundColor Cyan
         Write-Host '==================================================' -ForegroundColor Cyan

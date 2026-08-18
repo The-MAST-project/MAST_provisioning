@@ -128,7 +128,7 @@ function Test-MastTcpPortOpen {
     } catch {
         return $false
     } finally {
-        try { $client.Close() } catch {}
+        try { $client.Close() } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
     }
 }
 

@@ -36,7 +36,7 @@ if (Test-Path ${ieKey}) {
         if ($null -ne ${p}.ProxyEnable)   { ${ie}.Enable   = [int]${p}.ProxyEnable }
         if ($null -ne ${p}.ProxyServer)   { ${ie}.Server   = [string]${p}.ProxyServer }
         if ($null -ne ${p}.ProxyOverride) { ${ie}.Override = [string]${p}.ProxyOverride }
-    } catch {}
+    } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
 }
 
 Write-VLog ("env(Machine): http_proxy='{0}' https_proxy='{1}' no_proxy='{2}'" -f ${envHttp}, ${envHttps}, ${envNo})

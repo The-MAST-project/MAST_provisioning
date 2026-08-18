@@ -56,7 +56,7 @@ try {
     ${p} = Start-Process -FilePath 'powershell.exe' `
         -ArgumentList @('-ExecutionPolicy', 'Bypass', '-NoProfile', '-WindowStyle', 'Hidden', '-File', ${enforceDst}) `
         -PassThru -Wait -NoNewWindow
-    try { ${p}.Refresh() } catch {}
+    try { ${p}.Refresh() } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
     Write-WuLog ("Enforcement run exit code: {0}" -f ${p}.ExitCode)
 
     Write-WuLog "Windows Update lockdown provisioning complete."

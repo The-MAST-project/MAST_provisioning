@@ -140,7 +140,7 @@ function Set-WinINetConnectionFlags {
     $bypass = if ($NoProxyList) { Convert-NoProxyToWildcardBypass $NoProxyList } else { '' }
     foreach ($name in @('DefaultConnectionSettings', 'SavedLegacySettings')) {
         $existing = $null
-        try { $existing = (Get-ItemProperty -Path $k -Name $name -ErrorAction Stop).$name } catch {}
+        try { $existing = (Get-ItemProperty -Path $k -Name $name -ErrorAction Stop).$name } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
         if ($existing -and $existing.Length -ge 12) {
             # In-place: just clear/flip the flags byte and bump the change counter
             # (offset 4) so WinINet reloads, leaving the rest of the blob intact.
@@ -162,7 +162,7 @@ function Get-WinINetAutoDetect {
     try {
         $v = (Get-ItemProperty -Path $k -Name 'DefaultConnectionSettings' -ErrorAction Stop).DefaultConnectionSettings
         if ($v -and $v.Length -ge 9) { return [bool]($v[8] -band 0x08) }
-    } catch {}
+    } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
     return $false
 }
 
@@ -175,7 +175,7 @@ function Get-WinINetProxyState {
         if ($null -ne $p.ProxyEnable)   { $h.Enable   = [int]$p.ProxyEnable }
         if ($null -ne $p.ProxyServer)   { $h.Server   = [string]$p.ProxyServer }
         if ($null -ne $p.ProxyOverride) { $h.Override = [string]$p.ProxyOverride }
-    } catch {}
+    } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
     return $h
 }
 
@@ -270,7 +270,7 @@ function Get-MastProxyPosture {
         no_proxy    = [Environment]::GetEnvironmentVariable('no_proxy', 'Machine')
     }
     $winhttp = ''
-    try { $winhttp = (& cmd /c 'netsh winhttp show proxy' 2>&1 | Out-String) } catch {}
+    try { $winhttp = (& cmd /c 'netsh winhttp show proxy' 2>&1 | Out-String) } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
     return @{
         Env            = $env
         WinINet        = (Get-WinINetProxyState)
