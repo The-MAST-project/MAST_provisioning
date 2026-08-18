@@ -41,7 +41,7 @@ class FakeSession(T.SshSession):
         pass
 
 
-def make_responder(
+def make_responder(  # noqa: C901 -- a test fake: one branch per remote command it answers, which is the unit it emulates
     *,
     pull: str = DEFAULT_PULL,
     register: str = "DETACHED_REGISTERED",

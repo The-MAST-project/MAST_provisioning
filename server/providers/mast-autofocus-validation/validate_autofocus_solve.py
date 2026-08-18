@@ -94,7 +94,7 @@ def start_ps3cli_server(port: int):
     return subprocess.Popen(cmd, cwd=ps3dir)
 
 
-def validate_series(name: str, files: list[str], expected: dict, host: str, port: int, timeout: float) -> bool:
+def validate_series(name: str, files: list[str], expected: dict, host: str, port: int, timeout: float) -> bool:  # noqa: C901 -- one branch per expected-outcome the series can produce; the branches ARE the assertions
     from focus_analysis import FocusAnalysisError, analyze_focus_files  # type: ignore  # unit-side (MAST_unit)
 
     print(f"\n=== series '{name}' ({len(files)} images) ===")

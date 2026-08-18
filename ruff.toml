@@ -35,25 +35,23 @@ extend-select = [
 
 # Scoped rather than global, deliberately: these rules stay BLOCKING everywhere
 # they are not listed, so new code cannot add to the debt. Each entry names why
-# it is here, and the remaining work is tracked in #72.
+# it is here.
+#
+# NEITHER C901 NOR BLE001 IS WAIVED PER FILE ANY MORE (#72). Both are annotated
+# per site -- `# noqa: C901 -- <why>` on the function, `# noqa: BLE001 -- <what
+# happens instead>` on the except -- so the rules are live in every file and
+# nothing new can arrive unremarked. The blanket form hid real growth: `render` in
+# fleet-drift-report.py went from complexity 19 to 35 while its file was exempt.
+# Two of the ten C901 annotations mark refactors still owed (#72): `_process_unit`
+# at 20 and `render` at 35; each will drop its annotation when it is split.
 [lint.per-file-ignores]
-# C901 (complexity > 10). Every entry is either an argparse `main()` whose
-# branching IS the CLI surface, or -- for driver.py -- `_process_unit`, the phase
-# sequence the whole orchestrator is built around (complexity 20). Splitting that
-# is a real refactor with real risk, and doing it inside a lint sweep is how an
-# orchestrator regression gets introduced for a style score. Tracked, not hidden.
-"server/prov/driver.py" = ["C901"]
-"server/prov/tests/test_driver_flow.py" = ["C901"]
-"tools/fleet-drift-report.py" = ["C901"]
 # The dev VM harness (vm/): a scenario run drives VirtualBox, WinRM and a guest OS
 # through dozens of steps, and a broad catch that reports and continues is how a
 # transient guest hiccup avoids killing a 40-minute run. It is developer tooling,
 # not production code, and its failure mode is a re-run. (Its broad catches are
 # annotated individually now -- only the remaining families are waived here.)
-"vm/test-suite.py" = ["C901", "S110", "SIM105", "SIM115", "TRY004", "B904"]
-"vm/run-prov-test.py" = ["C901", "S110", "SIM105", "PLW1510"]
-"server/providers/mast-autofocus-validation/validate_autofocus_solve.py" = ["C901"]
-"server/providers/mast-validation/validate_mastrometry.py" = ["C901"]
+"vm/test-suite.py" = ["S110", "SIM105", "SIM115", "TRY004", "B904"]
+"vm/run-prov-test.py" = ["S110", "SIM105", "PLW1510"]
 
 # BLE001 is NO LONGER waived per file (#72). All 34 `except Exception` sites now
 # carry a targeted `# noqa: BLE001 -- <what happens instead>`, following the
@@ -70,7 +68,7 @@ extend-select = [
 # E501 in this file only: the long lines are embedded PowerShell source inside
 # Python string literals. Splitting them means concatenating PS across Python
 # lines, which risks changing the script that actually gets emitted.
-"tools/run-remote-script-winrm.py" = ["C901", "E501"]
+"tools/run-remote-script-winrm.py" = ["E501"]
 
 [lint.isort]
 # server/prov/ is imported as `from prov import ...` by the driver, the CLI and

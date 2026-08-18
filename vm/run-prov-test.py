@@ -1149,7 +1149,7 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
-def main() -> None:
+def main() -> None:  # noqa: C901 -- argparse branching IS the CLI surface, plus the phase-selection matrix
     args = parse_args()
 
     # --winrm-call-timeout-s overrides the overall script timeout enforced

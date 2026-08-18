@@ -334,7 +334,7 @@ class Driver:
                 out.append(name)
         return sorted(out, key=lambda n: (order.get(n, 0), n))
 
-    def _process_unit(self, unit: registry.UnitEntry) -> None:
+    def _process_unit(self, unit: registry.UnitEntry) -> None:  # noqa: C901 -- the phase sequence a fleet run walks; its ordering and early returns are the contract. Refactor tracked in #72
         self.units_checked += 1
         host = unit.hostname
         unit_start = datetime.now(UTC)
