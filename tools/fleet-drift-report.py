@@ -505,25 +505,13 @@ def _boot_cell(gap: dict) -> str:
     return f"v{gap['version']}"
 
 
-def render(  # noqa: C901 -- one branch per report section; a pure string builder. Refactor tracked in #72
-    units: list[UnitRecord],
-    reference: UnitRecord | None,
-    cmp: dict,
-    boot: dict,
-    repo_boot_v: int | None,
-    repos: dict | None = None,
-) -> str:
-    lines: list[str] = []
-    cols = ([reference] if reference else []) + units
+def _render_fleet_summary(cols: list[UnitRecord], reference: UnitRecord | None, cmp: dict, boot: dict) -> list[str]:
     host_w = max([len(u.host) for u in cols] + [9])
-
-    lines.append("=== Fleet summary ===")
     hdr = (
         f"{'unit'.ljust(host_w)}  {'status'.ljust(11)}  {'payload'.ljust(12)}  "
         f"{'git'.ljust(12)}  {'boot'.ljust(6)}  installed_at"
     )
-    lines.append(hdr)
-    lines.append("-" * len(hdr))
+    out = ["=== Fleet summary ===", hdr, "-" * len(hdr)]
     for u in cols:
         if u is reference:
             verdict, boot_cell = "REFERENCE", "-"
@@ -531,77 +519,93 @@ def render(  # noqa: C901 -- one branch per report section; a pure string builde
             verdict = cmp["verdicts"].get(u.host, "?")
             boot_cell = _boot_cell(boot["by_host"].get(u.host, {"state": "unstamped", "version": None}))
         detail = f"  {u.error}" if u.error else ""
-        lines.append(
+        out.append(
             f"{u.host.ljust(host_w)}  {verdict.ljust(11)}  {_short(u.payload_hash).ljust(12)}  "
             f"{_short(u.git_sha).ljust(12)}  {boot_cell.ljust(6)}  {u.installed_at or '-'}{detail}"
         )
+    return out
 
-    if repos and repos.get("total_count"):
-        if not repos.get("any_data"):
-            lines.append("upstream repos: no data (no unit has re-provisioned since #75 landed)")
-        elif repos["consistent_count"] == repos["total_count"]:
-            lines.append(f"upstream repos: all {repos['total_count']} consistent across the fleet")
-        else:
-            lines.append(
-                f"upstream repos: {repos['consistent_count']} of {repos['total_count']} consistent "
-                f"({', '.join(repos['divergent_dirs'])} differ)"
-            )
 
-    ok_cols = [u for u in cols if u.status == "ok"]
-    if cmp["modules"] and ok_cols:
-        lines.append("")
-        # 'summaries' is only present in the hash-keyed mode, where each cell is
-        # a status against the build rather than a version compared to the fleet.
-        if "summaries" in cmp:
-            lines.append("=== Module status vs build (ok / STALE / MISSING / extra) ===")
-        else:
-            lines.append("=== Module versions ('*' = differs from baseline) ===")
-        mod_w = max([len(m) for m in cmp["modules"]] + [len("module")])
-        cell_w = 22
-        header = "module".ljust(mod_w) + "  " + "".join(u.host[:cell_w].ljust(cell_w + 1) for u in ok_cols)
-        lines.append(header)
-        lines.append("-" * len(header))
-        by_mod = {row["module"]: row for row in cmp["matrix"]}
-        for mod in cmp["modules"]:
-            row = by_mod[mod]
-            cells_txt = ""
-            for u in ok_cols:
-                v = row["cells"].get(u.host)
-                mark = "*" if row["differs"].get(u.host) else " "
-                cells_txt += (f"{(v or '(absent)')[:cell_w]}{mark}").ljust(cell_w + 1)
-            lines.append(mod.ljust(mod_w) + "  " + cells_txt)
-
-    if "summaries" in cmp and ok_cols:
-        lines.append("")
-        lines.append("=== Tier-2 verify (computed live state) ===")
-        for u in ok_cols:
-            if u.validated_at:
-                fails = sorted(m for m, v in u.validation.items() if str(v).lower() == "fail")
-                detail = ("fail: " + ", ".join(fails)) if fails else "all pass"
-                lines.append(f"  {u.host}: checked {u.validated_at} -- {detail}")
-            else:
-                # Not a failure: run-verify-only.ps1 is operator-run, so "never"
-                # is the normal state on a unit nobody has validated yet.
-                lines.append(f"  {u.host}: never run (run-verify-only.ps1 has not written a report)")
-
-    drifted = {h: mods for h, mods in cmp["drift_modules_by_host"].items() if mods}
-    if drifted:
-        lines.append("")
-        lines.append("=== Module drift detail ===")
-        for h, mods in drifted.items():
-            lines.append(f"  {h}: {', '.join(mods)}")
-
-    # --- Upstream repos ---
-    if repos and repos.get("any_data"):
-        lines.append("")
-        lines.append(
-            "=== Upstream repos (resolved revision; '*' = differs, '!' = pin not honoured, "
-            "MISSING = expected for this role, n/a = not) ==="
+def _render_repos_oneliner(repos: dict | None) -> list[str]:
+    if not (repos and repos.get("total_count")):
+        return []
+    if not repos.get("any_data"):
+        return ["upstream repos: no data (no unit has re-provisioned since #75 landed)"]
+    if repos["consistent_count"] == repos["total_count"]:
+        return [f"upstream repos: all {repos['total_count']} consistent across the fleet"]
+    return [
+        (
+            f"upstream repos: {repos['consistent_count']} of {repos['total_count']} consistent "
+            f"({', '.join(repos['divergent_dirs'])} differ)"
         )
+    ]
+
+
+def _render_module_matrix(cmp: dict, ok_cols: list[UnitRecord]) -> list[str]:
+    if not (cmp["modules"] and ok_cols):
+        return []
+    # 'summaries' is only present in the hash-keyed mode, where each cell is
+    # a status against the build rather than a version compared to the fleet.
+    if "summaries" in cmp:
+        out = ["", "=== Module status vs build (ok / STALE / MISSING / extra) ==="]
+    else:
+        out = ["", "=== Module versions ('*' = differs from baseline) ==="]
+    mod_w = max([len(m) for m in cmp["modules"]] + [len("module")])
+    cell_w = 22
+    header = "module".ljust(mod_w) + "  " + "".join(u.host[:cell_w].ljust(cell_w + 1) for u in ok_cols)
+    out.append(header)
+    out.append("-" * len(header))
+    by_mod = {row["module"]: row for row in cmp["matrix"]}
+    for mod in cmp["modules"]:
+        row = by_mod[mod]
+        cells_txt = ""
+        for u in ok_cols:
+            v = row["cells"].get(u.host)
+            mark = "*" if row["differs"].get(u.host) else " "
+            cells_txt += (f"{(v or '(absent)')[:cell_w]}{mark}").ljust(cell_w + 1)
+        out.append(mod.ljust(mod_w) + "  " + cells_txt)
+    return out
+
+
+def _render_tier2(cmp: dict, ok_cols: list[UnitRecord]) -> list[str]:
+    if not ("summaries" in cmp and ok_cols):
+        return []
+    out = ["", "=== Tier-2 verify (computed live state) ==="]
+    for u in ok_cols:
+        if u.validated_at:
+            fails = sorted(m for m, v in u.validation.items() if str(v).lower() == "fail")
+            detail = ("fail: " + ", ".join(fails)) if fails else "all pass"
+            out.append(f"  {u.host}: checked {u.validated_at} -- {detail}")
+        else:
+            # Not a failure: run-verify-only.ps1 is operator-run, so "never"
+            # is the normal state on a unit nobody has validated yet.
+            out.append(f"  {u.host}: never run (run-verify-only.ps1 has not written a report)")
+    return out
+
+
+def _render_drift_detail(cmp: dict) -> list[str]:
+    drifted = {h: mods for h, mods in cmp["drift_modules_by_host"].items() if mods}
+    if not drifted:
+        return []
+    out = ["", "=== Module drift detail ==="]
+    for h, mods in drifted.items():
+        out.append(f"  {h}: {', '.join(mods)}")
+    return out
+
+
+def _render_repo_matrix(repos: dict | None, ok_cols: list[UnitRecord]) -> list[str]:
+    if repos and repos.get("any_data"):
+        out = [
+            "",
+            (
+                "=== Upstream repos (resolved revision; '*' = differs, '!' = pin not honoured, "
+                "MISSING = expected for this role, n/a = not) ==="
+            ),
+        ]
         repo_w = max([len(r["dir"]) for r in repos["matrix"]] + [8])
         rhdr = "repo".ljust(repo_w) + "  " + "  ".join(u.host.ljust(9) for u in ok_cols) + "  pin"
-        lines.append(rhdr)
-        lines.append("-" * len(rhdr))
+        out.append(rhdr)
+        out.append("-" * len(rhdr))
         for row in repos["matrix"]:
             cells = []
             for u in ok_cols:
@@ -618,71 +622,110 @@ def render(  # noqa: C901 -- one branch per report section; a pure string builde
                 else:
                     cells.append(sha.ljust(9))
             pin = row["pinned_rev"] or "-"
-            lines.append(row["dir"].ljust(repo_w) + "  " + "  ".join(cells) + f"  {pin}")
+            out.append(row["dir"].ljust(repo_w) + "  " + "  ".join(cells) + f"  {pin}")
+        out += _render_repo_warnings(repos)
+        return out
+    if repos and repos.get("total_count") == 0:
+        return [
+            "",
+            "=== Upstream repos ===",
+            "  no 'repos' block on any unit -- nothing has re-provisioned since #75 landed.",
+        ]
+    return []
 
-        # Spelled out rather than left to the glyphs: 'pinned and yet divergent'
-        # means a MOVED TAG, which is a different failure from a branch drifting.
-        for row in repos["matrix"]:
-            if row["pinned_rev"] and any(s == REPO_DIFFERS for s in row["states"].values()):
-                lines.append(
-                    f"  [WARN] {row['dir']}: pinned at {row['pinned_rev']} but units resolved to "
-                    f"different commits -- the tag moved, or a unit predates the pin."
-                )
-            if any(s == REPO_MISSING for s in row["states"].values()):
-                gone = [h for h, s in row["states"].items() if s == REPO_MISSING]
-                lines.append(
-                    f"  [WARN] {row['dir']}: expected for this role but ABSENT on "
-                    f"{', '.join(gone)} -- the clone did not land, or predates the repo."
-                )
-            if any(s == REPO_UNPINNED for s in row["states"].values()):
-                off = [h for h, s in row["states"].items() if s == REPO_UNPINNED]
-                lines.append(
-                    f"  [WARN] {row['dir']}: pinned in the manifest but on a branch on "
-                    f"{', '.join(off)} -- a --branch override, or a clone from before the pin."
-                )
-    elif repos and repos.get("total_count") == 0:
-        lines.append("")
-        lines.append("=== Upstream repos ===")
-        lines.append("  no 'repos' block on any unit -- nothing has re-provisioned since #75 landed.")
 
-    # --- Bootstrap ---
-    lines.append("")
+def _render_repo_warnings(repos: dict) -> list[str]:
+    # Spelled out rather than left to the glyphs: 'pinned and yet divergent'
+    # means a MOVED TAG, which is a different failure from a branch drifting.
+    out: list[str] = []
+    for row in repos["matrix"]:
+        if row["pinned_rev"] and any(s == REPO_DIFFERS for s in row["states"].values()):
+            out.append(
+                f"  [WARN] {row['dir']}: pinned at {row['pinned_rev']} but units resolved to "
+                f"different commits -- the tag moved, or a unit predates the pin."
+            )
+        if any(s == REPO_MISSING for s in row["states"].values()):
+            gone = [h for h, s in row["states"].items() if s == REPO_MISSING]
+            out.append(
+                f"  [WARN] {row['dir']}: expected for this role but ABSENT on "
+                f"{', '.join(gone)} -- the clone did not land, or predates the repo."
+            )
+        if any(s == REPO_UNPINNED for s in row["states"].values()):
+            off = [h for h, s in row["states"].items() if s == REPO_UNPINNED]
+            out.append(
+                f"  [WARN] {row['dir']}: pinned in the manifest but on a branch on "
+                f"{', '.join(off)} -- a --branch override, or a clone from before the pin."
+            )
+    return out
+
+
+def _render_bootstrap(units: list[UnitRecord], boot: dict, repo_boot_v: int | None) -> list[str]:
     cur = boot["current"]
-    lines.append(f"=== Bootstrap (current version: {cur if cur is not None else 'unknown'}) ===")
+    out = ["", f"=== Bootstrap (current version: {cur if cur is not None else 'unknown'}) ==="]
     if repo_boot_v is not None and cur is not None and repo_boot_v != cur:
-        lines.append(
+        out.append(
             f"  [WARN] client/bootstrap-winrm.ps1 $script:BootstrapVersion={repo_boot_v} "
             f"!= bootstrap-elements.json current_version={cur} -- bump them together."
         )
     for u in units:
         g = boot["by_host"].get(u.host, {"state": "unstamped", "version": None, "missing": []})
         if g["state"] == "unstamped":
-            lines.append(
+            out.append(
                 f"  {u.host}: UNSTAMPED -- no bootstrap-manifest.json "
                 f"(pre-versioning, or bootstrap not re-run since stamping was added)"
             )
         elif g["state"] == "outdated":
             miss = ", ".join(g["missing"]) if g["missing"] else "(none listed)"
-            lines.append(f"  {u.host}: v{g['version']} OUTDATED (current {cur}) -- may need: {miss}")
+            out.append(f"  {u.host}: v{g['version']} OUTDATED (current {cur}) -- may need: {miss}")
         else:
-            lines.append(f"  {u.host}: v{g['version']} (current)")
+            out.append(f"  {u.host}: v{g['version']} (current)")
+    return out
 
-    # --- Overall ---
-    lines.append("")
+
+def _render_result(units: list[UnitRecord], cmp: dict, boot: dict, repos: dict | None) -> list[str]:
     module_problems = [u.host for u in units if cmp["verdicts"].get(u.host) != "IN SYNC"]
     boot_problems = [u.host for u in units if boot["by_host"].get(u.host, {}).get("state") != "current"]
     repo_problems = sorted(repos["divergent_dirs"]) if (repos and repos.get("any_data")) else []
-    if module_problems or boot_problems or repo_problems:
-        if module_problems:
-            lines.append(f"RESULT: payload drift/gaps on {len(module_problems)} unit(s): {', '.join(module_problems)}")
-        if boot_problems:
-            lines.append(f"RESULT: bootstrap outdated/unstamped on {len(boot_problems)} unit(s): {', '.join(boot_problems)}")
-        # Reported even when every module matches the build: that combination is
-        # precisely the 08-11 state, and the old RESULT line called it in sync.
-        if repo_problems:
-            lines.append(f"RESULT: upstream repo divergence on {len(repo_problems)} repo(s): {', '.join(repo_problems)}")
-    else:
-        lines.append("RESULT: all units in sync and bootstrap current")
+    if not (module_problems or boot_problems or repo_problems):
+        return ["", "RESULT: all units in sync and bootstrap current"]
+    out = [""]
+    if module_problems:
+        out.append(f"RESULT: payload drift/gaps on {len(module_problems)} unit(s): {', '.join(module_problems)}")
+    if boot_problems:
+        out.append(f"RESULT: bootstrap outdated/unstamped on {len(boot_problems)} unit(s): {', '.join(boot_problems)}")
+    # Reported even when every module matches the build: that combination is
+    # precisely the 08-11 state, and the old RESULT line called it in sync.
+    if repo_problems:
+        out.append(f"RESULT: upstream repo divergence on {len(repo_problems)} repo(s): {', '.join(repo_problems)}")
+    return out
+
+
+def render(
+    units: list[UnitRecord],
+    reference: UnitRecord | None,
+    cmp: dict,
+    boot: dict,
+    repo_boot_v: int | None,
+    repos: dict | None = None,
+) -> str:
+    """The text report, section by section, in the order an operator reads it.
+
+    Each _render_* helper self-guards and returns [] when its section does not
+    apply, so this function states the ORDER and nothing else -- the ordering is
+    the only thing here that is a decision. Output is pinned byte-for-byte by
+    test_render_output_is_byte_for_byte_unchanged.
+    """
+    cols = ([reference] if reference else []) + units
+    ok_cols = [u for u in cols if u.status == "ok"]
+    lines: list[str] = []
+    lines += _render_fleet_summary(cols, reference, cmp, boot)
+    lines += _render_repos_oneliner(repos)
+    lines += _render_module_matrix(cmp, ok_cols)
+    lines += _render_tier2(cmp, ok_cols)
+    lines += _render_drift_detail(cmp)
+    lines += _render_repo_matrix(repos, ok_cols)
+    lines += _render_bootstrap(units, boot, repo_boot_v)
+    lines += _render_result(units, cmp, boot, repos)
     return "\n".join(lines)
 
 
