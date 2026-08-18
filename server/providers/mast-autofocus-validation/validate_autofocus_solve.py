@@ -106,7 +106,7 @@ def validate_series(name: str, files: list[str], expected: dict, host: str, port
     except FocusAnalysisError as ex:
         print(f"  FAIL: analyser error (phase={ex.phase}): {ex}")
         return False
-    except Exception as ex:  # connection refused, etc.
+    except Exception as ex:  # noqa: BLE001 -- printed and returned as a failure; a solver error is a result, not a crash; connection refused, etc.
         print(f"  FAIL: {type(ex).__name__}: {ex}")
         return False
 

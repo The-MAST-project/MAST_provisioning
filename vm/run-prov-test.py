@@ -180,7 +180,7 @@ def _keep_awake() -> Generator[None, None, None]:
             set_state = ctypes.windll.kernel32.SetThreadExecutionState
             set_state(_ES_CONTINUOUS | _ES_SYSTEM_REQUIRED)
             log("[keep-awake] holding the host awake (no-sleep) for the run")
-        except Exception as e:  # a power hint must never break a run
+        except Exception as e:  # noqa: BLE001 -- logged; a power hint must never break a run; a power hint must never break a run
             log(f"[keep-awake] could not set no-sleep (continuing): {e}")
             set_state = None
     try:
@@ -189,7 +189,7 @@ def _keep_awake() -> Generator[None, None, None]:
         if set_state is not None:
             try:
                 set_state(_ES_CONTINUOUS)  # clear the request -> restore normal sleep policy
-            except Exception:
+            except Exception:  # noqa: BLE001 -- clearing the no-sleep request on the way out; the process is exiting either way
                 pass
 
 
@@ -445,7 +445,7 @@ class ExecuteLogPoller:
                                 self._step_timer[0] = time.monotonic()
                         self._lines_seen += len(new_lines)
                 consecutive_errors = 0
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 -- logged, then the poller reconnects; a log tail must not kill the run
                 consecutive_errors += 1
                 log(f"  [poller] warning ({consecutive_errors}): {e}")
                 _dispose_winrm_session(self._session)
@@ -453,7 +453,7 @@ class ExecuteLogPoller:
                 try:
                     self._session = self._new_session()
                     log("  [poller] reconnected.")
-                except Exception as re:
+                except Exception as re:  # noqa: BLE001 -- logged; the next iteration retries the session
                     log(f"  [poller] reconnect failed: {re}")
                     self._session = self._new_session()  # will retry next iteration
 
@@ -527,7 +527,7 @@ def _unit_expected_to_serve(unit: UnitSession) -> bool:
             timeout_s=60,
         )
         return r.std_out.decode(errors="replace").strip() != "inert"
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 -- logged, and errs toward 'expected to serve' so a broken probe cannot mask a dead unit
         log(f"  [unit-health] service probe failed ({e}); treating the unit as expected to serve")
         return True
 
@@ -728,7 +728,7 @@ def _fetch_session_log_tail(unit: UnitSession, log_filename: str, lines: int = 4
             log(f"--- Last {lines} lines of {log_filename} ---")
             log_raw(r.std_out.decode(errors="replace").rstrip())
             log("--- end ---")
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 -- logged; fetching a log tail is diagnostics, not the run
         log(f"Could not fetch {log_filename}: {e}")
 
 
@@ -756,7 +756,7 @@ def _fetch_diagnostics(unit: Any) -> None:
         if r.std_out:
             log("Verify logs on unit:")
             log_raw(r.std_out.decode(errors="replace").rstrip())
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 -- logged; diagnostics failing must not fail the cycle
         log(f"Diagnostics failed: {e}")
     log("--- end diagnostics ---")
 
@@ -819,7 +819,7 @@ def phase_verify(
                     raise ValueError(f"unit reported errors: {body['errors']}")
                 results["unit_health_ok"] = True
                 results["unit_health_detail"] = f"api_version={body.get('api_version')!r}"
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 -- the result dict carries the outcome; see the comment below
                 # Silence only fails the cycle if mast-unit was expected to serve.
                 # At rest (Stopped/Manual, the fleet's state) it owes no answer, and
                 # failing the cycle for that would mean no cycle can pass. Same rule
@@ -1354,14 +1354,14 @@ def main() -> None:
                     else:
                         cycle_results.append(True)
 
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001 -- logged and the cycle recorded as failed
                     log(f"\nCycle {cycle} ERROR: {exc}")
                     cycle_results.append(False)
                     if unit_session is not None:
                         try:
                             _fetch_execute_log_tail(unit_session)
                             _fetch_diagnostics(unit_session)
-                        except Exception:
+                        except Exception:  # noqa: BLE001 -- best-effort diagnostics after a cycle error; the failure is already recorded
                             pass
 
                 if cycle < args.repeat and not args.no_reset and "reset" in phases:

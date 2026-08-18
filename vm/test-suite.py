@@ -822,7 +822,7 @@ def run_idempotent_after_manifest_wipe(
     try:
         wait_for_winrm(host_unit, creds["unit"])
         manifest_a = _unit_read_installed_manifest(host_unit, creds)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 -- returned as a ScenarioResult ERROR carrying the message
         return ScenarioResult(
             scenario.name, scenario.status, ERROR, time.monotonic() - t0, f"reading manifest after A failed: {e}", sub_runs
         )
@@ -841,7 +841,7 @@ def run_idempotent_after_manifest_wipe(
     # Delete manifest on the unit.
     try:
         _unit_delete_installed_manifest(host_unit, creds)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 -- returned as a ScenarioResult ERROR carrying the message
         return ScenarioResult(
             scenario.name, scenario.status, ERROR, time.monotonic() - t0, f"deleting manifest failed: {e}", sub_runs
         )
@@ -860,7 +860,7 @@ def run_idempotent_after_manifest_wipe(
     # Read manifest after C.
     try:
         manifest_c = _unit_read_installed_manifest(host_unit, creds)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 -- returned as a ScenarioResult ERROR carrying the message
         return ScenarioResult(
             scenario.name, scenario.status, ERROR, time.monotonic() - t0, f"reading manifest after C failed: {e}", sub_runs
         )
@@ -951,7 +951,7 @@ def run_scenario(
         )
     try:
         return runner(scenario, host_unit, hostname, vbox_vm, snapshot, modules_override)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 -- returned as a ScenarioResult ERROR; one scenario must not abort the suite
         return ScenarioResult(
             scenario.name,
             scenario.status,
@@ -1190,7 +1190,7 @@ def main() -> int:
                     )
                 finally:
                     pf.close()
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 -- printed with the log tail and recorded as a pre-flight failure
                 vm_lib.log_fn = saved_log_fn
                 vm_lib.log_raw_fn = saved_log_raw_fn
                 detail = f"pre-flight reset failed: {type(e).__name__}: {e}"

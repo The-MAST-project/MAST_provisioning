@@ -602,7 +602,7 @@ def wait_for_ssh(host: str, cred: dict[str, str], timeout: int = WINRM_BOOT_TIME
             s = ssh_session(host, cred, port=port, connect_timeout_s=20)
             _log(f"SSH on {host} is ready (user={_ssh_username(cred['user'])!r}).")
             return s
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 -- captured into last_err and raised as TimeoutError below
             last_err = f"{type(e).__name__}: {e}"
             time.sleep(5)
     raise TimeoutError(f"SSH on {host}:{port} not ready after {timeout}s. Last: {last_err}")
@@ -635,7 +635,7 @@ def _winrm_probe_once(host: str, cred: dict[str, str], users: list[str]) -> tupl
                 return (winrm_session(host, cred), "ok")
         except winrm.exceptions.InvalidCredentialsError:
             rejected = True
-        except Exception:  # probing candidates; the next one is tried
+        except Exception:  # noqa: BLE001 -- candidate probe; the loop's return value ('auth_rejected'/'down') is the report; probing candidates; the next one is tried
             pass
         finally:
             _dispose_winrm_session(s)
@@ -668,7 +668,7 @@ def connect_unit(
                 s = ssh_session(host, cred, connect_timeout_s=20)
                 _log(f"Connected to {host} over SSH (user={_ssh_username(cred['user'])!r}).")
                 return s
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 -- logged; SSH not ready is expected here and WinRM is tried next
                 _log(f"  SSH not ready yet ({type(e).__name__}: {e}); trying WinRM fallback...")
             sess, state = _winrm_probe_once(host, cred, users)
             if state == "ok":
@@ -684,7 +684,7 @@ def connect_unit(
                     s = ssh_session(host, cred, connect_timeout_s=20)
                     _log(f"Connected to {host} over SSH (user={_ssh_username(cred['user'])!r}).")
                     return s
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001 -- logged; the retry loop keeps trying until winrm_wait_s
                     _log(f"  SSH not ready yet ({type(e).__name__}: {e}); will keep trying.")
         time.sleep(5)
     _log(f"Neither channel usable within {winrm_wait_s}s; final SSH attempt...")
@@ -732,7 +732,7 @@ def _run_with_heartbeat(
     def worker() -> None:
         try:
             result.append(fn())
-        except BaseException as e:
+        except BaseException as e:  # noqa: BLE001 -- re-raised in the caller's thread from exc[]
             exc.append(e)
 
     t = threading.Thread(target=worker, daemon=True)
@@ -850,7 +850,7 @@ def _evict_winrm_connection_pool(protocol: Any) -> None:
     """
     try:
         protocol.transport.session.close()
-    except Exception:
+    except Exception:  # noqa: BLE001 -- best-effort close; the next .post() rebuilds the pool (see comment)
         # Whatever requests/urllib3 version is in use, close() is best-effort.
         # If it raises, the next .post() will rebuild the pool anyway.
         pass
@@ -998,12 +998,12 @@ def _resilient_run_ps(
         finally:
             try:
                 protocol.cleanup_command(shell_id, command_id)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 -- logged; a failed cleanup_command must not abandon the run
                 _log(f"  ... {log_label} cleanup_command failed (ignored): {e}")
     finally:
         try:
             protocol.close_shell(shell_id)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 -- logged; the listener reaps the shell on its idle timer anyway
             _log(f"  ... {log_label} close_shell failed (ignored): {e}")
 
     # Match pywinrm's stderr post-processing for parity with session.run_ps.
@@ -1142,7 +1142,7 @@ def wait_for_winrm(host: str, cred: dict[str, str], timeout: int = WINRM_BOOT_TI
                         cred["user"] = usr
                         _log(f"WinRM on {host} is ready (user={usr!r}).")
                         return
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001 -- collected into auth_errors and reported by the caller
                     auth_errors.append(f"{usr!r}:{type(e).__name__}")
                     continue
                 finally:

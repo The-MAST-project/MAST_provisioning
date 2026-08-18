@@ -48,11 +48,11 @@ def _resolve_controller() -> tuple[bool, str, str]:
     """
     try:
         from common.config.local import load_local_config  # type: ignore  # unit-side (MAST_common)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 -- returned as import_failed; unit-side modules are absent off a unit
         return False, "", f"import_failed ({e})"
     try:
         cfg = load_local_config()
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 -- returned with the exception type as the reason
         return False, "", f"{type(e).__name__} ({e})"
     return True, cfg.controller_host, f"site={cfg.site} mongo_uri={cfg.mongo_uri}"
 
@@ -68,7 +68,7 @@ def _has_ramdisk_indexes() -> tuple[bool, str]:
 
         drives = win32api.GetLogicalDriveStrings().split("\000")[:-1]
         d_mapped = "D:\\" in drives
-    except Exception as e:  # pragma: no cover -- pywin32 missing
+    except Exception as e:  # noqa: BLE001 -- returned as no_pywin32; the probe's failure is the answer; pragma: no cover -- pywin32 missing
         return False, f"no_pywin32 ({e})"
 
     candidate = Path("D:/mast-indexes") if d_mapped else Path("C:/mast-indexes")
@@ -138,14 +138,14 @@ def main() -> int:
         from common.interfaces.imager import ImagerRoi  # type: ignore
         from imagers import ImagerSettings  # type: ignore
         from solvers.mastrometry import MastrometryDotNet  # type: ignore
-    except Exception:
+    except Exception:  # noqa: BLE001 -- printed with a traceback and returned 1
         print("FAIL: import error -- MAST_unit modules not loadable from venv")
         traceback.print_exc()
         return 1
 
     try:
         solver = MastrometryDotNet()
-    except Exception:
+    except Exception:  # noqa: BLE001 -- printed with a traceback and returned 1 (breakage, not skip)
         # __init__ asserts RAM disk is mounted and index dir exists; if it
         # blows up despite our preflight, treat that as breakage (not skip).
         print("FAIL: MastrometryDotNet() construction failed")
@@ -166,7 +166,7 @@ def main() -> int:
                 image_path=str(fits_path),
             ),
         )
-    except Exception:
+    except Exception:  # noqa: BLE001 -- printed with a traceback and returned 1
         print("FAIL: solver.solve() raised")
         traceback.print_exc()
         return 1

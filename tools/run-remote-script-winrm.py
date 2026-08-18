@@ -176,7 +176,7 @@ def print_guest_remote_runs_listing(session: winrm.Session, *, quiet: bool) -> N
             sys.stdout.write(out)
         if err:
             sys.stderr.write(err)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 -- reported via obs(); listing the guest runs is informational
         obs(f"warning: failed to list guest remote-runs: {e!r}", quiet=quiet)
 
 
@@ -270,7 +270,7 @@ def run_ps_interruptible(
     def worker() -> None:
         try:
             result.append(session.run_ps(script))
-        except BaseException as e:
+        except BaseException as e:  # noqa: BLE001 -- re-raised in the caller's thread from error[]
             error.append(e)
 
     th = threading.Thread(target=worker, daemon=True)
@@ -376,7 +376,7 @@ def wait_for_winrm_ready(
                 f"  [{attempt}] WinRM auth not ready yet (~{max(0, int(remaining))}s left): {e}",
                 quiet=quiet,
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 -- reported via obs(); the probe retries until the deadline
             obs(
                 f"  [{attempt}] WinRM probe failed (~{max(0, int(remaining))}s left): {e!r}",
                 quiet=quiet,
