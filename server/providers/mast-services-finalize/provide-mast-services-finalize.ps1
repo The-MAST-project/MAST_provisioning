@@ -41,7 +41,7 @@ ${namesDot} = Join-Path ${PSScriptRoot} 'mast-service-names.ps1'
 if (-not (Test-Path ${namesDot})) { throw "mast-service-names.ps1 not found beside provide script." }
 . ${namesDot}
 
-${log} = Start-ProvisionLog -Component 'mast-services-finalize'
+${null} = Start-ProvisionLog -Component 'mast-services-finalize'
 try {
     ${services} = Get-MastServiceNames
     ${failures} = New-Object 'System.Collections.Generic.List[string]'

@@ -40,7 +40,7 @@ if (-not ${Force} -and (Test-Path ${pythonExeGuard})) {
     }
 }
 
-${log} = Start-ProvisionLog -Component 'provide-python'
+${null} = Start-ProvisionLog -Component 'provide-python'
 try {
     # --- Locate installer ---
     ${exePath} = Join-Path ${AssetsRoot} ${Installer}

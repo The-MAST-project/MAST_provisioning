@@ -25,7 +25,7 @@ catch {
     throw "Failed to import provisioning.psm1: $($_.Exception.Message)"
 }
 
-${log} = Start-ProvisionLog -Component 'provide-astrometry'
+${null} = Start-ProvisionLog -Component 'provide-astrometry'
 try {
     ${archivePath} = Join-Path ${AssetsRoot} ${ArchiveName}
     if (-not (Test-Path ${archivePath})) {

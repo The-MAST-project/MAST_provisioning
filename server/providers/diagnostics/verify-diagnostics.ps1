@@ -29,7 +29,6 @@ if (-not (Test-Path ${mastLogDot})) { ${mastLogDot} = Join-Path ${PSScriptRoot} 
 Set-StrictMode -Off  # mast-log.ps1 enables StrictMode; verify scripts predate it and probe optional properties
 ${verifyLog} = Get-MastVerifyLog -Module 'diagnostics'
 
-${results} = @()
 ${failCount} = 0
 
 ${hostsFile} = Join-Path ${env:SystemRoot} 'System32\drivers\etc\hosts'

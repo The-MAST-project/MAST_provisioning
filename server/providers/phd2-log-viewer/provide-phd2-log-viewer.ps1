@@ -52,7 +52,7 @@ function Get-InstalledPhdLogViewExe {
     return $null
 }
 
-${log} = Start-ProvisionLog -Component 'provide-phd2-log-viewer'
+${null} = Start-ProvisionLog -Component 'provide-phd2-log-viewer'
 try {
     ${existing} = Get-InstalledPhdLogViewExe
     if (${existing}) {

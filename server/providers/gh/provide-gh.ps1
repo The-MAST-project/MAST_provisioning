@@ -52,7 +52,7 @@ function Get-InstalledGhExe {
     return $null
 }
 
-${log} = Start-ProvisionLog -Component 'provide-gh'
+${null} = Start-ProvisionLog -Component 'provide-gh'
 try {
     ${existing} = Get-InstalledGhExe
     if (${existing}) {

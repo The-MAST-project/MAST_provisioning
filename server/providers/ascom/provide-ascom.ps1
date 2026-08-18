@@ -275,7 +275,6 @@ function Install-Silent {
   )
 
   $ext = [IO.Path]::GetExtension($InstallerPath).ToLowerInvariant()
-  $logArg = ""
   $pkgLog = Join-Path $LogRoot ("{0}_{1:yyyyMMdd_HHmmss}.install.log" -f ($DisplayName -replace '[^\w\-]','_'), (Get-Date))
 
   if ($ext -eq ".msi") {

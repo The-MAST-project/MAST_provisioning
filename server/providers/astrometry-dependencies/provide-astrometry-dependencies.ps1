@@ -64,7 +64,7 @@ if (-not ${Force} -and ${_missing}.Count -eq 0) {
     exit 0
 }
 
-${log} = Start-ProvisionLog -Component 'provide-astrometry-dependencies'
+${null} = Start-ProvisionLog -Component 'provide-astrometry-dependencies'
 try {
     ${setupPath} = Join-Path ${AssetsRoot} ${SetupName}
     if (-not (Test-Path ${setupPath})) {
