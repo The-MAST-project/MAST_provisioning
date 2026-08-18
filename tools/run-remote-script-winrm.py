@@ -71,7 +71,7 @@ def obs(msg: str, *, quiet: bool) -> None:
         print(f"[{_ts()}] {msg}", file=sys.stderr, flush=True)
 
 
-def emit_guest_mast_lines(stdout: bytes, stderr: bytes) -> None:
+def emit_guest_mast_lines(stdout: bytes, stderr: bytes) -> None:  # noqa: C901 -- one branch per ##MAST## line shape it mirrors; splitting would scatter the format in six places
     """Mirror ##MAST## lines from guest output to orchestrator stderr (structured observability)."""
     blob = b""
     if stdout:
@@ -384,7 +384,7 @@ def wait_for_winrm_ready(
         time.sleep(min(poll_s, max(0.2, remaining)))
 
 
-def main() -> int:
+def main() -> int:  # noqa: C901 -- argparse branching IS the CLI surface
     root = repo_root()
     ap = argparse.ArgumentParser(description="Run a PS1 on a unit via WinRM HTTP (no local admin).")
     ap.add_argument("--host", required=True, help="DNS name or IP of the unit (mast01 in prod).")

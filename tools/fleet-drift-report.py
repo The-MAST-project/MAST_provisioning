@@ -505,7 +505,7 @@ def _boot_cell(gap: dict) -> str:
     return f"v{gap['version']}"
 
 
-def render(
+def render(  # noqa: C901 -- one branch per report section; a pure string builder. Refactor tracked in #72
     units: list[UnitRecord],
     reference: UnitRecord | None,
     cmp: dict,
@@ -734,7 +734,7 @@ def write_csv(path: Path, units: list[UnitRecord], cmp: dict, boot: dict, repos:
             )
 
 
-def main() -> int:
+def main() -> int:  # noqa: C901 -- argparse branching IS the CLI surface
     ap = argparse.ArgumentParser(description="Cross-unit MAST version/drift report (read-only).")
     ap.add_argument("--hosts", help="Comma-separated hostnames (default: all in unit-registry.json).")
     ap.add_argument("--registry", default=None, help="Path to unit-registry.json (default: server/unit-registry.json).")

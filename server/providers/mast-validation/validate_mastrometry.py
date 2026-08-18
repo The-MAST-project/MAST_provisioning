@@ -81,7 +81,7 @@ def _has_ramdisk_indexes() -> tuple[bool, str]:
     return True, f"using {candidate}"
 
 
-def main() -> int:
+def main() -> int:  # noqa: C901 -- argparse branching IS the CLI surface
     ap = argparse.ArgumentParser()
     ap.add_argument("--unit-src", required=True, help="Path to MAST_unit/src (added to sys.path)")
     ap.add_argument("--fits", required=True, help="Path to the full-frame FITS to solve")

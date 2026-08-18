@@ -1078,7 +1078,7 @@ def _cli_list() -> int:
     return 0
 
 
-def main() -> int:
+def main() -> int:  # noqa: C901 -- argparse branching IS the CLI surface, plus scenario selection
     p = argparse.ArgumentParser(
         description="Named provisioning test scenarios. Use --list to see them all.",
     )
