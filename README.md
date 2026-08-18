@@ -345,7 +345,10 @@ proxy). Rules live in `PSScriptAnalyzerSettings.psd1`; run it with
 Accepted findings are declared **at the site** with
 `[Diagnostics.CodeAnalysis.SuppressMessageAttribute]` and a justification, because
 PSScriptAnalyzer has no per-line suppression comment; where a finding has no function
-or param block to attach one to it goes in `tools/pssa-baseline.txt` instead. Why these
+or param block to attach one to, it carries a `# pssa-ignore: <Rule> -- <reason>`
+comment on (or directly above) the flagged line, which the runner reads -- the
+`# noqa` PowerShell does not have. A reason is required, and a stale annotation is
+itself an error. Why these
 rules and not others, and which two were excluded for finding nothing real:
 `docs/decisions/2026-08-18-powershell-is-linted-by-psscriptanalyzer.md`.
 

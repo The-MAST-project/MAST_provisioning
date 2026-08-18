@@ -22,7 +22,7 @@ areas:
 | Style / Information families, excluded | 114 |
 | `PSAvoidUsingEmptyCatchBlock`, deferred | 113 |
 | Two rules excluded on evidence (below) | 31 |
-| Accepted at the site or in the baseline | 8 |
+| Accepted at the site (attribute) or by annotation | 8 |
 | **Actually fixed** | **38** |
 
 **`Write-Host` is the correct call here, not a defect** -- 59% of the pile in one rule. These are console-facing provisioning scripts whose output IS the operator interface; a technician watching a unit provision reads it. They are not modules emitting objects, so `Write-Output` would put log chatter into return values.
@@ -36,7 +36,15 @@ The 8 harmless ones are worth recording even though the rule is gone, because ea
 
 **What the 38 fixes found.** Two were Error-severity and real: `param($host, ...)` shadowing the automatic `$host` inside an `Invoke-Command` block, and an argument string assigned to `$args`, the automatic array of unbound arguments. Three `-ne $null` comparisons had `$null` on the right, which array-filters instead of comparing -- `CLAUDE.md` already required the opposite. Fifteen were dead variables, ten of them the same idiom: provider scripts capturing `Start-ProvisionLog`'s return into `${log}` and never reading it (the function's work is its `Start-Transcript` side effect, so nothing was ever unlogged). Eighteen functions used unapproved verbs and were renamed across 78 references.
 
-**Suppression has to work differently here, and that shaped the tooling.** PSScriptAnalyzer has **no per-line suppression comment** -- no `# noqa`, no `# pyright: ignore` -- and its settings cannot exclude a rule per path the way `ruff.toml`'s `per-file-ignores` does. So an accepted finding is declared with `[Diagnostics.CodeAnalysis.SuppressMessageAttribute]` and a justification where there is a function or param block to attach one to (the five credential findings), and in `tools/pssa-baseline.txt` where there is not (three `ForEach-Object` false positives at script top level). Without the baseline, accepting one finding would mean stopping enforcement of its rule everywhere.
+**Suppression has to work differently here, and that shaped the tooling.** PSScriptAnalyzer has **no per-line suppression comment** -- no `# noqa`, no `# pyright: ignore` -- and its settings cannot exclude a rule per path the way `ruff.toml`'s `per-file-ignores` does. Without something, accepting one finding would mean dropping its rule everywhere.
+
+Where a function or param block exists, the native `[Diagnostics.CodeAnalysis.SuppressMessageAttribute]` with a `Justification` is used, because PSSA honours it directly (the five credential findings). Where it does not -- three `ForEach-Object` false positives at script top level -- `tools/invoke-psscriptanalyzer.ps1` reads an annotation of our own:
+
+    # pssa-ignore: <RuleName> -- why this one is accepted
+
+on the flagged line or directly above it. It must name the rule (there is no blanket form) and it must carry a reason, which the runner enforces by failing without one. **A stale annotation fails too**: if the line stops reporting the rule it dismisses, that is an error rather than cruft -- the same service `ruff` does with an unused `noqa`.
+
+The first design was a baseline file keyed `<rule>|<path>|<line>`, and it was rejected after being written: a line-numbered record rots silently, because editing a file above an accepted finding both frees the finding and leaves the stale entry able to dismiss whatever moves onto that line. Annotations travel with the code. The stale check earned itself immediately -- its first run caught the runner's own comment help, where a literal example was being read as a real annotation.
 
 **Rejected:**
 
@@ -51,6 +59,6 @@ The 8 harmless ones are worth recording even though the rule is gone, because ea
 
 - **The `pssa` job has not run on a runner.** Verified on the prov workstation (parse sweep clean, Pester 76/0, lint clean) and the YAML parses with five jobs, but as with #65 and #87, until Actions has executed it this is YAML.
 - **`Install-Module` fails on the prov workstation** -- PowerShellGet's NuGet-client bootstrap dies behind bcproxy with a `NullReferenceException`. The installer falls back to fetching the `.nupkg` directly, which works, but the fallback is load-bearing there rather than a nicety.
-- **The baseline is line-numbered**, so editing `tools/mast-clone.ps1` above line 326 silently invalidates its three entries: the findings reappear and the stale entries match nothing. A content-based key would survive edits; nothing yet warns about drift.
+- **An annotation is matched to a finding by line adjacency**, so it is only as stable as the statement it sits above. Moving the flagged expression and leaving the comment behind is caught (it reports stale), but splitting one flagged line into two could quietly move the finding out from under its annotation.
 - **Whether this becomes the fleet pattern** (`#73`'s last step). `MAST_common`, `MAST_unit`, `MAST_spec` and `MAST_control` all carry PowerShell and none has a linting job. The settings file here is the candidate to promote, but the exclusions were argued from *this* repo's evidence and the false-positive findings above may not generalise.
 - **`PSUseApprovedVerbs` was left applying to `docs/decisions/`**, which is untouched by the renames: the archive is frozen and an accepted record's body is never edited, so records naming `Generate-Commands` stay as written. Nothing enforces that a future record uses the new names.

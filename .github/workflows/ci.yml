@@ -183,7 +183,7 @@ jobs:
         # unaccepted -- 39 real cleanups, six style families and one deferred rule
         # excluded with a reason each in PSScriptAnalyzerSettings.psd1, five
         # credential findings suppressed at the site, three false positives in
-        # tools/pssa-baseline.txt. What is deferred is PSAvoidUsingEmptyCatchBlock
+        # '# pssa-ignore' annotations. What is deferred is PSAvoidUsingEmptyCatchBlock
         # (113 sites), tracked in #92.
         shell: powershell
         run: .\tools\invoke-psscriptanalyzer.ps1

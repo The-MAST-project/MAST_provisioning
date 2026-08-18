@@ -174,8 +174,11 @@ Rationale: `docs/decisions/2026-08-18-powershell-is-linted-by-psscriptanalyzer.m
 - **There is no `# noqa` for PowerShell.** Accept a finding with
   `[Diagnostics.CodeAnalysis.SuppressMessageAttribute('<Rule>', '<Target>', Justification = '...')]`
   on the function or param block, and **always** write the justification. Only when
-  there is nothing to attach it to does the finding go in `tools/pssa-baseline.txt`,
-  with a reason above it.
+  there is nothing to attach it to, annotate the line:
+  `# pssa-ignore: <Rule> -- <reason>`, on the flagged line or directly above it. The
+  runner reads these -- it is the `# noqa` PowerShell lacks. **The reason is not
+  optional**: an annotation without one fails the job, as does a stale annotation
+  whose line no longer reports that rule.
 - **Do not widen `ExcludeRules` to clear a finding.** That stops enforcing the rule
   on every file including new ones. Two rules ARE excluded there, each because it was
   measured to report nothing real -- not because its findings were inconvenient.

@@ -16,7 +16,8 @@
 # [Diagnostics.CodeAnalysis.SuppressMessageAttribute] and a justification, because
 # PSScriptAnalyzer has no per-line suppression comment -- there is no `# noqa` or
 # `# pyright: ignore` equivalent. Where a finding has no function or param block to
-# attach an attribute to, it goes in tools/pssa-baseline.txt instead.
+# attach an attribute to, it carries a '# pssa-ignore: <Rule> -- <reason>' comment
+# that tools/invoke-psscriptanalyzer.ps1 reads.
 @{
     # Everything except the exclusions below. Severity is not filtered: an
     # Information-level finding from a rule we chose to run is still a finding.
