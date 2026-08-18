@@ -88,7 +88,7 @@
         # only because 113 sites cannot be read inside the adoption that
         # introduces the tool, and each needs reading: some are deliberate
         # best-effort cleanup, some are bugs. Same shape as ruff's BLE001
-        # deferral, and tracked with it.
+        # deferral, and tracked with it in #92.
         'PSAvoidUsingEmptyCatchBlock'
     )
 }
