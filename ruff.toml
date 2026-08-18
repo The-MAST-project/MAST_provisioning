@@ -46,29 +46,31 @@ extend-select = [
 "server/prov/tests/test_driver_flow.py" = ["C901"]
 "tools/fleet-drift-report.py" = ["C901"]
 # The dev VM harness (vm/): a scenario run drives VirtualBox, WinRM and a guest OS
-# through dozens of steps, and broad catches with a silent continue are how a
+# through dozens of steps, and a broad catch that reports and continues is how a
 # transient guest hiccup avoids killing a 40-minute run. It is developer tooling,
-# not production code, and its failure mode is a re-run.
-"vm/test-suite.py" = ["C901", "BLE001", "S110", "SIM105", "SIM115", "TRY004", "B904"]
-"vm/run-prov-test.py" = ["C901", "BLE001", "S110", "SIM105", "PLW1510"]
-"server/providers/mast-autofocus-validation/validate_autofocus_solve.py" = ["C901", "BLE001"]
-"server/providers/mast-validation/validate_mastrometry.py" = ["C901", "BLE001"]
+# not production code, and its failure mode is a re-run. (Its broad catches are
+# annotated individually now -- only the remaining families are waived here.)
+"vm/test-suite.py" = ["C901", "S110", "SIM105", "SIM115", "TRY004", "B904"]
+"vm/run-prov-test.py" = ["C901", "S110", "SIM105", "PLW1510"]
+"server/providers/mast-autofocus-validation/validate_autofocus_solve.py" = ["C901"]
+"server/providers/mast-validation/validate_mastrometry.py" = ["C901"]
 
-# BLE001 (`except Exception`). In the transport and the two validation providers
-# these are deliberate: a provisioning run must not abort because one cleanup
-# step, one optional probe, or one unit raised something unforeseen -- the
-# handlers report and continue, which is the behaviour the driver's fleet loop
-# depends on. Narrowing 33 catch sites by guesswork would trade a style finding
-# for a real outage, so each needs reading against its own failure mode (#72).
+# BLE001 is NO LONGER waived per file (#72). All 34 `except Exception` sites now
+# carry a targeted `# noqa: BLE001 -- <what happens instead>`, following the
+# pattern driver.py already used, so the rule is live in every file and a new bare
+# catch cannot arrive unremarked. The reasons are worth reading rather than
+# summarising: 30 of the 34 log, return a failure result, or re-raise from a worker
+# thread; 4 stay silent and say why on the line.
+#
 # S110/SIM105 here are the WinRM session-close and candidate-probe paths, both
 # documented in situ as best-effort: whatever requests/urllib3 version is in use,
 # close() may raise, and the next call rebuilds the pool anyway.
-"server/prov/transport.py" = ["BLE001", "S110", "SIM105"]
+"server/prov/transport.py" = ["S110", "SIM105"]
 
 # E501 in this file only: the long lines are embedded PowerShell source inside
 # Python string literals. Splitting them means concatenating PS across Python
 # lines, which risks changing the script that actually gets emitted.
-"tools/run-remote-script-winrm.py" = ["C901", "BLE001", "E501"]
+"tools/run-remote-script-winrm.py" = ["C901", "E501"]
 
 [lint.isort]
 # server/prov/ is imported as `from prov import ...` by the driver, the CLI and
