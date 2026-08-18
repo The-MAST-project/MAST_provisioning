@@ -143,7 +143,7 @@ function Get-MastRepoHead {
     return ([string](@(${out})[0])).Trim()
 }
 
-${log} = Start-ProvisionLog -Component 'provide-mast'
+${null} = Start-ProvisionLog -Component 'provide-mast'
 try {
     # --- Git (mast-clone requires it on PATH) ------------------------------
     ${gitExe} = Resolve-MastGitExe

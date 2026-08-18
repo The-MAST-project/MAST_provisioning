@@ -104,7 +104,7 @@ function Get-TargetPlan {
     return ${o}
 }
 
-function Build-Plan {
+function New-Plan {
     param([bool]${DoForce})
     ${st} = Resolve-State
     ${plans} = @(
@@ -149,7 +149,7 @@ function Show-Diff {
     }
 }
 
-function Apply-Plan {
+function Invoke-Plan {
     param(${bp})
     ${changed} = 0
     foreach (${p} in @(${bp}.Plans | Where-Object { $_.WillWrite })) {
@@ -180,7 +180,7 @@ if (-not (Test-Path -LiteralPath ${Pwi4Settings})) {
 if (${Interactive}) {
     ${useForce} = $false
     while ($true) {
-        ${bp} = Build-Plan -DoForce ${useForce}
+        ${bp} = New-Plan -DoForce ${useForce}
         try { Clear-Host } catch { }
         Write-Host '==================================================' -ForegroundColor Cyan
         Write-Host '        MAST Instrument Calibration' -ForegroundColor Cyan
@@ -196,13 +196,13 @@ if (${Interactive}) {
         switch (${choice}) {
             'V' { ${useForce} = $false; continue }
             'D' {
-                ${bpd} = Build-Plan -DoForce $false
+                ${bpd} = New-Plan -DoForce $false
                 Write-Host ''; Show-Diff -bp ${bpd}
                 Read-Host 'Press Enter to continue' | Out-Null
             }
             { $_ -eq 'A' -or $_ -eq 'F' } {
                 ${doForce} = (${choice} -eq 'F')
-                ${bpa} = Build-Plan -DoForce ${doForce}
+                ${bpa} = New-Plan -DoForce ${doForce}
                 Write-Host ''
                 Show-Diff -bp ${bpa}
                 ${toWrite} = @(${bpa}.Plans | Where-Object { $_.WillWrite })
@@ -214,7 +214,7 @@ if (${Interactive}) {
                     Read-Host 'Press Enter' | Out-Null; continue
                 }
                 ${ans} = (Read-Host ("Apply the above {0} change(s)? [y/N]" -f ${toWrite}.Count)).Trim().ToUpper()
-                if (${ans} -eq 'Y') { Write-Host ''; Apply-Plan -bp ${bpa} | Out-Null }
+                if (${ans} -eq 'Y') { Write-Host ''; Invoke-Plan -bp ${bpa} | Out-Null }
                 else { Write-Host '  Cancelled.' -ForegroundColor DarkGray }
                 Read-Host 'Press Enter' | Out-Null
             }
@@ -226,7 +226,7 @@ if (${Interactive}) {
 }
 
 # ------------------------------- CLI --------------------------------------
-${bp} = Build-Plan -DoForce ([bool]${Force})
+${bp} = New-Plan -DoForce ([bool]${Force})
 foreach (${p} in ${bp}.Plans) { Log ("{0}: action={1} cur='{2}' desired='{3}' ({4})" -f ${p}.Target, ${p}.Action, ${p}.Cur, ${p}.Desired, ${p}.Source) }
 Show-State -bp ${bp}
 Write-Host ''
@@ -246,5 +246,5 @@ if (${bp}.State.Pwi4Running) {
     exit 2
 }
 Write-Host ''
-Apply-Plan -bp ${bp} | Out-Null
+Invoke-Plan -bp ${bp} | Out-Null
 exit 0

@@ -275,13 +275,12 @@ function Install-Silent {
   )
 
   $ext = [IO.Path]::GetExtension($InstallerPath).ToLowerInvariant()
-  $logArg = ""
   $pkgLog = Join-Path $LogRoot ("{0}_{1:yyyyMMdd_HHmmss}.install.log" -f ($DisplayName -replace '[^\w\-]','_'), (Get-Date))
 
   if ($ext -eq ".msi") {
     # MSI silent
-    $args = "/i `"$InstallerPath`" /qn /norestart /L*v `"$pkgLog`""
-    Invoke-Proc -FilePath "msiexec.exe" -Arguments $args -LogTag $DisplayName
+    $msiArgs = "/i `"$InstallerPath`" /qn /norestart /L*v `"$pkgLog`""
+    Invoke-Proc -FilePath "msiexec.exe" -Arguments $msiArgs -LogTag $DisplayName
   } else {
     # EXE silent - try common flags used by Inno/NSIS/MSI-bootstrappers
     # Prefer very silent & no reboot; suppress msg boxes; log if supported.

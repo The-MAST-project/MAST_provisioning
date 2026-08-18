@@ -56,7 +56,7 @@ trap [System.Management.Automation.PipelineStoppedException] {
     exit 130
 }
 
-function Normalize-Mac([string]$Text) {
+function Format-Mac([string]$Text) {
     if (-not $Text) { return '' }
     return (($Text -replace '[:-]', '').ToLowerInvariant())
 }
@@ -163,13 +163,13 @@ function Test-MastWinRmHttpOpen {
 
 function Get-IpFromNeighborMac {
     param([string]$MacDash, [string]$Prefix)
-    $want = Normalize-Mac $MacDash
+    $want = Format-Mac $MacDash
     if (-not $want) { return $null }
     $neighbors = @(Get-NetNeighbor -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object {
             $_.IPAddress -like ($Prefix + '.*') -and $_.LinkLayerAddress
         })
     foreach ($n in $neighbors) {
-        if ((Normalize-Mac $n.LinkLayerAddress) -eq $want) {
+        if ((Format-Mac $n.LinkLayerAddress) -eq $want) {
             return $n.IPAddress
         }
     }
@@ -180,7 +180,7 @@ function Get-IpVBoxNeighborsDisambiguate {
     param([string]$Prefix)
     $neighbors = @(Get-NetNeighbor -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object {
             $_.IPAddress -like ($Prefix + '.*') -and $_.LinkLayerAddress -and
-            ((Normalize-Mac $_.LinkLayerAddress).StartsWith('080027'))
+            ((Format-Mac $_.LinkLayerAddress).StartsWith('080027'))
         })
     $ips = @($neighbors | Select-Object -ExpandProperty IPAddress -Unique | Sort-Object)
     if ($ips.Count -eq 0) { return $null }

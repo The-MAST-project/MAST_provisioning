@@ -44,7 +44,7 @@ function Add-GitDirsToSystemPath {
     if (Test-Path -LiteralPath ${binPath}) { Add-ToSystemPath -Dir ${binPath} }
 }
 
-${log} = Start-ProvisionLog -Component 'provide-git'
+${null} = Start-ProvisionLog -Component 'provide-git'
 try {
     ${existing} = Get-InstalledGitExe
     if (${existing}) {

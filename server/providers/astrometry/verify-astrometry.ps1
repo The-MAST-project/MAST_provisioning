@@ -138,8 +138,6 @@ if (Test-Path ${work}) { Remove-Item -LiteralPath ${work} -Recurse -Force }
 ${null} = New-Item -ItemType Directory -Path ${work} -Force
 
 # Cygwin paths for the cfg
-${cygWorkDrive}  = (${work}.Substring(0,1)).ToLower()
-${cygWork}       = '/cygdrive/' + ${cygWorkDrive} + ((${work}.Substring(2)) -replace '\\','/')
 ${cygIndexDrive} = (${indexDir}.Substring(0,1)).ToLower()
 ${cygIndex}      = '/cygdrive/' + ${cygIndexDrive} + ((${indexDir}.Substring(2)) -replace '\\','/')
 

@@ -101,6 +101,14 @@
     found is just reported "not present". Idempotent; safe to re-run.
 #>
 
+# Runs from a .cmd on a bare machine, before any MAST tooling exists: the password
+# arrives as a command-line string because there is no session to hold a
+# SecureString, and New-LocalUser/Set-LocalUser require the conversion. Both
+# findings are accepted, not oversights.
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingPlainTextForPassword', 'MastPassword',
+    Justification = 'Bootstrap is invoked from a .cmd on a machine with no MAST tooling; a SecureString cannot cross that boundary.')]
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingConvertToSecureStringWithPlainText', '',
+    Justification = 'Set-LocalUser/New-LocalUser take a SecureString; the plaintext is the parameter above, which cannot be a SecureString here.')]
 param(
     [string]$FactoryUser = 'user',
     [string]$MastUser = 'mast',
@@ -259,7 +267,7 @@ function Set-MastAdaptersToDhcp {
     }
 }
 
-function Ensure-MastWinRmFirewallRule5985 {
+function Initialize-MastWinRmFirewallRule5985 {
     param([string]$RuleDisplayName = 'MAST - WinRM HTTP')
     if (Test-MastNetFirewallRuleExists -DisplayName $RuleDisplayName) {
         Write-BootstrapMsg "  Firewall rule '$RuleDisplayName' already exists." 'Green'
@@ -759,7 +767,6 @@ try {
     # for backward compatibility but is now a no-op.
     Write-BootstrapMsg '' 'Cyan'
     Write-BootstrapMsg '--- OEM factory account policy ---' 'Cyan'
-    $RenamedOemToMast = $false
     if ($FactoryUser) {
         Write-BootstrapMsg "  -FactoryUser is deprecated and ignored; OEM '$FactoryUser' is left intact." 'DarkGray'
         Write-BootstrapMsg "  A separate '$MastUser' account will be created/ensured below." 'DarkGray'
@@ -1221,7 +1228,7 @@ try {
 
     Write-BootstrapMsg '' 'Cyan'
     Write-BootstrapMsg '--- Firewall TCP 5985 ---' 'Cyan'
-    Ensure-MastWinRmFirewallRule5985 -RuleDisplayName 'MAST - WinRM HTTP'
+    Initialize-MastWinRmFirewallRule5985 -RuleDisplayName 'MAST - WinRM HTTP'
 
     Write-BootstrapMsg '' 'Cyan'
     Write-BootstrapMsg '--- Persist Private network profile across reboots ---' 'Cyan'

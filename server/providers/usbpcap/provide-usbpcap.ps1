@@ -34,7 +34,7 @@ function Get-InstalledUsbPcapCmd {
     return $null
 }
 
-${log} = Start-ProvisionLog -Component 'provide-usbpcap'
+${null} = Start-ProvisionLog -Component 'provide-usbpcap'
 try {
     # Same admin-token consideration as the npcap provider: USBPcap registers
     # a kernel driver and needs BUILTIN\Administrators in the effective token.

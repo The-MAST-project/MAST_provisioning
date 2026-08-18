@@ -90,7 +90,7 @@ if ($AllowPendingReboot -and $exe -and -not $svc) {
 }
 
 # ---- failure path: dump diagnostics ----
-W ("FAIL exe={0} svc={1} AllowPendingReboot={2}" -f ($exe -ne $null), ($svc -ne $null), [bool]$AllowPendingReboot)
+W ("FAIL exe={0} svc={1} AllowPendingReboot={2}" -f ($null -ne $exe), ($null -ne $svc), [bool]$AllowPendingReboot)
 
 W "--- elevation status of verify process ---"
 $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent()

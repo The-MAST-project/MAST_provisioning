@@ -50,7 +50,7 @@ if (-not ${Force} -and (Test-Path ${bashExeExisting})) {
     Write-Host ("Cygwin present at {0} but 'uname' failed (exit={1}); reinstalling." -f ${InstallRoot}, ${LASTEXITCODE})
 }
 
-${log} = Start-ProvisionLog -Component 'provide-cygwin'
+${null} = Start-ProvisionLog -Component 'provide-cygwin'
 try {
     # --- Locate archive ---
     ${archivePath} = Join-Path ${AssetsRoot} ${ArchiveName}

@@ -250,7 +250,7 @@ function New-LinkOrCopy {
 }
 
 # Optional: load/parse license allocation CSV (if preallocating)
-function Load-AllocCsv([string]${Path}) {
+function Import-AllocCsv([string]${Path}) {
   if (-not (Test-Path ${Path})) { return @() }
   try { return (Import-Csv -Path ${Path}) } catch {
     # barebones manual parse (license,host)
@@ -270,7 +270,7 @@ function Save-AllocCsv([string]${Path}, [object[]]${Rows}) {
 
 ${allocCsv} = Join-Path ${TOP} 'server\providers\nomachine\assets\licenses\allocated.csv'
 # allocRows
-${allocRows} = Load-AllocCsv ${allocCsv}
+${allocRows} = Import-AllocCsv ${allocCsv}
 
 # allLicFiles
 ${allLicFiles} = Get-ChildItem -Path ${licensesVault} -Filter '*.lic' -File -ErrorAction SilentlyContinue | Sort-Object Name
@@ -292,7 +292,7 @@ Write-Host  "[build-mast] astrometry-dependencies  -> offline (frozen cygwin-pkg
 Write-Host "==================================================================="
 
 # Build commands list once (same for all), then tweak per host only if we add a SingleLicensePath
-function Generate-Commands([string[]]${Mods}) {
+function New-CommandFile([string[]]${Mods}) {
   ${cmds}=@()
   foreach (${m} in ${Mods}) {
     ${mf}=Read-ModuleManifest -ModuleName ${m}
@@ -403,7 +403,7 @@ function Generate-Commands([string[]]${Mods}) {
   return (${cmds} | Sort-Object order, desc)
 }
 
-${baseCmds} = Generate-Commands -Mods ${Modules}
+${baseCmds} = New-CommandFile -Mods ${Modules}
 
 ${stagingTop} = Join-Path ${OutRoot} ${HostName}
 New-Item -ItemType Directory -Force -Path ${stagingTop} | Out-Null

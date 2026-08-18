@@ -52,7 +52,7 @@ ${smokeDir} = Get-MastSmokeDir
 # separate powershell.exe children that do not dot-source mast-log.ps1, so they
 # cannot call Get-MastVerifyDir themselves and will crash on Out-File if the
 # directory does not exist (seen in ascom verify, 2026-05-17 run).
-${verifyDir} = Get-MastVerifyDir
+${null} = Get-MastVerifyDir
 ${logFile} = Join-Path ${logDir} "provisioning-execute.log"
 
 # State under <SystemDrive>\MAST (same tree as logs); installed-manifest lives here.

@@ -24,6 +24,11 @@
   .\server\setup-smb-share.ps1 -Top C:\repos\MAST_provisioning
 #>
 
+# The mast-transfer account is created from a vault-supplied password, and
+# New-LocalUser only accepts a SecureString -- so the conversion is required,
+# not incidental.
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingConvertToSecureStringWithPlainText', '',
+    Justification = 'New-LocalUser requires a SecureString; the vault supplies the password as text.')]
 [CmdletBinding()]
 param(
     [string]$Top = ''
@@ -108,7 +113,7 @@ try {
 # ---------------------------------------------------------------------------
 # Helper: idempotent SMB share + NTFS ACL setup
 # ---------------------------------------------------------------------------
-function Ensure-MastSmbShare {
+function Initialize-MastSmbShare {
     param(
         [string]$Name,
         [string]$SharePath,
@@ -179,7 +184,7 @@ function Ensure-MastSmbShare {
     Write-Host "NTFS ACL: granted $NtfsAccess to '$AccountName' on '$Name', removed Everyone."
 }
 
-# Build the Everyone SID once; passed into each Ensure-MastSmbShare call.
+# Build the Everyone SID once; passed into each Initialize-MastSmbShare call.
 $everyoneSid = New-Object System.Security.Principal.SecurityIdentifier(
     [System.Security.Principal.WellKnownSidType]::WorldSid, $null
 )
@@ -187,7 +192,7 @@ $everyoneSid = New-Object System.Security.Principal.SecurityIdentifier(
 # ---------------------------------------------------------------------------
 # mast-staging: read-only pull share for units
 # ---------------------------------------------------------------------------
-Ensure-MastSmbShare `
+Initialize-MastSmbShare `
     -Name        'mast-staging' `
     -SharePath   $outRoot `
     -Comment     'MAST provisioning staging (read-only pull for units)' `
@@ -203,7 +208,7 @@ Ensure-MastSmbShare `
 # provider and issue #25).
 # ---------------------------------------------------------------------------
 $sharedRoot = Join-Path $Top 'shared'
-Ensure-MastSmbShare `
+Initialize-MastSmbShare `
     -Name        'mast-shared' `
     -SharePath   $sharedRoot `
     -Comment     'MAST shared directory (read-write for units)' `

@@ -118,7 +118,7 @@ function Get-MastProvLastErrLog {
 # Shared timestamp and log-line helpers
 # ---------------------------------------------------------------------------
 
-function Now-Utc {
+function Get-UtcNow {
     return (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
 }
 
