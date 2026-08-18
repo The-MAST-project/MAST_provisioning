@@ -147,7 +147,7 @@ function Test-MastSmbHostReady {
                 )
             } else {
                 $r = Receive-Job $job
-                if ($r.rc -ne 0 -and $r.rc -ne $null) {
+                if ($r.rc -ne 0 -and $null -ne $r.rc) {
                     [void]$failures.Add(
                         "Loopback 'net use $unc' as $TransferUser returned exit $($r.rc). " +
                         "Auth or share-name mismatch. Output: $($r.output -replace '\s+',' ')"
