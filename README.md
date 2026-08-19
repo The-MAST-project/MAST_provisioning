@@ -44,7 +44,7 @@ MAST_provisioning/
 |-- build/
 |   `-- build-mast.ps1                # Assembles staging\<host>\01-provisioning\
 |-- client/
-|   |-- bootstrap-winrm.ps1           # First-time unit prep (single source of truth): mast user, site selection, auto-logon, WinRM HTTP, OpenSSH, Npcap, rename, WU policy, telemetry/privacy hardening, Windows Firewall OFF (units sit behind a perimeter firewall; WinRM/SSH rules kept for re-enable)
+|   |-- bootstrap-winrm.ps1           # First-time unit prep (single source of truth): hardware preflight (64 GB RAM + free D:), mast user, site selection, auto-logon, WinRM HTTP, OpenSSH, Npcap, rename, WU policy, telemetry/privacy hardening, Windows Firewall OFF (units sit behind a perimeter firewall; WinRM/SSH rules kept for re-enable)
 |   |-- execute-mast-provisioning.ps1 # Runs on the unit; iterates through commands.json
 |   |-- run-verify-only.ps1           # Runs on the unit; *-verify steps only (see below)
 |   `-- onboard-mast-unit.ps1         # Post-bootstrap onboarder: provision + register + handoff
@@ -120,7 +120,7 @@ renumbering.
 |   100 | `proxy` | Soft proxy: set (on-campus) or clear (home) machine/WinHTTP/WinINet proxy settings |
 |   150 | `config-bootstrap` | Lay down `C:\WIS\config.toml` (machine identity + config-DB connection) with the `machine_role` field injected; site chosen by build `-Site` |
 |   200 | `openssh-server` | Drift check for OpenSSH Server (install/config owned by `bootstrap-winrm.ps1`) |
-|   250 | `imdisk` | ImDisk driver; mount D: from the astrometry index image, persist across reboots |
+|   250 | `imdisk` | ImDisk driver; assert the machine has the fleet's required RAM, then mount D: from the astrometry index image, persist across reboots |
 |   300 | `cygwin` | Cygwin environment from a prebuilt tgz (postinstall, PATH) |
 |   400 | `astrometry-dependencies` | Cygwin packages for astrometry.net (offline, from the frozen build-host cache `C:\MAST\cygwin-pkg-cache`) + bundled `fitsio` wheel |
 |   500 | `astrometry` | Prebuilt astrometry.net 0.97 tree into `C:\cygwin64\usr\local\astrometry` |
@@ -207,10 +207,11 @@ drifts from `sites/*.toml`. The shared enumerator is `Get-ConfiguredSites` in
 This is the only path operators run by hand. Everything else is autonomous.
 
 1. Install Windows IoT on the unit machine and complete OOBE.
-2. Copy `client/bootstrap-winrm.cmd` and `client/bootstrap-winrm.ps1` to the unit
-   via USB thumb drive or a temporary network share. Both files must be in the same
-   folder. (In the VM workflow these files are bundled on the autounattend ISO; for
-   physical units that ISO is not present, so manual copy is required.)
+2. Copy `client/bootstrap-winrm.cmd`, `client/bootstrap-winrm.ps1` and
+   `client/mast-client-util.ps1` to the unit via USB thumb drive or a temporary network
+   share. All three files must be in the same folder. (In the VM workflow these files are
+   bundled on the autounattend ISO; for physical units that ISO is not present, so manual
+   copy is required.)
 3. On the unit, open an **elevated Command Prompt** (Run as administrator) and run:
 
    ```cmd
@@ -225,6 +226,14 @@ This is the only path operators run by hand. Everything else is autonomous.
    ```
 
    Confirm the script prints `[OK]` before continuing.
+
+   The first thing it does is assert the unit's hardware: **64 GB of RAM** and a **free
+   drive letter D:**, both required by the `imdisk` provider's 32 GB RAM-backed D: mount.
+   A machine missing either stops here, before anything has been changed on it -- fit the
+   memory (or pull the disk holding D:) and re-run. The requirement is declared once, in
+   `Get-MastRequiredMemoryGB` (`server/lib/mast-modules.psm1`); `bootstrap-winrm.ps1`
+   embeds it because it runs offline, and `build-mast.ps1` fails the build if the two
+   drift.
 
 4. Once bootstrap completes the unit is reachable over WinRM HTTP on port 5985. From
    here the provisioning server's Task Scheduler loop picks up the unit automatically

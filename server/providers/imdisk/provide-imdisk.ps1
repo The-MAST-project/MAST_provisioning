@@ -42,7 +42,14 @@ param(
     # pristine-seed guarantee is waived; dev-VM only. Baked in by build-mast
     # -ImdiskMountType (the VM harness passes 'file').
     [ValidateSet('vm', 'file')]
-    [string]${MountType}    = 'vm'
+    [string]${MountType}    = 'vm',
+    # Memory the machine must have before a '-t vm' mount is attempted, in GB.
+    # build-mast.ps1 injects the fleet figure (Get-MastRequiredMemoryGB) into this
+    # module's command, so the number is not copied here; 0 means a hand-run
+    # outside a build, which asserts nothing. bootstrap-winrm.ps1 is the primary
+    # gate -- this is the one that still fires on a unit bootstrapped before that
+    # check existed, or re-imaged since.
+    [int]   ${MinMemoryGB}  = 0
 )
 
 ${ErrorActionPreference} = "Stop"
@@ -53,6 +60,13 @@ if ([string]::IsNullOrWhiteSpace(${IndexSeedDir})) {
 ${mastLogDot} = Join-Path ${PSScriptRoot} 'mast-log.ps1'
 if (-not (Test-Path ${mastLogDot})) { ${mastLogDot} = Join-Path ${PSScriptRoot} '..\..\lib\mast-log.ps1' }
 . ${mastLogDot}
+
+# Test-MastMemoryRequirement: shared with bootstrap-winrm.ps1 so the unit is
+# measured the same way at both gates. build-mast stages it into the payload root
+# alongside mast-log.ps1; the fallback is the source tree.
+${clientUtilDot} = Join-Path ${PSScriptRoot} 'mast-client-util.ps1'
+if (-not (Test-Path ${clientUtilDot})) { ${clientUtilDot} = Join-Path ${PSScriptRoot} '..\..\..\client\mast-client-util.ps1' }
+. ${clientUtilDot}
 ${logDir} = Get-MastLogSessionDir
 New-Item -ItemType Directory -Path ${logDir} -Force | Out-Null
 ${logFile} = Join-Path ${logDir} "imdisk-install.log"
@@ -220,6 +234,20 @@ function New-SparseIndexImage {
 }
 
 try {
+    # Memory first, before the install does any work: a '-t vm' attach commits
+    # the image's full ${DiskSize}, so on a machine that cannot back it the run
+    # is already lost -- it just would not say so until the mount, several
+    # minutes and one ImDisk installation later, as "imdisk exited 3".
+    if (${MountType} -eq 'vm' -and ${MinMemoryGB} -gt 0) {
+        ${visibleBytes} = [long](Get-CimInstance Win32_ComputerSystem -ErrorAction Stop).TotalPhysicalMemory
+        ${mem} = Test-MastMemoryRequirement -VisibleBytes ${visibleBytes} -RequiredGB ${MinMemoryGB}
+        if (-not ${mem}.Ok) {
+            throw ("This machine has {0} GB of RAM; a '-t vm' mount of {1} on a MAST unit requires {2} GB. Fit the memory and re-run (or build with -ImdiskMountType file, which is dev-VM only)." -f `
+                ${mem}.VisibleGB, ${DiskSize}, ${mem}.RequiredGB)
+        }
+        Write-ImDiskLog ("Memory check: {0} GB visible, {1} GB required for a -t vm mount of {2}." -f ${mem}.VisibleGB, ${mem}.RequiredGB, ${DiskSize})
+    }
+
     ${zipPath} = Join-Path ${AssetsRoot} "ImDiskTk-x64.zip"
     if (-not (Test-Path ${zipPath})) {
         throw "ImDisk archive not found at ${zipPath}"
