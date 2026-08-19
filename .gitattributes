@@ -5,6 +5,13 @@ server/providers/*/assets/*.msi filter=lfs diff=lfs merge=lfs -text
 server/providers/*/assets/*.whl filter=lfs diff=lfs merge=lfs -text
 server/providers/*/assets/*.vsix filter=lfs diff=lfs merge=lfs -text
 server/providers/*/assets/**/*.cab filter=lfs diff=lfs merge=lfs -text
+
+# The bootstrap USB/ISO payload. A separate line because the pattern list above is
+# per-directory: client/assets/ matched nothing, so npcap's committed pointer was
+# never smudged and every clone got the 132-byte pointer text instead of the
+# installer -- silently, since `git lfs pull` exits 0 on a path it does not filter.
+# A new asset directory needs its own rule here. See #101.
+client/assets/*.exe filter=lfs diff=lfs merge=lfs -text
 # .iso is a generated build artifact -- prefer .gitignore. The LFS rule is a
 # safety net in case one is staged elsewhere by accident.
 *.iso filter=lfs diff=lfs merge=lfs -text
