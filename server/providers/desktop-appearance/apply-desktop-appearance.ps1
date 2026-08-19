@@ -48,18 +48,25 @@ function Write-ApplyLog {
     Add-Content -LiteralPath ${LogFile} -Encoding UTF8 -Value ("[{0}] [{1}] {2}" -f ${stamp}, ${env:USERNAME}, ${Line})
 }
 
-if (-not ('MastProvisioning.DesktopInterop' -as [type])) {
-    Add-Type -Namespace 'MastProvisioning' -Name 'DesktopInterop' -UsingNamespace 'System.Runtime.InteropServices' -MemberDefinition @'
+try {
+    New-Item -ItemType Directory -Path ${AppearanceRoot} -Force | Out-Null
+
+    # No -UsingNamespace here. Add-Type -MemberDefinition already emits
+    # `using System.Runtime.InteropServices;` itself, and adding it again makes the
+    # compiler warn about the duplicate directive -- which it treats as an ERROR, so
+    # Add-Type throws and this script dies. Measured on the dev VM 2026-08-19: the
+    # task exited 1 before reaching any log line, and the only trace was the task's
+    # own LastTaskResult. Inside the try for the same reason -- a failure up here has
+    # to reach the catch, or it is invisible.
+    if (-not ('MastProvisioning.DesktopInterop' -as [type])) {
+        Add-Type -Namespace 'MastProvisioning' -Name 'DesktopInterop' -MemberDefinition @'
 [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
 public static extern bool SystemParametersInfo(uint uiAction, uint uiParam, string pvParam, uint fWinIni);
 
 [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
 public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, IntPtr wParam, string lParam, uint fuFlags, uint uTimeout, out IntPtr lpdwResult);
 '@
-}
-
-try {
-    New-Item -ItemType Directory -Path ${AppearanceRoot} -Force | Out-Null
+    }
 
     if (-not (Test-Path -LiteralPath ${SidecarPath})) {
         throw ("background sidecar not found at {0} (provide-desktop-appearance.ps1 has not run on this machine)" -f ${SidecarPath})

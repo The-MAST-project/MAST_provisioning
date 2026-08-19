@@ -54,6 +54,9 @@ ${ThemeKey}     = 'Software\Microsoft\Windows\CurrentVersion\Themes\Personalize'
 ${DesktopKey}   = 'Control Panel\Desktop'
 ${WallpaperFill}   = '10'
 ${TileWallpaperNo} = '0'
+${TaskNeverRan}     = 267011  # 0x41303, SCHED_S_TASK_HAS_NOT_RUN
+${ApplyWaitSeconds} = 60
+${ApplyPollSeconds} = 2
 
 function Write-AppearanceLog {
     param([string]${Line})
@@ -148,6 +151,30 @@ try {
                 Write-AppearanceLog 'Started the apply task in the live session.'
             } catch {
                 Write-AppearanceLog ("[WARN] could not start the apply task now ({0}); it runs at the next logon." -f $_.Exception.Message)
+            }
+
+            # Wait for it, and fail if it failed. Starting a task and reporting success
+            # regardless would make this module's exit code meaningless: the whole
+            # visible outcome -- a repainted desktop -- happens in that task, and its
+            # exit code is the only trace it leaves. Waiting also removes a race, since
+            # the verify step reads the same LastTaskResult moments later and would
+            # otherwise catch the task mid-run.
+            ${waited} = 0
+            while (${waited} -lt ${ApplyWaitSeconds}) {
+                ${state} = (Get-ScheduledTask -TaskName ${TaskName} -ErrorAction SilentlyContinue).State
+                if (${state} -ne 'Running') { break }
+                Start-Sleep -Seconds ${ApplyPollSeconds}
+                ${waited} = ${waited} + ${ApplyPollSeconds}
+            }
+            ${applyInfo} = Get-ScheduledTaskInfo -TaskName ${TaskName} -ErrorAction SilentlyContinue
+            if (-not ${applyInfo}) {
+                Write-AppearanceLog '[WARN] apply task run info unreadable; its outcome is unknown.'
+            } elseif (${applyInfo}.LastTaskResult -eq ${TaskNeverRan}) {
+                Write-AppearanceLog ("[WARN] apply task still reports not-yet-run after {0}s; its outcome is unknown." -f ${waited})
+            } elseif (${applyInfo}.LastTaskResult -ne 0) {
+                throw ("the apply task failed (result {0}); the desktop was not repainted -- see {1}" -f ${applyInfo}.LastTaskResult, (Join-Path ${AppearanceRoot} 'apply.log'))
+            } else {
+                Write-AppearanceLog 'Apply task completed cleanly; the live desktop is updated.'
             }
         } else {
             Write-AppearanceLog 'No active mast session; the apply task runs at the next logon.'

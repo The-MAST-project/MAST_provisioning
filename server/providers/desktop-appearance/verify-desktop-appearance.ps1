@@ -109,8 +109,24 @@ if (${hive}) {
 }
 
 # --- the task that re-asserts it every logon -------------------------------
+# Presence is not enough: the task is what makes the appearance visible, and a
+# registered task that fails every logon leaves the desktop untouched while every
+# other check here passes. Its last exit code is the only trace it leaves -- which
+# is how a duplicate `using` directive in the apply script's Add-Type went unnoticed
+# on the dev VM until someone read LastTaskResult by hand (2026-08-19).
+${TaskNeverRan} = 267011  # 0x41303, SCHED_S_TASK_HAS_NOT_RUN
 if (Get-ScheduledTask -TaskName ${TaskName} -ErrorAction SilentlyContinue) {
     W ("AtLogon task present: {0}" -f ${TaskName})
+    ${info} = Get-ScheduledTaskInfo -TaskName ${TaskName} -ErrorAction SilentlyContinue
+    if (-not ${info}) {
+        W '[WARN] task registered but its run info is unreadable; last result not checked.'
+    } elseif (${info}.LastTaskResult -eq ${TaskNeverRan}) {
+        W 'task has not run yet (no logon since it was registered); nothing to judge.'
+    } elseif (${info}.LastTaskResult -ne 0) {
+        ${fail} += ("AtLogon task last FAILED: result {0} at {1} -- the desktop is not being repainted (see {2}\apply.log)" -f ${info}.LastTaskResult, ${info}.LastRunTime, ${AppearanceRoot})
+    } else {
+        W ("task last ran clean at {0}" -f ${info}.LastRunTime)
+    }
 } else {
     ${fail} += ("AtLogon task missing: {0}" -f ${TaskName})
 }
