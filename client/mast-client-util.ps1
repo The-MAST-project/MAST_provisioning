@@ -58,15 +58,36 @@ function Get-MastDriveDVerdict {
         # Whether any device holds D: at all (a Win32_LogicalDisk for D:, or a
         # reachable D:\ -- a medialess drive answers only the first).
         [Parameter(Mandatory)][bool]$Present,
-        # Win32_LogicalDisk.DriveType: 3 = local disk, 5 = CD-ROM.
+        # Win32_LogicalDisk.DriveType: 2 = removable, 3 = local disk, 5 = CD-ROM.
         [int]$DriveType = 0,
         [string]$VolumeName = '',
-        [Parameter(Mandatory)][string]$IndexVolumeLabel
+        [Parameter(Mandatory)][string]$IndexVolumeLabel,
+        # Whether the caller is itself running from D: -- on a bare unit the
+        # bootstrap USB takes D:, because C: is the system disk and D: is the
+        # next free letter.
+        [bool]$RunningFromD = $false
     )
     if (-not $Present) { return 'free' }
     # Bootstrap is idempotent and gets re-run on units that are already
     # provisioned, where D: is the index mount imdisk put there. That is the
     # wanted state, not a conflict.
     if ($DriveType -eq 3 -and $VolumeName -eq $IndexVolumeLabel) { return 'index' }
+    # The question is not "is D: occupied" but "will D: still be occupied when
+    # the imdisk provider mounts it", several reboots and one payload transfer
+    # later. The medium the operator is running from is transient by
+    # construction -- the one occupant of D: that answers no.
+    #
+    # REMOVABLE and running-from, both: the exemption rests on the volume going
+    # away, not on where the script happens to sit. An operator who copies the
+    # payload onto the factory D: SSD and runs it from there is looking at the
+    # exact disk that has to come out, and must still be told so. The cost is
+    # that a USB enclosure reporting itself fixed (some SSD ones do) fails
+    # instead of passing -- the safe direction, with a message that says what
+    # to do.
+    if ($RunningFromD -and $DriveType -eq 2) { return 'self' }
+    # Removable but not the medium in hand: a stick left mounted while bootstrap
+    # runs from a copy elsewhere, or a card reader. Fails like any other
+    # occupant, but the fix is different enough to be worth its own message.
+    if ($DriveType -eq 2) { return 'removable' }
     return 'foreign'
 }

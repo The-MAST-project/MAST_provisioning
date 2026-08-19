@@ -69,4 +69,26 @@ Describe 'Get-MastDriveDVerdict' {
         Get-MastDriveDVerdict -Present $true -DriveType 5 -VolumeName 'mast-indexes' -IndexVolumeLabel 'mast-indexes' |
             Should Be 'foreign'
     }
+    It 'recognizes the bootstrap medium it is running from' {
+        # On a bare unit the USB takes D:, C: being the system disk.
+        Get-MastDriveDVerdict -Present $true -DriveType 2 -VolumeName 'USB DISK' -IndexVolumeLabel 'mast-indexes' -RunningFromD $true |
+            Should Be 'self'
+    }
+    It 'calls a removable D: removable when it is not the medium in hand' {
+        Get-MastDriveDVerdict -Present $true -DriveType 2 -VolumeName 'USB DISK' -IndexVolumeLabel 'mast-indexes' -RunningFromD $false |
+            Should Be 'removable'
+    }
+    It 'still recognizes the index volume when running from D:' {
+        # A re-run on a provisioned unit, from a copy on the index disk itself.
+        Get-MastDriveDVerdict -Present $true -DriveType 3 -VolumeName 'mast-indexes' -IndexVolumeLabel 'mast-indexes' -RunningFromD $true |
+            Should Be 'index'
+    }
+    It 'does not excuse a fitted disk just because the script runs from D:' {
+        # The operator who copies the payload onto the factory D: SSD and runs
+        # it from there is looking at the exact disk that has to come out. An
+        # earlier ordering returned 'self' here, which would have passed the
+        # check on the machine it exists to stop.
+        Get-MastDriveDVerdict -Present $true -DriveType 3 -VolumeName 'Data' -IndexVolumeLabel 'mast-indexes' -RunningFromD $true |
+            Should Be 'foreign'
+    }
 }
