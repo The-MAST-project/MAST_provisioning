@@ -230,12 +230,18 @@ This is the only path operators run by hand. Everything else is autonomous.
    The first thing it does is assert the unit's hardware: **64 GB of RAM** and a **free
    drive letter D:**, both required by the `imdisk` provider's 32 GB RAM-backed D: mount.
    A machine missing either stops here, before anything has been changed on it -- fit the
-   memory (or pull the disk holding D:) and re-run. The requirement is declared once, in
-   `Get-MastRequiredMemoryGB` (`server/lib/mast-modules.psm1`); `bootstrap-winrm.ps1`
+   memory (or pull the disk holding D:) and re-run. On a bare unit the bootstrap USB
+   itself takes D: (`C:` is the system disk); that is recognized and is **not** a failure,
+   and the drive is ejected at the end of the run. The memory requirement is declared once,
+   in `Get-MastRequiredMemoryGB` (`server/lib/mast-modules.psm1`); `bootstrap-winrm.ps1`
    embeds it because it runs offline, and `build-mast.ps1` fails the build if the two
    drift.
 
-4. Once bootstrap completes the unit is reachable over WinRM HTTP on port 5985. From
+4. **Unplug the bootstrap drive** when the run tells you to, before any reboot. Bootstrap
+   ejects it, but a drive left physically plugged in is picked up again on the next boot
+   and takes `D:` back -- which is the state the preflight exists to prevent.
+
+5. Once bootstrap completes the unit is reachable over WinRM HTTP on port 5985. From
    here the provisioning server's Task Scheduler loop picks up the unit automatically
    and handles all further software installation and updates.
 

@@ -45,6 +45,12 @@
     short on either stops with the box untouched. It is a hard failure; the only exemption is
     -VmTestRun (the 8 GB dev VM, which builds with -ImdiskMountType file).
 
+    D: held by the bootstrap medium ITSELF is not a failure -- on a bare unit the USB takes D:,
+    C: being the system disk -- and that drive is gone before provisioning ever mounts the
+    index disk. At the END of a successful run the script ejects that medium if it is
+    removable, and says so loudly: a drive left plugged in is picked up again on the next boot
+    and takes D: back, so only unplugging it is durable.
+
     This script performs ALL first-time prep; there is no separate prepare step. After it
     completes successfully, the operator verifies the summary and reboots if prompted. The unit
     is then ready for provisioning (the prov server's provisioning loop picks it up
@@ -151,13 +157,18 @@ $script:BootstrapLogDir = Join-Path $env:SystemDrive 'MAST\logs'
 $script:BootstrapLog = Join-Path $script:BootstrapLogDir 'bootstrap-winrm.log'
 $script:RebootRecommended = $false
 $script:AllowUnencryptedOk = $false
+# Set by the preflight when D: turned out to be the bootstrap medium itself, so the
+# end of the run can say so again after the drive has been ejected.
+$script:BootstrapMediaOnD = $false
+$script:BootstrapMediaEjectAttempted = $false
+$script:BootstrapMediaLetter = ''
 
 # Bootstrap version: stamped to C:\MAST\bootstrap-manifest.json on success so the fleet
 # drift report (tools/fleet-drift-report.py) can tell which bootstrap each unit ran and
 # flag units missing newer bootstrap elements. BUMP THIS whenever you add a bootstrap
 # capability, and add a matching element (since = this number) to
 # client/bootstrap-elements.json so its current_version stays == this value.
-$script:BootstrapVersion = 10
+$script:BootstrapVersion = 11
 
 # --- Hardware requirement (asserted before anything is changed) ---------------
 # Kept in step with server\lib\mast-modules.psm1 Get-MastRequiredMemoryGB, which is
@@ -230,6 +241,49 @@ function Get-MastInstalledMemoryBanks {
     }
 }
 
+function Dismount-MastBootstrapMedia {
+    # Eject the removable volume this script is running from, at the end of the
+    # run, once nothing needs it any more (the Npcap installer is launched from
+    # it mid-run).
+    #
+    # Why it matters beyond tidiness: bootstrap often ends in a reboot, and a
+    # forgotten stick is re-enumerated on the next boot and takes D: again --
+    # which is precisely the state the preflight exists to prevent. Ejecting
+    # does NOT survive that on its own; only physically removing the drive
+    # does. What the eject buys is that the drive is safe to pull, D: is free
+    # immediately, and the volume vanishing from Explorer is a visible cue for
+    # the notice below.
+    #
+    # A courtesy, never a precondition: every failure here is a warning telling
+    # the operator to pull the drive by hand.
+    if ([string]::IsNullOrWhiteSpace($PSScriptRoot)) { return }
+    $root = [System.IO.Path]::GetPathRoot($PSScriptRoot)
+    if ($root -notmatch '^[A-Za-z]:\\$') { return }
+    $letter = $root.Substring(0, 2)
+
+    $vol = Get-CimInstance Win32_LogicalDisk -Filter ("DeviceID='{0}'" -f $letter) -ErrorAction SilentlyContinue
+    # DriveType 2 = removable disk. A CD-ROM (5) is deliberately left alone: the
+    # dev VM runs this from the autounattend ISO.
+    if ($null -eq $vol -or [int]$vol.DriveType -ne 2) { return }
+
+    Write-BootstrapMsg '' 'Cyan'
+    Write-BootstrapMsg '--- Bootstrap media ---' 'Cyan'
+    Write-BootstrapMsg ("  Ejecting the bootstrap drive {0} (label '{1}')..." -f $letter, $vol.VolumeName) 'White'
+    try {
+        & mountvol.exe $letter /P 2>&1 | ForEach-Object { Write-BootstrapMsg ("    {0}" -f $_) 'DarkGray' }
+    } catch {
+        Write-BootstrapMsg ("  [WARN] eject command failed: {0}" -f $_.Exception.Message) 'Yellow'
+    }
+    $still = Get-CimInstance Win32_LogicalDisk -Filter ("DeviceID='{0}'" -f $letter) -ErrorAction SilentlyContinue
+    if ($null -eq $still) {
+        Write-BootstrapMsg ("  [OK] {0} is ejected and safe to unplug." -f $letter) 'Green'
+    } else {
+        Write-BootstrapMsg ("  [WARN] {0} could not be ejected (something still holds it open)." -f $letter) 'Yellow'
+    }
+    $script:BootstrapMediaEjectAttempted = $true
+    $script:BootstrapMediaLetter = $letter
+}
+
 function Assert-MastUnitHardware {
     # The two facts provisioning cannot supply for itself. Runs before the
     # hostname prompt and before the first mutation, so a unit that fails here
@@ -260,13 +314,24 @@ function Assert-MastUnitHardware {
         $dType = [int]$dDisk.DriveType
         if ($dDisk.VolumeName) { $dLabel = [string]$dDisk.VolumeName }
     }
-    $verdict = Get-MastDriveDVerdict -Present $dPresent -DriveType $dType -VolumeName $dLabel -IndexVolumeLabel $script:IndexVolumeLabel
+    $verdict = Get-MastDriveDVerdict -Present $dPresent -DriveType $dType -VolumeName $dLabel `
+        -IndexVolumeLabel $script:IndexVolumeLabel -RunningFromD ($PSScriptRoot -like 'D:*')
     switch ($verdict) {
         'free' {
             Write-BootstrapMsg '  [OK] Drive letter D: is free for the index RAM disk.' 'Green'
         }
         'index' {
             Write-BootstrapMsg ("  [OK] D: already carries the '{0}' index volume (unit is provisioned)." -f $script:IndexVolumeLabel) 'Green'
+        }
+        'self' {
+            # Not a defect: this is the stick in the operator's hand, and it is
+            # gone long before the imdisk mount. The obligation it leaves is
+            # repeated at the end of the run and in the desktop report.
+            $script:BootstrapMediaOnD = $true
+            Write-BootstrapMsg '  [OK] D: is this bootstrap medium, not a fitted disk; it frees up when the drive is removed.' 'Green'
+        }
+        'removable' {
+            $problems += ("drive letter D: is a removable drive (label='{0}') and the index RAM disk requires it. If this is the bootstrap drive, eject it and re-run from a copy on C:; otherwise remove that device or reassign its letter." -f $dLabel)
         }
         'foreign' {
             $problems += ("drive letter D: is taken (DriveType={0} label='{1}'); the index RAM disk requires it. Remove the D: disk, or reassign that device's letter, and re-run." -f $dType, $dLabel)
@@ -497,7 +562,13 @@ function Write-BootstrapDesktopReport([string]$HostNm, [string]$SiteCode) {
             $(if ($banks.Count -gt 0) { ($banks | ForEach-Object { "${_} GB" }) -join ' + ' } else { '(not enumerated)' }))
     } catch { $lines += ('  memory : (query failed: {0})' -f $_.Exception.Message) }
     $dLd = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='D:'" -ErrorAction SilentlyContinue
-    $lines += ('  drive D: {0}' -f $(if ($dLd) { ("in use (DriveType={0} label='{1}')" -f $dLd.DriveType, $dLd.VolumeName) } else { 'free (reserved for the index RAM disk)' }))
+    $lines += ('  drive D: {0}' -f $(
+        if ($script:BootstrapMediaOnD) { 'held by the bootstrap drive only - free once that drive is removed' }
+        elseif ($dLd) { ("in use (DriveType={0} label='{1}')" -f $dLd.DriveType, $dLd.VolumeName) }
+        else { 'free (reserved for the index RAM disk)' }))
+    if ($script:BootstrapMediaOnD) {
+        $lines += '           D: MUST be free for the index RAM disk before this unit provisions.'
+    }
     $lines += @(
         ''
         '--- Network adapters (record MACs for DHCP reservations) ---'
@@ -1634,8 +1705,29 @@ try {
         Write-BootstrapMsg ("  - {0}" -f $app) 'White'
     }
 
+    # Last, so the drive notice is the final thing on screen before any reboot
+    # countdown -- and after the Npcap installer and the desktop report, which
+    # both need the media.
+    Dismount-MastBootstrapMedia
+    if ($script:BootstrapMediaEjectAttempted) {
+        Write-BootstrapBanner '' 'White'
+        Write-BootstrapBanner '======================================================================' 'Yellow'
+        Write-BootstrapBanner (' REMOVE THE BOOTSTRAP DRIVE ({0}) NOW' -f $script:BootstrapMediaLetter) 'Yellow'
+        Write-BootstrapBanner '======================================================================' 'Yellow'
+        if ($script:BootstrapMediaOnD) {
+            Write-BootstrapMsg '  It is sitting on D:, which the index RAM disk needs. Ejecting frees D: now,' 'Yellow'
+            Write-BootstrapMsg '  but a drive left plugged in is picked up again on the next boot and takes D:' 'Yellow'
+            Write-BootstrapMsg '  back. Only unplugging it is durable.' 'Yellow'
+        } else {
+            Write-BootstrapMsg '  Left plugged in, it takes a drive letter again on the next boot.' 'Yellow'
+        }
+    }
+
     if ($RebootAfterBootstrap) {
         Write-BootstrapMsg '' 'Yellow'
+        if ($script:BootstrapMediaEjectAttempted) {
+            Write-BootstrapMsg 'Unplug the drive BEFORE the reboot below completes.' 'Red'
+        }
         Write-BootstrapMsg 'Reboot in 90 seconds (-RebootAfterBootstrap). Cancel: shutdown.exe /a' 'Yellow'
         & shutdown.exe /r /t 90 /c "MAST bootstrap complete; rebooting."
     }
