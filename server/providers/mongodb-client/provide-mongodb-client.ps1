@@ -344,6 +344,37 @@ if (-not ${NoCompass}) {
   ${shortcutPath} = if (${shortcutHits}.Count -gt 0) { ${shortcutHits}[0].FullName } else { $null }
   ${haveShortcut} = $null -ne ${shortcutPath}
 
+  # Squirrel does not write the shortcut itself: it registers it from Compass's
+  # --squirrel-firstrun handler, which only runs if the installer launches the
+  # GUI at the end. An installer that exits without launching leaves a complete
+  # install and no shortcut -- mast05, 2026-08-19: installer gone at t=2s,
+  # wrapper present, app-1.43.0 present, 176 MB exe and 351 MB app dir, and the
+  # module failed on the .lnk alone.
+  #
+  # Write it ourselves rather than fail a good install. The size checks below
+  # are what actually establish the install is complete; the shortcut is how an
+  # operator reaches it, and creating one is deterministic where waiting on a
+  # vendor firstrun handler is not. Still fatal if this cannot produce one.
+  if (-not ${haveShortcut} -and ${haveWrapper}) {
+    ${programsDir} = Join-Path ${env:APPDATA} 'Microsoft\Windows\Start Menu\Programs'
+    ${lnkPath} = Join-Path ${programsDir} 'MongoDB Compass.lnk'
+    try {
+      New-Item -ItemType Directory -Path ${programsDir} -Force | Out-Null
+      ${ws} = New-Object -ComObject WScript.Shell
+      ${lnk} = ${ws}.CreateShortcut(${lnkPath})
+      ${lnk}.TargetPath = ${wrapperExe}
+      ${lnk}.Description = 'MongoDB Compass'
+      ${lnk}.Save()
+      if (Test-Path -LiteralPath ${lnkPath}) {
+        ${shortcutPath} = ${lnkPath}
+        ${haveShortcut} = $true
+        Write-Host ("Start Menu shortcut was absent (Squirrel firstrun did not run); created {0}" -f ${lnkPath})
+      }
+    } catch {
+      Write-Warning ("could not create the Start Menu shortcut: {0}" -f $_.Exception.Message)
+    }
+  }
+
   Write-Host ("Compass verify: wrapper={0} appDir={1} appExeBytes={2:N0} appDirBytes={3:N0} shortcut={4}" `
       -f ${haveWrapper}, ${appDirPath}, ${appExeBytes}, ${appDirBytes}, $(if (${haveShortcut}) { ${shortcutPath} } else { '<missing>' }))
 
