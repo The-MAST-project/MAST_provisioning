@@ -84,6 +84,9 @@ BUILD_TIMEOUT_S = 1800
 TRANSFER_TIMEOUT_S = 3600
 EXECUTE_TIMEOUT_S = 3600
 
+#: Windows reports memory in bytes and talks about it in GiB; so does this log line.
+GIB = 1024**3
+
 EXIT_OK = 0
 EXIT_UNIT_FAIL = 1
 EXIT_FATAL = 2
@@ -640,10 +643,19 @@ class Driver:
         write a per-unit JSON, persist the primary MAC to the registry. Non-fatal."""
         host = unit.hostname
         try:
+            # Memory rides along with the NICs because it is the same kind of fact:
+            # something the fleet needs to know about a machine that the payload
+            # cannot tell it. A unit short on RAM cannot host the imdisk index
+            # mount, and this is the only cross-fleet read of what is actually
+            # fitted -- both gates on the requirement (bootstrap-winrm.ps1 and the
+            # imdisk provider) run ON the unit and only report locally.
             script = (
                 "$a = Get-NetAdapter -Physical | ForEach-Object { [ordered]@{ name=$_.Name; "
                 "mac=$_.MacAddress; status=$_.Status; media=$_.PhysicalMediaType } }; "
+                "$cs = Get-CimInstance Win32_ComputerSystem; "
+                "$banks = @(Get-CimInstance Win32_PhysicalMemory | ForEach-Object { $_.Capacity }); "
                 "$o = [ordered]@{ hostname=$env:COMPUTERNAME; adapters=@($a); "
+                "memory_visible_bytes=$cs.TotalPhysicalMemory; memory_bank_bytes=$banks; "
                 "collected_utc=(Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ') }; "
                 "Write-Output ('INV ' + ($o | ConvertTo-Json -Compress -Depth 6))"
             )
@@ -659,7 +671,9 @@ class Driver:
                 for a in inv.get("adapters", [])
                 if str(a.get("status")).lower() == "up" and "802.3" in str(a.get("media", ""))
             ]
-            self.log.event("INVENTORY_OK", unit=host, site=unit.site, macs_up=len(macs_up))
+            mem_bytes = inv.get("memory_visible_bytes")
+            mem_gb = round(mem_bytes / GIB, 1) if isinstance(mem_bytes, int) else "unknown"
+            self.log.event("INVENTORY_OK", unit=host, site=unit.site, macs_up=len(macs_up), memory_gb=mem_gb)
             if macs_up and unit.mac != macs_up[0]:
                 self._persist_mac(unit, macs_up[0])
         except Exception as e:  # noqa: BLE001 -- inventory never fails the run
