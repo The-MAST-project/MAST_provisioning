@@ -1,6 +1,6 @@
 ---
 decided: 2026-08-19
-status: proposed
+status: accepted
 issue: MAST_provisioning#54
 areas:
   - operator tooling
