@@ -152,6 +152,7 @@ renumbering.
 |  2500 | `diagnostics` | Post-smoke runtime checks (ASCOM, app launch, PHD2 RPC, heartbeat) |
 |  2600 | `ds9` | SAOImage DS9 8.7 imaging / data visualization |
 |  2700 | `desktop-shortcuts` | Operator shortcuts on the Public desktop (FastAPI control, weather page, DS9, MAST logs, **instrument calibration**, **Jupyter Notebook**) |
+|  2750 | `desktop-appearance` | Dark Windows theme + a dark background carrying the machine's identity (hostname, site, role), written into the autologin `mast` hive and re-asserted in that session by an AtLogon task |
 |  2900 | `mast-validation` | End-to-end plate-solve validation through production code paths |
 |  9500 | `mast-services-finalize` | Set the MAST services (`mast-unit`, `mast-pwi4`, `mast-pwshutter`, `mast-phd2`) to **manual** start and stop them, as the last step after verification |
 |  9999 | `reboot` | Detect pending-reboot state; drop a flag for the orchestrator |

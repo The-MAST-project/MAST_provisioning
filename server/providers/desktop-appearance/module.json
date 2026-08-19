@@ -1,0 +1,15 @@
+{
+  "name": "desktop-appearance",
+  "version": "1.0",
+  "description": "Operator desktop appearance for a dome machine reached remotely: the dark Windows theme (per-user Personalize keys) and a dark background carrying the machine's identity -- hostname above all, plus site and role read from C:\\WIS\\config.toml. Written into the autologin 'mast' hive from the provisioning session, and re-asserted in that session by an AtLogon task, which is the only place a live desktop can be repainted.",
+  "order": 2750,
+  "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-desktop-appearance.ps1\" -AppearanceRoot \"C:\\ProgramData\\MAST\\desktop\" -MastUser \"mast\"",
+  "commandfiles": [
+    "provide-desktop-appearance.ps1",
+    "render-desktop-background.ps1",
+    "apply-desktop-appearance.ps1",
+    "mast-userhive-lib.ps1",
+    "verify-desktop-appearance.ps1"
+  ],
+  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\verify-desktop-appearance.ps1\" -AppearanceRoot \"C:\\ProgramData\\MAST\\desktop\" -MastUser \"mast\""
+}

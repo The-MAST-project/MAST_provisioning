@@ -1,0 +1,139 @@
+#requires -Version 5.1
+# Is the operator desktop appearance CURRENT, not merely present.
+#
+# Presence proves nothing here. A background rendered before a rename still
+# exists, still loads, and still names the wrong host -- which is the whole reason
+# an operator would look at it. So the checks compare the sidecar's recorded
+# static fields against the live machine, and the deployed registry values against
+# what this build would write (docs/per-module-tracking-plan.md, resolution rule 2).
+#
+# Reads mast's hive through the same mast-userhive-lib.ps1 the provider writes
+# through, so the check cannot be looking at a different user than the one
+# configured.
+[CmdletBinding()]
+param(
+    [string]${AppearanceRoot} = 'C:\ProgramData\MAST\desktop',
+    [string]${UnitToml} = 'C:\WIS\config.toml',
+    [string]${MastUser} = 'mast'
+)
+
+${ErrorActionPreference} = 'Stop'
+${mastLogDot} = Join-Path ${PSScriptRoot} 'mast-log.ps1'
+if (-not (Test-Path ${mastLogDot})) { ${mastLogDot} = Join-Path ${PSScriptRoot} '..\..\lib\mast-log.ps1' }
+. ${mastLogDot}
+${hiveLibDot} = Join-Path ${PSScriptRoot} 'mast-userhive-lib.ps1'
+if (-not (Test-Path ${hiveLibDot})) { throw "mast-userhive-lib.ps1 not found next to verify-desktop-appearance.ps1" }
+. ${hiveLibDot}
+Set-StrictMode -Off  # mast-log.ps1 enables StrictMode; verify scripts probe optional state
+${verifyLog} = Get-MastVerifyLog -Module 'desktop-appearance'
+
+${TaskName}        = 'MAST-DesktopAppearance-Apply'
+${ThemeKey}        = 'Software\Microsoft\Windows\CurrentVersion\Themes\Personalize'
+${DesktopKey}      = 'Control Panel\Desktop'
+${WallpaperFill}   = '10'
+${TileWallpaperNo} = '0'
+
+function W { param([string]${Line}) Add-Content -LiteralPath ${verifyLog} -Encoding UTF8 -Value ("[{0}] {1}" -f (Get-Date -Format 'HH:mm:ss'), ${Line}) }
+Set-Content -LiteralPath ${verifyLog} -Encoding UTF8 -Value ("[{0}] verify-desktop-appearance.ps1 started" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))
+
+function Get-TomlValue {
+    param([Parameter(Mandatory)][string]${Content}, [Parameter(Mandatory)][string]${Key})
+    ${match} = [regex]::Match(${Content}, ('(?m)^\s*{0}\s*=\s*(.+?)\s*$' -f [regex]::Escape(${Key})))
+    if (${match}.Success) { return ${match}.Groups[1].Value.Trim().Trim('"') }
+    return $null
+}
+
+${fail} = @()
+${imagePath}   = Join-Path ${AppearanceRoot} 'background.png'
+${sidecarPath} = Join-Path ${AppearanceRoot} 'background.json'
+
+# --- the image and what it was rendered from --------------------------------
+${sidecar} = $null
+if (-not (Test-Path -LiteralPath ${sidecarPath})) {
+    ${fail} += ("background sidecar missing: {0}" -f ${sidecarPath})
+} else {
+    ${sidecar} = Get-Content -LiteralPath ${sidecarPath} -Raw | ConvertFrom-Json
+    W ("sidecar present: renderer_version={0} rendered_at={1}" -f ${sidecar}.renderer_version, ${sidecar}.rendered_at)
+
+    if (-not (Test-Path -LiteralPath ${imagePath})) {
+        ${fail} += ("background image missing: {0}" -f ${imagePath})
+    } elseif ((Get-Item -LiteralPath ${imagePath}).Length -le 0) {
+        ${fail} += ("background image is empty: {0}" -f ${imagePath})
+    } else {
+        W ("background image present: {0} ({1} bytes)" -f ${imagePath}, (Get-Item -LiteralPath ${imagePath}).Length)
+    }
+
+    # The staleness check. Only static_fields are compared: a field listed in
+    # dynamic_fields is live by design and would differ on every read.
+    ${expectedSite} = 'unknown'
+    ${expectedRole} = 'unknown'
+    if (Test-Path -LiteralPath ${UnitToml}) {
+        ${toml} = Get-Content -LiteralPath ${UnitToml} -Raw
+        ${tomlSite} = Get-TomlValue -Content ${toml} -Key 'site'
+        ${tomlRole} = Get-TomlValue -Content ${toml} -Key 'machine_role'
+        if (${tomlSite}) { ${expectedSite} = ${tomlSite} }
+        if (${tomlRole}) { ${expectedRole} = ${tomlRole} }
+    }
+    ${expected} = @{
+        computer_name = ${env:COMPUTERNAME}
+        site          = ${expectedSite}
+        role          = ${expectedRole}
+    }
+    ${dynamic} = @()
+    if (${sidecar}.dynamic_fields) { ${dynamic} = @(${sidecar}.dynamic_fields) }
+    foreach (${field} in @('computer_name', 'site', 'role')) {
+        if (${dynamic} -contains ${field}) { W ("{0} is declared dynamic; not compared." -f ${field}); continue }
+        ${recorded} = ${sidecar}.static_fields.${field}
+        if (${recorded} -ne ${expected}[${field}]) {
+            ${fail} += ("background STALE: {0} rendered as '{1}', machine reports '{2}'" -f ${field}, ${recorded}, ${expected}[${field}])
+        } else {
+            W ("{0} current: {1}" -f ${field}, ${recorded})
+        }
+    }
+}
+
+# --- the per-user values, read out of mast's own hive -----------------------
+${hive} = $null
+try {
+    ${hive} = Resolve-MastUserHive -UserName ${MastUser}
+} catch {
+    ${fail} += ("could not reach the '{0}' hive: {1}" -f ${MastUser}, $_.Exception.Message)
+}
+if (${hive}) {
+    W ("resolved the '{0}' hive ({1})." -f ${MastUser}, ${hive}.Source)
+    foreach (${check} in @(
+            @{ SubKey = ${ThemeKey};   Name = 'AppsUseLightTheme';    Expected = 0 },
+            @{ SubKey = ${ThemeKey};   Name = 'SystemUsesLightTheme'; Expected = 0 },
+            @{ SubKey = ${DesktopKey}; Name = 'Wallpaper';            Expected = ${imagePath} },
+            @{ SubKey = ${DesktopKey}; Name = 'WallpaperStyle';       Expected = ${WallpaperFill} },
+            @{ SubKey = ${DesktopKey}; Name = 'TileWallpaper';        Expected = ${TileWallpaperNo} })) {
+        ${actual} = Get-MastUserHiveValue -Hive ${hive} -SubKey ${check}.SubKey -Name ${check}.Name
+        if ($null -eq ${actual}) {
+            ${fail} += ("{0} not set in the {1} hive" -f ${check}.Name, ${MastUser})
+        } elseif ("${actual}" -ne "$(${check}.Expected)") {
+            ${fail} += ("{0} is '{1}', build expects '{2}'" -f ${check}.Name, ${actual}, ${check}.Expected)
+        } else {
+            W ("{0} current: {1}" -f ${check}.Name, ${actual})
+        }
+    }
+    Close-MastUserHive -Hive ${hive}
+} elseif (${fail}.Count -eq 0) {
+    # No profile at all: the provider legitimately deferred to the logon task, so
+    # there is nothing to read back yet. Say so rather than passing silently.
+    W ("[WARN] '{0}' has no profile yet; per-user values not verifiable on this machine." -f ${MastUser})
+}
+
+# --- the task that re-asserts it every logon -------------------------------
+if (Get-ScheduledTask -TaskName ${TaskName} -ErrorAction SilentlyContinue) {
+    W ("AtLogon task present: {0}" -f ${TaskName})
+} else {
+    ${fail} += ("AtLogon task missing: {0}" -f ${TaskName})
+}
+
+if (${fail}.Count -eq 0) {
+    W 'PASS desktop appearance current'
+    Write-MastSmokeOk -Module 'desktop-appearance' | Out-Null
+    exit 0
+}
+W ('FAIL ' + (${fail} -join '; '))
+exit 1
