@@ -82,4 +82,30 @@ function Get-ConfiguredSites {
   return ${sites}
 }
 
-Export-ModuleMember -Function @('Get-AllProviderModules', 'Get-ConfiguredSites')
+# ---------------------------------------------------------------------------
+# Fleet hardware requirement (no admin required)
+# ---------------------------------------------------------------------------
+# The memory a MAST unit must have, and the single declaration of it. The figure
+# is not a preference: server/providers/imdisk mounts D: as a RAM-backed VOLATILE
+# ImDisk (`imdisk -a -m D: -t vm`), and that attach commits the image's full
+# 32 GB. 64 GB is that commit plus room for the control stack, the venvs and a
+# solve running at the same time.
+#
+# Two consumers, one number:
+#   - build-mast.ps1 injects it into the imdisk module command (-MinMemoryGB), so
+#     a run that reaches the mount has already asserted the machine can host it.
+#   - client/bootstrap-winrm.ps1 EMBEDS it ($script:RequiredMemoryGB), because it
+#     runs offline on a bare unit and cannot import this module -- exactly the
+#     $knownSites situation, and guarded the same way by
+#     Assert-BootstrapMemoryRequirementInSync in build-mast.ps1.
+#
+# A fleet that ever stops being uniform needs a per-unit value here instead
+# (unit-registry.json is where it would be declared); until then, one number.
+
+function Get-MastRequiredMemoryGB {
+  [CmdletBinding()]
+  param()
+  return 64
+}
+
+Export-ModuleMember -Function @('Get-AllProviderModules', 'Get-ConfiguredSites', 'Get-MastRequiredMemoryGB')

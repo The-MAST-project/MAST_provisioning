@@ -177,7 +177,35 @@ function Assert-BootstrapKnownSitesInSync {
   Write-Host ('[build-mast] Site list in sync: {0} (bootstrap-winrm.ps1 $knownSites matches config-bootstrap/sites/).' -f (${configured} -join ', '))
 }
 
+# The memory figure has the same shape of problem as the site list: bootstrap runs
+# offline on a bare unit and must embed it, while the provisioning side reads it from
+# mast-modules.psm1. Only one of the two is authoritative, and only the build can see
+# both -- so the build is where a half-edit is caught.
+function Assert-BootstrapMemoryRequirementInSync {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)][string]${ClientRoot}
+  )
+  ${bootstrapScript} = Join-Path ${ClientRoot} 'bootstrap-winrm.ps1'
+  if (-not (Test-Path -LiteralPath ${bootstrapScript})) {
+    throw ('Cannot verify the memory requirement: bootstrap script not found at {0}' -f ${bootstrapScript})
+  }
+  ${required} = Get-MastRequiredMemoryGB
+
+  ${text} = Get-Content -LiteralPath ${bootstrapScript} -Raw -Encoding UTF8
+  ${m} = [regex]::Match(${text}, '\$script:RequiredMemoryGB\s*=\s*(\d+)')
+  if (-not ${m}.Success) {
+    throw ('Cannot find a ''$script:RequiredMemoryGB = <n>'' assignment in {0} to verify against Get-MastRequiredMemoryGB.' -f ${bootstrapScript})
+  }
+  ${embedded} = [int]${m}.Groups[1].Value
+  if (${embedded} -ne ${required}) {
+    throw ("bootstrap-winrm.ps1 `$script:RequiredMemoryGB is {0} GB but Get-MastRequiredMemoryGB (server\lib\mast-modules.psm1) says {1} GB. Update {2} to match; the module is the authoritative declaration." -f ${embedded}, ${required}, ${bootstrapScript})
+  }
+  Write-Host ('[build-mast] Memory requirement in sync: {0} GB (bootstrap-winrm.ps1 matches Get-MastRequiredMemoryGB).' -f ${required})
+}
+
 Assert-BootstrapKnownSitesInSync -ClientRoot ${clientRoot} -ProvidersRoot ${providersRoot}
+Assert-BootstrapMemoryRequirementInSync -ClientRoot ${clientRoot}
 
 # If no -Modules were passed (or the normalization above collapsed to empty),
 # default to the providers discovered on disk. Get-AllProviderModules lives in
@@ -326,6 +354,12 @@ function New-CommandFile([string[]]${Mods}) {
         if (${ImdiskMountType} -ne 'vm') {
           ${cmd} = ${cmd} + (" -MountType {0}" -f ${ImdiskMountType})
         }
+        # The fleet requirement travels with the command rather than being a
+        # default in the provider, so there is one declaration of the number
+        # (Get-MastRequiredMemoryGB) instead of a copy per consumer. The
+        # provider only asserts it for a '-t vm' mount -- the dev VM's
+        # file-backed mount commits nothing and is exempt by construction.
+        ${cmd} = ${cmd} + (" -MinMemoryGB {0}" -f (Get-MastRequiredMemoryGB))
       }
       'config-bootstrap' {
         # Inject the explicitly-selected -Site so the provider deploys
@@ -468,13 +502,15 @@ if (-not (Test-Path ${installedManifestScript})) {
 Copy-Item -Force ${installedManifestScript} (Join-Path ${staging} 'mast-installed-manifest.ps1')
 Write-Host " Staged mast-installed-manifest.ps1"
 
+# A hard requirement for the same reason as the manifest script above: the imdisk
+# provider dot-sources Test-MastMemoryRequirement from here before it will attempt
+# a '-t vm' mount, so a payload without it does not degrade, it fails on the unit.
 ${clientUtilScript} = Join-Path ${clientRoot} 'mast-client-util.ps1'
-if (Test-Path ${clientUtilScript}) {
-    Copy-Item -Force ${clientUtilScript} (Join-Path ${staging} 'mast-client-util.ps1')
-    Write-Host " Staged mast-client-util.ps1"
-} else {
-    Write-Warning "mast-client-util.ps1 not found at ${clientUtilScript}"
+if (-not (Test-Path ${clientUtilScript})) {
+    throw "Missing mast-client-util.ps1 at ${clientUtilScript}"
 }
+Copy-Item -Force ${clientUtilScript} (Join-Path ${staging} 'mast-client-util.ps1')
+Write-Host " Staged mast-client-util.ps1"
 
 ${verifyOnlyScript} = Join-Path ${clientRoot} 'run-verify-only.ps1'
 if (Test-Path ${verifyOnlyScript}) {

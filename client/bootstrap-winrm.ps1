@@ -38,13 +38,21 @@
          -SkipTrim. Remote-desktop and backup APPS are left to uninstall by hand -
          listed at the end of a run.
 
+    Before any of that, the script asserts the two hardware facts a unit's provisioning depends
+    on and no software step can supply: 64 GB of RAM installed, and drive letter D: free. Both
+    exist because the imdisk provider mounts D: as a 32 GB RAM-backed volatile ImDisk. The
+    check runs FIRST, before the hostname prompt and before anything is changed, so a machine
+    short on either stops with the box untouched. It is a hard failure; the only exemption is
+    -VmTestRun (the 8 GB dev VM, which builds with -ImdiskMountType file).
+
     This script performs ALL first-time prep; there is no separate prepare step. After it
     completes successfully, the operator verifies the summary and reboots if prompted. The unit
     is then ready for provisioning (the prov server's provisioning loop picks it up
     once it is in unit-registry.json, or run client\onboard-mast-unit.ps1 on the unit).
 
-    USB / DVD: copy client\bootstrap-winrm.cmd, bootstrap-winrm.ps1, and the Npcap installer
-    (client\assets\npcap-*.exe) together (or use the autounattend ISO, which bundles all three).
+    USB / DVD: copy client\bootstrap-winrm.cmd, bootstrap-winrm.ps1, mast-client-util.ps1 and
+    the Npcap installer (client\assets\npcap-*.exe) together (or use the autounattend ISO,
+    which bundles all four).
     Double-click bootstrap-winrm.cmd so Windows runs PowerShell (many PCs
     open .ps1 in Notepad by default). Or from an elevated PowerShell:
         cd <folder containing bootstrap-winrm.ps1>
@@ -91,6 +99,9 @@
     Adds a hosts file entry mapping mast-wis-control -> 192.168.56.1 (the VirtualBox host-only
     host IP) so the MongoDB client inside the VM connects to the host machine's MongoDB instance.
     The entry is marked with # MAST-VM-TEST-ONLY for easy identification and removal.
+    Also downgrades the hardware preflight (64 GB RAM, D: free) from a hard failure to a
+    warning: the dev VM has 8 GB and mounts D: file-backed, so it can never satisfy the
+    production requirement and is not meant to.
 
 .PARAMETER SkipTrim
     Service short-names to leave alone when the non-essential / vendor service trim
@@ -127,8 +138,14 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+# Not optional: Disable-WindowsAutoUpdate and the hardware-preflight helpers below
+# both come from here, and the first of them runs before anything else. Missing it
+# used to surface as "term not recognized" a thousand lines in.
 $_clientUtilDot = Join-Path $PSScriptRoot 'mast-client-util.ps1'
-if (Test-Path $_clientUtilDot) { . $_clientUtilDot }
+if (-not (Test-Path $_clientUtilDot)) {
+    throw "mast-client-util.ps1 not found next to this script ($_clientUtilDot). Copy it alongside bootstrap-winrm.ps1 (the autounattend ISO bundles it)."
+}
+. $_clientUtilDot
 
 $script:BootstrapLogDir = Join-Path $env:SystemDrive 'MAST\logs'
 $script:BootstrapLog = Join-Path $script:BootstrapLogDir 'bootstrap-winrm.log'
@@ -140,7 +157,20 @@ $script:AllowUnencryptedOk = $false
 # flag units missing newer bootstrap elements. BUMP THIS whenever you add a bootstrap
 # capability, and add a matching element (since = this number) to
 # client/bootstrap-elements.json so its current_version stays == this value.
-$script:BootstrapVersion = 9
+$script:BootstrapVersion = 10
+
+# --- Hardware requirement (asserted before anything is changed) ---------------
+# Kept in step with server\lib\mast-modules.psm1 Get-MastRequiredMemoryGB, which is
+# the fleet's single declaration of the figure. This script runs OFFLINE on a bare
+# unit and cannot read that module, so it embeds the number -- the same situation
+# as $knownSites below, and guarded the same way: build-mast.ps1 runs
+# Assert-BootstrapMemoryRequirementInSync on every build and FAILS the build if the
+# two drift.
+$script:RequiredMemoryGB = 64
+# Volume label imdisk formats the index disk with (provide-imdisk.ps1 -IndexSubdir).
+# D: carrying THAT is the wanted end state, not a conflict -- bootstrap is
+# idempotent and gets re-run on units that are already provisioned.
+$script:IndexVolumeLabel = 'mast-indexes'
 
 # --- Service trim list (applied by default; exempt with -SkipTrim) ------------
 # Non-essential / vendor services with no role on a headless control box. Service
@@ -184,6 +214,74 @@ function Write-BootstrapMsg {
 
 function Write-BootstrapBanner([string]$Text, [string]$Color = 'Cyan') {
     Write-BootstrapMsg $Text $Color
+}
+
+function Get-MastInstalledMemoryBanks {
+    # Per-DIMM capacities, for the report only. Which slot is short is what an
+    # operator needs to know once the total comes up wrong; it is deliberately
+    # not what the check thresholds on (see Test-MastMemoryRequirement).
+    # Some virtual firmware enumerates nothing here, so an empty result is a
+    # missing diagnostic, never a verdict.
+    try {
+        return @(Get-CimInstance Win32_PhysicalMemory -ErrorAction Stop |
+            ForEach-Object { [math]::Round($_.Capacity / 1GB, 0) })
+    } catch {
+        return @()
+    }
+}
+
+function Assert-MastUnitHardware {
+    # The two facts provisioning cannot supply for itself. Runs before the
+    # hostname prompt and before the first mutation, so a unit that fails here
+    # is left exactly as it was found.
+    param([switch]$IsVmTestRun)
+
+    Write-BootstrapMsg '' 'Cyan'
+    Write-BootstrapMsg '--- Hardware preflight (RAM, drive D:) ---' 'Cyan'
+    $problems = @()
+
+    $visibleBytes = [long](Get-CimInstance Win32_ComputerSystem -ErrorAction Stop).TotalPhysicalMemory
+    $mem = Test-MastMemoryRequirement -VisibleBytes $visibleBytes -RequiredGB $script:RequiredMemoryGB
+    $banks = @(Get-MastInstalledMemoryBanks)
+    $bankText = if ($banks.Count -gt 0) { ($banks | ForEach-Object { "${_} GB" }) -join ' + ' } else { '(not enumerated)' }
+    Write-BootstrapMsg ("  Memory: {0} GB visible to Windows; banks: {1}; required {2} GB (floor {3} GB)." -f `
+        $mem.VisibleGB, $bankText, $mem.RequiredGB, $mem.FloorGB) 'White'
+    if ($mem.Ok) {
+        Write-BootstrapMsg '  [OK] Memory requirement met.' 'Green'
+    } else {
+        $problems += ("this machine has {0} GB of RAM; a MAST unit needs {1} GB. Power down, fit the memory, and re-run." -f $mem.VisibleGB, $mem.RequiredGB)
+    }
+
+    $dDisk = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='D:'" -ErrorAction SilentlyContinue
+    $dPresent = ($null -ne $dDisk) -or (Test-Path -LiteralPath 'D:\')
+    $dType = 0
+    $dLabel = ''
+    if ($dDisk) {
+        $dType = [int]$dDisk.DriveType
+        if ($dDisk.VolumeName) { $dLabel = [string]$dDisk.VolumeName }
+    }
+    $verdict = Get-MastDriveDVerdict -Present $dPresent -DriveType $dType -VolumeName $dLabel -IndexVolumeLabel $script:IndexVolumeLabel
+    switch ($verdict) {
+        'free' {
+            Write-BootstrapMsg '  [OK] Drive letter D: is free for the index RAM disk.' 'Green'
+        }
+        'index' {
+            Write-BootstrapMsg ("  [OK] D: already carries the '{0}' index volume (unit is provisioned)." -f $script:IndexVolumeLabel) 'Green'
+        }
+        'foreign' {
+            $problems += ("drive letter D: is taken (DriveType={0} label='{1}'); the index RAM disk requires it. Remove the D: disk, or reassign that device's letter, and re-run." -f $dType, $dLabel)
+        }
+    }
+
+    if ($problems.Count -eq 0) { return }
+    foreach ($p in $problems) {
+        Write-BootstrapMsg ("  [FAIL] {0}" -f $p) 'Red'
+    }
+    if ($IsVmTestRun) {
+        Write-BootstrapMsg '  [WARN] -VmTestRun: continuing anyway. The dev VM cannot meet the production hardware requirement (build with -ImdiskMountType file).' 'Yellow'
+        return
+    }
+    throw ("Hardware preflight failed: {0} Nothing has been changed on this machine." -f ($problems -join ' Also: '))
 }
 
 function Test-MastNetFirewallRuleExists {
@@ -388,6 +486,19 @@ function Write-BootstrapDesktopReport([string]$HostNm, [string]$SiteCode) {
         ('hostname  : {0}' -f $HostNm),
         ('site      : {0}' -f $SiteCode),
         ('bootstrap : version {0}' -f $script:BootstrapVersion),
+        ''
+        '--- Hardware (asserted at bootstrap) ---'
+    )
+    try {
+        $visible = [long](Get-CimInstance Win32_ComputerSystem -ErrorAction Stop).TotalPhysicalMemory
+        $banks = @(Get-MastInstalledMemoryBanks)
+        $lines += ('  memory : {0:N1} GB visible, required {1} GB   banks: {2}' -f `
+            ($visible / 1GB), $script:RequiredMemoryGB,
+            $(if ($banks.Count -gt 0) { ($banks | ForEach-Object { "${_} GB" }) -join ' + ' } else { '(not enumerated)' }))
+    } catch { $lines += ('  memory : (query failed: {0})' -f $_.Exception.Message) }
+    $dLd = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='D:'" -ErrorAction SilentlyContinue
+    $lines += ('  drive D: {0}' -f $(if ($dLd) { ("in use (DriveType={0} label='{1}')" -f $dLd.DriveType, $dLd.VolumeName) } else { 'free (reserved for the index RAM disk)' }))
+    $lines += @(
         ''
         '--- Network adapters (record MACs for DHCP reservations) ---'
     )
@@ -660,6 +771,9 @@ try {
     Write-BootstrapBanner ' MAST bootstrap-winrm.ps1 (manual first-time setup)' 'Cyan'
     Write-BootstrapBanner '======================================================================' 'Cyan'
     Write-BootstrapMsg ("Log file (append): {0}" -f $script:BootstrapLog) 'DarkGray'
+
+    # First, ahead of the prompts: a machine that fails this must be left untouched.
+    Assert-MastUnitHardware -IsVmTestRun:$VmTestRun
 
     if ([string]::IsNullOrWhiteSpace($MastHostName)) {
         if ($NonInteractive) {

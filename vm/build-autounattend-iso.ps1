@@ -7,8 +7,9 @@
   The output ISO contains:
     - Autounattend.xml at the root (Windows Setup auto-detects this on any
       attached drive: ISO, USB, or floppy).
-  - client\bootstrap-winrm.cmd and bootstrap-winrm.ps1 at the ISO root for the
-    operator to run manually after first login (USB/DVD copy is fine). Use the
+  - client\bootstrap-winrm.cmd, bootstrap-winrm.ps1 and mast-client-util.ps1 at the
+    ISO root for the operator to run manually after first login (USB/DVD copy is
+    fine; the .ps1 dot-sources the util and will not start without it). Use the
     .cmd so Windows runs PowerShell instead of Notepad (default .ps1 association).
     They are not executed from FirstLogonCommands. Bootstrap performs all first-time
     prep; after it succeeds the unit is ready for provisioning (no separate prepare step).
@@ -383,11 +384,15 @@ try {
     Write-Host "  Staged bootstrap-winrm.cmd"
     Copy-Item -Force $bootstrapVmTestCmdPath (Join-Path $staging 'bootstrap-winrm-vmtest.cmd')
     Write-Host "  Staged bootstrap-winrm-vmtest.cmd"
+    # Not optional: bootstrap-winrm.ps1 dot-sources this before it does anything,
+    # for the hardware preflight, and throws if it is absent. An ISO without it
+    # boots to a unit that cannot bootstrap.
     $clientUtilPath = Join-Path $RepoRoot 'client\mast-client-util.ps1'
-    if (Test-Path $clientUtilPath) {
-        Copy-Item -Force $clientUtilPath (Join-Path $staging 'mast-client-util.ps1')
-        Write-Host "  Staged mast-client-util.ps1"
+    if (-not (Test-Path $clientUtilPath)) {
+        throw "mast-client-util.ps1 not found at $clientUtilPath"
     }
+    Copy-Item -Force $clientUtilPath (Join-Path $staging 'mast-client-util.ps1')
+    Write-Host "  Staged mast-client-util.ps1"
     if ($npcapInstallerPath) {
         Copy-Item -Force $npcapInstallerPath (Join-Path $staging (Split-Path $npcapInstallerPath -Leaf))
         Write-Host "  Staged $(Split-Path $npcapInstallerPath -Leaf) (Npcap installer for bootstrap)"
