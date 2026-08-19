@@ -7,7 +7,7 @@ param(
     [string]${WeatherUrl} = 'https://www.meteoblue.com/en/weather/today/ne%e2%80%99ot-semadar_israel_8346527',
     # Site name shown in the weather shortcut label (consistent 'Smadar' spelling).
     [string]${WeatherSiteName} = 'Neot Smadar',
-    [string]${FastApiUrl} = 'http://localhost:8000/',
+    [string]${FastApiUrl} = 'http://localhost:8000/docs',
     [string]${Ds9Exe}     = 'C:\Program Files\SAOImageDS9\ds9.exe',
     [string]${LogsDir}    = 'C:\MAST\logs',
     [string]${CalibToolPath} = 'C:\ProgramData\MAST\instrument-profiles\calibrate-instruments.ps1',
@@ -81,7 +81,9 @@ Set-Content -LiteralPath (Join-Path ${mastRoot} 'README.txt') -Encoding ASCII -V
 Set-Content -LiteralPath (Join-Path ${dirOps} 'README.txt') -Encoding ASCII -Value @(
     'Day-to-day operator tools.',
     '',
-    '  MAST Unit (FastAPI) - the unit control page (http://localhost:8000/).',
+    '  MAST Unit (FastAPI) - the unit API contract page, grouped by contract',
+    '                        tier (http://localhost:8000/docs). The bare root used to',
+    '                        be the target and answered 404.',
     '                        The mast-* services must be running (they ship',
     '                        manual-start; bring them up in the wanted order).',
     '  Weather (Meteoblue) - site forecast page.',
