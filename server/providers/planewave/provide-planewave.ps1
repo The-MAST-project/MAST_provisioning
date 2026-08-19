@@ -18,12 +18,45 @@ function Write-MastPwLog {
     Write-Host ${Line}
 }
 
+function Import-MastPublisherCert {
+    # Pre-trust a driver publisher so Windows installs its catalog-signed driver
+    # without the "Would you like to install this device software?" consent
+    # dialog. Mirrors provide-zwo.ps1 / provide-stage.ps1 / provide-usbpcap.ps1.
+    #
+    # Without this, the dialog is the whole failure: with a desktop it blocks the
+    # run until someone clicks, and in Session 0 -- where provisioning normally
+    # runs -- there is no desktop to show it, so the driver install fails while
+    # the installer still exits 0 and the module reports success. mast04 carries
+    # PWI4 and a planewave_ok smoke marker with no PlaneWave or Texas Instruments
+    # driver in its store, which is what that looks like afterwards.
+    param([Parameter(Mandatory)][string]${Path}, [Parameter(Mandatory)][string]${Label})
+    if (-not (Test-Path -LiteralPath ${Path})) {
+        throw ("{0} publisher cert not found at {1}" -f ${Label}, ${Path})
+    }
+    ${cert} = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2
+    ${cert}.Import(${Path})
+    ${store} = New-Object System.Security.Cryptography.X509Certificates.X509Store(
+        [System.Security.Cryptography.X509Certificates.StoreName]::TrustedPublisher,
+        [System.Security.Cryptography.X509Certificates.StoreLocation]::LocalMachine
+    )
+    ${store}.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+    try { ${store}.Add(${cert}) } finally { ${store}.Close() }
+    Write-MastPwLog ("Trusted {0} publisher: {1} (thumbprint {2})" -f ${Label}, ${cert}.Subject, ${cert}.Thumbprint)
+}
+
 # Always create the log file (Write-Host does not pipe to Tee-Object in Windows PowerShell 5.1;
 # silent Inno may emit no stdout so Tee-Object would never open the file.)
 Set-Content -LiteralPath ${logFile} -Encoding UTF8 -Value ("[{0}] PlaneWave provide-planewave.ps1 started." -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))
 
 try {
     Write-MastPwLog "Starting PlaneWave installation..."
+
+    # BEFORE the installer, and unconditionally: PWI4 bundles catalog-signed USB
+    # drivers for the L-mount and for the TI Stellaris/Tiva electronics behind
+    # the PlaneWave accessories, and both prompt for consent unless their
+    # publisher is already trusted.
+    Import-MastPublisherCert -Path (Join-Path ${AssetsRoot} 'planewave-driver-publisher.cer') -Label 'PlaneWave'
+    Import-MastPublisherCert -Path (Join-Path ${AssetsRoot} 'ti-tiva-driver-publisher.cer') -Label 'Texas Instruments (Tiva/Stellaris)'
 
     # Install PWI4 (Inno Setup 6.x per vendor log -- use Inno silent flags, not NSIS /S.)
     ${pwi4InstallerPath} = Join-Path ${AssetsRoot} "Setup_PWI_4.1.6_Final.exe"
@@ -71,6 +104,51 @@ try {
         }
     }
     Write-MastPwLog ("Found pwi4.exe at: {0}" -f ${pwi4ExePath})
+
+    # Stage the bundled USB drivers into the driver store, OUTSIDE the idempotent
+    # installer guard above. This is the half that repairs a unit already
+    # carrying PWI4: the guard skips the installer on a re-run, so trusting the
+    # publisher alone would never install anything on mast01-mast04. Same shape
+    # and same reason as provide-zwo.ps1.
+    #
+    # /add-driver without /install: no PlaneWave hardware is attached during
+    # provisioning, so the aim is only to have the driver ready in the store for
+    # when a device is plugged in.
+    #
+    # The win2k\ variants next to these are legacy and deliberately not staged;
+    # these three are what Windows itself selected on mast05.
+    ${pwRoot} = Split-Path -Parent ${pwi4ExePath}
+    ${driverInfs} = @(
+        (Join-Path ${pwRoot} 'LMountDriver\usb_dev_cserial.inf'),
+        (Join-Path ${pwRoot} 'StellarisDrivers\usb_dev_serial.inf'),
+        (Join-Path ${pwRoot} 'StellarisDrivers\boot_usb.inf')
+    )
+    ${staged} = 0
+    foreach (${inf} in ${driverInfs}) {
+        if (-not (Test-Path -LiteralPath ${inf})) {
+            Write-MastPwLog ("[WARN] bundled driver not found, skipping: {0}" -f ${inf})
+            continue
+        }
+        ${pnpOut} = & pnputil.exe /add-driver ${inf} 2>&1
+        foreach (${line} in @(${pnpOut})) { Write-MastPwLog ("[pnputil] {0}" -f ${line}) }
+        if (${LASTEXITCODE} -eq 0) { ${staged}++ }
+        else { Write-MastPwLog ("[WARN] pnputil /add-driver exited {0} for {1}" -f ${LASTEXITCODE}, ${inf}) }
+    }
+    if (${staged} -eq 0) {
+        throw ("No PlaneWave USB driver could be staged from {0}. The bundled driver layout has changed; update the inf list in this provider." -f ${pwRoot})
+    }
+
+    # Assert the outcome rather than the absence of an error (#62): the store
+    # itself has to name both publishers, which is exactly the check mast04
+    # would fail today.
+    ${providers} = & pnputil.exe /enum-drivers 2>$null | Select-String -Pattern 'Provider Name'
+    foreach (${want} in 'Planewave', 'Texas Instruments') {
+        if (${providers} -match ${want}) {
+            Write-MastPwLog ("Driver store carries a '{0}' driver." -f ${want})
+        } else {
+            throw ("Staged {0} driver package(s) but the driver store reports no '{1}' provider." -f ${staged}, ${want})
+        }
+    }
 
     # Register PWI4 as an NSSM service so it is running before MAST_unit starts.
     # PWI4 is a GUI app; SERVICE_INTERACTIVE_PROCESS allows it to initialise in
