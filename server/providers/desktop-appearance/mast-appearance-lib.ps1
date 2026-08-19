@@ -64,31 +64,6 @@ function Format-MastCoordinates {
         [math]::Abs(${lat}), ${northSouth}, [math]::Abs(${lon}), ${eastWest})
 }
 
-function Get-MastPayloadStamp {
-    # The provisioning commit a unit was last given, short form: 'a1b2c3d'.
-    #
-    # Read from the build-manifest.json that came WITH the payload being installed,
-    # not from installed-manifest.json -- at order 2750 the installed manifest still
-    # describes the PREVIOUS run, so it would stamp the image with the version the
-    # machine is being moved off.
-    #
-    # git_sha, not built_at: the driver rebuilds the payload on every run, so a
-    # built_at stamp would differ on every single run and this module would drift
-    # forever. The commit changes when what a unit receives changes, which is the
-    # thing worth naming. Same convention as module_versions, where the provisioning
-    # SHA is the human-readable field rather than the drift signal.
-    #
-    # Empty when there is no manifest to read -- an isolated provider run, not a
-    # failure.
-    [CmdletBinding()]
-    param([Parameter(Mandatory)][string]${BuildManifestPath})
-
-    if (-not (Test-Path -LiteralPath ${BuildManifestPath})) { return '' }
-    ${manifest} = Get-Content -LiteralPath ${BuildManifestPath} -Raw | ConvertFrom-Json
-    if (-not ${manifest}.git_sha) { return '' }
-    return ${manifest}.git_sha.Substring(0, [math]::Min(7, ${manifest}.git_sha.Length))
-}
-
 function Get-MastAppearanceFields {
     # Everything the background states, as the renderer wants it: presentation-ready
     # strings, so the renderer holds no opinion about where any of it came from.
@@ -98,10 +73,7 @@ function Get-MastAppearanceFields {
     # pass after the map moved, and comparing only the code would pass after the
     # image was rendered from a name that no longer applies.
     [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)][string]${UnitToml},
-        [Parameter(Mandatory)][AllowEmptyString()][string]${BuildManifestPath}
-    )
+    param([Parameter(Mandatory)][string]${UnitToml})
 
     ${site} = ''
     ${coordinates} = ''
@@ -114,14 +86,10 @@ function Get-MastAppearanceFields {
             -Longitude ([string](Get-MastTomlValue -Content ${toml} -Key 'longitude'))
     }
 
-    ${payload} = ''
-    if (${BuildManifestPath}) { ${payload} = Get-MastPayloadStamp -BuildManifestPath ${BuildManifestPath} }
-
     return [ordered]@{
         computer_name = ${env:COMPUTERNAME}
         site          = ${site}
         site_name     = (Get-MastSiteDisplayName -SiteCode ${site})
         coordinates   = ${coordinates}
-        payload       = ${payload}
     }
 }

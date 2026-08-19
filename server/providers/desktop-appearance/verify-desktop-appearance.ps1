@@ -63,7 +63,7 @@ if (-not (Test-Path -LiteralPath ${sidecarPath})) {
     # image against the machine rather than against a second copy of the
     # formatting. Only static_fields are compared: a field listed in
     # dynamic_fields is live by design and would differ on every read.
-    ${expected} = Get-MastAppearanceFields -UnitToml ${UnitToml} -BuildManifestPath (Join-Path ${PSScriptRoot} 'build-manifest.json')
+    ${expected} = Get-MastAppearanceFields -UnitToml ${UnitToml}
     ${dynamic} = @()
     if (${sidecar}.dynamic_fields) { ${dynamic} = @(${sidecar}.dynamic_fields) }
     foreach (${field} in ${expected}.Keys) {

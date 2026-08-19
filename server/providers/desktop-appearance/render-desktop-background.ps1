@@ -29,7 +29,6 @@ param(
     [Parameter(Mandatory)][AllowEmptyString()][string]${SiteCode},
     [Parameter(Mandatory)][AllowEmptyString()][string]${SiteName},
     [AllowEmptyString()][string]${Coordinates} = '',
-    [AllowEmptyString()][string]${Payload} = '',
     [int]${Width}  = 1920,
     [int]${Height} = 1080
 )
@@ -38,7 +37,7 @@ ${ErrorActionPreference} = 'Stop'
 
 # Bumping this invalidates every deployed image, so a design change reaches units
 # that already have one. It is folded into the sidecar, which verify compares.
-${RendererVersion} = 2
+${RendererVersion} = 3
 
 # Layout. The text block sits in the lower-left: desktop icons occupy the top-left
 # (the single Desktop\MAST folder the desktop-shortcuts provider leaves there), and
@@ -96,7 +95,6 @@ ${coordFont} = New-Object System.Drawing.Font(${FontFamily}, ${CoordFontSize}, [
     # Role is not on the image: the footer already says 'MAST unit', so a 'role unit'
     # line said it twice.
     ${footText} = ('MAST unit   provisioned {0}' -f (Get-Date -Format 'yyyy-MM-dd'))
-    if (${Payload}) { ${footText} = ('{0}   payload {1}' -f ${footText}, ${Payload}) }
 
     # One entry per drawn line, so a line whose value is empty simply is not there
     # and the block closes up around it.
@@ -153,7 +151,6 @@ ${sidecar} = [ordered]@{
         site          = ${SiteCode}
         site_name     = ${SiteName}
         coordinates   = ${Coordinates}
-        payload       = ${Payload}
     }
     dynamic_fields   = @()
     rendered_at      = (Get-Date -Format 'yyyy-MM-ddTHH:mm:ss')

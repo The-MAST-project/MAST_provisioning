@@ -8,9 +8,8 @@
 #   1. Renders the background machine-wide into ${AppearanceRoot}, from the fields
 #      Get-MastAppearanceFields derives: the hostname, the site (spelled out from
 #      the code in the deployed C:\WIS\config.toml -- the single source of truth
-#      config-bootstrap writes, never the hostname), the site coordinates, and the
-#      provisioning commit the payload carries. Machine-scope, so it is verifiable
-#      without a user session.
+#      config-bootstrap writes, never the hostname) and the site coordinates.
+#      Machine-scope, so it is verifiable without a user session.
 #   2. Writes the theme and wallpaper values into mast's hive directly, via
 #      mast-userhive-lib.ps1. On a provisioned unit mast is signed in and the hive
 #      is already mounted at HKU\<sid>, so this is a plain write; with nobody
@@ -73,19 +72,11 @@ try {
     #    yields empty fields, and the renderer drops those lines rather than
     #    printing a placeholder -- the hostname, the point of the exercise, always
     #    resolves.
-    #
-    #    The build manifest sits in the staging root next to this script (staging is
-    #    flattened), and it describes the payload being installed RIGHT NOW --
-    #    unlike installed-manifest.json, which at order 2750 still describes the
-    #    previous run.
-    ${fields} = Get-MastAppearanceFields -UnitToml ${UnitToml} -BuildManifestPath (Join-Path ${PSScriptRoot} 'build-manifest.json')
+    ${fields} = Get-MastAppearanceFields -UnitToml ${UnitToml}
     if (-not (Test-Path -LiteralPath ${UnitToml})) {
         Write-AppearanceLog ("[WARN] {0} absent (config-bootstrap not run?); site and coordinates omitted from the image." -f ${UnitToml})
     }
-    if (-not ${fields}.payload) {
-        Write-AppearanceLog '[WARN] no build-manifest.json in the staging root; payload stamp omitted from the image.'
-    }
-    Write-AppearanceLog ("Background states: site={0} ({1}) coords='{2}' payload={3}" -f ${fields}.site_name, ${fields}.site, ${fields}.coordinates, ${fields}.payload)
+    Write-AppearanceLog ("Background states: site={0} ({1}) coords='{2}'" -f ${fields}.site_name, ${fields}.site, ${fields}.coordinates)
 
     # 2) Stage the renderer and the apply script at a persistent path. The AtLogon
     #    task runs long after the staging dir is gone, and the renderer follows it
@@ -109,7 +100,7 @@ try {
     & (Join-Path ${AppearanceRoot} 'render-desktop-background.ps1') `
         -OutputPath ${imagePath} -SidecarPath ${sidecarPath} `
         -ComputerName (${fields}.computer_name) -SiteCode (${fields}.site) -SiteName (${fields}.site_name) `
-        -Coordinates (${fields}.coordinates) -Payload (${fields}.payload)
+        -Coordinates (${fields}.coordinates)
     foreach (${artifact} in @(${imagePath}, ${sidecarPath})) {
         if (-not (Test-Path -LiteralPath ${artifact})) { throw ("render-desktop-background.ps1 produced no {0}" -f ${artifact}) }
     }
