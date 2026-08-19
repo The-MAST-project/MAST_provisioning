@@ -24,8 +24,12 @@ param(
     [Parameter(Mandatory)][string]${OutputPath},
     [Parameter(Mandatory)][string]${SidecarPath},
     [Parameter(Mandatory)][string]${ComputerName},
-    [string]${Site} = 'unknown',
-    [string]${Role} = 'unknown',
+    # Presentation-ready strings from Get-MastAppearanceFields; this script decides
+    # nothing about where they came from. An empty one drops its line.
+    [Parameter(Mandatory)][AllowEmptyString()][string]${SiteCode},
+    [Parameter(Mandatory)][AllowEmptyString()][string]${SiteName},
+    [AllowEmptyString()][string]${Coordinates} = '',
+    [AllowEmptyString()][string]${Payload} = '',
     [int]${Width}  = 1920,
     [int]${Height} = 1080
 )
@@ -34,18 +38,24 @@ ${ErrorActionPreference} = 'Stop'
 
 # Bumping this invalidates every deployed image, so a design change reaches units
 # that already have one. It is folded into the sidecar, which verify compares.
-${RendererVersion} = 1
+${RendererVersion} = 2
 
 # Layout. The text block sits in the lower-left: desktop icons occupy the top-left
 # (the single Desktop\MAST folder the desktop-shortcuts provider leaves there), and
 # a NoMachine session can be sized smaller than the render, so nothing important
 # goes near the right or bottom edge.
-${Margin}          = 140
-${BlockTopFraction} = 0.52
+# 300, not the 140 this started at: WallpaperStyle 10 (Fill) crops to cover, and a
+# 4:3 desktop (1440x1080) discards 240 px from each side -- which at 140 threw away
+# the accent bar and the first glyphs of the hostname, the one thing the background
+# exists to show. 300 leaves 60 px of slack inside that safe area. Fill is kept over
+# style 6 (Fit) because letterboxing looks worse than a wider margin.
+${Margin}          = 300
+${BlockTopFraction} = 0.48
 ${AccentBarWidth}  = 8
 ${AccentBarGap}    = 44
 ${HostFontSize}    = 128
 ${SubFontSize}     = 40
+${CoordFontSize}   = 28
 ${FootFontSize}    = 22
 ${LineGap}         = 28
 
@@ -66,6 +76,7 @@ ${bitmap}   = $null
 ${graphics} = $null
 ${hostFont} = $null
 ${subFont}  = $null
+${coordFont} = $null
 ${footFont} = $null
 try {
     ${bitmap}   = New-Object System.Drawing.Bitmap(${Width}, ${Height})
@@ -76,40 +87,53 @@ try {
 
     ${hostFont} = New-Object System.Drawing.Font(${FontFamily}, ${HostFontSize}, [System.Drawing.FontStyle]::Bold, [System.Drawing.GraphicsUnit]::Pixel)
     ${subFont}  = New-Object System.Drawing.Font(${FontFamily}, ${SubFontSize},  [System.Drawing.FontStyle]::Regular, [System.Drawing.GraphicsUnit]::Pixel)
+${coordFont} = New-Object System.Drawing.Font(${FontFamily}, ${CoordFontSize}, [System.Drawing.FontStyle]::Regular, [System.Drawing.GraphicsUnit]::Pixel)
     ${footFont} = New-Object System.Drawing.Font(${FontFamily}, ${FootFontSize}, [System.Drawing.FontStyle]::Regular, [System.Drawing.GraphicsUnit]::Pixel)
 
     ${textLeft} = ${Margin} + ${AccentBarWidth} + ${AccentBarGap}
     ${blockTop} = [int](${Height} * ${BlockTopFraction})
 
-    ${hostText} = ${ComputerName}.ToUpperInvariant()
-    ${subText}  = ('site {0}   role {1}' -f ${Site}, ${Role})
+    # Role is not on the image: the footer already says 'MAST unit', so a 'role unit'
+    # line said it twice.
     ${footText} = ('MAST unit   provisioned {0}' -f (Get-Date -Format 'yyyy-MM-dd'))
+    if (${Payload}) { ${footText} = ('{0}   payload {1}' -f ${footText}, ${Payload}) }
 
-    ${hostHeight} = ${graphics}.MeasureString(${hostText}, ${hostFont}).Height
-    ${subHeight}  = ${graphics}.MeasureString(${subText}, ${subFont}).Height
-    ${footHeight} = ${graphics}.MeasureString(${footText}, ${footFont}).Height
-    ${blockHeight} = ${hostHeight} + ${LineGap} + ${subHeight} + ${LineGap} + ${footHeight}
+    # One entry per drawn line, so a line whose value is empty simply is not there
+    # and the block closes up around it.
+    ${lines} = @()
+    ${lines} += @{ Text = ${ComputerName}.ToUpperInvariant(); Font = ${hostFont};  Brush = 'fg' }
+    if (${SiteName})    { ${lines} += @{ Text = ${SiteName};    Font = ${subFont};   Brush = 'fg' } }
+    if (${Coordinates}) { ${lines} += @{ Text = ${Coordinates}; Font = ${coordFont}; Brush = 'muted' } }
+    ${lines} += @{ Text = ${footText}; Font = ${footFont}; Brush = 'muted' }
+
+    ${blockHeight} = 0
+    foreach (${line} in ${lines}) {
+        ${line}.Height = ${graphics}.MeasureString(${line}.Text, ${line}.Font).Height
+        ${blockHeight} = ${blockHeight} + ${line}.Height
+    }
+    ${blockHeight} = ${blockHeight} + (${LineGap} * (${lines}.Count - 1))
 
     ${accentBrush} = New-Object System.Drawing.SolidBrush((ConvertTo-DrawingColor -Hex ${AccentColor}))
     ${graphics}.FillRectangle(${accentBrush}, ${Margin}, ${blockTop}, ${AccentBarWidth}, ${blockHeight})
     ${accentBrush}.Dispose()
 
-    ${fgBrush} = New-Object System.Drawing.SolidBrush((ConvertTo-DrawingColor -Hex ${ForegroundColor}))
-    ${mutedBrush} = New-Object System.Drawing.SolidBrush((ConvertTo-DrawingColor -Hex ${MutedColor}))
+    ${brushes} = @{
+        fg    = New-Object System.Drawing.SolidBrush((ConvertTo-DrawingColor -Hex ${ForegroundColor}))
+        muted = New-Object System.Drawing.SolidBrush((ConvertTo-DrawingColor -Hex ${MutedColor}))
+    }
     ${y} = [single]${blockTop}
-    ${graphics}.DrawString(${hostText}, ${hostFont}, ${fgBrush}, [single]${textLeft}, ${y})
-    ${y} = ${y} + ${hostHeight} + ${LineGap}
-    ${graphics}.DrawString(${subText}, ${subFont}, ${fgBrush}, [single]${textLeft}, ${y})
-    ${y} = ${y} + ${subHeight} + ${LineGap}
-    ${graphics}.DrawString(${footText}, ${footFont}, ${mutedBrush}, [single]${textLeft}, ${y})
-    ${fgBrush}.Dispose()
-    ${mutedBrush}.Dispose()
+    foreach (${line} in ${lines}) {
+        ${graphics}.DrawString(${line}.Text, ${line}.Font, ${brushes}[${line}.Brush], [single]${textLeft}, ${y})
+        ${y} = ${y} + ${line}.Height + ${LineGap}
+    }
+    ${brushes}.Values | ForEach-Object { $_.Dispose() }
 
     New-Item -ItemType Directory -Path (Split-Path -Parent ${OutputPath}) -Force | Out-Null
     ${bitmap}.Save(${OutputPath}, [System.Drawing.Imaging.ImageFormat]::Png)
 }
 finally {
     if (${footFont}) { ${footFont}.Dispose() }
+    if (${coordFont}) { ${coordFont}.Dispose() }
     if (${subFont})  { ${subFont}.Dispose() }
     if (${hostFont}) { ${hostFont}.Dispose() }
     if (${graphics}) { ${graphics}.Dispose() }
@@ -126,8 +150,10 @@ ${sidecar} = [ordered]@{
     height           = ${Height}
     static_fields    = [ordered]@{
         computer_name = ${ComputerName}
-        site          = ${Site}
-        role          = ${Role}
+        site          = ${SiteCode}
+        site_name     = ${SiteName}
+        coordinates   = ${Coordinates}
+        payload       = ${Payload}
     }
     dynamic_fields   = @()
     rendered_at      = (Get-Date -Format 'yyyy-MM-ddTHH:mm:ss')

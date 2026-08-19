@@ -8,6 +8,7 @@
     "provide-desktop-appearance.ps1",
     "render-desktop-background.ps1",
     "apply-desktop-appearance.ps1",
+    "mast-appearance-lib.ps1",
     "mast-userhive-lib.ps1",
     "verify-desktop-appearance.ps1"
   ],

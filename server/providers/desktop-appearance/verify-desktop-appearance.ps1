@@ -21,9 +21,11 @@ ${ErrorActionPreference} = 'Stop'
 ${mastLogDot} = Join-Path ${PSScriptRoot} 'mast-log.ps1'
 if (-not (Test-Path ${mastLogDot})) { ${mastLogDot} = Join-Path ${PSScriptRoot} '..\..\lib\mast-log.ps1' }
 . ${mastLogDot}
-${hiveLibDot} = Join-Path ${PSScriptRoot} 'mast-userhive-lib.ps1'
-if (-not (Test-Path ${hiveLibDot})) { throw "mast-userhive-lib.ps1 not found next to verify-desktop-appearance.ps1" }
-. ${hiveLibDot}
+foreach (${libName} in @('mast-userhive-lib.ps1', 'mast-appearance-lib.ps1')) {
+    ${libPath} = Join-Path ${PSScriptRoot} ${libName}
+    if (-not (Test-Path ${libPath})) { throw ("{0} not found next to verify-desktop-appearance.ps1" -f ${libName}) }
+    . ${libPath}
+}
 Set-StrictMode -Off  # mast-log.ps1 enables StrictMode; verify scripts probe optional state
 ${verifyLog} = Get-MastVerifyLog -Module 'desktop-appearance'
 
@@ -35,13 +37,6 @@ ${TileWallpaperNo} = '0'
 
 function W { param([string]${Line}) Add-Content -LiteralPath ${verifyLog} -Encoding UTF8 -Value ("[{0}] {1}" -f (Get-Date -Format 'HH:mm:ss'), ${Line}) }
 Set-Content -LiteralPath ${verifyLog} -Encoding UTF8 -Value ("[{0}] verify-desktop-appearance.ps1 started" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))
-
-function Get-TomlValue {
-    param([Parameter(Mandatory)][string]${Content}, [Parameter(Mandatory)][string]${Key})
-    ${match} = [regex]::Match(${Content}, ('(?m)^\s*{0}\s*=\s*(.+?)\s*$' -f [regex]::Escape(${Key})))
-    if (${match}.Success) { return ${match}.Groups[1].Value.Trim().Trim('"') }
-    return $null
-}
 
 ${fail} = @()
 ${imagePath}   = Join-Path ${AppearanceRoot} 'background.png'
@@ -63,28 +58,18 @@ if (-not (Test-Path -LiteralPath ${sidecarPath})) {
         W ("background image present: {0} ({1} bytes)" -f ${imagePath}, (Get-Item -LiteralPath ${imagePath}).Length)
     }
 
-    # The staleness check. Only static_fields are compared: a field listed in
+    # The staleness check. The expected set comes from the same
+    # Get-MastAppearanceFields the provider rendered from, so this compares the
+    # image against the machine rather than against a second copy of the
+    # formatting. Only static_fields are compared: a field listed in
     # dynamic_fields is live by design and would differ on every read.
-    ${expectedSite} = 'unknown'
-    ${expectedRole} = 'unknown'
-    if (Test-Path -LiteralPath ${UnitToml}) {
-        ${toml} = Get-Content -LiteralPath ${UnitToml} -Raw
-        ${tomlSite} = Get-TomlValue -Content ${toml} -Key 'site'
-        ${tomlRole} = Get-TomlValue -Content ${toml} -Key 'machine_role'
-        if (${tomlSite}) { ${expectedSite} = ${tomlSite} }
-        if (${tomlRole}) { ${expectedRole} = ${tomlRole} }
-    }
-    ${expected} = @{
-        computer_name = ${env:COMPUTERNAME}
-        site          = ${expectedSite}
-        role          = ${expectedRole}
-    }
+    ${expected} = Get-MastAppearanceFields -UnitToml ${UnitToml} -BuildManifestPath (Join-Path ${PSScriptRoot} 'build-manifest.json')
     ${dynamic} = @()
     if (${sidecar}.dynamic_fields) { ${dynamic} = @(${sidecar}.dynamic_fields) }
-    foreach (${field} in @('computer_name', 'site', 'role')) {
+    foreach (${field} in ${expected}.Keys) {
         if (${dynamic} -contains ${field}) { W ("{0} is declared dynamic; not compared." -f ${field}); continue }
         ${recorded} = ${sidecar}.static_fields.${field}
-        if (${recorded} -ne ${expected}[${field}]) {
+        if ("${recorded}" -ne "$(${expected}[${field}])") {
             ${fail} += ("background STALE: {0} rendered as '{1}', machine reports '{2}'" -f ${field}, ${recorded}, ${expected}[${field}])
         } else {
             W ("{0} current: {1}" -f ${field}, ${recorded})

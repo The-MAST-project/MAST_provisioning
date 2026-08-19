@@ -5,10 +5,12 @@
 # 'mast' account, while provisioning runs over WinRM as somebody else. So this
 # script does three separable things:
 #
-#   1. Renders the background machine-wide into ${AppearanceRoot}, from the
-#      hostname plus the site and role read out of the deployed C:\WIS\config.toml
-#      (the single source of truth config-bootstrap writes -- never derived from
-#      the hostname). Machine-scope so it is verifiable without a user session.
+#   1. Renders the background machine-wide into ${AppearanceRoot}, from the fields
+#      Get-MastAppearanceFields derives: the hostname, the site (spelled out from
+#      the code in the deployed C:\WIS\config.toml -- the single source of truth
+#      config-bootstrap writes, never the hostname), the site coordinates, and the
+#      provisioning commit the payload carries. Machine-scope, so it is verifiable
+#      without a user session.
 #   2. Writes the theme and wallpaper values into mast's hive directly, via
 #      mast-userhive-lib.ps1. On a provisioned unit mast is signed in and the hive
 #      is already mounted at HKU\<sid>, so this is a plain write; with nobody
@@ -38,9 +40,11 @@ ${ErrorActionPreference} = 'Stop'
 ${mastLogDot} = Join-Path ${PSScriptRoot} 'mast-log.ps1'
 if (-not (Test-Path ${mastLogDot})) { ${mastLogDot} = Join-Path ${PSScriptRoot} '..\..\lib\mast-log.ps1' }
 . ${mastLogDot}
-${hiveLibDot} = Join-Path ${PSScriptRoot} 'mast-userhive-lib.ps1'
-if (-not (Test-Path ${hiveLibDot})) { throw "mast-userhive-lib.ps1 not found next to provide-desktop-appearance.ps1" }
-. ${hiveLibDot}
+foreach (${libName} in @('mast-userhive-lib.ps1', 'mast-appearance-lib.ps1')) {
+    ${libPath} = Join-Path ${PSScriptRoot} ${libName}
+    if (-not (Test-Path ${libPath})) { throw ("{0} not found next to provide-desktop-appearance.ps1" -f ${libName}) }
+    . ${libPath}
+}
 
 ${logDir} = Get-MastLogSessionDir
 New-Item -ItemType Directory -Path ${logDir} -Force | Out-Null
@@ -59,36 +63,29 @@ function Write-AppearanceLog {
     Write-Host ${Line}
 }
 
-function Get-TomlValue {
-    # Light single-key reader, mirroring provide-instrument-profiles.ps1 -- no
-    # tomllib dependency for two top-level string keys.
-    param([Parameter(Mandatory)][string]${Content}, [Parameter(Mandatory)][string]${Key})
-    ${match} = [regex]::Match(${Content}, ('(?m)^\s*{0}\s*=\s*(.+?)\s*$' -f [regex]::Escape(${Key})))
-    if (${match}.Success) { return ${match}.Groups[1].Value.Trim().Trim('"') }
-    return $null
-}
-
 Set-Content -LiteralPath ${logFile} -Encoding UTF8 -Value ("[{0}] provide-desktop-appearance.ps1 started" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))
 
 try {
     New-Item -ItemType Directory -Path ${AppearanceRoot} -Force | Out-Null
 
-    # 1) Identity for the background. Site and role come from the deployed config,
-    #    which is the only thing that knows them; an absent config is a warning and
-    #    'unknown' on the image rather than a failed module -- the hostname, which
-    #    is the point of the exercise, is always available.
-    ${site} = 'unknown'
-    ${role} = 'unknown'
-    if (Test-Path -LiteralPath ${UnitToml}) {
-        ${toml} = Get-Content -LiteralPath ${UnitToml} -Raw
-        ${tomlSite} = Get-TomlValue -Content ${toml} -Key 'site'
-        ${tomlRole} = Get-TomlValue -Content ${toml} -Key 'machine_role'
-        if (${tomlSite}) { ${site} = ${tomlSite} }
-        if (${tomlRole}) { ${role} = ${tomlRole} }
-        Write-AppearanceLog ("Identity from {0}: site={1} role={2}" -f ${UnitToml}, ${site}, ${role})
-    } else {
-        Write-AppearanceLog ("[WARN] {0} absent (config-bootstrap not run?); site and role render as 'unknown'." -f ${UnitToml})
+    # 1) What the background states. Derived through the shared lib so verify can
+    #    recompute the identical set and compare. A missing config or manifest
+    #    yields empty fields, and the renderer drops those lines rather than
+    #    printing a placeholder -- the hostname, the point of the exercise, always
+    #    resolves.
+    #
+    #    The build manifest sits in the staging root next to this script (staging is
+    #    flattened), and it describes the payload being installed RIGHT NOW --
+    #    unlike installed-manifest.json, which at order 2750 still describes the
+    #    previous run.
+    ${fields} = Get-MastAppearanceFields -UnitToml ${UnitToml} -BuildManifestPath (Join-Path ${PSScriptRoot} 'build-manifest.json')
+    if (-not (Test-Path -LiteralPath ${UnitToml})) {
+        Write-AppearanceLog ("[WARN] {0} absent (config-bootstrap not run?); site and coordinates omitted from the image." -f ${UnitToml})
     }
+    if (-not ${fields}.payload) {
+        Write-AppearanceLog '[WARN] no build-manifest.json in the staging root; payload stamp omitted from the image.'
+    }
+    Write-AppearanceLog ("Background states: site={0} ({1}) coords='{2}' payload={3}" -f ${fields}.site_name, ${fields}.site, ${fields}.coordinates, ${fields}.payload)
 
     # 2) Stage the renderer and the apply script at a persistent path. The AtLogon
     #    task runs long after the staging dir is gone, and the renderer follows it
@@ -111,7 +108,8 @@ try {
     # everything downstream reads.
     & (Join-Path ${AppearanceRoot} 'render-desktop-background.ps1') `
         -OutputPath ${imagePath} -SidecarPath ${sidecarPath} `
-        -ComputerName ${env:COMPUTERNAME} -Site ${site} -Role ${role}
+        -ComputerName (${fields}.computer_name) -SiteCode (${fields}.site) -SiteName (${fields}.site_name) `
+        -Coordinates (${fields}.coordinates) -Payload (${fields}.payload)
     foreach (${artifact} in @(${imagePath}, ${sidecarPath})) {
         if (-not (Test-Path -LiteralPath ${artifact})) { throw ("render-desktop-background.ps1 produced no {0}" -f ${artifact}) }
     }
