@@ -138,7 +138,7 @@ renumbering.
 |  1450 | `phd2-log-viewer` | PHDLogView offline PHD2 guide-log analyzer |
 |  1500 | `vcredist2013` | Visual C++ 2013 (MSVC120) x64 + x86 redistributables (for XILabs) |
 |  1600 | `stage` | Optical stage / mount control software |
-|  1700 | `planewave` | PlaneWave PWI4 + PWShutter + PS3 CLI + PlateSolve3 catalog + PWTools utility bundle |
+|  1700 | `planewave` | PlaneWave PWI4 + PWShutter + PS3 CLI + PlateSolve3 catalog + PWTools utility bundle. Pre-trusts the PlaneWave and TI Tiva/Stellaris driver publishers and stages PWI4's bundled USB drivers with `pnputil`, outside the installer's idempotency guard so a re-run repairs an already-installed unit |
 |  1800 | `zwo` | ZWO camera drivers, ASI Studio, ASCOM driver |
 |  1850 | `instrument-profiles` | Lay down PWI4 `.cfg` + PHD2 `.reg` **templates** (site location from `C:\WIS\config.toml`; fleet constants verbatim) and apply into the `mast` profile on first logon. Per-unit device->COM binding is the post-hardware `tools/calibrate-instruments.ps1` step, not this provider. |
 |  1900 | `vscode` | Visual Studio Code + bundled Python extensions (`ms-python.python`, `ms-python.debugpy`) installed offline from staged `.vsix` |
