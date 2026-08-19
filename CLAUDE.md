@@ -413,6 +413,26 @@ fixed VID/PID; the **FCU/Standa stage** (`VID_1CBE/PID_0007`) is MAST_unit's and
 libximc (`stage.py`), so it needs no recording. `tools/probe-instrument-detection.ps1` is the
 read-only probe that dumps this map on a connected unit.
 
+## Per-user settings: resolve the target hive, never fall back to `HKCU:`
+
+Provisioning runs over WinRM as an administrator or as SYSTEM, so `HKCU:` is **not** the
+user whose desktop the setting is for. Anything per-user (theme, wallpaper, per-user app
+config) goes through `Resolve-MastUserHive` in
+`server/providers/desktop-appearance/mast-userhive-lib.ps1`, which returns the hive at
+`HKEY_USERS\<sid>` when the account is signed in -- the normal state on a unit, since
+bootstrap enables auto-logon for `mast` -- and `reg.exe load`s `NTUSER.DAT` when it is not.
+
+**A resolver that cannot reach the target hive must fail, not retarget.** Writing to
+`HKCU:` instead configures the account running the script and reports success, which is the
+live defect in `client/bootstrap-winrm.ps1`'s `Set-MastHkcu` (`#106`). Bootstrap cannot
+consume the lib -- it runs on a bare machine before any staging exists -- so it carries its
+own copy of the logic; keep the two in step conceptually even though they cannot share code.
+
+A registry write alone does not repaint a desktop or make the shell re-read the theme: that
+needs `SystemParametersInfo` / `WM_SETTINGCHANGE` from **inside** the session, which is what
+`desktop-appearance`'s AtLogon task is for. See
+`docs/decisions/2026-08-19-per-user-desktop-state-is-written-into-the-target-hive-and-re-asserted-at-logon.md`.
+
 ## MAST services: `mast-` naming + manual start (current dev stage)
 
 The MAST NSSM services are named with a `mast-` prefix for findability: `mast-unit`,
