@@ -195,7 +195,16 @@ def classify(installed: dict | None, build: dict, validation: dict | None = None
         # A recorded failure means the module is not installed, whatever the
         # hash says -- the hash records what the payload WOULD have installed,
         # not that installing it worked.
-        failed = provide == "fail" or verify == "fail"
+        #
+        # 'skipped' counts the same way, for a different reason: the payload
+        # declared that command and this pass did not run it, so the module's
+        # state is unknown rather than clean. Treating an unknown as settled is
+        # how a unit stops being re-targeted for work nobody confirmed was done.
+        # 'none' -- no such command exists -- stays clean; there was nothing to
+        # run. Manifests written before the two were split record 'none' for
+        # both cases and are read as clean, which is what they meant at the time.
+        unknown = {"fail", "skipped"}
+        failed = provide in unknown or verify in unknown
 
         # Hash is the source of truth for "needs update"; the version string is
         # for humans (locked decision 2). An unknown installed hash cannot be

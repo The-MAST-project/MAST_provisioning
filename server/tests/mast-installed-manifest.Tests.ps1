@@ -38,6 +38,41 @@ function New-Outcomes {
     return $o
 }
 
+function New-Commands {
+    # The shape execute reads out of commands.json: one object per command,
+    # verify steps carrying the '-verify' suffix on .module.
+    param([string[]]$Modules)
+    return @($Modules | ForEach-Object { [pscustomobject]@{ module = $_ } })
+}
+
+Describe 'New-MastModuleOutcomeMap seeding' {
+    It 'seeds a declared verify as skipped until its command reports' {
+        $o = New-MastModuleOutcomeMap -Commands (New-Commands @('git', 'git-verify'))
+        $o['git']['provide'] | Should Be 'skipped'
+        $o['git']['verify']  | Should Be 'skipped'
+    }
+    It "seeds 'none' for a kind of command the payload never declares" {
+        # reboot has a provide and no verify: nothing to run, not a missed run.
+        $o = New-MastModuleOutcomeMap -Commands (New-Commands @('reboot'))
+        $o['reboot']['provide'] | Should Be 'skipped'
+        $o['reboot']['verify']  | Should Be 'none'
+    }
+    It 'a command that runs overwrites its seeded skipped' {
+        $o = New-MastModuleOutcomeMap -Commands (New-Commands @('git', 'git-verify'))
+        $o = Add-MastModuleOutcome -Outcomes $o -CommandModule 'git' -Success $true
+        $o['git']['provide'] | Should Be 'pass'
+        $o['git']['verify']  | Should Be 'skipped'
+    }
+    It 'leaves an unseeded map empty so entries are still created on demand' {
+        $o = New-MastModuleOutcomeMap
+        $o.Keys.Count | Should Be 0
+    }
+    It 'ignores commands carrying no module name' {
+        $o = New-MastModuleOutcomeMap -Commands @([pscustomobject]@{ module = '' }, $null)
+        $o.Keys.Count | Should Be 0
+    }
+}
+
 Describe 'Add-MastModuleOutcome' {
     It 'splits provide and verify by the -verify suffix' {
         $o = New-Outcomes @{ 'git' = @($true, $true) }
@@ -117,6 +152,17 @@ Describe 'Merge-MastInstalledManifest -- partial runs' {
         $r = Merge-MastInstalledManifest -Previous $null -BuildData $build `
                 -Outcomes (New-Outcomes @{ 'git' = @($true, $false) }) -InstalledAt $AT
         $r.fully_provisioned | Should Be $false
+    }
+    It 'a skipped verify blocks fully_provisioned -- unknown is not clean' {
+        # The declared verify never ran, so nothing establishes the module works.
+        # Distinct from 'none', asserted directly below.
+        $build = New-BuildData -Modules @('git') -Hashes @{ git = 'h-git' }
+        $o = New-MastModuleOutcomeMap -Commands (New-Commands @('git', 'git-verify'))
+        $o = Add-MastModuleOutcome -Outcomes $o -CommandModule 'git' -Success $true
+        $r = Merge-MastInstalledManifest -Previous $null -BuildData $build -Outcomes $o -InstalledAt $AT
+        $r.modules.git.verify | Should Be 'skipped'
+        $r.fully_provisioned  | Should Be $false
+        $r.PSObject.Properties.Match('payload_hash').Count | Should Be 0
     }
     It "a module with no verify ('none') does not block fully_provisioned" {
         $build = New-BuildData -Modules @('git') -Hashes @{ git = 'h-git' }

@@ -224,7 +224,10 @@ try {
     # Per-module provide/verify outcomes for the cumulative installed-manifest.
     # Recorded for every command, pass or fail, so a partial run still says which
     # modules landed rather than leaving the whole record stale (issue #22).
-    ${moduleOutcomes} = New-MastModuleOutcomeMap
+    # Seeded from the filtered command list so a declared verify that does not
+    # run is recorded as 'skipped' rather than sharing 'none' with a module that
+    # has no verify at all.
+    ${moduleOutcomes} = New-MastModuleOutcomeMap -Commands ${commands}
 
     foreach (${cmd} in ${commands}) {
         Write-Log ""
