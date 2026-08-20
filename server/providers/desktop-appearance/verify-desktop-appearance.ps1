@@ -29,11 +29,7 @@ foreach (${libName} in @('mast-userhive-lib.ps1', 'mast-appearance-lib.ps1')) {
 Set-StrictMode -Off  # mast-log.ps1 enables StrictMode; verify scripts probe optional state
 ${verifyLog} = Get-MastVerifyLog -Module 'desktop-appearance'
 
-${TaskName}        = 'MAST-DesktopAppearance-Apply'
-${ThemeKey}        = 'Software\Microsoft\Windows\CurrentVersion\Themes\Personalize'
-${DesktopKey}      = 'Control Panel\Desktop'
-${WallpaperFill}   = '10'
-${TileWallpaperNo} = '0'
+${TaskName} = 'MAST-DesktopAppearance-Apply'
 
 function W { param([string]${Line}) Add-Content -LiteralPath ${verifyLog} -Encoding UTF8 -Value ("[{0}] {1}" -f (Get-Date -Format 'HH:mm:ss'), ${Line}) }
 Set-Content -LiteralPath ${verifyLog} -Encoding UTF8 -Value ("[{0}] verify-desktop-appearance.ps1 started" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))
@@ -86,21 +82,20 @@ try {
 }
 if (${hive}) {
     W ("resolved the '{0}' hive ({1})." -f ${MastUser}, ${hive}.Source)
-    foreach (${check} in @(
-            @{ SubKey = ${ThemeKey};   Name = 'AppsUseLightTheme';    Expected = 0 },
-            @{ SubKey = ${ThemeKey};   Name = 'SystemUsesLightTheme'; Expected = 0 },
-            @{ SubKey = ${DesktopKey}; Name = 'Wallpaper';            Expected = ${imagePath} },
-            @{ SubKey = ${DesktopKey}; Name = 'WallpaperStyle';       Expected = ${WallpaperFill} },
-            @{ SubKey = ${DesktopKey}; Name = 'TileWallpaper';        Expected = ${TileWallpaperNo} })) {
+    # Compared against the same table the provider wrote from, so this measures the
+    # hive against the build rather than against a second copy of the expectations.
+    ${checked} = 0
+    foreach (${check} in (Get-MastDesktopUserValues -WallpaperPath ${imagePath})) {
         ${actual} = Get-MastUserHiveValue -Hive ${hive} -SubKey ${check}.SubKey -Name ${check}.Name
         if ($null -eq ${actual}) {
             ${fail} += ("{0} not set in the {1} hive" -f ${check}.Name, ${MastUser})
-        } elseif ("${actual}" -ne "$(${check}.Expected)") {
-            ${fail} += ("{0} is '{1}', build expects '{2}'" -f ${check}.Name, ${actual}, ${check}.Expected)
+        } elseif ("${actual}" -ne "$(${check}.Value)") {
+            ${fail} += ("{0} is '{1}', build expects '{2}'" -f ${check}.Name, ${actual}, ${check}.Value)
         } else {
-            W ("{0} current: {1}" -f ${check}.Name, ${actual})
+            ${checked} = ${checked} + 1
         }
     }
+    W ("{0} per-user values current in the {1} hive." -f ${checked}, ${MastUser})
     Close-MastUserHive -Hive ${hive}
 } elseif (${fail}.Count -eq 0) {
     # No profile at all: the provider legitimately deferred to the logon task, so

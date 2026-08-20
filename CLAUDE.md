@@ -423,10 +423,19 @@ config) goes through `Resolve-MastUserHive` in
 bootstrap enables auto-logon for `mast` -- and `reg.exe load`s `NTUSER.DAT` when it is not.
 
 **A resolver that cannot reach the target hive must fail, not retarget.** Writing to
-`HKCU:` instead configures the account running the script and reports success, which is the
-live defect in `client/bootstrap-winrm.ps1`'s `Set-MastHkcu` (`#106`). Bootstrap cannot
-consume the lib -- it runs on a bare machine before any staging exists -- so it carries its
-own copy of the logic; keep the two in step conceptually even though they cannot share code.
+`HKCU:` instead configures the account running the script and reports success. That was the
+defect in `client/bootstrap-winrm.ps1`'s `Set-MastHkcu`, and `#106` resolved it by moving
+the writes rather than fixing them in place: **per-user state belongs to provisioning, not
+to bootstrap.** Bootstrap runs on a bare machine before any staging exists, so it cannot
+consume the lib -- but it also runs *before the account it was configuring has a profile at
+all*, so there was never a hive for it to reach. Bootstrap keeps only machine-wide first
+touch; anything per-user goes in a provider.
+
+**`desktop-appearance` owns every per-user desktop value**, listed once in
+`Get-MastDesktopUserValues` (`mast-appearance-lib.ps1`) and consumed three ways: the
+provider writes the table into the target hive, the AtLogon task re-asserts it in the live
+session, and the verify compares the deployed values against it. Add a per-user value to
+that table, not to a fourth place.
 
 A registry write alone does not repaint a desktop or make the shell re-read the theme: that
 needs `SystemParametersInfo` / `WM_SETTINGCHANGE` from **inside** the session, which is what

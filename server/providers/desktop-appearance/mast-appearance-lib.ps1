@@ -19,6 +19,59 @@ ${script:MastSiteDisplayNames} = @{
     wis = 'Weizmann Institute'
 }
 
+#: Every per-user value this provider owns, in one table, because three callers write
+#: or read it and a second copy is how they drift: provide writes it into the mast hive
+#: from the provisioning session, apply re-asserts it in that session at logon, and
+#: verify compares what is deployed against it.
+#:
+#: The notification quieting below moved here from client\bootstrap-winrm.ps1 in
+#: MAST_provisioning#106. Bootstrap wrote it to whichever hive it could reach and
+#: reported success either way; more to the point, at bootstrap time the mast account
+#: has been created seconds earlier and has no profile at all, so there was no hive to
+#: write. Nothing is lost by moving it later -- provisioning runs long before a unit is
+#: operated, and by then the profile exists.
+#:
+#: Types matter and are not interchangeable. WallpaperStyle and TileWallpaper are REG_SZ
+#: -- written as DWORD they are ignored and the image lands centred and untiled.
+${script:MastPersonalizeKey} = 'Software\Microsoft\Windows\CurrentVersion\Themes\Personalize'
+${script:MastDesktopKey}     = 'Control Panel\Desktop'
+${script:MastPushKey}        = 'Software\Microsoft\Windows\CurrentVersion\PushNotifications'
+${script:MastCdmKey}         = 'Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'
+
+function Get-MastDesktopUserValues {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]${WallpaperPath})
+
+    ${values} = @(
+        # Dark theme: application chrome, then the shell (taskbar, Start).
+        @{ SubKey = ${script:MastPersonalizeKey}; Name = 'AppsUseLightTheme';    Value = 0; Type = 'DWord' },
+        @{ SubKey = ${script:MastPersonalizeKey}; Name = 'SystemUsesLightTheme'; Value = 0; Type = 'DWord' },
+        # Background.
+        @{ SubKey = ${script:MastDesktopKey}; Name = 'Wallpaper';      Value = ${WallpaperPath}; Type = 'String' },
+        @{ SubKey = ${script:MastDesktopKey}; Name = 'WallpaperStyle'; Value = '10';             Type = 'String' },
+        @{ SubKey = ${script:MastDesktopKey}; Name = 'TileWallpaper';  Value = '0';              Type = 'String' },
+        # Toasts: nothing should pop up over an observing session.
+        @{ SubKey = ${script:MastPushKey}; Name = 'ToastEnabled'; Value = 0; Type = 'DWord' }
+    )
+
+    # Content delivery: tips, spotlight, "Get started", app suggestions, the rotating
+    # lock-screen image. All the same shape, so the names carry the whole difference.
+    foreach (${name} in @(
+            'SoftLandingEnabled',
+            'SubscribedContent-338389Enabled',
+            'SubscribedContent-310093Enabled',
+            'SubscribedContent-338388Enabled',
+            'RotatingLockScreenEnabled',
+            'OemPreInstalledAppsEnabled',
+            'PreInstalledAppsEnabled',
+            'SilentInstalledAppsEnabled',
+            'SystemPaneSuggestionsEnabled')) {
+        ${values} += @{ SubKey = ${script:MastCdmKey}; Name = ${name}; Value = 0; Type = 'DWord' }
+    }
+
+    return ${values}
+}
+
 function Get-MastTomlValue {
     # Light single-key reader for the flat top-level and [location] keys this needs.
     # Same regex approach as verify-config-bootstrap and provide-instrument-profiles;

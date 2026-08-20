@@ -50,10 +50,6 @@ New-Item -ItemType Directory -Path ${logDir} -Force | Out-Null
 ${logFile} = Join-Path ${logDir} 'desktop-appearance.log'
 
 ${TaskName}     = 'MAST-DesktopAppearance-Apply'
-${ThemeKey}     = 'Software\Microsoft\Windows\CurrentVersion\Themes\Personalize'
-${DesktopKey}   = 'Control Panel\Desktop'
-${WallpaperFill}   = '10'
-${TileWallpaperNo} = '0'
 ${TaskNeverRan}     = 267011  # 0x41303, SCHED_S_TASK_HAS_NOT_RUN
 ${ApplyWaitSeconds} = 60
 ${ApplyPollSeconds} = 2
@@ -75,6 +71,10 @@ try {
     #    yields empty fields, and the renderer drops those lines rather than
     #    printing a placeholder -- the hostname, the point of the exercise, always
     #    resolves.
+    #
+    #    Step 4 below writes more than the theme and the wallpaper: the toast and
+    #    content-delivery suppressions moved here from bootstrap in #106, so every
+    #    per-user value the operator desktop owns is written in one place.
     ${fields} = Get-MastAppearanceFields -UnitToml ${UnitToml}
     if (-not (Test-Path -LiteralPath ${UnitToml})) {
         Write-AppearanceLog ("[WARN] {0} absent (config-bootstrap not run?); site and coordinates omitted from the image." -f ${UnitToml})
@@ -84,7 +84,10 @@ try {
     # 2) Stage the renderer and the apply script at a persistent path. The AtLogon
     #    task runs long after the staging dir is gone, and the renderer follows it
     #    so a re-render on a unit needs no payload.
-    foreach (${name} in @('render-desktop-background.ps1', 'apply-desktop-appearance.ps1')) {
+    # The lib travels with them: apply-desktop-appearance.ps1 dot-sources it for the
+    # value table, and it runs from this path at every logon long after the staging
+    # directory is gone.
+    foreach (${name} in @('render-desktop-background.ps1', 'apply-desktop-appearance.ps1', 'mast-appearance-lib.ps1')) {
         ${src} = Join-Path ${PSScriptRoot} ${name}
         if (-not (Test-Path -LiteralPath ${src})) { throw ("{0} not found for staging" -f ${name}) }
         Copy-Item -LiteralPath ${src} -Destination (Join-Path ${AppearanceRoot} ${name}) -Force
@@ -114,13 +117,12 @@ try {
     #    what covers it.
     ${hive} = Resolve-MastUserHive -UserName ${MastUser}
     if (${hive}) {
-        Set-MastUserHiveValue -Hive ${hive} -SubKey ${ThemeKey}   -Name 'AppsUseLightTheme'    -Value 0 -Type DWord
-        Set-MastUserHiveValue -Hive ${hive} -SubKey ${ThemeKey}   -Name 'SystemUsesLightTheme' -Value 0 -Type DWord
-        Set-MastUserHiveValue -Hive ${hive} -SubKey ${DesktopKey} -Name 'Wallpaper'      -Value ${imagePath}       -Type String
-        Set-MastUserHiveValue -Hive ${hive} -SubKey ${DesktopKey} -Name 'WallpaperStyle' -Value ${WallpaperFill}   -Type String
-        Set-MastUserHiveValue -Hive ${hive} -SubKey ${DesktopKey} -Name 'TileWallpaper'  -Value ${TileWallpaperNo} -Type String
+        ${userValues} = Get-MastDesktopUserValues -WallpaperPath ${imagePath}
+        foreach (${value} in ${userValues}) {
+            Set-MastUserHiveValue -Hive ${hive} -SubKey ${value}.SubKey -Name ${value}.Name -Value ${value}.Value -Type ${value}.Type
+        }
         Close-MastUserHive -Hive ${hive}
-        Write-AppearanceLog ("Wrote theme + wallpaper into the '{0}' hive ({1})." -f ${MastUser}, ${hive}.Source)
+        Write-AppearanceLog ("Wrote {0} per-user values into the '{1}' hive ({2})." -f ${userValues}.Count, ${MastUser}, ${hive}.Source)
     } else {
         Write-AppearanceLog ("[WARN] '{0}' has no profile yet; hive write skipped, first logon applies it." -f ${MastUser})
     }

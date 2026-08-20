@@ -21,9 +21,13 @@
 #
 # There is deliberately no fallback to HKCU:. HKCU is the hive of whoever is
 # RUNNING the script, so writing there reports success while configuring the
-# wrong account -- the defect this file exists not to repeat
-# (MAST_provisioning#106, client\bootstrap-winrm.ps1's Set-MastHkcu). A caller
-# that cannot reach the target hive is told so, loudly or by $null, and decides.
+# wrong account -- the defect this file exists not to repeat. A caller that cannot
+# reach the target hive is told so, loudly or by $null, and decides.
+#
+# That defect was client\bootstrap-winrm.ps1's Set-MastHkcu, and #106 removed it by
+# moving those writes into this provider: bootstrap ran before the mast account had a
+# profile at all, so no hive existed for it to reach and every write landed on the
+# operator instead.
 #
 # This file defines functions and one mount-key constant -- dot-sourcing it reads
 # nothing and changes nothing on the machine.
