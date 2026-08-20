@@ -647,7 +647,7 @@ class Driver:
             # something the fleet needs to know about a machine that the payload
             # cannot tell it. A unit short on RAM cannot host the imdisk index
             # mount, and this is the only cross-fleet read of what is actually
-            # fitted -- both gates on the requirement (bootstrap-winrm.ps1 and the
+            # fitted -- both gates on the requirement (bootstrap.ps1 and the
             # imdisk provider) run ON the unit and only report locally.
             script = (
                 "$a = Get-NetAdapter -Physical | ForEach-Object { [ordered]@{ name=$_.Name; "

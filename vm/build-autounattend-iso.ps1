@@ -7,14 +7,14 @@
   The output ISO contains:
     - Autounattend.xml at the root (Windows Setup auto-detects this on any
       attached drive: ISO, USB, or floppy).
-  - client\bootstrap-winrm.cmd, bootstrap-winrm.ps1 and mast-client-util.ps1 at the
+  - client\bootstrap.cmd, bootstrap.ps1 and mast-client-util.ps1 at the
     ISO root for the operator to run manually after first login (USB/DVD copy is
     fine; the .ps1 dot-sources the util and will not start without it). Use the
     .cmd so Windows runs PowerShell instead of Notepad (default .ps1 association).
     They are not executed from FirstLogonCommands. Bootstrap performs all first-time
     prep; after it succeeds the unit is ready for provisioning (no separate prepare step).
-  - client\bootstrap-winrm-vmtest.cmd at the ISO root: identical to
-    bootstrap-winrm.cmd but passes -VmTestRun, which adds a hosts entry routing
+  - client\bootstrap-vmtest.cmd at the ISO root: identical to
+    bootstrap.cmd but passes -VmTestRun, which adds a hosts entry routing
     mast-wis-control -> 192.168.56.1 (the VirtualBox host-only host IP).
     *** VM TESTING ONLY - do not run on production units. ***
 
@@ -39,7 +39,7 @@
 .PARAMETER MastUser, MastPassword
   Local admin account created by the answer file (factory/OEM defaults).
   Defaults: user / password1 - simulates a generic machine from the factory.
-  The operator runs client\bootstrap-winrm.cmd (or .ps1 in PowerShell) with -MastHostName mastNN; it renames user -> mast,
+  The operator runs client\bootstrap.cmd (or .ps1 in PowerShell) with -MastHostName mastNN; it renames user -> mast,
   sets physics, enables WinRM (matches vault/creds.json), and renames the computer to mastNN.
 
 .PARAMETER WindowsEditionIndex
@@ -78,12 +78,12 @@
   NetBIOS computer name written during specialize (max 15 chars).
   Default (omit): OEM + 12 hex chars, unique each time you build the ISO - mimics
   a generic factory serial. Pass '*' to let Windows pick a random name at install
-  time (legacy behavior). The operator-chosen mastNN name is applied by bootstrap-winrm.ps1,
+  time (legacy behavior). The operator-chosen mastNN name is applied by bootstrap.ps1,
   which also handles all other first-time prep (WinRM, firewall, OpenSSH, Npcap).
 
 .PARAMETER ExtraScripts
   Optional list of extra files to copy into the ISO root (in addition to
-  bootstrap-winrm.cmd and bootstrap-winrm.ps1). Useful for shipping
+  bootstrap.cmd and bootstrap.ps1). Useful for shipping
   onboard-mast-unit.ps1.
 
 .EXAMPLE
@@ -174,20 +174,20 @@ if ([string]::IsNullOrWhiteSpace($FactoryComputerName)) {
     }
 }
 
-$bootstrapPath = Join-Path $RepoRoot 'client\bootstrap-winrm.ps1'
-$bootstrapCmdPath = Join-Path $RepoRoot 'client\bootstrap-winrm.cmd'
-$bootstrapVmTestCmdPath = Join-Path $RepoRoot 'client\bootstrap-winrm-vmtest.cmd'
+$bootstrapPath = Join-Path $RepoRoot 'client\bootstrap.ps1'
+$bootstrapCmdPath = Join-Path $RepoRoot 'client\bootstrap.cmd'
+$bootstrapVmTestCmdPath = Join-Path $RepoRoot 'client\bootstrap-vmtest.cmd'
 if (-not (Test-Path $bootstrapPath)) {
-    throw "bootstrap-winrm.ps1 not found at $bootstrapPath"
+    throw "bootstrap.ps1 not found at $bootstrapPath"
 }
 if (-not (Test-Path $bootstrapCmdPath)) {
-    throw "bootstrap-winrm.cmd not found at $bootstrapCmdPath"
+    throw "bootstrap.cmd not found at $bootstrapCmdPath"
 }
 if (-not (Test-Path $bootstrapVmTestCmdPath)) {
-    throw "bootstrap-winrm-vmtest.cmd not found at $bootstrapVmTestCmdPath"
+    throw "bootstrap-vmtest.cmd not found at $bootstrapVmTestCmdPath"
 }
 
-# Npcap installer ships on the ISO next to bootstrap-winrm.ps1; bootstrap
+# Npcap installer ships on the ISO next to bootstrap.ps1; bootstrap
 # installs it interactively (the free Npcap edition has no working silent mode
 # under the WinRM/Session-0 pipeline -- see DECISIONS.md 2026-05-27). Newest
 # npcap-*.exe under client\assets\ wins.
@@ -378,13 +378,13 @@ try {
     [System.IO.File]::WriteAllText($xmlPath, $xml, [System.Text.UTF8Encoding]::new($false))
     Write-Host "  Staged Autounattend.xml ($([int]((Get-Item $xmlPath).Length / 1KB)) KB)"
 
-    Copy-Item -Force $bootstrapPath (Join-Path $staging 'bootstrap-winrm.ps1')
-    Write-Host "  Staged bootstrap-winrm.ps1"
-    Copy-Item -Force $bootstrapCmdPath (Join-Path $staging 'bootstrap-winrm.cmd')
-    Write-Host "  Staged bootstrap-winrm.cmd"
-    Copy-Item -Force $bootstrapVmTestCmdPath (Join-Path $staging 'bootstrap-winrm-vmtest.cmd')
-    Write-Host "  Staged bootstrap-winrm-vmtest.cmd"
-    # Not optional: bootstrap-winrm.ps1 dot-sources this before it does anything,
+    Copy-Item -Force $bootstrapPath (Join-Path $staging 'bootstrap.ps1')
+    Write-Host "  Staged bootstrap.ps1"
+    Copy-Item -Force $bootstrapCmdPath (Join-Path $staging 'bootstrap.cmd')
+    Write-Host "  Staged bootstrap.cmd"
+    Copy-Item -Force $bootstrapVmTestCmdPath (Join-Path $staging 'bootstrap-vmtest.cmd')
+    Write-Host "  Staged bootstrap-vmtest.cmd"
+    # Not optional: bootstrap.ps1 dot-sources this before it does anything,
     # for the hardware preflight, and throws if it is absent. An ISO without it
     # boots to a unit that cannot bootstrap.
     $clientUtilPath = Join-Path $RepoRoot 'client\mast-client-util.ps1'

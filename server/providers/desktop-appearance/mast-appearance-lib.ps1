@@ -24,7 +24,7 @@ ${script:MastSiteDisplayNames} = @{
 #: from the provisioning session, apply re-asserts it in that session at logon, and
 #: verify compares what is deployed against it.
 #:
-#: The notification quieting below moved here from client\bootstrap-winrm.ps1 in
+#: The notification quieting below moved here from client\bootstrap.ps1 in
 #: MAST_provisioning#106. Bootstrap wrote it to whichever hive it could reach and
 #: reported success either way; more to the point, at bootstrap time the mast account
 #: has been created seconds earlier and has no profile at all, so there was no hive to

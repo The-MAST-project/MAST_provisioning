@@ -331,7 +331,7 @@ def _dispose_winrm_session(sess: UnitSession | None) -> None:
 # After the end-of-provisioning reboot the unit's link-local NIC can regress to
 # the Public network profile, which makes WinRM refuse unencrypted Basic auth
 # (HTTP 401) even though the box is up and TCP 5985 is open. OpenSSH (installed
-# by bootstrap-winrm.ps1, port 22, password auth) survives that regression, so
+# by bootstrap.ps1, port 22, password auth) survives that regression, so
 # it is the resilient channel for post-reboot reconnect and verification.
 #
 # SshSession.run_ps mirrors the parts of pywinrm's Response that the orchestrator
@@ -1154,7 +1154,7 @@ def wait_for_winrm(host: str, cred: dict[str, str], timeout: int = WINRM_BOOT_TI
                 tail = "; ".join(auth_errors[-4:]) if auth_errors else "no auth attempts"
                 _log(
                     f"WinRM: TCP {WINRM_PORT} open on {host} but Basic auth not accepted yet ({tail}). "
-                    "Confirm vault/creds.json matches the unit mast password and that bootstrap-winrm.ps1 "
+                    "Confirm vault/creds.json matches the unit mast password and that bootstrap.ps1 "
                     "finished (a Public network profile can also make WinRM Basic return 401)."
                 )
             else:

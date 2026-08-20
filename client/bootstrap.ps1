@@ -56,13 +56,13 @@
     is then ready for provisioning (the prov server's provisioning loop picks it up
     once it is in unit-registry.json, or run client\onboard-mast-unit.ps1 on the unit).
 
-    USB / DVD: copy client\bootstrap-winrm.cmd, bootstrap-winrm.ps1, mast-client-util.ps1 and
+    USB / DVD: copy client\bootstrap.cmd, bootstrap.ps1, mast-client-util.ps1 and
     the Npcap installer (client\assets\npcap-*.exe) together (or use the autounattend ISO,
     which bundles all four).
-    Double-click bootstrap-winrm.cmd so Windows runs PowerShell (many PCs
+    Double-click bootstrap.cmd so Windows runs PowerShell (many PCs
     open .ps1 in Notepad by default). Or from an elevated PowerShell:
-        cd <folder containing bootstrap-winrm.ps1>
-        .\bootstrap-winrm.ps1 -MastHostName mast05
+        cd <folder containing bootstrap.ps1>
+        .\bootstrap.ps1 -MastHostName mast05
 
     If you omit -MastHostName, the script prompts interactively, defaulting to the current
     computer name on plain Enter (not valid with -NonInteractive).
@@ -149,18 +149,18 @@ $ErrorActionPreference = 'Stop'
 # used to surface as "term not recognized" a thousand lines in.
 $_clientUtilDot = Join-Path $PSScriptRoot 'mast-client-util.ps1'
 if (-not (Test-Path $_clientUtilDot)) {
-    throw "mast-client-util.ps1 not found next to this script ($_clientUtilDot). Copy it alongside bootstrap-winrm.ps1 (the autounattend ISO bundles it)."
+    throw "mast-client-util.ps1 not found next to this script ($_clientUtilDot). Copy it alongside bootstrap.ps1 (the autounattend ISO bundles it)."
 }
 . $_clientUtilDot
 
 $script:BootstrapLogDir = Join-Path $env:SystemDrive 'MAST\logs'
-$script:BootstrapLog = Join-Path $script:BootstrapLogDir 'bootstrap-winrm.log'
+$script:BootstrapLog = Join-Path $script:BootstrapLogDir 'bootstrap.log'
 $script:RebootRecommended = $false
 $script:AllowUnencryptedOk = $false
 # Set by the preflight when D: turned out to be the bootstrap medium itself, so the
 # end of the run can say so again after the drive has been ejected.
 $script:BootstrapMediaOnD = $false
-$script:BootstrapMediaEjectAttempted = $false
+$script:BootstrapMediaIsRemovable = $false
 $script:BootstrapMediaLetter = ''
 
 # Bootstrap version: stamped to C:\MAST\bootstrap-manifest.json on success so the fleet
@@ -241,21 +241,20 @@ function Get-MastInstalledMemoryBanks {
     }
 }
 
-function Dismount-MastBootstrapMedia {
-    # Eject the removable volume this script is running from, at the end of the
-    # run, once nothing needs it any more (the Npcap installer is launched from
-    # it mid-run).
+function Find-MastBootstrapMedia {
+    # Record whether this script is running from a removable volume, so the end
+    # of the run can tell the operator to unplug it.
     #
-    # Why it matters beyond tidiness: bootstrap often ends in a reboot, and a
-    # forgotten stick is re-enumerated on the next boot and takes D: again --
-    # which is precisely the state the preflight exists to prevent. Ejecting
-    # does NOT survive that on its own; only physically removing the drive
-    # does. What the eject buys is that the drive is safe to pull, D: is free
-    # immediately, and the volume vanishing from Explorer is a visible cue for
-    # the notice below.
+    # This used to eject the volume as well (mountvol /P). It no longer does:
+    # cmd.exe reads a batch file incrementally, seeking back to its saved offset
+    # for each line, so dismounting the volume out from under the running
+    # bootstrap.cmd wrapper killed the wrapper mid-script -- the tail
+    # never ran and the window closed with no error (#107).
     #
-    # A courtesy, never a precondition: every failure here is a warning telling
-    # the operator to pull the drive by hand.
+    # Nothing is lost by dropping it. The eject never survived a reboot anyway:
+    # a drive left plugged in is re-enumerated on the next boot and takes its
+    # letter back regardless. Only physically removing it is durable, which is
+    # what the notice has always been for.
     if ([string]::IsNullOrWhiteSpace($PSScriptRoot)) { return }
     $root = [System.IO.Path]::GetPathRoot($PSScriptRoot)
     if ($root -notmatch '^[A-Za-z]:\\$') { return }
@@ -263,24 +262,10 @@ function Dismount-MastBootstrapMedia {
 
     $vol = Get-CimInstance Win32_LogicalDisk -Filter ("DeviceID='{0}'" -f $letter) -ErrorAction SilentlyContinue
     # DriveType 2 = removable disk. A CD-ROM (5) is deliberately left alone: the
-    # dev VM runs this from the autounattend ISO.
+    # dev VM runs this from the autounattend ISO and there is nothing to unplug.
     if ($null -eq $vol -or [int]$vol.DriveType -ne 2) { return }
 
-    Write-BootstrapMsg '' 'Cyan'
-    Write-BootstrapMsg '--- Bootstrap media ---' 'Cyan'
-    Write-BootstrapMsg ("  Ejecting the bootstrap drive {0} (label '{1}')..." -f $letter, $vol.VolumeName) 'White'
-    try {
-        & mountvol.exe $letter /P 2>&1 | ForEach-Object { Write-BootstrapMsg ("    {0}" -f $_) 'DarkGray' }
-    } catch {
-        Write-BootstrapMsg ("  [WARN] eject command failed: {0}" -f $_.Exception.Message) 'Yellow'
-    }
-    $still = Get-CimInstance Win32_LogicalDisk -Filter ("DeviceID='{0}'" -f $letter) -ErrorAction SilentlyContinue
-    if ($null -eq $still) {
-        Write-BootstrapMsg ("  [OK] {0} is ejected and safe to unplug." -f $letter) 'Green'
-    } else {
-        Write-BootstrapMsg ("  [WARN] {0} could not be ejected (something still holds it open)." -f $letter) 'Yellow'
-    }
-    $script:BootstrapMediaEjectAttempted = $true
+    $script:BootstrapMediaIsRemovable = $true
     $script:BootstrapMediaLetter = $letter
 }
 
@@ -472,7 +457,7 @@ function Install-MastNetworkPrivateTask {
     $null = New-Item -ItemType Directory -Path $scriptDir -Force -ErrorAction SilentlyContinue
     $helper = Join-Path $scriptDir 'mast-set-network-private.ps1'
     $body = @'
-# AUTO-GENERATED by bootstrap-winrm.ps1. Re-assert all network connection
+# AUTO-GENERATED by bootstrap.ps1. Re-assert all network connection
 # profiles to Private so the link-local provisioning NIC does not regress to
 # Public (Public breaks WinRM unencrypted-Basic). Runs at boot + on net change.
 $ErrorActionPreference = 'SilentlyContinue'
@@ -598,7 +583,7 @@ function Write-BootstrapDesktopReport([string]$HostNm, [string]$SiteCode) {
         '3) After provisioning + hardware hookup: run the "MAST Instrument',
         '   Calibration" desktop shortcut to bind instrument COM ports.',
         '',
-        'Logs: C:\MAST\logs\bootstrap-winrm.log ; provisioning logs land under C:\MAST\logs.'
+        ('Logs: {0} ; provisioning logs land under {1}.' -f $script:BootstrapLog, $script:BootstrapLogDir)
     )
     $reportPath = Join-Path $targetDir 'MAST Bootstrap Report.txt'
     Set-Content -LiteralPath $reportPath -Value $lines -Encoding UTF8
@@ -839,7 +824,7 @@ function Set-MastIntlValues {
 $exitCode = 0
 try {
     Write-BootstrapBanner '======================================================================' 'Cyan'
-    Write-BootstrapBanner ' MAST bootstrap-winrm.ps1 (manual first-time setup)' 'Cyan'
+    Write-BootstrapBanner ' MAST bootstrap.ps1 (manual first-time setup)' 'Cyan'
     Write-BootstrapBanner '======================================================================' 'Cyan'
     Write-BootstrapMsg ("Log file (append): {0}" -f $script:BootstrapLog) 'DarkGray'
 
@@ -1522,7 +1507,7 @@ try {
         }
         if (-not $npcapInstaller) {
             Write-BootstrapMsg '  [WARN] No npcap-*.exe found next to this script or in .\assets.' 'Yellow'
-            Write-BootstrapMsg '  Copy the Npcap installer alongside bootstrap-winrm.ps1 and re-run, or install Npcap manually.' 'Yellow'
+            Write-BootstrapMsg '  Copy the Npcap installer alongside bootstrap.ps1 and re-run, or install Npcap manually.' 'Yellow'
             Write-BootstrapMsg '  Packet capture (Wireshark, etc.) will not work until Npcap is installed.' 'Yellow'
         } else {
             Write-BootstrapMsg ("  Launching Npcap installer GUI: {0}" -f $npcapInstaller) 'White'
@@ -1627,7 +1612,7 @@ try {
             bootstrap_version = $script:BootstrapVersion
             bootstrapped_at   = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
             hostname          = $MastHostName
-            script            = 'bootstrap-winrm.ps1'
+            script            = 'bootstrap.ps1'
         }
         $bootStamp | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $bootStampDir 'bootstrap-manifest.json') -Encoding UTF8
         Write-BootstrapMsg ("  Stamped bootstrap version {0} to C:\MAST\bootstrap-manifest.json" -f $script:BootstrapVersion) 'White'
@@ -1656,18 +1641,17 @@ try {
     }
 
     # Last, so the drive notice is the final thing on screen before any reboot
-    # countdown -- and after the Npcap installer and the desktop report, which
-    # both need the media.
-    Dismount-MastBootstrapMedia
-    if ($script:BootstrapMediaEjectAttempted) {
+    # countdown.
+    Find-MastBootstrapMedia
+    if ($script:BootstrapMediaIsRemovable) {
         Write-BootstrapBanner '' 'White'
         Write-BootstrapBanner '======================================================================' 'Yellow'
         Write-BootstrapBanner (' REMOVE THE BOOTSTRAP DRIVE ({0}) NOW' -f $script:BootstrapMediaLetter) 'Yellow'
         Write-BootstrapBanner '======================================================================' 'Yellow'
         if ($script:BootstrapMediaOnD) {
-            Write-BootstrapMsg '  It is sitting on D:, which the index RAM disk needs. Ejecting frees D: now,' 'Yellow'
-            Write-BootstrapMsg '  but a drive left plugged in is picked up again on the next boot and takes D:' 'Yellow'
-            Write-BootstrapMsg '  back. Only unplugging it is durable.' 'Yellow'
+            Write-BootstrapMsg '  It is sitting on D:, which the index RAM disk needs. A drive left plugged' 'Yellow'
+            Write-BootstrapMsg '  in is picked up again on the next boot and takes D: back, so provisioning' 'Yellow'
+            Write-BootstrapMsg '  will fail at the imdisk mount. Only unplugging it is durable.' 'Yellow'
         } else {
             Write-BootstrapMsg '  Left plugged in, it takes a drive letter again on the next boot.' 'Yellow'
         }
@@ -1675,7 +1659,7 @@ try {
 
     if ($RebootAfterBootstrap) {
         Write-BootstrapMsg '' 'Yellow'
-        if ($script:BootstrapMediaEjectAttempted) {
+        if ($script:BootstrapMediaIsRemovable) {
             Write-BootstrapMsg 'Unplug the drive BEFORE the reboot below completes.' 'Red'
         }
         Write-BootstrapMsg 'Reboot in 90 seconds (-RebootAfterBootstrap). Cancel: shutdown.exe /a' 'Yellow'

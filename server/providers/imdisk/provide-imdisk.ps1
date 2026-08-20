@@ -46,7 +46,7 @@ param(
     # Memory the machine must have before a '-t vm' mount is attempted, in GB.
     # build-mast.ps1 injects the fleet figure (Get-MastRequiredMemoryGB) into this
     # module's command, so the number is not copied here; 0 means a hand-run
-    # outside a build, which asserts nothing. bootstrap-winrm.ps1 is the primary
+    # outside a build, which asserts nothing. bootstrap.ps1 is the primary
     # gate -- this is the one that still fires on a unit bootstrapped before that
     # check existed, or re-imaged since.
     [int]   ${MinMemoryGB}  = 0
@@ -61,7 +61,7 @@ ${mastLogDot} = Join-Path ${PSScriptRoot} 'mast-log.ps1'
 if (-not (Test-Path ${mastLogDot})) { ${mastLogDot} = Join-Path ${PSScriptRoot} '..\..\lib\mast-log.ps1' }
 . ${mastLogDot}
 
-# Test-MastMemoryRequirement: shared with bootstrap-winrm.ps1 so the unit is
+# Test-MastMemoryRequirement: shared with bootstrap.ps1 so the unit is
 # measured the same way at both gates. build-mast stages it into the payload root
 # alongside mast-log.ps1; the fallback is the source tree.
 ${clientUtilDot} = Join-Path ${PSScriptRoot} 'mast-client-util.ps1'

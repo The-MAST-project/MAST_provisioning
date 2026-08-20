@@ -24,7 +24,7 @@ Set-Content -LiteralPath ${logFile} -Encoding UTF8 -Value `
 <#
 Post-bootstrap OpenSSH idempotency / drift check.
 
-Bootstrap (client\bootstrap-winrm.ps1) owns the heavy work: installs the
+Bootstrap (client\bootstrap.ps1) owns the heavy work: installs the
 OpenSSH.Server Windows capability, sets sshd + ssh-agent to Automatic,
 starts them, opens firewall TCP 22, and asserts PasswordAuthentication yes
 in sshd_config. That all has to happen in an interactive admin shell --

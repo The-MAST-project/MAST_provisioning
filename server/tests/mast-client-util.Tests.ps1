@@ -1,6 +1,6 @@
 # Pester unit tests for the pure helpers in client/mast-client-util.ps1.
 #
-# These are the hardware-preflight predicates bootstrap-winrm.ps1 gates a whole
+# These are the hardware-preflight predicates bootstrap.ps1 gates a whole
 # unit on, and the imdisk provider re-asserts before a '-t vm' mount. The CIM
 # reads that feed them are the caller's; only the judgement is tested here.
 #

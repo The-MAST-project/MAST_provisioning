@@ -389,7 +389,7 @@ file from `sites/<site>.toml` with `machine_role` injected as a top-level key. *
 explicitly via `build-mast.ps1 -Site`, never
 derived from the hostname** -- do not reintroduce hostname->site parsing in providers. Per-site
 profiles must match the controller's MongoDB `sites` doc (the app cross-checks them at startup).
-The operator picks the site at bootstrap (`bootstrap-winrm.ps1`, default `ns`); it is persisted and
+The operator picks the site at bootstrap (`bootstrap.ps1`, default `ns`); it is persisted and
 `onboard-mast-unit.ps1` writes it into the unit's `unit-registry.json` entry, which
 the driver passes to `build-mast.ps1 -Site`. Site is config-only -- never the hostname.
 
@@ -424,7 +424,7 @@ bootstrap enables auto-logon for `mast` -- and `reg.exe load`s `NTUSER.DAT` when
 
 **A resolver that cannot reach the target hive must fail, not retarget.** Writing to
 `HKCU:` instead configures the account running the script and reports success. That was the
-defect in `client/bootstrap-winrm.ps1`'s `Set-MastHkcu`, and `#106` resolved it by moving
+defect in `client/bootstrap.ps1`'s `Set-MastHkcu`, and `#106` resolved it by moving
 the writes rather than fixing them in place: **per-user state belongs to provisioning, not
 to bootstrap.** Bootstrap runs on a bare machine before any staging exists, so it cannot
 consume the lib -- but it also runs *before the account it was configuring has a profile at
@@ -470,7 +470,7 @@ When adding any new `client/*.ps1` that is needed at provisioning or bootstrap t
 1. **`build/build-mast.ps1`** — add a `Copy-Item` block so the file is staged into each
    unit's `01-provisioning/` folder.
 2. **`vm/build-autounattend-iso.ps1`** — add a `Copy-Item` call in the staging block if the
-   script is needed at bootstrap (i.e. used by `bootstrap-winrm.ps1` or `onboard-mast-unit.ps1`).
+   script is needed at bootstrap (i.e. used by `bootstrap.ps1` or `onboard-mast-unit.ps1`).
 
 Skipping either step means the script is missing at runtime on the unit.
 
@@ -576,7 +576,7 @@ and restore afterward. Do not try to make cryptnet fetch revocation through bcpr
 
 The free Npcap installer's silent `/S` and feature flags are OEM-only -- the free build
 ignores them and blocks on the NSIS options page, which can never be dismissed under a
-Session-0 WinRM task. So Npcap is installed interactively by `client/bootstrap-winrm.ps1`
+Session-0 WinRM task. So Npcap is installed interactively by `client/bootstrap.ps1`
 (full admin token), and the `npcap` provider only verifies the service/driver and
 (re)registers the watchdog. Do NOT reintroduce installer-running logic into
 `provide-npcap.ps1` or chase silent-flag / token / driver-trust fixes. To bump the version,

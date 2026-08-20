@@ -222,8 +222,8 @@ def load_bootstrap_elements(repo_root: Path) -> dict:
 
 
 def repo_bootstrap_version(repo_root: Path) -> int | None:
-    """Parse $script:BootstrapVersion from client/bootstrap-winrm.ps1 (consistency check)."""
-    path = repo_root / "client" / "bootstrap-winrm.ps1"
+    """Parse $script:BootstrapVersion from client/bootstrap.ps1 (consistency check)."""
+    path = repo_root / "client" / "bootstrap.ps1"
     if not path.exists():
         return None
     m = re.search(r"\$script:BootstrapVersion\s*=\s*(\d+)", path.read_text(encoding="utf-8", errors="replace"))
@@ -664,7 +664,7 @@ def _render_bootstrap(units: list[UnitRecord], boot: dict, repo_boot_v: int | No
     out = ["", f"=== Bootstrap (current version: {cur if cur is not None else 'unknown'}) ==="]
     if repo_boot_v is not None and cur is not None and repo_boot_v != cur:
         out.append(
-            f"  [WARN] client/bootstrap-winrm.ps1 $script:BootstrapVersion={repo_boot_v} "
+            f"  [WARN] client/bootstrap.ps1 $script:BootstrapVersion={repo_boot_v} "
             f"!= bootstrap-elements.json current_version={cur} -- bump them together."
         )
     for u in units:

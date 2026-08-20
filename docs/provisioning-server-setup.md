@@ -114,7 +114,7 @@ Edit `vault\creds.json`:
 ```
 
 `unit` is the WinRM credential for connecting to unit machines. It must match
-the password set by `client\bootstrap-winrm.ps1` during unit onboarding
+the password set by `client\bootstrap.ps1` during unit onboarding
 (default dev value is `physics`; change it for production).
 
 `smb` is a read-only local account that `setup-smb-share.ps1` creates on this
@@ -244,7 +244,7 @@ The unit side is automatic: the early **`timesync`** provider (order 50) discove
 this server from the active SMB connection, does a **one-time** clock correction
 from it (falling back to public NTP), then leaves the unit configured for normal
 public NTP for ongoing operation -- it is **not** left permanently pointed at the
-provisioning server. (`client\bootstrap-winrm.ps1` also makes a best-effort public
+provisioning server. (`client\bootstrap.ps1` also makes a best-effort public
 NTP sync at bootstrap time as a redundant backstop.)
 
 Verify:
@@ -593,7 +593,7 @@ short version after `vault\creds.json` exists:
 
 # 3. Boot and wait ~20 min for Windows install, then bootstrap the unit:
 #    (Run as Administrator on the VM)
-#    D:\bootstrap-winrm.cmd
+#    D:\bootstrap.cmd
 
 # 4. Sync DNS (elevated on the host, so mastNN resolves):
 .\vm\sync-dev-unit-hosts.ps1

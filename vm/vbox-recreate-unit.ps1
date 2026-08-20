@@ -5,18 +5,18 @@
 
 .DESCRIPTION
   End-to-end helper for a clean factory-simulation run:
-    1. Optionally rebuild autounattend-mast.iso (factory user, OEM hostname; bootstrap-winrm.cmd + .ps1 staged on ISO, not auto-run).
+    1. Optionally rebuild autounattend-mast.iso (factory user, OEM hostname; bootstrap.cmd + .ps1 staged on ISO, not auto-run).
     2. Power off and unregister the existing VM (deletes disks).
     3. Run vbox-create-unit.ps1 with the Windows ISO and autounattend ISO.
     4. Start the VM (default: GUI so you can watch). If EFI shows
        "Press any key to boot from CD or DVD...", click the VM window and press Enter once.
   5. By default exit after starting the VM. With -WaitForDevWinRm, poll until WinRM HTTP (port 5985)
-     answers (run bootstrap-winrm.cmd in the guest first). Tries -BootstrapWinRmHost first (hostname);
+     answers (run bootstrap.cmd in the guest first). Tries -BootstrapWinRmHost first (hostname);
      if unset or unreachable, scans the host-only subnet prefix (DHCP; dev VMs).
 
 .PARAMETER WaitForDevWinRm
   After starting the VM, wait until TCP port 5985 is open on the guest (max
-  -BootstrapTimeoutMinutes). Use only after you ran bootstrap-winrm.cmd in the VM
+  -BootstrapTimeoutMinutes). Use only after you ran bootstrap.cmd in the VM
   and want an automated smoke check. Default: do not wait.
 
 .PARAMETER BootstrapWinRmHost
@@ -229,15 +229,15 @@ if ($WaitForDevWinRm) {
             $phaseSw.Elapsed.TotalMinutes, $BootstrapPollSeconds, $BootstrapTimeoutMinutes)
     }
     if (-not $winRmUp) {
-        throw "WinRM did not become reachable within $BootstrapTimeoutMinutes minutes. Log into the VM, run D:\bootstrap-winrm.cmd -MastHostName mastNN (Run as administrator), reboot if prompted, then retry with -WaitForDevWinRm or sync hosts and test manually."
+        throw "WinRM did not become reachable within $BootstrapTimeoutMinutes minutes. Log into the VM, run D:\bootstrap.cmd -MastHostName mastNN (Run as administrator), reboot if prompted, then retry with -WaitForDevWinRm or sync hosts and test manually."
     }
     Write-MastTiming 'WinRM port open (after manual bootstrap)'
 
-    Write-Host "`nDone. WinRM HTTP is up - bootstrap-winrm.cmd has done all first-time prep (no separate prepare step)." -ForegroundColor Green
+    Write-Host "`nDone. WinRM HTTP is up - bootstrap.cmd has done all first-time prep (no separate prepare step)." -ForegroundColor Green
     Write-Host '  Register the guest hostname on this PC (elevated): tools\sync-dev-unit-hosts.ps1'
     Write-Host '  The unit is then ready for provisioning (the provisioning loop, or onboard-mast-unit.ps1 on the unit).'
 } else {
-    Write-Host "`nDone (no WinRM wait). After Windows finishes: log in, run bootstrap-winrm.cmd from the autounattend ISO (or USB) as Administrator with -MastHostName mastNN (or pass args via cmd.exe), confirm [OK], then tools\sync-dev-unit-hosts.ps1 on the host. Bootstrap does all first-time prep; no separate prepare step." -ForegroundColor Green
+    Write-Host "`nDone (no WinRM wait). After Windows finishes: log in, run bootstrap.cmd from the autounattend ISO (or USB) as Administrator with -MastHostName mastNN (or pass args via cmd.exe), confirm [OK], then tools\sync-dev-unit-hosts.ps1 on the host. Bootstrap does all first-time prep; no separate prepare step." -ForegroundColor Green
 }
 
 Write-Host ""

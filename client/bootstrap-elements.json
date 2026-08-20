@@ -1,5 +1,5 @@
 {
-  "_comment": "Source of truth for the bootstrap element HISTORY, read by tools/fleet-drift-report.py. Each element's 'since' is the bootstrap version (client/bootstrap-winrm.ps1 $script:BootstrapVersion) that introduced it. current_version must equal max(since) AND the $script:BootstrapVersion constant. When you add a bootstrap capability: add an element with since = the new version, bump current_version here, and bump $script:BootstrapVersion in bootstrap-winrm.ps1 to match (the report warns if they drift). The report reads each unit's C:\\MAST\\bootstrap-manifest.json (stamped at bootstrap time) and lists elements with since > the unit's stamped version as 'may need applying'.",
+  "_comment": "Source of truth for the bootstrap element HISTORY, read by tools/fleet-drift-report.py. Each element's 'since' is the bootstrap version (client/bootstrap.ps1 $script:BootstrapVersion) that introduced it. current_version must equal max(since) AND the $script:BootstrapVersion constant. When you add a bootstrap capability: add an element with since = the new version, bump current_version here, and bump $script:BootstrapVersion in bootstrap.ps1 to match (the report warns if they drift). The report reads each unit's C:\\MAST\\bootstrap-manifest.json (stamped at bootstrap time) and lists elements with since > the unit's stamped version as 'may need applying'.",
   "current_version": 11,
   "elements": [
     {
@@ -70,7 +70,7 @@
     {
       "id": "bootstrap-media-handling",
       "since": 11,
-      "description": "Treat D: held by the bootstrap medium itself as no conflict, and eject that medium at the end of the run so a forgotten drive does not take D: back on the next boot"
+      "description": "Treat D: held by the bootstrap medium itself as no conflict, and tell the operator at the end of the run to unplug it, so a forgotten drive does not take D: back on the next boot"
     }
   ]
 }

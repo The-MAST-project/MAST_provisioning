@@ -11,7 +11,7 @@ param(
 
 # Set (and record) the machine-wide PowerShell ExecutionPolicy.
 #
-# This used to be a MANUAL step that bootstrap-winrm.ps1 only PRINTED, and it was
+# This used to be a MANUAL step that bootstrap.ps1 only PRINTED, and it was
 # skipped on mast04 (2026-07-07) and mast03 (2026-07-08) -- both then fixed by hand.
 # A printed instruction is not a mechanism; a provider that runs every cycle is.
 # See #51.
