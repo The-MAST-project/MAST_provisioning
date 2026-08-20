@@ -583,7 +583,7 @@ function Write-BootstrapDesktopReport([string]$HostNm, [string]$SiteCode) {
         '3) After provisioning + hardware hookup: run the "MAST Instrument',
         '   Calibration" desktop shortcut to bind instrument COM ports.',
         '',
-        'Logs: C:\MAST\logs\bootstrap.log ; provisioning logs land under C:\MAST\logs.'
+        ('Logs: {0} ; provisioning logs land under {1}.' -f $script:BootstrapLog, $script:BootstrapLogDir)
     )
     $reportPath = Join-Path $targetDir 'MAST Bootstrap Report.txt'
     Set-Content -LiteralPath $reportPath -Value $lines -Encoding UTF8
