@@ -161,6 +161,11 @@ $script:AllowUnencryptedOk = $false
 # end of the run can say so again after the drive has been ejected.
 $script:BootstrapMediaOnD = $false
 $script:BootstrapMediaIsRemovable = $false
+# Things this run was required to establish and did not. Appended to by any
+# section that fails a hard requirement; drives the exit code and the end-of-run
+# banner. A warning the operator scrolls past is how mast06 reported a clean run
+# with no SSH server on it (#123).
+$script:BootstrapBlockers = @()
 $script:BootstrapMediaLetter = ''
 
 # Bootstrap version: stamped to C:\MAST\bootstrap-manifest.json on success so the fleet
@@ -168,7 +173,7 @@ $script:BootstrapMediaLetter = ''
 # flag units missing newer bootstrap elements. BUMP THIS whenever you add a bootstrap
 # capability, and add a matching element (since = this number) to
 # client/bootstrap-elements.json so its current_version stays == this value.
-$script:BootstrapVersion = 11
+$script:BootstrapVersion = 12
 
 # --- Hardware requirement (asserted before anything is changed) ---------------
 # Kept in step with server\lib\mast-modules.psm1 Get-MastRequiredMemoryGB, which is
@@ -1379,24 +1384,53 @@ try {
     #      working entry point of mast / physics over SSH)
     Write-BootstrapMsg '' 'Cyan'
     Write-BootstrapMsg '--- OpenSSH Server ---' 'Cyan'
-    try {
-        $sshCap = Get-WindowsCapability -Online -Name 'OpenSSH.Server~~~~0.0.1.0' -ErrorAction Stop
-        if ($sshCap.State -ne 'Installed') {
-            Write-BootstrapMsg ("  Adding OpenSSH.Server capability (current state: {0})..." -f $sshCap.State) 'White'
-            Add-WindowsCapability -Online -Name 'OpenSSH.Server~~~~0.0.1.0' -ErrorAction Stop | Out-Null
-            Write-BootstrapMsg '  OpenSSH.Server capability installed.' 'Green'
-        } else {
-            Write-BootstrapMsg '  OpenSSH.Server capability already installed.' 'DarkGray'
+    # Installed from the bundled Win32-OpenSSH MSI, not from the OpenSSH.Server
+    # Features-on-Demand capability. The capability needs a servicing payload
+    # fetched from Windows Update or matched to the running build, and it
+    # registers sshd asynchronously: on mast06 Add-WindowsCapability reported
+    # success after 4m33s with sshd still unregistered a moment later, so the
+    # service was never configured and the run still exited 0 (#123). msiexec
+    # returns only once the service exists, so there is nothing to wait out, and
+    # the MSI is one binary for every build -- unlike the per-build cabs #124
+    # had to introduce for NetFx3.
+    $sshMsi = Join-Path $PSScriptRoot 'OpenSSH-Win64-v10.0.0.0.msi'
+    if (Get-Service -Name 'sshd' -ErrorAction SilentlyContinue) {
+        Write-BootstrapMsg '  sshd already registered; skipping the OpenSSH install.' 'DarkGray'
+    } elseif (-not (Test-Path -LiteralPath $sshMsi)) {
+        $msg = "OpenSSH MSI missing from the bootstrap media at ${sshMsi}"
+        $script:BootstrapBlockers += $msg
+        Write-BootstrapMsg ("  [BLOCKER] {0}" -f $msg) 'Red'
+        Write-BootstrapMsg '  Restage the bootstrap media; SSH is how provisioning reaches this unit.' 'Red'
+    } else {
+        Write-BootstrapMsg ("  Installing Win32-OpenSSH from {0}..." -f (Split-Path $sshMsi -Leaf)) 'White'
+        try {
+            $mp = Start-Process -FilePath 'msiexec.exe' `
+                -ArgumentList @('/i', ('"{0}"' -f $sshMsi), '/qn', '/norestart') `
+                -PassThru -Wait -WindowStyle Hidden
+            if ($mp.ExitCode -ne 0 -and $mp.ExitCode -ne 3010) {
+                throw ("msiexec exit {0}" -f $mp.ExitCode)
+            }
+            if ($null -eq (Get-Service -Name 'sshd' -ErrorAction SilentlyContinue)) {
+                throw 'msiexec reported success but sshd is still not registered'
+            }
+            Write-BootstrapMsg '  Win32-OpenSSH installed (sshd registered).' 'Green'
+        } catch {
+            $msg = "OpenSSH install failed: $($_.Exception.Message)"
+            $script:BootstrapBlockers += $msg
+            Write-BootstrapMsg ("  [BLOCKER] {0}" -f $msg) 'Red'
         }
-    } catch {
-        Write-BootstrapMsg ("  WARN: Add-WindowsCapability failed: {0}" -f $_.Exception.Message) 'Yellow'
-        Write-BootstrapMsg '  SSH provider verify on this unit will fail until the capability is installed by another means.' 'Yellow'
     }
 
     foreach ($svc in @('sshd', 'ssh-agent')) {
         $s = Get-Service -Name $svc -ErrorAction SilentlyContinue
         if ($null -eq $s) {
-            Write-BootstrapMsg ("  Service '{0}' not registered (capability install failed?); skipping." -f $svc) 'Yellow'
+            if ($svc -eq 'sshd') {
+                $msg = "service 'sshd' is not registered, so it was never set Automatic or started"
+                $script:BootstrapBlockers += $msg
+                Write-BootstrapMsg ("  [BLOCKER] {0}" -f $msg) 'Red'
+            } else {
+                Write-BootstrapMsg ("  Service '{0}' not registered; skipping (not required)." -f $svc) 'Yellow'
+            }
             continue
         }
         try {
@@ -1450,7 +1484,9 @@ try {
             Write-BootstrapMsg ("  WARN: sshd_config patch failed: {0}" -f $_.Exception.Message) 'Yellow'
         }
     } else {
-        Write-BootstrapMsg ("  sshd_config not found at {0} (capability may have failed earlier)." -f $sshdCfg) 'Yellow'
+        $msg = "sshd_config not found at ${sshdCfg}, so PasswordAuthentication was never asserted"
+        $script:BootstrapBlockers += $msg
+        Write-BootstrapMsg ("  [BLOCKER] {0}" -f $msg) 'Red'
     }
 
     # --- Windows Firewall: disable (perimeter-protected fleet) ---
@@ -1655,6 +1691,20 @@ try {
         } else {
             Write-BootstrapMsg '  Left plugged in, it takes a drive letter again on the next boot.' 'Yellow'
         }
+    }
+
+    # Before the reboot notice, so an incomplete run is the last thing read.
+    if ($script:BootstrapBlockers.Count -gt 0) {
+        $exitCode = Get-MastBootstrapExitCode -Blockers $script:BootstrapBlockers
+        Write-BootstrapBanner '' 'White'
+        Write-BootstrapBanner '======================================================================' 'Red'
+        Write-BootstrapBanner ' BOOTSTRAP INCOMPLETE' 'Red'
+        Write-BootstrapBanner '======================================================================' 'Red'
+        foreach ($b in $script:BootstrapBlockers) { Write-BootstrapMsg ("  - {0}" -f $b) 'Red' }
+        Write-BootstrapMsg '' 'Red'
+        Write-BootstrapMsg '  The machine was changed, but it is not ready. Fix the above and re-run;' 'Red'
+        Write-BootstrapMsg '  bootstrap is idempotent.' 'Red'
+        Write-BootstrapMsg ("  Full log: {0}" -f $script:BootstrapLog) 'Yellow'
     }
 
     if ($RebootAfterBootstrap) {
