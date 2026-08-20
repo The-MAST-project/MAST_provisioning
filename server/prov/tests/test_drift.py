@@ -105,6 +105,23 @@ def test_verify_none_is_not_a_failure():
     assert r.current
 
 
+def test_skipped_verify_needs_update_even_when_hash_matches():
+    """Declared and not run is an unknown, and an unknown is not clean.
+
+    The counterpart of test_verify_none_is_not_a_failure: 'none' means there was
+    nothing to run, 'skipped' means it was there and this pass did not run it.
+    Reading the second as the first is what lets a module stop being targeted
+    for a check nobody performed.
+    """
+    r = classify(installed_manifest(git=entry("h1", verify="skipped")), build_manifest(git="h1"))
+    assert r.targets == ["git"]
+
+
+def test_skipped_provide_needs_update_even_when_hash_matches():
+    r = classify(installed_manifest(git=entry("h1", provide="skipped")), build_manifest(git="h1"))
+    assert r.targets == ["git"]
+
+
 def test_missing_installed_hash_needs_update_rather_than_silently_passing():
     r = classify(installed_manifest(git={"version": "1.0", "provide": "pass"}), build_manifest(git="h1"))
     assert r.targets == ["git"]

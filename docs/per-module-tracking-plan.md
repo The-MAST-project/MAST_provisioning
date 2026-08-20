@@ -201,8 +201,11 @@ Fixes the two-directional `mast` defect described above.
 
 - `execute-mast-provisioning.ps1`: stop copying `build-manifest.json` wholesale.
   For each module **actually run** this execute, **merge** an entry into
-  `installed-manifest.json`: `{ version, hash, installed_at, verify:
-  <pass|fail> }` (the `verify` value captured from that module's verify step).
+  `installed-manifest.json`: `{ version, hash, installed_at, provide, verify }`,
+  each outcome one of `pass | fail | none | skipped` (amended 2026-08-20 —
+  `none` means the payload declares no command of that kind, `skipped` means it
+  declares one this pass did not run; before the split both read `none` and an
+  unknown was indistinguishable from a non-existent check).
   Untouched modules' entries **persist** — a `-Modules` subset no longer wipes
   the record. This fixes the last-payload-only gap.
 - Derive `fully_provisioned` (installed set ⊇ the build's module set, all hashes

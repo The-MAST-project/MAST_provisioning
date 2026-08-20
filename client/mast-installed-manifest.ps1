@@ -15,14 +15,55 @@ Set-StrictMode -Off
 
 # Per-module entry state. 'provide' and 'verify' are tracked separately because
 # a module can install and then fail its own verify, and because a module may
-# have no verify command at all (verify = 'none' rather than a false 'pass').
+# have no verify command at all.
+#
+# 'none' and 'skipped' are NOT the same claim, which is why both exist:
+#   none    - the payload declares no command of that kind for this module.
+#             There was nothing to run. `reboot` has no verify, and never will.
+#   skipped - the payload DOES declare one and this pass did not run it. The
+#             module's state in that respect is unknown, not clean.
+# Before the split, both read 'none', and a reader could not tell "nothing to
+# check" from "never checked" -- so the second silently counted as the first.
 $script:MastModulePass = 'pass'
 $script:MastModuleFail = 'fail'
 $script:MastModuleNone = 'none'
+$script:MastModuleSkipped = 'skipped'
 
 function New-MastModuleOutcomeMap {
-    # Ordered so the manifest reads in execution order for a human.
-    return [ordered]@{}
+    # Seed from the commands this pass INTENDS to run, so a declared-but-unrun
+    # command is distinguishable at write time from one that was never declared.
+    # Add-MastModuleOutcome overwrites a seeded 'skipped' with pass/fail as each
+    # command reports; whatever is still 'skipped' at the end genuinely did not
+    # run.
+    #
+    # Pass the command list AFTER the -Modules filter: those are the modules the
+    # run means to touch, and they are exactly the ones Merge-MastInstalledManifest
+    # overwrites. Seeding from the unfiltered list would mark every excluded
+    # module 'skipped' and overwrite the entries a partial run is supposed to
+    # leave alone.
+    #
+    # Ordered so the manifest reads in execution order for a human. The parameter
+    # is optional: with no commands this returns an empty map and entries are
+    # created on demand exactly as before.
+    param($Commands = @())
+
+    $map = [ordered]@{}
+    foreach ($c in @($Commands)) {
+        if ($null -eq $c) { continue }
+        $name = [string]$c.module
+        if ([string]::IsNullOrWhiteSpace($name)) { continue }
+        $isVerify = $name -like '*-verify'
+        $base = if ($isVerify) { $name.Substring(0, $name.Length - 7) } else { $name }
+        if (-not $map.Contains($base)) {
+            $map[$base] = [ordered]@{
+                provide = $script:MastModuleNone
+                verify  = $script:MastModuleNone
+            }
+        }
+        $key = if ($isVerify) { 'verify' } else { 'provide' }
+        $map[$base][$key] = $script:MastModuleSkipped
+    }
+    return $map
 }
 
 # Record one command's result. Called once per command in the execute loop.
@@ -133,7 +174,9 @@ function Merge-MastInstalledManifest {
     # 3. fully_provisioned: every module the BUILD declares is present, matches
     #    the build hash, installed cleanly, and did not fail its verify. A module
     #    with no verify command ('none') does not disqualify the unit -- absence
-    #    of a check is not a failed check.
+    #    of a check is not a failed check. A module whose verify was declared and
+    #    NOT run ('skipped') does disqualify it: that is an unknown, and this flag
+    #    is what the autonomous loop trusts to skip a unit entirely.
     #
     #    NOTE the scope this rests on: "the BUILD declares". This function cannot
     #    tell a full build from a partial one, so the flag means what the caller's
@@ -161,7 +204,8 @@ function Merge-MastInstalledManifest {
         }
         if (-not $mHash -or $mHash -ne $wantHash) { $fully = $false; break }
         if ($mProvide -ne $script:MastModulePass)  { $fully = $false; break }
-        if ($mVerify  -eq $script:MastModuleFail)  { $fully = $false; break }
+        if ($mVerify  -eq $script:MastModuleFail)    { $fully = $false; break }
+        if ($mVerify  -eq $script:MastModuleSkipped) { $fully = $false; break }
     }
 
     $out = [ordered]@{
