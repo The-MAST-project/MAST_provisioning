@@ -326,9 +326,19 @@ if (-not $NoNet) {
   #      assets/sxs/README.md.
   $netFx3Path = 'unknown'
   if (-not $FoDSource) {
-    $bundledSxs = Join-Path $assets 'sxs'
+    # Payloads live one directory per OS build (assets\sxs\<build>\). The cab
+    # filename carries no version -- it is byte-identically named on 19044 and
+    # 26100 -- so a flat directory cannot hold both, and the wrong generation
+    # silently servicing nothing is what #124 was.
+    #
+    # NOT -Recurse: DISM's /Source does not descend. A cab spotted under some
+    # other build's directory would satisfy this check and then not be found by
+    # DISM, which is 0x800f081f -- the exact failure this layout prevents.
+    $sxsRoot = Join-Path $assets 'sxs'
+    $osBuild = [string][Environment]::OSVersion.Version.Build
+    $bundledSxs = Join-Path $sxsRoot $osBuild
     if (Test-Path -LiteralPath $bundledSxs) {
-      $hasCab = @(Get-ChildItem -LiteralPath $bundledSxs -Filter '*.cab' -File -Recurse -ErrorAction SilentlyContinue).Count -gt 0
+      $hasCab = @(Get-ChildItem -LiteralPath $bundledSxs -Filter '*.cab' -File -ErrorAction SilentlyContinue).Count -gt 0
       if ($hasCab) {
         # Resolve to absolute path. The provider is invoked with
         # -AssetsRoot ".", so without resolution this would end up as
@@ -338,9 +348,17 @@ if (-not $NoNet) {
         # it is. Run #14 (2026-05-26) showed this exactly -- bundled-sxs
         # attempt failed in <1s, online fallback then took 7+ minutes.
         $FoDSource = (Resolve-Path -LiteralPath $bundledSxs).Path
-        $netFx3Path = 'bundled-sxs'
-        Write-Host ("[ascom] NetFx3 source: bundled SxS at {0}" -f $FoDSource)
+        $netFx3Path = "bundled-sxs-${osBuild}"
+        Write-Host ("[ascom] NetFx3 source: bundled SxS for build {0} at {1}" -f $osBuild, $FoDSource)
       }
+    }
+    if (-not $FoDSource) {
+      # Name the build we wanted and the builds we have. Without this the run
+      # says only "no bundled SxS", which is what made the mast06 failure look
+      # like a staging problem rather than a wrong-generation payload.
+      $have = @(Get-ChildItem -LiteralPath $sxsRoot -Directory -ErrorAction SilentlyContinue | ForEach-Object { $_.Name })
+      Write-Warning ("[ascom] no bundled NetFx3 SxS for OS build {0} (payloads bundled: {1})." -f
+        $osBuild, $(if ($have.Count -gt 0) { $have -join ', ' } else { '<none>' }))
     }
   } else {
     $FoDSource = (Resolve-Path -LiteralPath $FoDSource).Path

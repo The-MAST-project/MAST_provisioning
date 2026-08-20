@@ -46,6 +46,14 @@
 
 [CmdletBinding(DefaultParameterSetName = 'IsoPath')]
 param(
+    # The OS build this payload services, e.g. 19044 (Win10 LTSC 2021) or 26100
+    # (Win11 IoT LTSC 2024). Payloads are stored one directory per build because
+    # the cab filename carries no version and would otherwise collide. Explicit
+    # rather than sniffed from the image: filing a payload under the wrong build
+    # is silent until a unit needs it, which is how #124 happened.
+    [Parameter(Mandatory = $true)]
+    [ValidatePattern('^\d{5}$')]
+    [string]$Build,
     [Parameter(Mandatory = $true, ParameterSetName = 'IsoPath')]
     [string]$IsoPath,
     [Parameter(Mandatory = $true, ParameterSetName = 'IsoDrive')]
@@ -55,7 +63,10 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$destDir = $PSScriptRoot   # this script lives at assets\sxs\fetch-from-iso.ps1
+# This script lives at assets\sxs\fetch-from-iso.ps1; payloads go in a sibling
+# directory named for the build they service.
+$destDir = Join-Path $PSScriptRoot $Build
+New-Item -ItemType Directory -Force -Path $destDir | Out-Null
 $cabPattern = 'microsoft-windows-netfx3-ondemand-package*'
 
 function Copy-Sxs {
@@ -69,9 +80,11 @@ function Copy-Sxs {
     }
     Write-Host ("Found {0} NetFx3 cab file(s) under {1}." -f $cabs.Count, $Source)
 
-    # Mirror the directory contents (cab + manifests + .mum/.cat). Keep the
-    # original tree shape so DISM sees a normal sources\sxs layout.
-    foreach ($item in Get-ChildItem -LiteralPath $Source -File) {
+    # Copy the NetFx3 payload only -- the cab plus its own manifests. Mirroring
+    # the whole of sources\sxs is how the unused Internet Explorer cabs ended up
+    # bundled and staged onto every unit (removed in PR #126); DISM needs the
+    # feature being enabled, not the rest of the medium.
+    foreach ($item in Get-ChildItem -LiteralPath $Source -File -Filter "$cabPattern*") {
         $dest = Join-Path $destDir $item.Name
         Copy-Item -LiteralPath $item.FullName -Destination $dest -Force
         Write-Host ("  copied {0} ({1:N0} bytes)" -f $item.Name, $item.Length)
@@ -119,9 +132,9 @@ if ($staged.Count -eq 0) {
 }
 $total = ($staged | Measure-Object -Property Length -Sum).Sum
 Write-Host ""
-Write-Host ("DONE. Staged {0} NetFx3 cab file(s), total {1:N0} bytes under {2}" -f $staged.Count, $total, $destDir)
+Write-Host ("DONE. Staged {0} NetFx3 cab file(s) for build {1}, total {2:N0} bytes under {3}" -f $staged.Count, $Build, $total, $destDir)
 Write-Host ("Largest cab: {0} ({1:N0} bytes)" -f $staged[0].Name, $staged[0].Length)
 Write-Host ""
 Write-Host "Next steps:"
 Write-Host "  1. Re-run build (build-mast.ps1 will now find the bundled SxS and not require -AllowMissingNetFx3Sxs)."
-Write-Host "  2. On the unit, ASCOM provider will log '[ascom] NetFx3 source: bundled SxS at ...' instead of the online-DISM warning."
+Write-Host ("  2. On a unit running build {0}, the ASCOM provider will log '[ascom] NetFx3 source: bundled SxS for build {0} at ...' instead of the online-DISM warning." -f $Build)
