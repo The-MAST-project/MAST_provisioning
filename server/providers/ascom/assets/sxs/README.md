@@ -1,10 +1,33 @@
 # Bundled NetFx3 SxS source - REQUIRED ASSET
 
-This directory must contain the `microsoft-windows-netfx3-ondemand-package*`
-.cab file (and the small companion `.mum` / `.cat` / `.xml` manifests) from
-a matching **Windows IoT Enterprise LTSC 2024** installation image. The
-ASCOM provider passes this directory to DISM as `-FoDSource` to enable
-.NET Framework 3.5 from a deterministic local input.
+This directory holds **one subdirectory per Windows build**, each containing
+the `microsoft-windows-netfx3-ondemand-package*` .cab (and its companion
+manifests) taken from an installation image of that build:
+
+```
+sxs/
+  19044/   Windows 10 LTSC 2021  -- mast01..mast06 and every production unit
+  26100/   Windows 11 IoT Enterprise LTSC 2024 -- the dev VM (MAST-WIS-01)
+```
+
+The subdirectory name is the OS build number, matching
+`[Environment]::OSVersion.Version.Build` exactly. `provide-ascom.ps1` selects
+the directory for the build it is running on and passes **that** path to DISM
+as `-FoDSource`.
+
+**Why per-build and not one flat directory:** the cab filename encodes no
+version -- `microsoft-windows-netfx3-ondemand-package~31bf3856ad364e35~amd64~~.cab`
+is the name on both 19044 and 26100 -- so a flat directory can only hold one,
+and the other silently wins. Shipping the 26100 payload to a 19044 fleet is
+exactly what #124 was: DISM answered `0x800f081f, the source files could not
+be found` with the source present and readable, because it was the wrong
+generation.
+
+**The payload is build-specific, not edition-specific.** The 19044 cab here
+came from a Windows 10 *consumer* medium (build 19041.3803) and enables NetFx3
+on Windows 10 IoT Enterprise LTSC 19044 -- verified on mast06, which went
+`DisabledWithPayloadRemoved` to `Enabled`, DISM exit 3010. Any medium in the
+same servicing family will do; it does not have to be the LTSC SKU.
 
 ## Why this is a required asset, not optional
 
@@ -25,8 +48,13 @@ which is why this asset is mandatory in production builds.
 
 ## What to drop here
 
-From a Windows IoT Enterprise LTSC 2024 ISO (build 10.0.26100.x), copy
-the **entire contents** of `sources\sxs\` into this directory:
+Run `fetch-from-iso.ps1 -Build <build> -IsoPath <iso>`; it mounts the image,
+copies the NetFx3 payload out of `sources\sxs\` into `sxs\<build>\`, and
+verifies a cab landed. Do **not** copy the entire contents of `sources\sxs\`
+by hand -- that is how two unused Internet Explorer packages ended up bundled
+and staged onto every unit (removed in PR #126).
+
+For reference, the older manual route was:
 
 ```
 server/providers/ascom/assets/sxs/

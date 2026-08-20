@@ -612,21 +612,27 @@ if (${Modules} -contains 'nomachine') {
 # bounded, documented fetch quest, not an open-ended hunt.
 if (${Modules} -contains 'ascom') {
     ${sxsSrc} = Join-Path ${providersRoot} 'ascom\assets\sxs'
-    ${sxsCabs} = @()
+    # One directory per OS build (assets\sxs\<build>\). Counting .cab files
+    # anywhere under sxs\ is what let a Windows 11 26100 payload ship to a fleet
+    # of 19044 units and present as a working asset until a unit whose component
+    # store lacked the NetFx3 payload finally had to use it (#124). A build
+    # directory holding at least one cab is the thing worth asserting.
+    ${sxsBuilds} = @()
     if (Test-Path -LiteralPath ${sxsSrc}) {
-        ${sxsCabs} = @(Get-ChildItem -LiteralPath ${sxsSrc} -Filter '*.cab' -File -Recurse -ErrorAction SilentlyContinue)
+        ${sxsBuilds} = @(Get-ChildItem -LiteralPath ${sxsSrc} -Directory -ErrorAction SilentlyContinue |
+            Where-Object { @(Get-ChildItem -LiteralPath $_.FullName -Filter '*.cab' -File -ErrorAction SilentlyContinue).Count -gt 0 })
     }
-    if (${sxsCabs}.Count -gt 0) {
-        # Stage the whole sxs\ subtree under the ascom staging area; the
-        # provider points DISM at this path via -FoDSource.
+    if (${sxsBuilds}.Count -gt 0) {
+        # Stage every build's payload; the provider selects the directory matching
+        # the unit's own OS build, which is the only party that knows it for sure.
         ${sxsDst} = Join-Path ${staging} 'sxs'
         New-Item -ItemType Directory -Force -Path ${sxsDst} | Out-Null
         Copy-Item -Force -Recurse -Path (Join-Path ${sxsSrc} '*') -Destination ${sxsDst}
-        Write-Host (" Staged NetFx3 SxS source ({0} .cab file(s)) -> {1}" -f ${sxsCabs}.Count, ${sxsDst})
+        Write-Host (" Staged NetFx3 SxS payloads for build(s) {0} -> {1}" -f ((${sxsBuilds} | ForEach-Object { $_.Name }) -join ', '), ${sxsDst})
     } elseif (${AllowMissingNetFx3Sxs}) {
-        Write-Warning "NetFx3 SxS source under '$sxsSrc' is empty; continuing due to -AllowMissingNetFx3Sxs (provider will fall back to online DISM)."
+        Write-Warning "No per-build NetFx3 SxS payload under '$sxsSrc'; continuing due to -AllowMissingNetFx3Sxs (provider will fall back to online DISM)."
     } else {
-        throw "NetFx3 SxS source missing under '$sxsSrc'. Drop the Windows IoT 11 LTSC SxS files there (see provider README), or pass -AllowMissingNetFx3Sxs for dev/test."
+        throw "No per-build NetFx3 SxS payload under '$sxsSrc'. Expected at least one '<build>\*.cab' directory, e.g. '19044\' -- see the provider README for fetching one from a matching ISO. Pass -AllowMissingNetFx3Sxs for dev/test."
     }
 }
 
