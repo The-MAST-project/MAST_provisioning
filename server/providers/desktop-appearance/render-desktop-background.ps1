@@ -37,7 +37,7 @@ ${ErrorActionPreference} = 'Stop'
 
 # Bumping this invalidates every deployed image, so a design change reaches units
 # that already have one. It is folded into the sidecar, which verify compares.
-${RendererVersion} = 3
+${RendererVersion} = 4
 
 # Layout. The text block sits in the lower-left: desktop icons occupy the top-left
 # (the single Desktop\MAST folder the desktop-shortcuts provider leaves there), and
@@ -59,7 +59,11 @@ ${FootFontSize}    = 22
 ${LineGap}         = 28
 
 ${BackgroundColor} = '#0B0E14'
-${ForegroundColor} = '#E6EDF3'
+# Identity text (hostname and site name). Held well below the top of the palette
+# ramp: against #0B0E14 a near-white reads as glare at 128 px on the enclosure
+# monitor, not as a label. Still clearly above ${MutedColor}, which the coordinate
+# and footer lines use -- the two tiers have to stay distinguishable.
+${ForegroundColor} = '#B1BAC4'
 ${MutedColor}      = '#7D8894'
 ${AccentColor}     = '#4C7DF0'
 ${FontFamily}      = 'Segoe UI'
@@ -80,8 +84,13 @@ ${footFont} = $null
 try {
     ${bitmap}   = New-Object System.Drawing.Bitmap(${Width}, ${Height})
     ${graphics} = [System.Drawing.Graphics]::FromImage(${bitmap})
-    ${graphics}.TextRenderingHint = [System.Drawing.Text.TextRenderingHint]::ClearTypeGridFit
-    ${graphics}.SmoothingMode     = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+    # Glyphs are filled as outlines (see the drawing loop), so TextRenderingHint only
+    # governs MeasureString here. It is still not ClearType: subpixel hinting has no
+    # meaning on an offscreen bitmap, and measuring under a hint the render does not
+    # use would size the block against the wrong metrics.
+    ${graphics}.TextRenderingHint = [System.Drawing.Text.TextRenderingHint]::AntiAliasGridFit
+    ${graphics}.SmoothingMode     = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
+    ${graphics}.PixelOffsetMode   = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
     ${graphics}.Clear((ConvertTo-DrawingColor -Hex ${BackgroundColor}))
 
     ${hostFont} = New-Object System.Drawing.Font(${FontFamily}, ${HostFontSize}, [System.Drawing.FontStyle]::Bold, [System.Drawing.GraphicsUnit]::Pixel)
@@ -119,9 +128,26 @@ ${coordFont} = New-Object System.Drawing.Font(${FontFamily}, ${CoordFontSize}, [
         fg    = New-Object System.Drawing.SolidBrush((ConvertTo-DrawingColor -Hex ${ForegroundColor}))
         muted = New-Object System.Drawing.SolidBrush((ConvertTo-DrawingColor -Hex ${MutedColor}))
     }
+    # Every line is converted to an outline and filled, rather than drawn with
+    # DrawString. GDI+ ClearType has no subpixel layout to filter against when the
+    # target is an offscreen Bitmap and degrades to near-binary edges; the steps are
+    # invisible on the 22-40 px lines and unmissable on a 128 px hostname, which is
+    # what made the identity text look ragged at any resolution. Filling the glyph
+    # outline antialiases against real coverage, so it is smooth at any size.
     ${y} = [single]${blockTop}
     foreach (${line} in ${lines}) {
-        ${graphics}.DrawString(${line}.Text, ${line}.Font, ${brushes}[${line}.Brush], [single]${textLeft}, ${y})
+        ${path} = New-Object System.Drawing.Drawing2D.GraphicsPath
+        try {
+            ${path}.AddString(
+                ${line}.Text,
+                ${line}.Font.FontFamily,
+                [int]${line}.Font.Style,
+                ${line}.Font.Size,
+                (New-Object System.Drawing.PointF([single]${textLeft}, ${y})),
+                [System.Drawing.StringFormat]::GenericDefault)
+            ${graphics}.FillPath(${brushes}[${line}.Brush], ${path})
+        }
+        finally { ${path}.Dispose() }
         ${y} = ${y} + ${line}.Height + ${LineGap}
     }
     ${brushes}.Values | ForEach-Object { $_.Dispose() }
