@@ -92,3 +92,27 @@ Describe 'Get-MastDriveDVerdict' {
             Should Be 'foreign'
     }
 }
+
+Describe 'Get-MastBootstrapExitCode' {
+    It 'returns 0 when nothing blocked the run' {
+        Get-MastBootstrapExitCode -Blockers @() | Should Be 0
+    }
+    It 'returns 0 when the parameter is omitted entirely' {
+        Get-MastBootstrapExitCode | Should Be 0
+    }
+    It 'returns 1 for a single blocker' {
+        Get-MastBootstrapExitCode -Blockers @('sshd is not registered') | Should Be 1
+    }
+    It 'returns 1 for several blockers' {
+        Get-MastBootstrapExitCode -Blockers @('sshd is not registered', 'sshd_config missing') | Should Be 1
+    }
+    It 'ignores empty and whitespace entries' {
+        # An accidental '+= $null' or '+= ""' must not fail an otherwise clean
+        # run: the exit code is the operator's signal, so a false 1 costs as
+        # much trust as a false 0.
+        Get-MastBootstrapExitCode -Blockers @('', '   ', $null) | Should Be 0
+    }
+    It 'still fails when a real blocker sits among empty entries' {
+        Get-MastBootstrapExitCode -Blockers @('', 'sshd is not registered', $null) | Should Be 1
+    }
+}
