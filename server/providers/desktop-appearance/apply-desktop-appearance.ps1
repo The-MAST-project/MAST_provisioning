@@ -26,12 +26,8 @@ param(
 
 ${ErrorActionPreference} = 'Stop'
 
-${SidecarPath}     = Join-Path ${AppearanceRoot} 'background.json'
-${LogFile}         = Join-Path ${AppearanceRoot} 'apply.log'
-${ThemeKey}        = 'Software\Microsoft\Windows\CurrentVersion\Themes\Personalize'
-${DesktopKey}      = 'Control Panel\Desktop'
-${WallpaperFill}   = '10'
-${TileWallpaperNo} = '0'
+${SidecarPath} = Join-Path ${AppearanceRoot} 'background.json'
+${LogFile}     = Join-Path ${AppearanceRoot} 'apply.log'
 
 # SystemParametersInfo / WM_SETTINGCHANGE constants.
 ${SPI_SETDESKWALLPAPER} = 0x0014
@@ -41,6 +37,10 @@ ${HWND_BROADCAST}       = [System.IntPtr]0xffff
 ${WM_SETTINGCHANGE}     = 0x001A
 ${SMTO_ABORTIFHUNG}     = 0x0002
 ${BroadcastTimeoutMs}   = 1000
+
+${libPath} = Join-Path ${PSScriptRoot} 'mast-appearance-lib.ps1'
+if (-not (Test-Path ${libPath})) { throw "mast-appearance-lib.ps1 not found next to apply-desktop-appearance.ps1" }
+. ${libPath}
 
 function Write-ApplyLog {
     param([string]${Line})
@@ -77,19 +77,17 @@ public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, IntPtr wPa
         throw ("background image named by the sidecar is missing: {0}" -f ${imagePath})
     }
 
-    # Dark theme. Two values: application chrome and the shell (taskbar, Start).
-    ${themePath} = Join-Path 'HKCU:' ${ThemeKey}
-    if (-not (Test-Path -LiteralPath ${themePath})) { New-Item -Path ${themePath} -Force | Out-Null }
-    Set-ItemProperty -LiteralPath ${themePath} -Name 'AppsUseLightTheme'   -Value 0 -Type DWord -Force
-    Set-ItemProperty -LiteralPath ${themePath} -Name 'SystemUsesLightTheme' -Value 0 -Type DWord -Force
-
-    # Wallpaper. WallpaperStyle and TileWallpaper are REG_SZ, not DWORD -- written
-    # as numbers they are ignored and the image lands centered and untiled.
-    ${desktopPath} = Join-Path 'HKCU:' ${DesktopKey}
-    Set-ItemProperty -LiteralPath ${desktopPath} -Name 'Wallpaper'      -Value ${imagePath}       -Type String -Force
-    Set-ItemProperty -LiteralPath ${desktopPath} -Name 'WallpaperStyle' -Value ${WallpaperFill}   -Type String -Force
-    Set-ItemProperty -LiteralPath ${desktopPath} -Name 'TileWallpaper'  -Value ${TileWallpaperNo} -Type String -Force
-    Write-ApplyLog ("Asserted theme + wallpaper values in HKCU (image {0})." -f ${imagePath})
+    # The same table the provider wrote into this hive from the provisioning session --
+    # theme, wallpaper, toast and content-delivery quieting. Re-asserted rather than
+    # assumed: this runs as the owner of HKCU, so it is the one place that can be sure
+    # the values are the ones the live session will read.
+    ${userValues} = Get-MastDesktopUserValues -WallpaperPath ${imagePath}
+    foreach (${value} in ${userValues}) {
+        ${keyPath} = Join-Path 'HKCU:' ${value}.SubKey
+        if (-not (Test-Path -LiteralPath ${keyPath})) { New-Item -Path ${keyPath} -Force | Out-Null }
+        Set-ItemProperty -LiteralPath ${keyPath} -Name ${value}.Name -Value ${value}.Value -Type ${value}.Type -Force
+    }
+    Write-ApplyLog ("Asserted {0} per-user values in HKCU (image {1})." -f ${userValues}.Count, ${imagePath})
 
     ${applied} = [MastProvisioning.DesktopInterop]::SystemParametersInfo(
         ${SPI_SETDESKWALLPAPER}, 0, ${imagePath}, (${SPIF_UPDATEINIFILE} -bor ${SPIF_SENDCHANGE}))

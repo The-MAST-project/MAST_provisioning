@@ -1030,10 +1030,16 @@ try {
     Write-BootstrapMsg '' 'Cyan'
     Write-BootstrapMsg '--- Suppressing Windows popup notifications ---' 'Cyan'
 
-    # Machine-wide consumer cloud content ("Get even more out of Windows" nags) is
-    # disabled in the telemetry/privacy hardening table below (DisableWindowsConsumerFeatures),
-    # so it is not duplicated here. This section keeps the per-user (HKCU) toast /
-    # content-delivery suppressions and the backup-reminder task disable.
+    # MACHINE-WIDE ONLY. Consumer cloud content ("Get even more out of Windows" nags)
+    # is disabled in the telemetry/privacy hardening table below
+    # (DisableWindowsConsumerFeatures); what is left here is the backup-reminder task.
+    #
+    # The per-user (HKCU) toast and content-delivery suppressions used to live here and
+    # moved to the desktop-appearance provider in #106. They could not work from here:
+    # the mast account is created a few dozen lines above this point and has never
+    # logged on, so it has no profile and no hive -- the writes landed in the hive of
+    # whoever ran bootstrap, and reported success. Provisioning runs after a profile
+    # exists, and owns every other per-user desktop value already.
 
     # Machine-wide: disable Windows Backup scheduled tasks that trigger backup reminder popups
     foreach ($taskName in @('Automatic Backup', 'ConfigNotification')) {
@@ -1048,63 +1054,7 @@ try {
         } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
     }
 
-    # Apply HKCU notification suppressions for the mast user.
-    # Load the hive if mast is not the current user (bootstrap typically runs as a different user).
-    $mastProfilePath = ''
-    try {
-        $mastProfilePath = (Get-LocalUser -Name $MastUser -ErrorAction Stop |
-            ForEach-Object {
-                $sid = $_.SID.Value
-                $p = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\$sid"
-                if (Test-Path $p) { (Get-ItemProperty -Path $p).ProfileImagePath } else { '' }
-            })
-    } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
-
-    $hiveLoaded = $false
-    $hivePath = ''
-    if ($mastProfilePath -and (Test-Path (Join-Path $mastProfilePath 'NTUSER.DAT'))) {
-        $hivePath = Join-Path $mastProfilePath 'NTUSER.DAT'
-        $hiveKey = 'HKU\MAST_BOOTSTRAP_HIVE'
-        try {
-            & reg.exe load $hiveKey $hivePath 2>&1 | Out-Null
-            if ($LASTEXITCODE -eq 0) { $hiveLoaded = $true }
-        } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
-    }
-
-    # Helper: set a DWORD in either HKU hive (if loaded) or HKCU (if running as mast already)
-    function Set-MastHkcu {
-        param([string]$SubKey, [string]$Name, [int]$Value)
-        $fullPath = if ($hiveLoaded) { "Registry::HKU\MAST_BOOTSTRAP_HIVE\$SubKey" } else { "HKCU:\$SubKey" }
-        try {
-            New-Item -Path $fullPath -Force -ErrorAction SilentlyContinue | Out-Null
-            Set-ItemProperty -Path $fullPath -Name $Name -Value $Value -Type DWord -Force -ErrorAction Stop
-        } catch {
-            Write-BootstrapMsg ("  WARN: could not set HKCU\{0}\{1}: {2}" -f $SubKey, $Name, $_.Exception.Message) 'Yellow'
-        }
-    }
-
-    # Disable toast notifications
-    Set-MastHkcu 'Software\Microsoft\Windows\CurrentVersion\PushNotifications' 'ToastEnabled' 0
-
-    # Disable tips, "Get started", spotlight, content delivery subscriptions
-    $cdm = 'Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'
-    Set-MastHkcu $cdm 'SoftLandingEnabled'                  0
-    Set-MastHkcu $cdm 'SubscribedContent-338389Enabled'     0
-    Set-MastHkcu $cdm 'SubscribedContent-310093Enabled'     0
-    Set-MastHkcu $cdm 'SubscribedContent-338388Enabled'     0
-    Set-MastHkcu $cdm 'RotatingLockScreenEnabled'           0
-    Set-MastHkcu $cdm 'OemPreInstalledAppsEnabled'          0
-    Set-MastHkcu $cdm 'PreInstalledAppsEnabled'             0
-    Set-MastHkcu $cdm 'SilentInstalledAppsEnabled'          0
-    Set-MastHkcu $cdm 'SystemPaneSuggestionsEnabled'        0
-
-    if ($hiveLoaded) {
-        try {
-            & reg.exe unload 'HKU\MAST_BOOTSTRAP_HIVE' 2>&1 | Out-Null
-        } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
-    }
-
-    Write-BootstrapMsg '  Windows popup/notification suppressions applied.' 'Green'
+    Write-BootstrapMsg '  Backup-reminder tasks disabled (per-user quieting moved to provisioning, #106).' 'Green'
 
     # --- Regional format: English (United States) ---
     #
