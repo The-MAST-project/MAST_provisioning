@@ -5,8 +5,8 @@
   Post-bootstrap onboarder for a MAST unit: provision, register, hand off.
 
 .DESCRIPTION
-  Assumes client\bootstrap-winrm.ps1 has ALREADY run on this machine.
-  bootstrap-winrm.ps1 is the single source of truth for first-time prep:
+  Assumes client\bootstrap.ps1 has ALREADY run on this machine.
+  bootstrap.ps1 is the single source of truth for first-time prep:
   the 'mast' admin account, WinRM HTTP/5985 + Basic, firewall, OpenSSH, Npcap,
   computer rename, and Windows Update suppression. This script does NOT repeat
   any of that. Stage 0 only verifies bootstrap left the machine in the expected
@@ -29,7 +29,7 @@
 
 .PARAMETER HostName
   Required. The unit's MAST hostname (mast01..mast20). Must already match the
-  name bootstrap-winrm.ps1 set on this machine.
+  name bootstrap.ps1 set on this machine.
 
 .PARAMETER ProvServer
   Required. IP of the provisioning server.
@@ -40,7 +40,7 @@
 
 .PARAMETER Site
   Site code (e.g. 'ns', 'wis') written into this unit's registry entry; selects the
-  provisioning config profile. Defaults to the value bootstrap-winrm.ps1 persisted at
+  provisioning config profile. Defaults to the value bootstrap.ps1 persisted at
   C:\ProgramData\MAST\site.txt. Never derived from the hostname.
 
 .PARAMETER ResumeFrom
@@ -56,7 +56,7 @@
   Log every action but do not execute side effects.
 
 .EXAMPLE
-  # After bootstrap-winrm.ps1 has already run on the unit:
+  # After bootstrap.ps1 has already run on the unit:
   .\onboard-mast-unit.ps1 -HostName mast01 -ProvServer 192.168.56.1
 
   # Resume after a failed PROVISION stage:
@@ -104,7 +104,7 @@ New-Item -ItemType Directory -Force -Path $DataRoot, $LogDir, $StatusDir | Out-N
 $SiteFile = Join-Path $DataRoot 'site.txt'
 if (-not $Site -and (Test-Path $SiteFile)) { $Site = (Get-Content $SiteFile -Raw).Trim() }
 if (-not $Site) {
-    throw "No site selected: pass -Site <site>, or run bootstrap-winrm.ps1 first (it persists $SiteFile)."
+    throw "No site selected: pass -Site <site>, or run bootstrap.ps1 first (it persists $SiteFile)."
 }
 
 # ---------------------------------------------------------------------------
@@ -195,7 +195,7 @@ function Invoke-Stage {
 }
 
 # ---------------------------------------------------------------------------
-# Stage 0 - PREFLIGHT  (verify admin + that bootstrap-winrm.ps1 already ran)
+# Stage 0 - PREFLIGHT  (verify admin + that bootstrap.ps1 already ran)
 # ---------------------------------------------------------------------------
 function Invoke-StagePreflight {
     Write-MastEvent 'CHECK' @{ check='admin_rights' }
@@ -203,18 +203,18 @@ function Invoke-StagePreflight {
     if (-not $isAdmin) { throw "Must run as Administrator." }
     Write-MastEvent 'CHECK_OK' @{ check='admin_rights' }
 
-    # This onboarder assumes bootstrap-winrm.ps1 already did first-time prep.
+    # This onboarder assumes bootstrap.ps1 already did first-time prep.
     # Verify its two load-bearing outputs rather than recreating them.
     Write-MastEvent 'CHECK' @{ check='bootstrap_mast_account'; user=$MastUser }
     if (-not (Get-LocalUser -Name $MastUser -ErrorAction SilentlyContinue)) {
-        throw "Local account '$MastUser' not found. Run client\bootstrap-winrm.ps1 first (it creates the mast admin and enables WinRM)."
+        throw "Local account '$MastUser' not found. Run client\bootstrap.ps1 first (it creates the mast admin and enables WinRM)."
     }
     Write-MastEvent 'CHECK_OK' @{ check='bootstrap_mast_account' }
 
     Write-MastEvent 'CHECK' @{ check='bootstrap_winrm_http' }
     $winrmTcp = Test-NetConnection -ComputerName '127.0.0.1' -Port 5985 -WarningAction SilentlyContinue
     if (-not $winrmTcp.TcpTestSucceeded) {
-        throw "WinRM HTTP (TCP 5985) is not listening. Run client\bootstrap-winrm.ps1 first."
+        throw "WinRM HTTP (TCP 5985) is not listening. Run client\bootstrap.ps1 first."
     }
     Write-MastEvent 'CHECK_OK' @{ check='bootstrap_winrm_http' }
 

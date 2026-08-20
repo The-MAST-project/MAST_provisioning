@@ -1,6 +1,7 @@
 ---
 decided: 2026-08-19
-status: accepted
+status: superseded
+superseded_by: 2026-08-20-the-operator-unplugs-the-bootstrap-drive-nothing-ejects-it
 issue: MAST_provisioning#104
 areas:
   - bootstrap

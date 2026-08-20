@@ -1,7 +1,7 @@
 ﻿{
   "name": "openssh-server",
   "version": "windows-capability",
-  "description": "Drift check for OpenSSH Server. The capability install, service config, firewall rule, and sshd_config password-auth assertion are owned by client\\bootstrap-winrm.ps1 (interactive admin shell -- DISM rejects Add-WindowsCapability under WinRM). This provider only re-asserts those settings if they have drifted since bootstrap.",
+  "description": "Drift check for OpenSSH Server. The capability install, service config, firewall rule, and sshd_config password-auth assertion are owned by client\\bootstrap.ps1 (interactive admin shell -- DISM rejects Add-WindowsCapability under WinRM). This provider only re-asserts those settings if they have drifted since bootstrap.",
   "order": 200,
   "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-openssh-server.ps1\"",
   "commandfiles": [

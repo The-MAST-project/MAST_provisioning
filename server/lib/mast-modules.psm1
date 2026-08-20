@@ -94,7 +94,7 @@ function Get-ConfiguredSites {
 # Two consumers, one number:
 #   - build-mast.ps1 injects it into the imdisk module command (-MinMemoryGB), so
 #     a run that reaches the mount has already asserted the machine can host it.
-#   - client/bootstrap-winrm.ps1 EMBEDS it ($script:RequiredMemoryGB), because it
+#   - client/bootstrap.ps1 EMBEDS it ($script:RequiredMemoryGB), because it
 #     runs offline on a bare unit and cannot import this module -- exactly the
 #     $knownSites situation, and guarded the same way by
 #     Assert-BootstrapMemoryRequirementInSync in build-mast.ps1.

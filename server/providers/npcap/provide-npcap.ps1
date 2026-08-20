@@ -21,7 +21,7 @@ function Write-NpcapLog {
 
 Set-Content -LiteralPath ${logFile} -Encoding UTF8 -Value ("[{0}] provide-npcap.ps1 started (verify-only)." -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))
 
-# --- Install moved to bootstrap-winrm.ps1 ---
+# --- Install moved to bootstrap.ps1 ---
 #
 # Npcap registers a kernel driver. Under a WinRM network logon the calling
 # user has a filtered NTLM token (BUILTIN\Administrators stripped from the
@@ -31,7 +31,7 @@ Set-Content -LiteralPath ${logFile} -Encoding UTF8 -Value ("[{0}] provide-npcap.
 # InstallOptions page, which has no working silent mode on Session 0 (the /S
 # and feature flags are OEM-edition-only; see the 2026-05-27 DECISIONS entry).
 #
-# Npcap is now installed by client/bootstrap-winrm.ps1, which runs
+# Npcap is now installed by client/bootstrap.ps1, which runs
 # interactively as a full (unfiltered) admin token, so the operator clicks
 # through the installer GUI once. This provider is therefore reduced to a
 # post-bootstrap safety check: assert the service/driver are present (fail
@@ -49,7 +49,7 @@ try {
     ${svc} = Get-Service -Name 'npcap' -ErrorAction SilentlyContinue
     if ($null -eq ${svc}) {
         throw ("Npcap service not registered. Npcap is installed by " +
-               "client\bootstrap-winrm.ps1 (run interactively as admin before provisioning); " +
+               "client\bootstrap.ps1 (run interactively as admin before provisioning); " +
                "this unit appears to have skipped that step.")
     }
     # The kernel driver lives at System32\drivers\npcap.sys; System32\Npcap\

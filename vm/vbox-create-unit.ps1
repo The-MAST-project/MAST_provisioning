@@ -21,7 +21,7 @@
        - Leave the host-only adapter on DHCP (enable VirtualBox DHCP for the
          host-only network if needed), or use a temporary address until DNS/hosts
          maps the unit hostname (mast01) from this host.
-       - Run bootstrap-winrm.cmd as Administrator (from ISO/USB; same folder as .ps1). Confirm [OK] in the summary.
+       - Run bootstrap.cmd as Administrator (from ISO/USB; same folder as .ps1). Confirm [OK] in the summary.
          Bootstrap does all first-time prep (mast user, WinRM HTTP/5985, firewall, OpenSSH, Npcap, rename); no separate prepare step.
        - Verify WinRM reachability from this host (the prov server) on
          port 5985 using the unit hostname once it resolves
@@ -38,8 +38,8 @@
   When supplied, mounts the Windows install ISO on SATA port 1 (EFI must boot
   that disc) and the autounattend ISO on port 2. Setup discovers Autounattend.xml
   on the second optical volume during windowsPE. Skips the manual install
-  walkthrough entirely. The autounattend ISO also carries bootstrap-winrm.cmd and
-  bootstrap-winrm.ps1 at its root; after first login run bootstrap-winrm.cmd as
+  walkthrough entirely. The autounattend ISO also carries bootstrap.cmd and
+  bootstrap.ps1 at its root; after first login run bootstrap.cmd as
   Administrator before the prov server uses WinRM.
 
 .PARAMETER VmName
@@ -277,10 +277,10 @@ Next steps (autounattend mode):
      the factory admin (user / password1 by default). It does NOT auto-run bootstrap.
 
   3) Log in as that account. From the second DVD (often D: or E:), right-click
-     bootstrap-winrm.cmd and choose Run as administrator (passes args through to PowerShell).
+     bootstrap.cmd and choose Run as administrator (passes args through to PowerShell).
      Example from cmd.exe:
-       D:\bootstrap-winrm.cmd -MastHostName mast05 -RebootAfterBootstrap
-     (Use the drive letter that lists bootstrap-winrm.cmd; keep .cmd and .ps1 in the same folder.)
+       D:\bootstrap.cmd -MastHostName mast05 -RebootAfterBootstrap
+     (Use the drive letter that lists bootstrap.cmd; keep .cmd and .ps1 in the same folder.)
      Read the [OK] or [FAIL] summary; fix any USER ACTION lines and re-run if needed.
 
   4) After reboot if you used -RebootAfterBootstrap, log in as mast / physics.
@@ -304,10 +304,10 @@ Next steps (manual install):
      When done and at the desktop, inside the VM:
        - Prefer DHCP on the host-only adapter (enable VBox host-only DHCP or use
          a lease-friendly layout). Identity is the hostname (mast01), not a fixed IP.
-       - Copy bootstrap-winrm.cmd, bootstrap-winrm.ps1, and npcap-*.exe together, then either:
-           Right-click bootstrap-winrm.cmd -> Run as administrator
+       - Copy bootstrap.cmd, bootstrap.ps1, and npcap-*.exe together, then either:
+           Right-click bootstrap.cmd -> Run as administrator
          or from an elevated cmd.exe:
-             D:\bootstrap-winrm.cmd -MastHostName mast05
+             D:\bootstrap.cmd -MastHostName mast05
          Bootstrap does all first-time prep; there is no separate prepare step.
 
      (Copy scripts onto the VM via shared clipboard or a temporary VBox shared folder.)

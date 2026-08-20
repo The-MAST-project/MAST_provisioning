@@ -24,7 +24,7 @@
 # wrong account -- the defect this file exists not to repeat. A caller that cannot
 # reach the target hive is told so, loudly or by $null, and decides.
 #
-# That defect was client\bootstrap-winrm.ps1's Set-MastHkcu, and #106 removed it by
+# That defect was client\bootstrap.ps1's Set-MastHkcu, and #106 removed it by
 # moving those writes into this provider: bootstrap ran before the mast account had a
 # profile at all, so no hive existed for it to reach and every write landed on the
 # operator instead.

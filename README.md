@@ -44,7 +44,7 @@ MAST_provisioning/
 |-- build/
 |   `-- build-mast.ps1                # Assembles staging\<host>\01-provisioning\
 |-- client/
-|   |-- bootstrap-winrm.ps1           # First-time unit prep (single source of truth): hardware preflight (64 GB RAM + free D:), mast user, site selection, auto-logon, WinRM HTTP, OpenSSH, Npcap, rename, WU policy, telemetry/privacy hardening, Windows Firewall OFF (units sit behind a perimeter firewall; WinRM/SSH rules kept for re-enable)
+|   |-- bootstrap.ps1           # First-time unit prep (single source of truth): hardware preflight (64 GB RAM + free D:), mast user, site selection, auto-logon, WinRM HTTP, OpenSSH, Npcap, rename, WU policy, telemetry/privacy hardening, Windows Firewall OFF (units sit behind a perimeter firewall; WinRM/SSH rules kept for re-enable)
 |   |-- execute-mast-provisioning.ps1 # Runs on the unit; iterates through commands.json
 |   |-- run-verify-only.ps1           # Runs on the unit; *-verify steps only (see below)
 |   `-- onboard-mast-unit.ps1         # Post-bootstrap onboarder: provision + register + handoff
@@ -119,7 +119,7 @@ renumbering.
 |------:|--------|-------------|
 |   100 | `proxy` | Soft proxy: set (on-campus) or clear (home) machine/WinHTTP/WinINet proxy settings |
 |   150 | `config-bootstrap` | Lay down `C:\WIS\config.toml` (machine identity + config-DB connection) with the `machine_role` field injected; site chosen by build `-Site` |
-|   200 | `openssh-server` | Drift check for OpenSSH Server (install/config owned by `bootstrap-winrm.ps1`) |
+|   200 | `openssh-server` | Drift check for OpenSSH Server (install/config owned by `bootstrap.ps1`) |
 |   250 | `imdisk` | ImDisk driver; assert the machine has the fleet's required RAM, then mount D: from the astrometry index image, persist across reboots |
 |   300 | `cygwin` | Cygwin environment from a prebuilt tgz (postinstall, PATH) |
 |   400 | `astrometry-dependencies` | Cygwin packages for astrometry.net (offline, from the frozen build-host cache `C:\MAST\cygwin-pkg-cache`) + bundled `fitsio` wheel |
@@ -177,15 +177,15 @@ derived from the hostname.
 `server/providers/config-bootstrap/sites/`. The file base name is the site code, and its
 contents are that site's per-machine bootstrap config (site/project/controller_host/
 domain/`[location]`). To add a site, drop `sites/<code>.toml` **and** add `<code>` to the
-`$knownSites` list in `client/bootstrap-winrm.ps1` (see below).
+`$knownSites` list in `client/bootstrap.ps1` (see below).
 
-**How the selection flows:** `bootstrap-winrm.ps1` (offline, on the bare unit) records the
+**How the selection flows:** `bootstrap.ps1` (offline, on the bare unit) records the
 chosen site to `C:\ProgramData\MAST\site.txt` -> `onboard-mast-unit.ps1` reads it and writes
 it into the unit's `unit-registry.json` entry -> the driver passes it to
 `build-mast.ps1 -Site <code>`, which stages `sites/<code>.toml` for the `config-bootstrap`
 provider to deploy as `C:\WIS\config.toml`.
 
-**Two site lists, kept in sync automatically:** `bootstrap-winrm.ps1` runs offline before
+**Two site lists, kept in sync automatically:** `bootstrap.ps1` runs offline before
 the prov server is reachable, so it cannot read `sites/` and embeds a `$knownSites` list for
 console-time validation. `build-mast.ps1` runs `Assert-BootstrapKnownSitesInSync` on every
 build (on the prov server, where both are visible) and **fails the build** if `$knownSites`
@@ -208,7 +208,7 @@ drifts from `sites/*.toml`. The shared enumerator is `Get-ConfiguredSites` in
 This is the only path operators run by hand. Everything else is autonomous.
 
 1. Install Windows IoT on the unit machine and complete OOBE.
-2. Copy `client/bootstrap-winrm.cmd`, `client/bootstrap-winrm.ps1` and
+2. Copy `client/bootstrap.cmd`, `client/bootstrap.ps1` and
    `client/mast-client-util.ps1` to the unit via USB thumb drive or a temporary network
    share. All three files must be in the same folder. (In the VM workflow these files are
    bundled on the autounattend ISO; for physical units that ISO is not present, so manual
@@ -216,14 +216,14 @@ This is the only path operators run by hand. Everything else is autonomous.
 3. On the unit, open an **elevated Command Prompt** (Run as administrator) and run:
 
    ```cmd
-   bootstrap-winrm.cmd
+   bootstrap.cmd
    ```
 
    The `.cmd` wrapper enables script execution for the session and invokes the `.ps1`.
    If you need to pass arguments (e.g. `-MastHostName mast05`), pass them directly:
 
    ```cmd
-   bootstrap-winrm.cmd -MastHostName mast05
+   bootstrap.cmd -MastHostName mast05
    ```
 
    Confirm the script prints `[OK]` before continuing.
@@ -233,14 +233,16 @@ This is the only path operators run by hand. Everything else is autonomous.
    A machine missing either stops here, before anything has been changed on it -- fit the
    memory (or pull the disk holding D:) and re-run. On a bare unit the bootstrap USB
    itself takes D: (`C:` is the system disk); that is recognized and is **not** a failure,
-   and the drive is ejected at the end of the run. The memory requirement is declared once,
-   in `Get-MastRequiredMemoryGB` (`server/lib/mast-modules.psm1`); `bootstrap-winrm.ps1`
+   and the run ends by telling you to unplug it. The memory requirement is declared once,
+   in `Get-MastRequiredMemoryGB` (`server/lib/mast-modules.psm1`); `bootstrap.ps1`
    embeds it because it runs offline, and `build-mast.ps1` fails the build if the two
    drift.
 
-4. **Unplug the bootstrap drive** when the run tells you to, before any reboot. Bootstrap
-   ejects it, but a drive left physically plugged in is picked up again on the next boot
-   and takes `D:` back -- which is the state the preflight exists to prevent.
+4. **Unplug the bootstrap drive** when the run tells you to, before any reboot. A drive
+   left physically plugged in is picked up again on the next boot and takes `D:` back --
+   which is the state the preflight exists to prevent. Nothing automates this: bootstrap
+   used to eject the volume, which killed the `cmd` wrapper reading its own batch file
+   off it (#107), and the eject never survived a reboot anyway.
 
 5. Once bootstrap completes the unit is reachable over WinRM HTTP on port 5985. From
    here the provisioning server's Task Scheduler loop picks up the unit automatically
@@ -409,7 +411,7 @@ version is on each unit, and where do they differ?" -- useful as units are added
 drift creeps in. It gathers each unit's `C:\MAST\installed-manifest.json` over **SSH**
 and prints a per-unit summary plus a module-version matrix flagging divergences (a
 missing manifest shows as `NO-MANIFEST`). It also reads each unit's
-`C:\MAST\bootstrap-manifest.json` (stamped by `bootstrap-winrm.ps1`) and flags units on
+`C:\MAST\bootstrap-manifest.json` (stamped by `bootstrap.ps1`) and flags units on
 an older or unstamped bootstrap, listing the bootstrap elements they may be missing
 (element history in `client/bootstrap-elements.json`). It changes nothing on the units.
 
@@ -443,7 +445,7 @@ The quick summary: install Python 3.12 + pywinrm, run `vm\admin-prep.ps1`
 
 ### One-time unit VM setup
 
-Bootstrap (**`client\bootstrap-winrm.cmd`**) must run **elevated**: in File Explorer, right-click the `.cmd` file and choose **Run as administrator** (or run it from an **elevated Command Prompt** if you need arguments such as `-MastHostName`). The matching `bootstrap-winrm.ps1` must live in the same folder. Alternatively, run `bootstrap-winrm.ps1` from an elevated PowerShell session.
+Bootstrap (**`client\bootstrap.cmd`**) must run **elevated**: in File Explorer, right-click the `.cmd` file and choose **Run as administrator** (or run it from an **elevated Command Prompt** if you need arguments such as `-MastHostName`). The matching `bootstrap.ps1` must live in the same folder. Alternatively, run `bootstrap.ps1` from an elevated PowerShell session.
 
 Two paths: an unattended path (recommended) and a manual path.
 
@@ -451,7 +453,7 @@ Two paths: an unattended path (recommended) and a manual path.
 
 ```powershell
 # 1) Build a small autounattend ISO (~1 MB). It contains Autounattend.xml plus
-#    bootstrap-winrm.cmd + bootstrap-winrm.ps1 on the ISO root (not executed automatically).
+#    bootstrap.cmd + bootstrap.ps1 on the ISO root (not executed automatically).
 .\vm\build-autounattend-iso.ps1
 # Optional: target ARM64 IoT LTSC and pick a specific edition
 # .\vm\build-autounattend-iso.ps1 -Architecture arm64 -WindowsEdition "Windows 11 IoT Enterprise LTSC"
@@ -464,11 +466,11 @@ Two paths: an unattended path (recommended) and a manual path.
 VBoxManage startvm mast-unit --type gui
 
 # 4) Log in (factory user/password1 by default). On the second DVD (or USB), locate
-#    bootstrap-winrm.cmd in the same folder as bootstrap-winrm.ps1. Right-click
-#    bootstrap-winrm.cmd and choose Run as administrator (required; the script
+#    bootstrap.cmd in the same folder as bootstrap.ps1. Right-click
+#    bootstrap.cmd and choose Run as administrator (required; the script
 #    elevates WinRM and renames the computer). If you need command-line arguments,
 #    open an elevated Command Prompt (Run as administrator) and run for example:
-#        D:\bootstrap-winrm.cmd -MastHostName mast05 -RebootAfterBootstrap
+#        D:\bootstrap.cmd -MastHostName mast05 -RebootAfterBootstrap
 #    The .cmd file runs PowerShell for you (.ps1 may open in Notepad if opened directly).
 #    Confirm the script prints [OK] before you continue.
 
@@ -483,7 +485,7 @@ Test-NetConnection mast05 -Port 5985
 ```
 
 Defaults baked into the answer file for the first local account: `user` / `password1`
-(until you run `bootstrap-winrm.cmd` as Administrator, or `bootstrap-winrm.ps1` from an elevated
+(until you run `bootstrap.cmd` as Administrator, or `bootstrap.ps1` from an elevated
 PowerShell session, which sets `mast` / `physics`). Locale and
 timezone default to `en-US` and `Israel Standard Time` unless overridden on
 `build-autounattend-iso.ps1`.
@@ -501,10 +503,10 @@ VBoxManage startvm mast-unit --type gui
 #   1) Ensure the host-only adapter has an address (DHCP on the VirtualBox
 #      host-only network, or set a temporary address) and that mastNN resolves
 #      from the host after you run bootstrap.
-#   2) Run bootstrap: right-click client\bootstrap-winrm.cmd (or the copy on D:\ etc.)
+#   2) Run bootstrap: right-click client\bootstrap.cmd (or the copy on D:\ etc.)
 #      and choose Run as administrator. For arguments (for example -MastHostName mast05),
 #      use an elevated Command Prompt instead:
-#         D:\bootstrap-winrm.cmd -MastHostName mast05
+#         D:\bootstrap.cmd -MastHostName mast05
 #      Bootstrap does all first-time prep (mast user, WinRM, OpenSSH, Npcap,
 #      rename, WU policy, telemetry/privacy hardening, Windows Firewall OFF);
 #      there is no separate prepare step.
@@ -515,7 +517,7 @@ VBoxManage startvm mast-unit --type gui
 ```
 
 Either path produces two snapshots: `clean-state` (post-Windows install, before
-manual bootstrap) and `post-prepare` (after `bootstrap-winrm.cmd` (Run as
+manual bootstrap) and `post-prepare` (after `bootstrap.cmd` (Run as
 administrator) ran -- bootstrap does all first-time prep; the snapshot name is
 historical).
 

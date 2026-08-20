@@ -29,7 +29,7 @@ unit      n/a        bbbbbbb!   ccccccc!   v1.2
   [WARN] unit: pinned in the manifest but on a branch on mast01, mast02 -- a --branch override, or a clone from before the pin.
 
 === Bootstrap (current version: 3) ===
-  [WARN] client/bootstrap-winrm.ps1 $script:BootstrapVersion=4 != bootstrap-elements.json current_version=3 -- bump them together.
+  [WARN] client/bootstrap.ps1 $script:BootstrapVersion=4 != bootstrap-elements.json current_version=3 -- bump them together.
   mast01: v3 (current)
   mast02: v2 OUTDATED (current 3) -- may need: (none listed)
   mast03: UNSTAMPED -- no bootstrap-manifest.json (pre-versioning, or bootstrap not re-run since stamping was added)

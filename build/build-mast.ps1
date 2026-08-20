@@ -135,7 +135,7 @@ function Read-ModuleManifest {
 
 # Guard the single source of truth for the site list. The authoritative set of
 # sites is the *.toml profiles under config-bootstrap/sites/. The offline
-# bootstrap script (client/bootstrap-winrm.ps1) cannot read that directory -- it
+# bootstrap script (client/bootstrap.ps1) cannot read that directory -- it
 # runs on a bare unit from USB/ISO before the prov server is reachable -- so it
 # embeds a $knownSites list for early operator validation at the console. This
 # guard runs on the prov server (where both are visible) and fails the build if
@@ -148,7 +148,7 @@ function Assert-BootstrapKnownSitesInSync {
     [Parameter(Mandatory)][string]${ClientRoot},
     [Parameter(Mandatory)][string]${ProvidersRoot}
   )
-  ${bootstrapScript} = Join-Path ${ClientRoot} 'bootstrap-winrm.ps1'
+  ${bootstrapScript} = Join-Path ${ClientRoot} 'bootstrap.ps1'
   if (-not (Test-Path -LiteralPath ${bootstrapScript})) {
     throw ('Cannot verify site-list sync: bootstrap script not found at {0}' -f ${bootstrapScript})
   }
@@ -168,13 +168,13 @@ function Assert-BootstrapKnownSitesInSync {
   ${missing} = @(${configured} | Where-Object { ${embedded} -notcontains $_ })
   ${extra}   = @(${embedded}   | Where-Object { ${configured} -notcontains $_ })
   if (${missing}.Count -gt 0 -or ${extra}.Count -gt 0) {
-    ${msg} = 'bootstrap-winrm.ps1 $knownSites is out of sync with config-bootstrap/sites/.'
+    ${msg} = 'bootstrap.ps1 $knownSites is out of sync with config-bootstrap/sites/.'
     if (${missing}.Count -gt 0) { ${msg} += (' Missing from $knownSites: {0}.' -f (${missing} -join ', ')) }
     if (${extra}.Count -gt 0)   { ${msg} += (' In $knownSites but no matching sites/*.toml: {0}.' -f (${extra} -join ', ')) }
     ${msg} += (' Configured sites: {0}. Update the $knownSites list in {1} to match.' -f (${configured} -join ', '), ${bootstrapScript})
     throw ${msg}
   }
-  Write-Host ('[build-mast] Site list in sync: {0} (bootstrap-winrm.ps1 $knownSites matches config-bootstrap/sites/).' -f (${configured} -join ', '))
+  Write-Host ('[build-mast] Site list in sync: {0} (bootstrap.ps1 $knownSites matches config-bootstrap/sites/).' -f (${configured} -join ', '))
 }
 
 # The memory figure has the same shape of problem as the site list: bootstrap runs
@@ -186,7 +186,7 @@ function Assert-BootstrapMemoryRequirementInSync {
   param(
     [Parameter(Mandatory)][string]${ClientRoot}
   )
-  ${bootstrapScript} = Join-Path ${ClientRoot} 'bootstrap-winrm.ps1'
+  ${bootstrapScript} = Join-Path ${ClientRoot} 'bootstrap.ps1'
   if (-not (Test-Path -LiteralPath ${bootstrapScript})) {
     throw ('Cannot verify the memory requirement: bootstrap script not found at {0}' -f ${bootstrapScript})
   }
@@ -199,9 +199,9 @@ function Assert-BootstrapMemoryRequirementInSync {
   }
   ${embedded} = [int]${m}.Groups[1].Value
   if (${embedded} -ne ${required}) {
-    throw ("bootstrap-winrm.ps1 `$script:RequiredMemoryGB is {0} GB but Get-MastRequiredMemoryGB (server\lib\mast-modules.psm1) says {1} GB. Update {2} to match; the module is the authoritative declaration." -f ${embedded}, ${required}, ${bootstrapScript})
+    throw ("bootstrap.ps1 `$script:RequiredMemoryGB is {0} GB but Get-MastRequiredMemoryGB (server\lib\mast-modules.psm1) says {1} GB. Update {2} to match; the module is the authoritative declaration." -f ${embedded}, ${required}, ${bootstrapScript})
   }
-  Write-Host ('[build-mast] Memory requirement in sync: {0} GB (bootstrap-winrm.ps1 matches Get-MastRequiredMemoryGB).' -f ${required})
+  Write-Host ('[build-mast] Memory requirement in sync: {0} GB (bootstrap.ps1 matches Get-MastRequiredMemoryGB).' -f ${required})
 }
 
 Assert-BootstrapKnownSitesInSync -ClientRoot ${clientRoot} -ProvidersRoot ${providersRoot}

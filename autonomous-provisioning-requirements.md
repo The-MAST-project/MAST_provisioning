@@ -501,7 +501,7 @@ targeted `-Modules` updates are the rest of the per-module-tracking epic (#22).
 
 A unit comes online in two moves, with a clean split of responsibility.
 
-1. **Unit side -- `client/bootstrap-winrm.ps1` does EVERYTHING** needed to make a
+1. **Unit side -- `client/bootstrap.ps1` does EVERYTHING** needed to make a
    bare Windows IoT machine ready to be autonomously provisioned. An operator runs
    it once, elevated, on the physical machine (from the autounattend ISO or USB; VMs
    get it the same way after first login). When it prints `[OK]` the unit is:
@@ -555,12 +555,12 @@ Each stage logs `STAGE_START` / `STAGE_OK` / `STAGE_FAIL` brackets. A checkpoint
 
 **Deployment paths:**
 
-- **Physical unit:** boot the autounattend ISO (or copy `bootstrap-winrm.cmd` +
-  `bootstrap-winrm.ps1` + `npcap-*.exe` to USB), run `bootstrap-winrm.cmd` elevated
+- **Physical unit:** boot the autounattend ISO (or copy `bootstrap.cmd` +
+  `bootstrap.ps1` + `npcap-*.exe` to USB), run `bootstrap.cmd` elevated
   with `-MastHostName mastNN`, and confirm `[OK]`. Then add the unit to
   `server/unit-registry.json` on the prov server. That is the whole flow.
 - **Dev/test VM:** the answer file installs Windows; after first login run
-  `bootstrap-winrm.cmd` the same way, then register the unit server-side.
+  `bootstrap.cmd` the same way, then register the unit server-side.
 - **Pushing the first cycle (optional):** instead of waiting for the loop, run
   `onboard-mast-unit.ps1 -HostName mast01 -ProvServer 192.168.64.10` on the unit and
   tail the mirrored log from the prov server:
@@ -570,7 +570,7 @@ Each stage logs `STAGE_START` / `STAGE_OK` / `STAGE_FAIL` brackets. A checkpoint
    }
    ```
 
-**Status:** `bootstrap-winrm.ps1` is the validated, supported unit-prep path.
+**Status:** `bootstrap.ps1` is the validated, supported unit-prep path.
 `onboard-mast-unit.ps1` is not yet validated end-to-end against a physical unit, and
 the autonomous loop it can hand off to is not fully operational; treat it as optional
 until Phase 1 lands.
@@ -662,7 +662,7 @@ can recycle the WinRM service and drop the same WinRM session the orchestrator i
 A remote-run guest script should avoid calling `Enable-PSRemoting` mid-session when
 `MAST_RUN_ID` is set and listeners already exist, and should print a `##MAST##` completion
 boundary before any WinRM-recycling work. (First-time WinRM setup now happens interactively
-on the unit via `bootstrap-winrm.ps1`, so the autonomous remote-run path no longer recycles
+on the unit via `bootstrap.ps1`, so the autonomous remote-run path no longer recycles
 WinRM.)
 
 **Hang with guest transcript complete but no `remote_run_end`:** `run-remote-script-winrm.py`
@@ -722,7 +722,7 @@ required for core operation.
 
 2. **Remote execution without elevating the prov server:** the driver uses
    **WinRM over HTTP (5985) with Basic authentication** -- the same surface enabled by
-   `client/bootstrap-winrm.ps1` on the unit. This does **not** depend on local
+   `client/bootstrap.ps1` on the unit. This does **not** depend on local
    `TrustedHosts` or `Enable-PSRemoting` on the orchestrator machine. **[DONE]**
 
 3. **Large payload delivery (`staging/` artifacts)** uses **SMB pull**: the unit connects
@@ -1378,7 +1378,7 @@ no science data can be collected regardless.
 
 Before running `execute-mast-provisioning.ps1`, Windows Update is prevented from
 installing updates and rebooting mid-run. This is implemented via `Disable-WindowsAutoUpdate`
-in `client/mast-client-util.ps1`, called by `bootstrap-winrm.ps1` during first-time prep:
+in `client/mast-client-util.ps1`, called by `bootstrap.ps1` during first-time prep:
 
 ```powershell
 # Disable automatic update installation during provisioning.
