@@ -341,7 +341,7 @@ Describe 'Merge-MastInstalledManifest -- module-reported facts (#137)' {
         # Observations are not checks. A module reporting something surprising
         # still passes if its verify passed.
         $build = New-BuildData -Modules @('mongodb-client') -Hashes @{ 'mongodb-client' = 'h-mongo' }
-        $facts = @{ 'mongodb-client' = [pscustomobject]@{ compass_self_updated = $true } }
+        $facts = @{ 'mongodb-client' = [pscustomobject]@{ compass_version = '1.49.14' } }
         $r = Merge-MastInstalledManifest -Previous $null -BuildData $build `
             -Outcomes (New-Outcomes @{ 'mongodb-client' = @($true, $true) }) -InstalledAt $AT -Facts $facts
         $r.fully_provisioned | Should Be $true
@@ -372,11 +372,11 @@ Describe 'Merge-MastInstalledManifest -- module-reported facts (#137)' {
         # execute writes with -Depth 6 and facts sit four levels down; a value
         # lost to truncation would read as "the module reported nothing".
         $build = New-BuildData -Modules @('mongodb-client') -Hashes @{ 'mongodb-client' = 'h-mongo' }
-        $facts = @{ 'mongodb-client' = [pscustomobject]@{ compass_version = '1.49.14'; compass_self_updated = $true } }
+        $facts = @{ 'mongodb-client' = [pscustomobject]@{ compass_version = '1.49.14'; mongosh_version = '2.2.6' } }
         $r = Merge-MastInstalledManifest -Previous $null -BuildData $build `
             -Outcomes (New-Outcomes @{ 'mongodb-client' = @($true, $true) }) -InstalledAt $AT -Facts $facts
         $round = $r | ConvertTo-Json -Depth 6 | ConvertFrom-Json
         $round.modules.'mongodb-client'.facts.compass_version | Should Be '1.49.14'
-        $round.modules.'mongodb-client'.facts.compass_self_updated | Should Be $true
+        $round.modules.'mongodb-client'.facts.mongosh_version | Should Be '2.2.6'
     }
 }

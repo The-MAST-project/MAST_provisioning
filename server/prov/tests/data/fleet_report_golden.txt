@@ -33,7 +33,6 @@ unit      n/a        bbbbbbb!   ccccccc!   v1.2
 fact                                      BUILD (reference)  mast01   mast02
 ----------------------------------------------------------------------------
 mongodb-client.compass_installer_version  -                  1.43.0   1.43.0
-mongodb-client.compass_self_updated*      -                  True     False
 mongodb-client.compass_version*           -                  1.49.14  1.43.0
 
 === Bootstrap (current version: 3) ===

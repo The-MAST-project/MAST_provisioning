@@ -98,7 +98,6 @@ def _golden_fixture(fdr):
                 "facts": {
                     "compass_version": "1.49.14",
                     "compass_installer_version": "1.43.0",
-                    "compass_self_updated": True,
                     "observed_at": "2026-08-23T12:00:00Z",
                 },
             },
@@ -122,7 +121,6 @@ def _golden_fixture(fdr):
                 "facts": {
                     "compass_version": "1.43.0",
                     "compass_installer_version": "1.43.0",
-                    "compass_self_updated": False,
                     "observed_at": "2026-08-23T13:00:00Z",
                 },
             },

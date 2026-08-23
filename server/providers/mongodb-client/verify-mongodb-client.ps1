@@ -66,8 +66,11 @@ if (Test-Path -LiteralPath $compassRoot) {
 
     if ($app.Version) { $facts['compass_version'] = [string]$app.Version }
     if ($pin.Version) { $facts['compass_installer_version'] = [string]$pin.Version }
+    # No 'self updated' fact: it is exactly compass_version != the installer's,
+    # both of which are reported, and a derived fact is a second place for the
+    # same truth to be wrong. The log line below still spells it out for a human
+    # reading one unit.
     if ($app.Version -and $pin.Version) {
-        $facts['compass_self_updated'] = ($app.Version -ne $pin.Version)
         if ($app.Version -eq $pin.Version) {
             W 'compass drift: none'
         } else {
