@@ -1364,24 +1364,25 @@ try {
         Write-BootstrapMsg '  Network may regress to Public after reboot; WinRM Basic could return 401 until re-run.' 'Yellow'
     }
 
-    # --- OpenSSH Server (capability + service + firewall + password auth) ---
+    # --- OpenSSH Server (MSI + service + firewall + password auth) ---
     #
-    # Installs the Windows in-box OpenSSH.Server optional capability and
-    # makes it operational. Owned by bootstrap (not by the openssh-server
-    # provider) because Add-WindowsCapability is rejected by DISM/CBS under
-    # the WinRM network logon used by the provider pipeline, even when the
-    # user is a full admin (the network-logon token isn't enough for
-    # CBS_E_NOT_APPLICABLE-style checks). Bootstrap runs interactively as
-    # admin, so the install just works here. See compare-mastw/GAPS.md +
-    # the 2026-05-25 DECISIONS entry.
+    # Installs Win32-OpenSSH from the bundled MSI and makes it operational.
+    # Owned by bootstrap (not by the openssh-server provider) because the
+    # provider cannot be reached before SSH exists, and because the in-box
+    # OpenSSH.Server capability is rejected by DISM/CBS under the WinRM
+    # network logon the provider pipeline uses even for a full admin. See
+    # compare-mastw/GAPS.md + the 2026-05-25 DECISIONS entry.
     #
-    # Steps mirrored from the previous provide-openssh-server.ps1:
-    #   1. Add-WindowsCapability OpenSSH.Server (idempotent)
+    # Steps:
+    #   1. msiexec the bundled OpenSSH MSI (skipped when sshd is registered)
     #   2. Set sshd Automatic, Start-Service
     #   3. Same for ssh-agent (helpful, not strictly required)
     #   4. Firewall: inbound TCP 22 (using the same helper as 5985)
     #   5. sshd_config: assert PasswordAuthentication yes (matches mastw's
     #      working entry point of mast / physics over SSH)
+    #
+    # 1 was Add-WindowsCapability until #123; steps 2, 4 and 5 now record a
+    # blocker rather than a warning when they cannot complete.
     Write-BootstrapMsg '' 'Cyan'
     Write-BootstrapMsg '--- OpenSSH Server ---' 'Cyan'
     # Installed from the bundled Win32-OpenSSH MSI, not from the OpenSSH.Server
