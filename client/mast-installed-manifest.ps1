@@ -121,7 +121,15 @@ function Merge-MastInstalledManifest {
         # git_sha was already recorded; the repos it INSTALLS were not, so the fleet
         # could diverge with nothing saying so (#75). Optional: a unit provisioned
         # before mast-clone wrote the sidecar simply has no 'repos' key.
-        $Repos = $null
+        $Repos = $null,
+        # Module-reported observations, keyed by module name, from the facts
+        # sidecars under C:\MAST\status\facts\ (see Write-MastModuleFacts).
+        # Attached only to modules THIS run touched, exactly like the entries
+        # themselves: an untouched module keeps the facts its carried-forward
+        # entry already holds, rather than gaining fresher ones from a run that
+        # did not look at it. Observations only -- see fully_provisioned below,
+        # which does not read them (#137).
+        $Facts = $null
     )
 
     $modules = [ordered]@{}
@@ -162,13 +170,18 @@ function Merge-MastInstalledManifest {
             if ($entry.PSObject.Properties.Match('version').Count) { $version = [string]$entry.version }
             if ($entry.PSObject.Properties.Match('hash').Count)    { $hash    = [string]$entry.hash }
         }
-        $modules[$name] = [ordered]@{
+        $moduleEntry = [ordered]@{
             version      = $version
             hash         = $hash
             provide      = [string]$Outcomes[$name]['provide']
             verify       = [string]$Outcomes[$name]['verify']
             installed_at = $InstalledAt
         }
+        if ($null -ne $Facts) {
+            $moduleFacts = Get-MastEntryField -Entry $Facts -Field $name
+            if ($null -ne $moduleFacts) { $moduleEntry['facts'] = $moduleFacts }
+        }
+        $modules[$name] = $moduleEntry
     }
 
     # 3. fully_provisioned: every module the BUILD declares is present, matches

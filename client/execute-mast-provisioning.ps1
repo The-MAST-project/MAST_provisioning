@@ -362,10 +362,29 @@ try {
                 }
             }
 
+            # What the modules observed, from the facts sidecars their own scripts
+            # wrote (Write-MastModuleFacts). Read here for the same reason as
+            # ${repos} above -- the merge stays pure over its inputs, and one
+            # unreadable sidecar costs that module's facts rather than the whole
+            # manifest write. Only modules this run touched are consulted; the
+            # rest keep whatever their carried-forward entry already says.
+            ${facts} = [ordered]@{}
+            foreach (${factModule} in @(${moduleOutcomes}.Keys)) {
+                ${factPath} = Get-MastModuleFactsPath -Module ${factModule}
+                if (-not (Test-Path -LiteralPath ${factPath})) { continue }
+                try {
+                    ${facts}[${factModule}] = Get-Content -LiteralPath ${factPath} -Raw | ConvertFrom-Json
+                }
+                catch {
+                    Write-Log "WARNING: facts sidecar for ${factModule} unreadable, recording none: $_"
+                }
+            }
+
             ${merged} = Merge-MastInstalledManifest -Previous ${previous} -BuildData ${buildData} `
                 -Outcomes ${moduleOutcomes} `
                 -InstalledAt ((Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')) `
-                -Repos ${repos}
+                -Repos ${repos} `
+                -Facts ${facts}
 
             # Atomic write: tmp then rename, so a concurrent reader never
             # sees a partial file.
