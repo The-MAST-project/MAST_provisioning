@@ -80,5 +80,16 @@
     },
     "ip": "169.254.83.102",
     "mac": "10-7C-61-5B-06-3B"
+  },
+  {
+    "hostname": "mast07",
+    "site": "ns",
+    "timezone": "Asia/Jerusalem",
+    "maintenance_window": {
+      "start_hour": 0,
+      "end_hour": 24
+    },
+    "ip": "169.254.67.212",
+    "mac": "10-7C-61-5B-06-5D"
   }
 ]
