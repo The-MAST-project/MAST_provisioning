@@ -711,11 +711,12 @@ def _render_facts_matrix(facts: dict | None, ok_cols: list[UnitRecord]) -> list[
             v = row["cells"].get(u.host)
             cells.append(("-" if v is None else str(v)).ljust(widths[u.host]))
         out.append((labels[id(row)].ljust(name_w) + "  " + "  ".join(cells)).rstrip())
-    for row in facts["rows"]:
-        if not row["divergent"]:
-            continue
-        seen = sorted({v for v in row["cells"].values() if v is not None})
-        out.append(f"  [WARN] {row['module']}.{row['key']} differs across the fleet: {', '.join(seen)}")
+    # No [WARN] lines and no RESULT line: a fact that varies across the fleet is
+    # an observation, not a finding. Compass updating itself is the accepted
+    # steady state (#137), so warning about it every run would train a reader to
+    # skip the section -- the row and its '*' say everything there is to say. The
+    # repo matrix warns because a moved tag or an unhonoured pin is a fault; this
+    # is the section where difference is expected.
     return out
 
 

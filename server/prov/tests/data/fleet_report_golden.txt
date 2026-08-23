@@ -35,8 +35,6 @@ fact                                      BUILD (reference)  mast01   mast02
 mongodb-client.compass_installer_version  -                  1.43.0   1.43.0
 mongodb-client.compass_self_updated*      -                  True     False
 mongodb-client.compass_version*           -                  1.49.14  1.43.0
-  [WARN] mongodb-client.compass_self_updated differs across the fleet: False, True
-  [WARN] mongodb-client.compass_version differs across the fleet: 1.43.0, 1.49.14
 
 === Bootstrap (current version: 3) ===
   [WARN] client/bootstrap.ps1 $script:BootstrapVersion=4 != bootstrap-elements.json current_version=3 -- bump them together.
