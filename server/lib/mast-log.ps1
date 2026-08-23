@@ -166,6 +166,65 @@ function Get-MastLastRunPath {
     return (Join-Path (Get-MastStatusBase) 'last-run.json')
 }
 
+# ---------------------------------------------------------------------------
+# Per-module reported facts under <SystemDrive>\MAST\status\facts\.
+#
+# The manifest records whether a module PASSED. Facts record what it FOUND --
+# the things only the module's own scripts can know and the driver cannot derive
+# from a payload hash: which Compass build a unit runs after Compass updated
+# itself (#137), which Python resolved, what firmware a device reports.
+# execute-mast-provisioning.ps1 folds them into installed-manifest.json, so the
+# fleet report answers "what is actually on each unit" without an operator
+# logging into every one of them.
+#
+# Facts are observations, never checks. Nothing here feeds fully_provisioned; a
+# module that reports an unexpected fact still passes if its verify passed.
+#
+# ONE CALL PER MODULE: the file is REPLACED, not merged, so a module states its
+# whole fact set at once. Merging would keep a fact alive after the code that
+# produced it was deleted, which is the stale-annotation problem in another
+# costume. Values stay scalar -- the manifest is written with
+# ConvertTo-Json -Depth 6 and facts already sit four levels down.
+# ---------------------------------------------------------------------------
+
+function Get-MastFactsDir {
+    [CmdletBinding()]
+    param()
+    $d = Join-Path (Get-MastStatusBase) 'facts'
+    $null = New-Item -ItemType Directory -Path $d -Force -ErrorAction SilentlyContinue
+    return $d
+}
+
+function Get-MastModuleFactsPath {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Module)
+    return (Join-Path (Get-MastFactsDir) ($Module + '.json'))
+}
+
+function Write-MastModuleFacts {
+    <#
+    .SYNOPSIS
+      Record what a module observed, for execute to fold into installed-manifest.json.
+    .DESCRIPTION
+      Stamps observed_at so a reader can tell facts left by an earlier run from
+      facts gathered in the run that wrote the manifest -- a module whose verify
+      did not run this pass contributes its previous observation, not a fresh one.
+    .OUTPUTS
+      The path written.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Module,
+        [Parameter(Mandatory)][hashtable]$Facts
+    )
+    $out = [ordered]@{}
+    foreach ($k in @($Facts.Keys | Sort-Object)) { $out[[string]$k] = $Facts[$k] }
+    $out['observed_at'] = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+    $path = Get-MastModuleFactsPath -Module $Module
+    Write-MastStatusFileAtomic -Path $path -Object ([pscustomobject]$out)
+    return $path
+}
+
 function Write-MastStatusFileAtomic {
     [CmdletBinding()]
     param(

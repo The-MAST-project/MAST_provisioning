@@ -33,6 +33,7 @@ function W { param([string]$Line) Add-Content -LiteralPath $verifyLog -Encoding 
 Set-Content -LiteralPath $verifyLog -Encoding UTF8 -Value ("[{0}] verify-mongodb-client.ps1 started" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))
 
 $fail = @()
+$facts = @{}
 
 # --- mongosh: the check this module has always made ---
 $mongosh = Get-ChildItem -LiteralPath $InstallRoot -Recurse -Filter 'mongosh.exe' -ErrorAction SilentlyContinue |
@@ -40,8 +41,9 @@ $mongosh = Get-ChildItem -LiteralPath $InstallRoot -Recurse -Filter 'mongosh.exe
 if ($mongosh) {
     W ("mongosh: {0}" -f $mongosh)
     try {
-        $shellVersion = (& $mongosh --nodb --eval 'print(version())' 2>&1 | Select-Object -Last 1)
-        W ("mongosh version: {0}" -f ([string]$shellVersion).Trim())
+        $shellVersion = ([string](& $mongosh --nodb --eval 'print(version())' 2>&1 | Select-Object -Last 1)).Trim()
+        W ("mongosh version: {0}" -f $shellVersion)
+        $facts['mongosh_version'] = $shellVersion
     } catch {
         $fail += "mongosh ran but did not report a version: $($_.Exception.Message)"
     }
@@ -62,7 +64,10 @@ if (Test-Path -LiteralPath $compassRoot) {
     W ("compass live version: {0}" -f $(if ($app.Version) { $app.Version } else { '<unknown>' }))
     W ("compass installer version: {0}" -f $(if ($pin.Version) { $pin.Version } else { '<installer not staged>' }))
 
+    if ($app.Version) { $facts['compass_version'] = [string]$app.Version }
+    if ($pin.Version) { $facts['compass_installer_version'] = [string]$pin.Version }
     if ($app.Version -and $pin.Version) {
+        $facts['compass_self_updated'] = ($app.Version -ne $pin.Version)
         if ($app.Version -eq $pin.Version) {
             W 'compass drift: none'
         } else {
@@ -74,7 +79,15 @@ if (Test-Path -LiteralPath $compassRoot) {
     foreach ($s in $app.Superseded) { W ("compass superseded build present: {0}{1}" -f $s.Name, $(if ($s.IsDead) { ' (dead, Squirrel will remove it)' } else { '' })) }
 } else {
     W 'compass: not installed on this unit'
+    $facts['compass_version'] = ''
 }
+
+# Hand the observations to execute, which folds them into the module's entry in
+# installed-manifest.json -- so the fleet report can answer "which Compass is on
+# each unit" without an operator visiting all of them. Written whether or not the
+# checks passed: what a broken unit is running is exactly what a reader wants.
+try { $null = Write-MastModuleFacts -Module 'mongodb-client' -Facts $facts }
+catch { W ("[WARN] could not record module facts: {0}" -f $_.Exception.Message) }
 
 if ($fail.Count -eq 0) {
     W 'PASS mongodb-client'

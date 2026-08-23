@@ -12,6 +12,7 @@ module             BUILD (reference)      mast01                 mast02
 ----------------------------------------------------------------------------------------
 git                (absent)               ok                     ok                     
 desktop-shortcuts  (absent)               STALE*                 ok                     
+mongodb-client     (absent)               ok                     ok                     
 
 === Tier-2 verify (computed live state) ===
   BUILD (reference): never run (run-verify-only.ps1 has not written a report)
@@ -27,6 +28,15 @@ repo      BUILD (reference)  mast01     mast02     pin
 common    n/a        aaaaaaa    aaaaaaa    -
 unit      n/a        bbbbbbb!   ccccccc!   v1.2
   [WARN] unit: pinned in the manifest but on a branch on mast01, mast02 -- a --branch override, or a clone from before the pin.
+
+=== Module-reported facts (what each module FOUND; '*' = units disagree, '-' = not reported) ===
+fact                                      BUILD (reference)  mast01   mast02
+----------------------------------------------------------------------------
+mongodb-client.compass_installer_version  -                  1.43.0   1.43.0
+mongodb-client.compass_self_updated*      -                  True     False
+mongodb-client.compass_version*           -                  1.49.14  1.43.0
+  [WARN] mongodb-client.compass_self_updated differs across the fleet: False, True
+  [WARN] mongodb-client.compass_version differs across the fleet: 1.43.0, 1.49.14
 
 === Bootstrap (current version: 3) ===
   [WARN] client/bootstrap.ps1 $script:BootstrapVersion=4 != bootstrap-elements.json current_version=3 -- bump them together.

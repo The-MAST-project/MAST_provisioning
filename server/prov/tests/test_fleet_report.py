@@ -90,7 +90,19 @@ def _golden_fixture(fdr):
         payload_hash="agg1234567890",
         git_sha="gitsha123456",
         installed_at="2026-08-01T10:00:00Z",
-        modules={"git": entry("h-git"), "desktop-shortcuts": entry("OLD")},
+        modules={
+            "git": entry("h-git"),
+            "desktop-shortcuts": entry("OLD"),
+            "mongodb-client": {
+                **entry("h-mongo"),
+                "facts": {
+                    "compass_version": "1.49.14",
+                    "compass_installer_version": "1.43.0",
+                    "compass_self_updated": True,
+                    "observed_at": "2026-08-23T12:00:00Z",
+                },
+            },
+        },
         bootstrap_version=3,
         repos=repos,
         validated_at="2026-08-02T09:00:00Z",
@@ -102,7 +114,19 @@ def _golden_fixture(fdr):
         payload_hash="agg1234567890",
         git_sha="gitsha123456",
         installed_at="2026-08-01T11:00:00Z",
-        modules={"git": entry("h-git"), "desktop-shortcuts": entry("NEW")},
+        modules={
+            "git": entry("h-git"),
+            "desktop-shortcuts": entry("NEW"),
+            "mongodb-client": {
+                **entry("h-mongo"),
+                "facts": {
+                    "compass_version": "1.43.0",
+                    "compass_installer_version": "1.43.0",
+                    "compass_self_updated": False,
+                    "observed_at": "2026-08-23T13:00:00Z",
+                },
+            },
+        },
         bootstrap_version=2,
         repos=repos_drift,
     )
@@ -113,15 +137,20 @@ def _golden_fixture(fdr):
         payload_hash="agg1234567890",
         git_sha="gitsha123456",
         installed_at="2026-08-01T09:00:00Z",
-        modules={"git": entry("h-git"), "desktop-shortcuts": entry("NEW")},
+        modules={"git": entry("h-git"), "desktop-shortcuts": entry("NEW"), "mongodb-client": entry("h-mongo")},
     )
+    # .facts is lifted out of the module entries by _manifest_from_obj when a
+    # manifest is parsed; these records are built directly, so mirror it here.
+    for u in (u1, u2):
+        u.facts = {m: e["facts"] for m, e in u.modules.items() if "facts" in e}
     units = [u1, u2, u3]
     build = {
         "payload_hash": "agg1234567890",
-        "modules": ["git", "desktop-shortcuts"],
+        "modules": ["git", "desktop-shortcuts", "mongodb-client"],
         "module_state": {
             "git": {"version": "2.52", "hash": "h-git"},
             "desktop-shortcuts": {"version": "1.0", "hash": "NEW"},
+            "mongodb-client": {"version": "mongosh-2.2.6/tools-100.9.4", "hash": "h-mongo"},
         },
     }
     return {
@@ -131,6 +160,7 @@ def _golden_fixture(fdr):
         "boot": fdr.bootstrap_gaps(units, {"current_version": 3, "elements": {}}),
         "repo_boot_v": 4,
         "repos": fdr.compare_repos(units, ref, expected={"common", "unit"}),
+        "facts": fdr.compare_facts(units),
     }
 
 
@@ -381,3 +411,94 @@ def test_an_unexpected_repo_absence_does_not_make_a_repo_divergent(fdr):
     out = fdr.compare_repos(units, None, expected={"common"})
     assert out["divergent_dirs"] == []
     assert out["consistent_count"] == out["total_count"] == 2
+
+
+# --- Module-reported facts (#137) -------------------------------------------
+# The fleet answer to "which Compass is on each unit". Facts are free-form, so
+# these pin the comparison rules rather than any particular fact's meaning.
+
+
+def _facts_unit(fdr, host: str, **facts):
+    return fdr.UnitRecord(host=host, status="ok", facts={"mongodb-client": dict(facts)})
+
+
+def test_facts_are_lifted_out_of_the_module_entries(fdr):
+    rec = fdr._manifest_from_obj(
+        "mast07",
+        {
+            "modules": {
+                "git": {"version": "1.0", "hash": "h"},
+                "mongodb-client": {"version": "1.0", "hash": "h", "facts": {"compass_version": "1.49.14"}},
+            }
+        },
+    )
+    assert rec.facts == {"mongodb-client": {"compass_version": "1.49.14"}}
+
+
+def test_a_manifest_without_facts_reports_none(fdr):
+    rec = fdr._manifest_from_obj("mast01", {"modules": {"git": {"version": "1.0", "hash": "h"}}})
+    assert rec.facts == {}
+
+
+def test_divergent_fact_is_flagged(fdr):
+    cmp = fdr.compare_facts(
+        [_facts_unit(fdr, "mast01", compass_version="1.49.14"), _facts_unit(fdr, "mast02", compass_version="1.43.0")]
+    )
+    assert cmp["divergent_count"] == 1
+    assert cmp["rows"][0]["divergent"] is True
+
+
+def test_agreeing_fact_is_not_flagged(fdr):
+    cmp = fdr.compare_facts(
+        [_facts_unit(fdr, "mast01", compass_version="1.43.0"), _facts_unit(fdr, "mast02", compass_version="1.43.0")]
+    )
+    assert cmp["divergent_count"] == 0
+
+
+def test_observed_at_never_counts_as_divergence(fdr):
+    # It differs on every unit by construction; counting it would mark every
+    # module divergent and bury the rows that mean something.
+    cmp = fdr.compare_facts(
+        [
+            _facts_unit(fdr, "mast01", compass_version="1.43.0", observed_at="2026-08-23T12:00:00Z"),
+            _facts_unit(fdr, "mast02", compass_version="1.43.0", observed_at="2026-08-23T13:00:00Z"),
+        ]
+    )
+    assert [r["key"] for r in cmp["rows"]] == ["compass_version"]
+    assert cmp["divergent_count"] == 0
+
+
+def test_a_unit_that_reported_nothing_is_not_a_disagreement(fdr):
+    # Absent is unknown, not a different answer -- one unit reporting is not drift.
+    cmp = fdr.compare_facts([_facts_unit(fdr, "mast01", compass_version="1.43.0"), _unit(fdr, "mast02")])
+    row = cmp["rows"][0]
+    assert row["cells"]["mast02"] is None
+    assert row["divergent"] is False
+    assert row["reported_by"] == 1
+
+
+def test_unreachable_units_are_excluded(fdr):
+    cmp = fdr.compare_facts(
+        [_facts_unit(fdr, "mast01", compass_version="1.43.0"), fdr.UnitRecord(host="mast03", status="unreachable")]
+    )
+    assert "mast03" not in cmp["rows"][0]["cells"]
+
+
+def test_no_facts_anywhere_renders_no_section(fdr):
+    # A fleet that has not re-provisioned since #137 must not gain an empty
+    # section -- which is also what keeps the golden report byte-stable.
+    cmp = fdr.compare_facts([_unit(fdr, "mast01"), _unit(fdr, "mast02")])
+    assert cmp["any_data"] is False
+    assert fdr._render_facts_matrix(cmp, [_unit(fdr, "mast01")]) == []
+
+
+def test_facts_reach_the_csv(fdr, tmp_path):
+    units = [_facts_unit(fdr, "mast01", compass_version="1.49.14"), _facts_unit(fdr, "mast02", compass_version="1.43.0")]
+    build = {"payload_hash": "p", "modules": [], "module_state": {}}
+    cmp = fdr.compare_to_build(units, build)
+    facts = fdr.compare_facts(units)
+    out = tmp_path / "r.csv"
+    fdr.write_csv(out, units, cmp, fdr.bootstrap_gaps(units, {"current_version": 1, "elements": {}}), None, facts)
+    rows = list(csv.DictReader(out.open(encoding="utf-8")))
+    col = "fact:mongodb-client.compass_version"
+    assert {r["host"]: r[col] for r in rows} == {"mast01": "1.49.14", "mast02": "1.43.0"}

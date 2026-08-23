@@ -312,3 +312,71 @@ Describe 'Merge-MastInstalledManifest -- upstream repo provenance (#75)' {
         $ok.fully_provisioned | Should Be $true
     }
 }
+
+Describe 'Merge-MastInstalledManifest -- module-reported facts (#137)' {
+    # Facts are what a module FOUND, as opposed to whether it passed: the Compass
+    # build a unit runs after Compass updated itself, and anything else only the
+    # module's own scripts can know. They ride in the module's entry so the fleet
+    # report can read them without visiting every unit.
+    It 'attaches a module''s facts to its entry' {
+        $build = New-BuildData -Modules @('mongodb-client') -Hashes @{ 'mongodb-client' = 'h-mongo' }
+        $facts = @{ 'mongodb-client' = [pscustomobject]@{ compass_version = '1.49.14' } }
+        $r = Merge-MastInstalledManifest -Previous $null -BuildData $build `
+            -Outcomes (New-Outcomes @{ 'mongodb-client' = @($true, $true) }) -InstalledAt $AT -Facts $facts
+        $r.modules['mongodb-client']['facts'].compass_version | Should Be '1.49.14'
+    }
+    It 'omits the key entirely for a module that reported nothing' {
+        $build = New-BuildData -Modules @('git') -Hashes @{ git = 'h-git' }
+        $r = Merge-MastInstalledManifest -Previous $null -BuildData $build `
+            -Outcomes (New-Outcomes @{ git = @($true, $true) }) -InstalledAt $AT -Facts @{}
+        $r.modules['git'].Contains('facts') | Should Be $false
+    }
+    It 'works with no -Facts at all, as a caller predating this' {
+        $build = New-BuildData -Modules @('git') -Hashes @{ git = 'h-git' }
+        $r = Merge-MastInstalledManifest -Previous $null -BuildData $build `
+            -Outcomes (New-Outcomes @{ git = @($true, $true) }) -InstalledAt $AT
+        $r.modules['git'].Contains('facts') | Should Be $false
+    }
+    It 'does not let a fact affect fully_provisioned' {
+        # Observations are not checks. A module reporting something surprising
+        # still passes if its verify passed.
+        $build = New-BuildData -Modules @('mongodb-client') -Hashes @{ 'mongodb-client' = 'h-mongo' }
+        $facts = @{ 'mongodb-client' = [pscustomobject]@{ compass_self_updated = $true } }
+        $r = Merge-MastInstalledManifest -Previous $null -BuildData $build `
+            -Outcomes (New-Outcomes @{ 'mongodb-client' = @($true, $true) }) -InstalledAt $AT -Facts $facts
+        $r.fully_provisioned | Should Be $true
+    }
+    It 'carries an untouched module''s previous facts forward' {
+        $build = New-BuildData -Modules @('git', 'mongodb-client') -Hashes @{ git = 'h-git'; 'mongodb-client' = 'h-mongo' }
+        $first = Merge-MastInstalledManifest -Previous $null -BuildData $build `
+            -Outcomes (New-Outcomes @{ git = @($true, $true); 'mongodb-client' = @($true, $true) }) `
+            -InstalledAt $EARLIER -Facts @{ 'mongodb-client' = [pscustomobject]@{ compass_version = '1.43.0' } }
+        $prev = $first | ConvertTo-Json -Depth 6 | ConvertFrom-Json
+        # A -Modules git touch-up: mongodb-client is not consulted at all.
+        $second = Merge-MastInstalledManifest -Previous $prev -BuildData $build `
+            -Outcomes (New-Outcomes @{ git = @($true, $true) }) -InstalledAt $AT -Facts @{}
+        $second.modules['mongodb-client'].facts.compass_version | Should Be '1.43.0'
+    }
+    It 'replaces the facts of a module this run did touch' {
+        $build = New-BuildData -Modules @('mongodb-client') -Hashes @{ 'mongodb-client' = 'h-mongo' }
+        $first = Merge-MastInstalledManifest -Previous $null -BuildData $build `
+            -Outcomes (New-Outcomes @{ 'mongodb-client' = @($true, $true) }) -InstalledAt $EARLIER `
+            -Facts @{ 'mongodb-client' = [pscustomobject]@{ compass_version = '1.43.0' } }
+        $prev = $first | ConvertTo-Json -Depth 6 | ConvertFrom-Json
+        $second = Merge-MastInstalledManifest -Previous $prev -BuildData $build `
+            -Outcomes (New-Outcomes @{ 'mongodb-client' = @($true, $true) }) -InstalledAt $AT `
+            -Facts @{ 'mongodb-client' = [pscustomobject]@{ compass_version = '1.49.14' } }
+        $second.modules['mongodb-client']['facts'].compass_version | Should Be '1.49.14'
+    }
+    It 'survives the JSON depth the manifest is written at' {
+        # execute writes with -Depth 6 and facts sit four levels down; a value
+        # lost to truncation would read as "the module reported nothing".
+        $build = New-BuildData -Modules @('mongodb-client') -Hashes @{ 'mongodb-client' = 'h-mongo' }
+        $facts = @{ 'mongodb-client' = [pscustomobject]@{ compass_version = '1.49.14'; compass_self_updated = $true } }
+        $r = Merge-MastInstalledManifest -Previous $null -BuildData $build `
+            -Outcomes (New-Outcomes @{ 'mongodb-client' = @($true, $true) }) -InstalledAt $AT -Facts $facts
+        $round = $r | ConvertTo-Json -Depth 6 | ConvertFrom-Json
+        $round.modules.'mongodb-client'.facts.compass_version | Should Be '1.49.14'
+        $round.modules.'mongodb-client'.facts.compass_self_updated | Should Be $true
+    }
+}

@@ -78,6 +78,12 @@ class UnitRecord:
     #: empty on a pre-stage-2 manifest. Populated by mast-clone's
     #: clone-manifest.json, which execute folds into installed-manifest.json.
     repos: dict[str, dict] = field(default_factory=dict)
+    #: Module-reported observations from each manifest entry's 'facts' block,
+    #: as {module: {key: value}} -- what a module FOUND, as opposed to whether it
+    #: passed. Written by Write-MastModuleFacts on the unit and folded into the
+    #: manifest by execute (#137). Empty on a unit whose manifest predates it,
+    #: or whose modules report nothing.
+    facts: dict[str, dict] = field(default_factory=dict)
     #: Tier-2 verify outcomes {module: pass|fail} from the unit's last
     #: run-verify-only pass; empty when tier 2 has not run.
     validation: dict[str, str] = field(default_factory=dict)
@@ -125,6 +131,17 @@ def _manifest_from_obj(host: str, obj: dict) -> UnitRecord:
             if isinstance(row, dict) and row.get("dir"):
                 repos[str(row["dir"])] = row
 
+    # Per-module facts live INSIDE each module entry, so they arrive with
+    # 'modules' and only need lifting out for comparison. A module that reports
+    # nothing simply has no key.
+    facts: dict[str, dict] = {}
+    for name, entry in modules.items():
+        if not isinstance(entry, dict):
+            continue
+        block = entry.get("facts")
+        if isinstance(block, dict) and block:
+            facts[str(name)] = block
+
     return UnitRecord(
         host=host,
         status="ok",
@@ -135,6 +152,7 @@ def _manifest_from_obj(host: str, obj: dict) -> UnitRecord:
         module_versions=mv,
         modules=modules,
         repos=repos,
+        facts=facts,
         fully_provisioned=obj.get("fully_provisioned"),
     )
 
@@ -526,6 +544,42 @@ def _render_fleet_summary(cols: list[UnitRecord], reference: UnitRecord | None, 
     return out
 
 
+def compare_facts(units: list[UnitRecord]) -> dict:
+    """Cross-unit view of module-reported facts, one row per module+key.
+
+    Facts are free-form by design -- a module reports what it knows -- so this
+    compares them the only way that generalises: as strings, per key, flagging
+    where the fleet disagrees. `observed_at` is dropped from the rows: it differs
+    on every unit by construction, so including it would mark every module
+    divergent and drown the rows that mean something.
+    """
+    ok_units = [u for u in units if u.status == "ok"]
+    keys = sorted({(m, k) for u in ok_units for m, block in u.facts.items() for k in block if k != "observed_at"})
+    rows = []
+    for module, key in keys:
+        cells = {}
+        for u in ok_units:
+            value = (u.facts.get(module) or {}).get(key)
+            # Absent and empty are different: a unit that reported nothing has
+            # not been asked, while one reporting '' answered and found nothing.
+            cells[u.host] = None if value is None else str(value)
+        present = [v for v in cells.values() if v is not None]
+        rows.append(
+            {
+                "module": module,
+                "key": key,
+                "cells": cells,
+                "divergent": len(set(present)) > 1,
+                "reported_by": len(present),
+            }
+        )
+    return {
+        "rows": rows,
+        "any_data": bool(rows),
+        "divergent_count": sum(1 for r in rows if r["divergent"]),
+    }
+
+
 def _render_repos_oneliner(repos: dict | None) -> list[str]:
     if not (repos and repos.get("total_count")):
         return []
@@ -634,6 +688,37 @@ def _render_repo_matrix(repos: dict | None, ok_cols: list[UnitRecord]) -> list[s
     return []
 
 
+def _render_facts_matrix(facts: dict | None, ok_cols: list[UnitRecord]) -> list[str]:
+    # Silent when nothing reports facts, which keeps the section out of the
+    # report entirely on a fleet that has not re-provisioned since #137.
+    if not (facts and facts.get("any_data")):
+        return []
+    out = [
+        "",
+        "=== Module-reported facts (what each module FOUND; '*' = units disagree, '-' = not reported) ===",
+    ]
+    labels = {id(r): f"{r['module']}.{r['key']}" + ("*" if r["divergent"] else "") for r in facts["rows"]}
+    name_w = max(list(map(len, labels.values())) + [8])
+    # Per-column widths: 'BUILD (reference)' is wider than any hostname, and a
+    # fixed pad leaves every cell under it three characters adrift.
+    widths = {u.host: max([len(u.host)] + [len(str(r["cells"].get(u.host) or "-")) for r in facts["rows"]]) for u in ok_cols}
+    hdr = "fact".ljust(name_w) + "  " + "  ".join(u.host.ljust(widths[u.host]) for u in ok_cols)
+    out.append(hdr.rstrip())
+    out.append("-" * len(hdr))
+    for row in facts["rows"]:
+        cells = []
+        for u in ok_cols:
+            v = row["cells"].get(u.host)
+            cells.append(("-" if v is None else str(v)).ljust(widths[u.host]))
+        out.append((labels[id(row)].ljust(name_w) + "  " + "  ".join(cells)).rstrip())
+    for row in facts["rows"]:
+        if not row["divergent"]:
+            continue
+        seen = sorted({v for v in row["cells"].values() if v is not None})
+        out.append(f"  [WARN] {row['module']}.{row['key']} differs across the fleet: {', '.join(seen)}")
+    return out
+
+
 def _render_repo_warnings(repos: dict) -> list[str]:
     # Spelled out rather than left to the glyphs: 'pinned and yet divergent'
     # means a MOVED TAG, which is a different failure from a branch drifting.
@@ -707,6 +792,7 @@ def render(
     boot: dict,
     repo_boot_v: int | None,
     repos: dict | None = None,
+    facts: dict | None = None,
 ) -> str:
     """The text report, section by section, in the order an operator reads it.
 
@@ -724,12 +810,20 @@ def render(
     lines += _render_tier2(cmp, ok_cols)
     lines += _render_drift_detail(cmp)
     lines += _render_repo_matrix(repos, ok_cols)
+    lines += _render_facts_matrix(facts, ok_cols)
     lines += _render_bootstrap(units, boot, repo_boot_v)
     lines += _render_result(units, cmp, boot, repos)
     return "\n".join(lines)
 
 
-def write_csv(path: Path, units: list[UnitRecord], cmp: dict, boot: dict, repos: dict | None = None) -> None:
+def write_csv(
+    path: Path,
+    units: list[UnitRecord],
+    cmp: dict,
+    boot: dict,
+    repos: dict | None = None,
+    facts: dict | None = None,
+) -> None:
     # Emit the SAME cells the rendered matrix shows. Reading them off
     # module_versions instead was wrong in hash-keyed mode: a module can drift
     # with an unchanged version string (the desktop-shortcuts verify gaining
@@ -741,6 +835,10 @@ def write_csv(path: Path, units: list[UnitRecord], cmp: dict, boot: dict, repos:
     # cannot collide with a module named 'common' or 'unit'.
     repo_dirs = list(repos["dirs"]) if repos else []
     repo_cells = {row["dir"]: row["cells"] for row in (repos["matrix"] if repos else [])}
+    # Same reason as the repo columns: the CSV stays a superset of the text
+    # report, so a spreadsheet answers "which Compass is on each unit" too.
+    fact_rows = list(facts["rows"]) if facts else []
+    fact_names = [f"{r['module']}.{r['key']}" for r in fact_rows]
     with path.open("w", newline="", encoding="utf-8") as fh:
         w = csv.writer(fh)
         w.writerow(
@@ -757,6 +855,7 @@ def write_csv(path: Path, units: list[UnitRecord], cmp: dict, boot: dict, repos:
             ]
             + modules
             + [f"repo:{d}" for d in repo_dirs]
+            + [f"fact:{n}" for n in fact_names]
         )
         for u in units:
             g = boot["by_host"].get(u.host, {})
@@ -774,6 +873,7 @@ def write_csv(path: Path, units: list[UnitRecord], cmp: dict, boot: dict, repos:
                 ]
                 + [str(cells_by_module.get(m, {}).get(u.host, "")) for m in modules]
                 + [str(repo_cells.get(d, {}).get(u.host) or "") for d in repo_dirs]
+                + [str(r["cells"].get(u.host) or "") for r in fact_rows]
             )
 
 
@@ -851,13 +951,14 @@ def main() -> int:  # noqa: C901 -- argparse branching IS the CLI surface
     # Independent of the module comparison: a unit can match the payload exactly and
     # still be running a different MAST_common than its neighbour (#75).
     repos_cmp = compare_repos(units, reference, expected_repo_dirs(_REPO_ROOT, args.role))
+    facts_cmp = compare_facts(units)
     elements_doc = load_bootstrap_elements(_REPO_ROOT)
     boot = bootstrap_gaps(units, elements_doc)
 
     if args.csv_out:
-        write_csv(Path(args.csv_out), units, cmp, boot, repos_cmp)
+        write_csv(Path(args.csv_out), units, cmp, boot, repos_cmp, facts_cmp)
 
-    print(render(units, reference, cmp, boot, repo_bootstrap_version(_REPO_ROOT), repos_cmp))
+    print(render(units, reference, cmp, boot, repo_bootstrap_version(_REPO_ROOT), repos_cmp, facts_cmp))
 
     if not units:
         return 1
