@@ -37,6 +37,10 @@ if (-not (Test-Path ${mastLogDot})) { ${mastLogDot} = Join-Path ${PSScriptRoot} 
 if (-not (Test-Path ${mastLogDot})) { throw "mast-log.ps1 not found (expected in staging or server\lib)." }
 . ${mastLogDot}
 
+${compassAppDot} = Join-Path ${PSScriptRoot} 'compass-app.ps1'
+if (-not (Test-Path ${compassAppDot})) { throw "compass-app.ps1 not found beside provide-mongodb-client.ps1." }
+. ${compassAppDot}
+
 try {
   ${provLocal} = Join-Path ${PSScriptRoot} 'provisioning.psm1'
   ${provGlobal} = 'C:\ProgramData\MAST\provisioning.psm1'
@@ -308,19 +312,33 @@ if (-not ${NoCompass}) {
   # and app dir but no shortcut; the install was functionally broken.
   ${compassRoot}   = Join-Path ${env:LOCALAPPDATA} 'MongoDBCompass'
   ${wrapperExe}    = Join-Path ${compassRoot} 'MongoDBCompass.exe'
-  ${appDirs}       = @(Get-ChildItem -LiteralPath ${compassRoot} -Directory -Filter 'app-*' -ErrorAction SilentlyContinue)
   ${haveWrapper}   = Test-Path -LiteralPath ${wrapperExe}
   ${appExeBytes}   = 0
   ${appDirBytes}   = 0
-  ${appDirPath}    = $null
-  if (${appDirs}.Count -gt 0) {
-    ${appDirPath} = ${appDirs}[0].FullName
-    ${appExe}     = Join-Path ${appDirPath} 'MongoDBCompass.exe'
+
+  # Measure the build the unit runs, which on a unit that has updated itself is
+  # not the one this installer laid down. See compass-app.ps1.
+  ${app}        = Get-MastCompassApp -CompassRoot ${compassRoot}
+  ${appDirPath} = ${app}.Path
+  if (${appDirPath}) {
+    ${appExe} = Join-Path ${appDirPath} 'MongoDBCompass.exe'
     if (Test-Path -LiteralPath ${appExe}) {
       ${appExeBytes} = (Get-Item -LiteralPath ${appExe}).Length
     }
     ${appDirBytes} = (Get-ChildItem -LiteralPath ${appDirPath} -Recurse -File -ErrorAction SilentlyContinue |
                        Measure-Object -Property Length -Sum).Sum
+  }
+
+  ${pinnedVersion} = Get-MastCompassVersionFromName -Name (Split-Path ${exeCompass} -Leaf)
+  Write-Host ("Compass builds on disk: {0}" -f $(
+      if (${app}.All.Count -gt 0) {
+          ((${app}.All | ForEach-Object { "{0}{1}" -f $_.Name, $(if ($_.IsDead) { ' (dead)' } else { '' }) }) -join ', ')
+      } else { '<none>' }))
+  Write-Host ("Compass version: live={0} installer={1}" -f `
+      $(if (${app}.Version) { ${app}.Version } else { '<unknown>' }),
+      $(if (${pinnedVersion}) { ${pinnedVersion} } else { '<unknown>' }))
+  if (${app}.Version -and ${pinnedVersion} -and ${app}.Version -ne ${pinnedVersion}) {
+    Write-Warning ("Compass has updated itself: running {0}, installer ships {1}. Expected and not an error -- Compass's own updater is left enabled." -f ${app}.Version, ${pinnedVersion})
   }
 
   # Start Menu shortcut: Squirrel writes a .lnk somewhere under the user's
