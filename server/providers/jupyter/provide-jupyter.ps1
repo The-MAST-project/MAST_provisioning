@@ -125,8 +125,23 @@ try {
         if (${installed} -and ${installed} -ne ${reqHash}) {
             Write-JupyterLog "Locked requirements changed since the last install; reinstalling to converge."
         }
-        Invoke-Native -Exe ${venvPy} -NativeArgs @('-m', 'pip', 'install', '--upgrade', 'pip') -Tag 'pip-upgrade'
-        Invoke-Native -Exe ${venvPy} -NativeArgs @('-m', 'pip', 'install', '-r', ${reqFile}) -Tag 'pip-install'
+        # --no-index: the wheels are vendored, so this install cannot depend on
+        # PyPI reachability, CDN throughput, or the proxy being right at
+        # provision time. Jupyter failed on exactly that four times on mast06
+        # in three days (#133), and the repo already vendors uv and the NetFx3
+        # SxS payload for the same reason.
+        #
+        # No separate 'pip install --upgrade pip': pip is pinned in the lock
+        # (pip==26.2.1) and installed from the wheelhouse with everything else.
+        # Upgrading it first would have reached for an index and reintroduced
+        # the dependency this removes.
+        ${wheels} = Join-Path ${PSScriptRoot} 'wheels'
+        if (-not (Test-Path -LiteralPath ${wheels})) {
+            throw ("Vendored wheelhouse not staged at {0}; the payload is incomplete." -f ${wheels})
+        }
+        Invoke-Native -Exe ${venvPy} -NativeArgs @(
+            '-m', 'pip', 'install', '--no-index', '--find-links', ${wheels}, '-r', ${reqFile}
+        ) -Tag 'pip-install'
         if (-not (Test-Path -LiteralPath ${jnExe})) {
             throw "jupyter-notebook.exe not found after pip install; see the pip-install log."
         }

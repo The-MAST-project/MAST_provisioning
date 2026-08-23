@@ -636,6 +636,27 @@ if (${Modules} -contains 'ascom') {
     }
 }
 
+# Vendored Jupyter wheelhouse. Staged as a directory rather than listed in
+# commandfiles: assets/* entries flatten to the staging root, and 118 wheels at
+# the root would bury the module's scripts. requirements.txt IS a commandfile, so
+# the lock -- the declaration of what gets installed -- is inside the module
+# content hash and drives drift; the wheels are its materialization (#133).
+if (${Modules} -contains 'jupyter') {
+    ${whSrc} = Join-Path ${providersRoot} 'jupyter\assets\wheels'
+    ${whFiles} = @()
+    if (Test-Path -LiteralPath ${whSrc}) {
+        ${whFiles} = @(Get-ChildItem -LiteralPath ${whSrc} -Filter '*.whl' -File -ErrorAction SilentlyContinue)
+    }
+    if (${whFiles}.Count -gt 0) {
+        ${whDst} = Join-Path ${staging} 'wheels'
+        New-Item -ItemType Directory -Force -Path ${whDst} | Out-Null
+        Copy-Item -Force -Path (Join-Path ${whSrc} '*.whl') -Destination ${whDst}
+        Write-Host (" Staged Jupyter wheelhouse ({0} wheels, {1:N0} MB) -> {2}" -f ${whFiles}.Count, ((${whFiles} | Measure-Object -Property Length -Sum).Sum / 1MB), ${whDst})
+    } else {
+        throw "Jupyter wheelhouse is empty under '${whSrc}'. The provider installs with --no-index and cannot fall back to PyPI; regenerate with 'pip download -r assets/requirements.txt -d assets/wheels --only-binary=:all:' on a Windows host running the fleet's Python."
+    }
+}
+
 # Astrometry index seed + smoke FITS. Sourced from C:\MAST\ on the build host
 # ("use these paths for now") -- both are far too large to keep in the repo. We
 # now stage the index FITS files themselves (the "seed"), NOT a pre-baked image:
