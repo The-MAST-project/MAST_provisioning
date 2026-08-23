@@ -103,27 +103,57 @@ try {
         Write-JupyterLog "venv already present; skipping creation."
     }
 
-    # 2) Install Jupyter Notebook + a Python kernel + a basic scientific/astronomy
-    #    stack INTO the venv (online pip via the proxy, same mechanism the mast
-    #    provider uses for repo requirements). Pre-installing the common packages
-    #    means a scientist opening a notebook does not have to pip-install them by
-    #    hand. Skip if already installed unless -Force.
-    ${pyPackages} = @(
-        'notebook>=7,<8', 'ipykernel', 'ipywidgets',   # notebook + Python kernel + widgets
-        'numpy', 'scipy', 'matplotlib', 'pandas',      # core scientific stack
-        'astropy', 'astroquery', 'photutils'           # astronomy
-    )
-    if (${Force} -or -not (Test-Path -LiteralPath ${jnExe})) {
-        Invoke-Native -Exe ${venvPy} -NativeArgs @('-m', 'pip', 'install', '--upgrade', 'pip') -Tag 'pip-upgrade'
-        Invoke-Native -Exe ${venvPy} -NativeArgs (@('-m', 'pip', 'install') + ${pyPackages}) -Tag 'pip-install'
+    # 2) Install the LOCKED Jupyter + scientific stack into the venv from
+    #    assets\requirements.txt. Every unit gets the same 118 packages, so two
+    #    units provisioned months apart run the same software -- mast05 and
+    #    mast06, four days apart, had already diverged on scipy and two
+    #    transitive packages (#133).
+    # build-mast flattens assets/* to the staging root, beside this script.
+    ${reqFile} = Join-Path ${PSScriptRoot} 'requirements.txt'
+    if (-not (Test-Path -LiteralPath ${reqFile})) {
+        throw ("Locked requirements not staged at {0}; the payload is incomplete." -f ${reqFile})
+    }
+    ${reqHash} = (Get-FileHash -LiteralPath ${reqFile} -Algorithm SHA256).Hash
+    ${stamp}   = Join-Path ${venv} '.mast-requirements.sha256'
+
+    # The guard is the requirements content, NOT whether jupyter-notebook.exe
+    # exists. Keying on the exe meant a unit that already had Jupyter skipped the
+    # install entirely, so a changed pin could never reach it and the fleet could
+    # not be converged by re-running provisioning -- the shape #129 is about.
+    ${installed} = if (Test-Path -LiteralPath ${stamp}) { (Get-Content -LiteralPath ${stamp} -Raw).Trim() } else { '' }
+    if (${Force} -or ${installed} -ne ${reqHash} -or -not (Test-Path -LiteralPath ${jnExe})) {
+        if (${installed} -and ${installed} -ne ${reqHash}) {
+            Write-JupyterLog "Locked requirements changed since the last install; reinstalling to converge."
+        }
+        # --no-index: the wheels are vendored, so this install cannot depend on
+        # PyPI reachability, CDN throughput, or the proxy being right at
+        # provision time. Jupyter failed on exactly that four times on mast06
+        # in three days (#133), and the repo already vendors uv and the NetFx3
+        # SxS payload for the same reason.
+        #
+        # No separate 'pip install --upgrade pip': pip is pinned in the lock
+        # (pip==26.2.1) and installed from the wheelhouse with everything else.
+        # Upgrading it first would have reached for an index and reintroduced
+        # the dependency this removes.
+        ${wheels} = Join-Path ${PSScriptRoot} 'wheels'
+        if (-not (Test-Path -LiteralPath ${wheels})) {
+            throw ("Vendored wheelhouse not staged at {0}; the payload is incomplete." -f ${wheels})
+        }
+        Invoke-Native -Exe ${venvPy} -NativeArgs @(
+            '-m', 'pip', 'install', '--no-index', '--find-links', ${wheels}, '-r', ${reqFile}
+        ) -Tag 'pip-install'
         if (-not (Test-Path -LiteralPath ${jnExe})) {
             throw "jupyter-notebook.exe not found after pip install; see the pip-install log."
         }
         # Register a Python kernel contained in the venv (--sys-prefix keeps the
         # kernelspec under the venv, not in the user profile).
         Invoke-Native -Exe ${venvPy} -NativeArgs @('-m', 'ipykernel', 'install', '--sys-prefix', '--name', 'python3', '--display-name', 'Python 3 (MAST)') -Tag 'kernel-register' -TimeoutMs (5 * 60 * 1000)
+        # Stamped only after the install succeeded, so a failed run does not
+        # convince the next one there is nothing to do.
+        Set-Content -LiteralPath ${stamp} -Value ${reqHash} -Encoding ASCII
+        Write-JupyterLog ("Stamped locked requirements {0}" -f ${reqHash}.Substring(0, 16))
     } else {
-        Write-JupyterLog "jupyter-notebook.exe already present; skipping pip install."
+        Write-JupyterLog ("Locked requirements already installed ({0}); skipping pip install." -f ${reqHash}.Substring(0, 16))
     }
 
     # Log the resolved Jupyter version for the record.
