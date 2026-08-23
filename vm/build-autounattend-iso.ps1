@@ -398,6 +398,17 @@ try {
         Write-Host "  Staged $(Split-Path $npcapInstallerPath -Leaf) (Npcap installer for bootstrap)"
     }
 
+    # bootstrap.ps1 installs OpenSSH from this MSI rather than from the
+    # OpenSSH.Server capability (#123), so it has to be on the medium beside it.
+    # Single copy in the repo, staged to both consumers: the openssh-server
+    # provider's payload and here. A second committed copy would age.
+    $sshMsiPath = Join-Path $RepoRoot 'server\providers\openssh-server\assets\OpenSSH-Win64-v10.0.0.0.msi'
+    if (-not (Test-Path $sshMsiPath)) {
+        throw "OpenSSH MSI not found at $sshMsiPath -- bootstrap cannot install SSH without it."
+    }
+    Copy-Item -Force $sshMsiPath (Join-Path $staging (Split-Path $sshMsiPath -Leaf))
+    Write-Host "  Staged $(Split-Path $sshMsiPath -Leaf) (OpenSSH installer for bootstrap)"
+
     foreach ($extra in $resolvedExtras) {
         $name = Split-Path $extra -Leaf
         Copy-Item -Force $extra (Join-Path $staging $name)

@@ -91,3 +91,22 @@ function Get-MastDriveDVerdict {
     if ($DriveType -eq 2) { return 'removable' }
     return 'foreign'
 }
+
+function Get-MastBootstrapExitCode {
+    <#
+      .SYNOPSIS
+      The exit code a bootstrap run owes, given the blockers it collected.
+
+      A run that leaves a unit missing something it is required to have must not
+      exit 0. Bootstrap sections that hit such a case append to
+      $script:BootstrapBlockers and keep going -- aborting mid-run would skip the
+      Npcap install, the desktop report and the reboot, leaving a stranger machine
+      than the one in hand. The run finishes; it just stops reporting success.
+
+      Pure so it can be tested: the list in, the code out, no state.
+    #>
+    param([string[]]${Blockers} = @())
+
+    if (@(${Blockers} | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count -gt 0) { return 1 }
+    return 0
+}
