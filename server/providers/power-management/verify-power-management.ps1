@@ -59,6 +59,68 @@ foreach (${n} in ${nics}) {
     if (${wol} -ne 'Disabled') { ${fail} += ("NIC {0} WakeOnMagicPacket not Disabled" -f ${n}.Name) }
 }
 
+# 5) BIOS power policy -- REPORTED, NEVER ASSERTED.
+#
+# The unit must power itself back on when mains returns, and that setting lives
+# in BIOS setup, which provisioning cannot write (the ASUS WMI provider's
+# SetOptionData is a stub on this BIOS -- see server\lib\mast-firmware.ps1).
+# A check whose subject provisioning cannot own must not fail the run: the same
+# rule verify-diagnostics.ps1 applies with Add-DiagWarn. Nothing below appends
+# to ${fail}; a drifted BIOS is loud in the log and in the facts sidecar, and
+# the unit still finishes provisioning.
+function Write-PMWarn {
+    param([string]${Detail})
+    Write-VLog ("[WARN] bios-power-policy: {0}" -f ${Detail})
+}
+
+${firmwareLib} = Join-Path ${PSScriptRoot} 'mast-firmware.ps1'
+if (-not (Test-Path ${firmwareLib})) { ${firmwareLib} = Join-Path ${PSScriptRoot} '..\..\lib\mast-firmware.ps1' }
+${biosFacts} = [ordered]@{ bios_check = 'not-run' }
+if (-not (Test-Path ${firmwareLib})) {
+    Write-PMWarn 'mast-firmware.ps1 not found in the payload; BIOS power policy not checked.'
+} else {
+    try {
+        . ${firmwareLib}
+        ${state} = Get-MastFirmwarePolicyState -ScriptRoot ${PSScriptRoot}
+        Write-VLog ("bios-power-policy: status={0} board='{1}' bios='{2}' sha256={3}" -f `
+            ${state}.Status, ${state}.BaseboardProduct, ${state}.BiosVersion, ${state}.Sha256)
+        foreach (${f} in @(${state}.Fields)) {
+            Write-VLog ("  {0} @ {1}: actual={2} expect={3} {4}" -f `
+                ${f}.Name, ${f}.Offset, ${f}.Actual, ${f}.Expect, $(if (${f}.Ok) { 'OK' } else { 'DRIFT' }))
+        }
+        if (${state}.Status -eq 'match') {
+            Write-VLog 'bios-power-policy: matches the known-good baseline for this board.'
+        } else {
+            foreach (${m} in @(${state}.Messages)) { Write-PMWarn ${m} }
+        }
+        ${biosFacts} = [ordered]@{
+            bios_check       = ${state}.Status
+            bios_version     = ${state}.BiosVersion
+            baseboard        = ${state}.BaseboardProduct
+            setup_sha256     = ${state}.Sha256
+            baseline_matched = [bool]${state}.BaselineMatched
+            needs_attention  = [bool]${state}.NeedsAttention
+        }
+        foreach (${f} in @(${state}.Fields)) {
+            ${biosFacts}[('field_' + (${f}.Name -replace '[^A-Za-z0-9]+', '_').ToLowerInvariant())] = ${f}.Actual
+        }
+    } catch {
+        # Never let a firmware read break a verify that is otherwise green.
+        Write-PMWarn ("BIOS power policy check errored (reported, not asserted): {0}" -f $_.Exception.Message)
+        ${biosFacts} = [ordered]@{ bios_check = 'error'; bios_error = $_.Exception.Message }
+    }
+}
+
+# Facts feed installed-manifest.json, which tools\fleet-drift-report.py already
+# gathers per unit -- so a drifted or unverifiable BIOS surfaces fleet-wide
+# without a second tool having to go look for it.
+try {
+    ${factsTable} = @{}
+    foreach (${k} in ${biosFacts}.Keys) { ${factsTable}[${k}] = ${biosFacts}[${k}] }
+    ${null} = Write-MastModuleFacts -Module 'power-management' -Facts ${factsTable}
+}
+catch { Write-VLog ("WARNING: could not write power-management facts: {0}" -f $_.Exception.Message) }
+
 if (${fail}.Count -eq 0) {
     Set-Content -LiteralPath ${smokeFile} -Encoding UTF8 -Value 'power_management_ok'
     Write-VLog 'PASS: system sleep/hibernate disabled; NIC power management hardened where present'

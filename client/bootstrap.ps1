@@ -168,12 +168,20 @@ $script:BootstrapMediaIsRemovable = $false
 $script:BootstrapBlockers = @()
 $script:BootstrapMediaLetter = ''
 
+# BIOS power policy: what the firmware check found, and whether a human saw it.
+# Deliberately NOT a blocker -- provisioning cannot write BIOS setup, and a unit
+# with a wrong power policy still needs to be built. The prompt below waits for
+# an operator to acknowledge and then continues on its own, so an unattended or
+# walked-away-from run is delayed, never stopped.
+$script:BiosCheckFacts = $null
+$script:BiosAckTimeoutSeconds = 120
+
 # Bootstrap version: stamped to C:\MAST\bootstrap-manifest.json on success so the fleet
 # drift report (tools/fleet-drift-report.py) can tell which bootstrap each unit ran and
 # flag units missing newer bootstrap elements. BUMP THIS whenever you add a bootstrap
 # capability, and add a matching element (since = this number) to
 # client/bootstrap-elements.json so its current_version stays == this value.
-$script:BootstrapVersion = 12
+$script:BootstrapVersion = 13
 
 # --- Hardware requirement (asserted before anything is changed) ---------------
 # Kept in step with server\lib\mast-modules.psm1 Get-MastRequiredMemoryGB, which is
@@ -337,6 +345,128 @@ function Assert-MastUnitHardware {
         return
     }
     throw ("Hardware preflight failed: {0} Nothing has been changed on this machine." -f ($problems -join ' Also: '))
+}
+
+function Read-MastAcknowledgment {
+    # Wait for an operator to press 'y', then continue -- but continue anyway
+    # after $TimeoutSeconds. This is an attention-getter, not a gate: the fleet
+    # will take boards that do not exist yet, so 'cannot verify this BIOS' will
+    # be the NORMAL result on new hardware, and it must never be the reason a
+    # unit failed to get built.
+    #
+    # Returns $true only if a human actually pressed y.
+    param([int]$TimeoutSeconds = 120)
+
+    # A redirected or non-console host has no RawUI keyboard; probing it throws.
+    # There is nobody to acknowledge in that case, so do not pretend to ask.
+    try { $null = $Host.UI.RawUI.KeyAvailable } catch { return $false }
+
+    Write-BootstrapMsg ("  Press 'y' to acknowledge (continuing on its own in {0}s) ..." -f $TimeoutSeconds) 'Yellow'
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while ((Get-Date) -lt $deadline) {
+        if ($Host.UI.RawUI.KeyAvailable) {
+            $key = $Host.UI.RawUI.ReadKey('NoEcho,IncludeKeyDown')
+            if ($key.Character -eq 'y' -or $key.Character -eq 'Y') { return $true }
+        }
+        Start-Sleep -Milliseconds 200
+    }
+    return $false
+}
+
+function Show-MastFirmwarePowerPolicy {
+    # Read the BIOS power policy and tell the operator about it -- at the one
+    # moment in a unit's life when someone is standing at the machine and can
+    # walk into BIOS setup and fix it.
+    #
+    # Never throws, never appends to $script:BootstrapBlockers. The whole point
+    # is that this is the ONE check bootstrap makes that it cannot itself
+    # remedy, so it informs rather than gates. What it does do is refuse to be
+    # silent: the result is printed here, repeated in the desktop report, and
+    # stamped into bootstrap-manifest.json with whether a human acknowledged it.
+    param([switch]$IsNonInteractive)
+
+    Write-BootstrapMsg '' 'Cyan'
+    Write-BootstrapMsg '--- BIOS power policy (read-only; provisioning cannot change this) ---' 'Cyan'
+
+    $lib = Join-Path $PSScriptRoot 'mast-firmware.ps1'
+    if (-not (Test-Path -LiteralPath $lib)) { $lib = Join-Path $PSScriptRoot '..\server\lib\mast-firmware.ps1' }
+    if (-not (Test-Path -LiteralPath $lib)) {
+        Write-BootstrapMsg '  [WARN] mast-firmware.ps1 is not on this medium; BIOS power policy not checked.' 'Yellow'
+        $script:BiosCheckFacts = [ordered]@{ status = 'not-run'; reason = 'mast-firmware.ps1 missing' }
+        return
+    }
+
+    try {
+        . $lib
+        $state = Get-MastFirmwarePolicyState -ScriptRoot $PSScriptRoot
+    } catch {
+        Write-BootstrapMsg ("  [WARN] BIOS power policy check errored: {0}" -f $_.Exception.Message) 'Yellow'
+        $script:BiosCheckFacts = [ordered]@{ status = 'error'; reason = $_.Exception.Message }
+        return
+    }
+
+    Write-BootstrapMsg ("  Board: {0}   BIOS: {1}" -f `
+        $(if ($state.BaseboardProduct) { $state.BaseboardProduct } else { '(unknown)' }),
+        $(if ($state.BiosVersion) { $state.BiosVersion } else { '(unknown)' })) 'White'
+    foreach ($f in @($state.Fields)) {
+        $mark = if ($f.Ok) { '[OK]  ' } else { '[WARN]' }
+        $color = if ($f.Ok) { 'Green' } else { 'Red' }
+        Write-BootstrapMsg ("  {0} {1} = {2} (expected {3})" -f $mark, $f.Name, $f.Actual, $f.Expect) $color
+    }
+
+    $acknowledged = $false
+    $ackReason = ''
+    switch ($state.Status) {
+        'match' {
+            Write-BootstrapMsg '  [OK] BIOS power policy matches the known-good baseline for this board.' 'Green'
+        }
+        'unavailable' {
+            # The dev VM and any non-UEFI/non-AMI box land here. Nothing to
+            # acknowledge and nobody to ask -- say so once and move on, or every
+            # VM bootstrap cycle would sit here waiting for a keypress.
+            foreach ($m in @($state.Messages)) { Write-BootstrapMsg ("  [WARN] {0}" -f $m) 'Yellow' }
+        }
+        default {
+            foreach ($m in @($state.Messages)) { Write-BootstrapMsg ("  [WARN] {0}" -f $m) 'Yellow' }
+            if ($state.NeedsAttention) {
+                Write-BootstrapMsg '' 'Red'
+                Write-BootstrapMsg '  ****************************************************************' 'Red'
+                Write-BootstrapMsg '  *  THIS UNIT MAY NOT POWER ITSELF BACK ON AFTER A MAINS EVENT  *' 'Red'
+                Write-BootstrapMsg '  ****************************************************************' 'Red'
+                Write-BootstrapMsg '  Fix it now while you are at the machine: reboot, enter BIOS setup (Del),' 'Yellow'
+                Write-BootstrapMsg '  Advanced -> APM Configuration -> Restore AC Power Loss = S0 State, F10.' 'Yellow'
+                Write-BootstrapMsg '  Bootstrap continues either way -- this is a warning, not a blocker.' 'Yellow'
+                if ($IsNonInteractive) {
+                    $ackReason = 'non-interactive'
+                    Write-BootstrapMsg '  (-NonInteractive: not prompting; recorded as unacknowledged.)' 'DarkGray'
+                } else {
+                    $acknowledged = Read-MastAcknowledgment -TimeoutSeconds $script:BiosAckTimeoutSeconds
+                    if ($acknowledged) {
+                        $ackReason = 'operator'
+                        Write-BootstrapMsg '  Acknowledged. Continuing.' 'White'
+                    } else {
+                        $ackReason = 'timeout'
+                        Write-BootstrapMsg '  No acknowledgment; continuing anyway (recorded).' 'DarkGray'
+                    }
+                }
+            }
+        }
+    }
+
+    $facts = [ordered]@{
+        status           = [string]$state.Status
+        baseboard        = [string]$state.BaseboardProduct
+        bios_version     = [string]$state.BiosVersion
+        setup_sha256     = [string]$state.Sha256
+        baseline_matched = [bool]$state.BaselineMatched
+        needs_attention  = [bool]$state.NeedsAttention
+        acknowledged     = [bool]$acknowledged
+    }
+    if ($ackReason) { $facts['acknowledgment'] = $ackReason }
+    foreach ($f in @($state.Fields)) {
+        $facts[('field_' + ($f.Name -replace '[^A-Za-z0-9]+', '_').ToLowerInvariant())] = [int]$f.Actual
+    }
+    $script:BiosCheckFacts = $facts
 }
 
 function Test-MastNetFirewallRuleExists {
@@ -571,14 +701,30 @@ function Write-BootstrapDesktopReport([string]$HostNm, [string]$SiteCode) {
     } catch { $lines += ('  (adapter query failed: {0})' -f $_.Exception.Message) }
     $lines += @(
         '',
-        '--- MANUAL: BIOS power policy (do once per machine) ---',
+        '--- BIOS power policy (checked at bootstrap; fixed by hand) ---',
         'The unit must power back on by itself when mains power returns (the DLI',
         'switch cuts and restores AC). In BIOS/UEFI setup:',
-        '  * Advanced -> APM Configuration -> "Restore AC Power Loss" = Power On',
+        '  * Advanced -> APM Configuration -> "Restore AC Power Loss" = S0 State',
         '    (ASUS wording; other boards call it "AC Power Recovery" or "After',
         '    Power Loss" -- set Power On, NOT Last State).',
         '  * Disable "ErP Ready" / deep-sleep options if present (they can block',
         '    power-on-after-mains).',
+        'Provisioning can READ this setting but cannot change it, so it is always',
+        'a manual fix. What this bootstrap measured:'
+    )
+    if ($script:BiosCheckFacts) {
+        $lines += ('  status : {0}{1}' -f $script:BiosCheckFacts['status'], $(
+            if ($script:BiosCheckFacts['acknowledgment']) { " (acknowledged: $($script:BiosCheckFacts['acknowledgment']))" } else { '' }))
+        foreach ($k in $script:BiosCheckFacts.Keys) {
+            if ($k -like 'field_*') { $lines += ('  {0,-22} = {1}' -f $k, $script:BiosCheckFacts[$k]) }
+        }
+        if ($script:BiosCheckFacts['status'] -ne 'match') {
+            $lines += '  ACTION: verify the setting above in BIOS setup before this unit ships.'
+        }
+    } else {
+        $lines += '  (not measured on this run)'
+    }
+    $lines += @(
         '',
         '--- NEXT: provisioning handoff ---',
         ('1) Ensure the prov server resolves {0} (DNS or hosts entry).' -f $HostNm),
@@ -835,6 +981,11 @@ try {
 
     # First, ahead of the prompts: a machine that fails this must be left untouched.
     Assert-MastUnitHardware -IsVmTestRun:$VmTestRun
+
+    # Read-only, and deliberately separate from the assert above: a wrong BIOS
+    # power policy is worth an operator's attention but is not a reason to
+    # refuse to build the unit.
+    Show-MastFirmwarePowerPolicy -IsNonInteractive:$NonInteractive
 
     if ([string]::IsNullOrWhiteSpace($MastHostName)) {
         if ($NonInteractive) {
@@ -1651,7 +1802,11 @@ try {
             hostname          = $MastHostName
             script            = 'bootstrap.ps1'
         }
-        $bootStamp | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $bootStampDir 'bootstrap-manifest.json') -Encoding UTF8
+        # Carries whether a human was told about a bad BIOS power policy and
+        # said 'yes, I know'. Without this, an acknowledged-bad unit is
+        # indistinguishable later from one nobody ever checked.
+        if ($script:BiosCheckFacts) { $bootStamp['bios_check'] = $script:BiosCheckFacts }
+        $bootStamp | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $bootStampDir 'bootstrap-manifest.json') -Encoding UTF8
         Write-BootstrapMsg ("  Stamped bootstrap version {0} to C:\MAST\bootstrap-manifest.json" -f $script:BootstrapVersion) 'White'
     } catch {
         Write-BootstrapMsg ("  [WARN] could not write bootstrap-manifest.json: {0}" -f $_.Exception.Message) 'Yellow'

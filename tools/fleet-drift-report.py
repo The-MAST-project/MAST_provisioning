@@ -720,6 +720,56 @@ def _render_facts_matrix(facts: dict | None, ok_cols: list[UnitRecord]) -> list[
     return out
 
 
+def _render_bios_policy(ok_cols: list[UnitRecord]) -> list[str]:
+    """BIOS power policy per unit -- its own section, and it DOES warn.
+
+    The facts matrix above deliberately does not warn, because a fact that
+    varies across the fleet is usually an observation. This one is not: a unit
+    whose 'Restore AC Power Loss' is wrong does not come back after a site power
+    event, and nobody finds out until someone drives to Neot Smadar. So it gets
+    a named section and a [WARN] line rather than a row among dozens.
+
+    Provisioning cannot fix any of this -- BIOS setup is written by hand at the
+    console -- which is exactly why the report has to keep saying it.
+    """
+    rows = [(u.host, (u.facts.get("power-management") or {})) for u in ok_cols]
+    rows = [(h, f) for h, f in rows if f.get("bios_check")]
+    if not rows:
+        return []
+
+    out = ["", "=== BIOS power policy (read-only; fixed by hand at the console) ==="]
+    width = max(len(h) for h, _ in rows)
+    for host, f in rows:
+        status = str(f.get("bios_check"))
+        bits = [f"board={f.get('baseboard') or '?'}", f"bios={f.get('bios_version') or '?'}"]
+        fields = [f"{k[len('field_') :]}={v}" for k, v in sorted(f.items()) if k.startswith("field_")]
+        out.append(f"  {host.ljust(width)}  {status:<16}  {'  '.join(bits + fields)}")
+
+    warned = False
+    for host, f in rows:
+        status = str(f.get("bios_check"))
+        if f.get("needs_attention"):
+            warned = True
+            if status == "unknown-baseline":
+                out.append(
+                    f"  [WARN] {host}: no baseline for this board/BIOS -- power policy NOT verified. "
+                    "Check APM Configuration by hand, then re-baseline (see README)."
+                )
+            else:
+                out.append(
+                    f"  [WARN] {host}: BIOS power policy is wrong -- this unit may not power itself "
+                    "back on after a mains event. Fix in BIOS setup: Advanced -> APM Configuration."
+                )
+        elif status == "blob-drift":
+            out.append(
+                f"  [note] {host}: some other BIOS setting differs from the baseline; "
+                "the power-policy fields are all correct."
+            )
+    if not warned:
+        out.append("  All reporting units match their baseline power policy.")
+    return out
+
+
 def _render_repo_warnings(repos: dict) -> list[str]:
     # Spelled out rather than left to the glyphs: 'pinned and yet divergent'
     # means a MOVED TAG, which is a different failure from a branch drifting.
@@ -812,6 +862,7 @@ def render(
     lines += _render_drift_detail(cmp)
     lines += _render_repo_matrix(repos, ok_cols)
     lines += _render_facts_matrix(facts, ok_cols)
+    lines += _render_bios_policy(ok_cols)
     lines += _render_bootstrap(units, boot, repo_boot_v)
     lines += _render_result(units, cmp, boot, repos)
     return "\n".join(lines)

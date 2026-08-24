@@ -393,6 +393,21 @@ try {
     }
     Copy-Item -Force $clientUtilPath (Join-Path $staging 'mast-client-util.ps1')
     Write-Host "  Staged mast-client-util.ps1"
+    # BIOS power-policy check: the reader and its baseline data, staged flat
+    # beside bootstrap.ps1 so it finds them via $PSScriptRoot. Optional by
+    # design -- bootstrap degrades to "not checked" rather than failing, so an
+    # older kit still builds units. A kit cut before a board or BIOS change
+    # carries a stale baseline and reports 'unknown-baseline' on new hardware;
+    # re-cut the kit when the baseline moves (see README, Firmware baseline).
+    foreach ($fwRel in @('server\lib\mast-firmware.ps1', 'server\data\firmware-baseline.json')) {
+        $fwSrc = Join-Path $RepoRoot $fwRel
+        if (Test-Path $fwSrc) {
+            Copy-Item -Force $fwSrc (Join-Path $staging (Split-Path $fwRel -Leaf))
+            Write-Host "  Staged $(Split-Path $fwRel -Leaf) (BIOS power-policy check)"
+        } else {
+            Write-Warning "$fwRel not found; this ISO bootstraps without the BIOS power-policy check"
+        }
+    }
     if ($npcapInstallerPath) {
         Copy-Item -Force $npcapInstallerPath (Join-Path $staging (Split-Path $npcapInstallerPath -Leaf))
         Write-Host "  Staged $(Split-Path $npcapInstallerPath -Leaf) (Npcap installer for bootstrap)"

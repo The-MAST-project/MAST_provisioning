@@ -500,3 +500,61 @@ def test_facts_reach_the_csv(fdr, tmp_path):
     rows = list(csv.DictReader(out.open(encoding="utf-8")))
     col = "fact:mongodb-client.compass_version"
     assert {r["host"]: r[col] for r in rows} == {"mast01": "1.49.14", "mast02": "1.43.0"}
+
+
+# --- BIOS power policy section ------------------------------------------------
+# Its own section rather than a row in the facts matrix, because that matrix
+# deliberately does not warn: a differing fact is usually an observation. A unit
+# that will not power itself back on after a mains event is not an observation.
+
+
+def _bios_unit(fdr, host: str, **bios):
+    rec = _unit(fdr, host, **{"power-management": {"version": "1.0", "hash": "h"}})
+    rec.facts = {"power-management": dict(bios)}
+    return rec
+
+
+def test_no_unit_reports_bios_renders_no_section(fdr):
+    assert fdr._render_bios_policy([_unit(fdr, "mast01", git={"version": "1.0", "hash": "h"})]) == []
+
+
+def test_matching_units_report_no_warning(fdr):
+    out = "\n".join(
+        fdr._render_bios_policy(
+            [
+                _bios_unit(fdr, "mast01", bios_check="match", needs_attention=False, baseboard="PE2100U"),
+                _bios_unit(fdr, "mast03", bios_check="match", needs_attention=False, baseboard="PE2100U"),
+            ]
+        )
+    )
+    assert "[WARN]" not in out
+    assert "All reporting units match their baseline power policy." in out
+
+
+def test_field_drift_warns_about_not_powering_back_on(fdr):
+    out = "\n".join(
+        fdr._render_bios_policy(
+            [_bios_unit(fdr, "mast02", bios_check="field-drift", needs_attention=True, field_restore_ac_power_loss=0)]
+        )
+    )
+    assert "[WARN] mast02" in out
+    assert "may not power itself" in out
+
+
+def test_unknown_baseline_warns_that_it_is_unverified_not_wrong(fdr):
+    # New hardware is the expected case, so the wording must not accuse the
+    # board of being misconfigured -- only of being unverifiable.
+    out = "\n".join(
+        fdr._render_bios_policy(
+            [_bios_unit(fdr, "mast09", bios_check="unknown-baseline", needs_attention=True, baseboard="NEWBOARD")]
+        )
+    )
+    assert "[WARN] mast09" in out
+    assert "NOT verified" in out
+    assert "may not power itself" not in out
+
+
+def test_blob_drift_is_noted_but_never_warned(fdr):
+    out = "\n".join(fdr._render_bios_policy([_bios_unit(fdr, "mast04", bios_check="blob-drift", needs_attention=False)]))
+    assert "[WARN]" not in out
+    assert "[note] mast04" in out
