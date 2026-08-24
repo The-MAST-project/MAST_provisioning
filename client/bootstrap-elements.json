@@ -1,86 +1,123 @@
 {
-  "_comment": "Source of truth for the bootstrap element HISTORY, read by tools/fleet-drift-report.py. Each element's 'since' is the bootstrap version (client/bootstrap.ps1 $script:BootstrapVersion) that introduced it. current_version must equal max(since) AND the $script:BootstrapVersion constant. When you add a bootstrap capability: add an element with since = the new version, bump current_version here, and bump $script:BootstrapVersion in bootstrap.ps1 to match (the report warns if they drift). The report reads each unit's C:\\MAST\\bootstrap-manifest.json (stamped at bootstrap time) and lists elements with since > the unit's stamped version as 'may need applying'.",
+  "_comment": "Source of truth for the bootstrap element HISTORY, read by tools/fleet-drift-report.py. Each element's 'since' is the bootstrap version (client/bootstrap.ps1 $script:BootstrapVersion) that introduced it. current_version must equal max(since) AND the $script:BootstrapVersion constant. When you add a bootstrap capability: add an element with since = the new version, bump current_version here, and bump $script:BootstrapVersion in bootstrap.ps1 to match (the report warns if they drift). The report reads each unit's C:\\\\MAST\\\\bootstrap-manifest.json (stamped at bootstrap time) and lists elements with since > the unit's stamped version as 'may need applying'. Every element also declares 'reassert', which says whether it may be run again on an ALREADY-PROVISIONED unit (see docs/decisions/2026-08-24-bootstrap-elements-declare-whether-they-may-be-re-run.md): 'routine' = safe to re-assert on every provisioning run; 'provider' = a provisioning provider already re-asserts it, named in 'provider' -- do NOT run bootstrap's copy again; 'on-demand' = capable of running remotely but never on a routine run, invoked explicitly for repair; 'console' = first-touch only, never remote. build-mast.ps1 fails the build if the field is missing or invalid.",
   "current_version": 13,
   "elements": [
     {
+      "id": "ntp-clock-sync",
+      "since": 1,
+      "description": "Sync the system clock before anything TLS-sensitive (public NTP, with an HTTP Date header fallback off-campus)",
+      "reassert": "provider",
+      "provider": "timesync"
+    },
+    {
+      "id": "timezone-israel-dst",
+      "since": 3,
+      "description": "Assert Israel Standard Time WITH automatic DST. Units arrived on the right zone with DST auto-adjust disabled and ran an hour off in summer; one idempotent tzutil /s fixes both",
+      "reassert": "routine"
+    },
+    {
       "id": "mast-admin-account",
       "since": 1,
-      "description": "Create local 'mast' admin account with the provisioning password"
+      "description": "Create local 'mast' admin account with the provisioning password",
+      "reassert": "console"
     },
     {
       "id": "auto-logon",
       "since": 1,
-      "description": "Winlogon AutoAdminLogon for headless unattended sign-in"
+      "description": "Winlogon AutoAdminLogon for headless unattended sign-in",
+      "reassert": "console"
     },
     {
       "id": "windows-update-suppress",
       "since": 1,
-      "description": "Suppress Windows Update automatic installs"
+      "description": "Suppress Windows Update automatic installs",
+      "reassert": "routine"
+    },
+    {
+      "id": "popup-notification-suppress",
+      "since": 1,
+      "description": "Suppress the machine-wide Windows backup-reminder notification task. The per-user toast and content-delivery half moved to the desktop-appearance provider in #106; consumer cloud content is covered by telemetry-privacy-harden",
+      "reassert": "routine"
     },
     {
       "id": "dhcp-ipv4",
       "since": 1,
-      "description": "Ensure IPv4 uses DHCP (the fleet identifies units by hostname)"
+      "description": "Ensure IPv4 uses DHCP (the fleet identifies units by hostname)",
+      "reassert": "routine"
     },
     {
       "id": "winrm-http-basic",
       "since": 1,
-      "description": "WinRM over HTTP 5985 + Basic auth, firewall port open, network profile Private"
+      "description": "WinRM over HTTP 5985 + Basic auth, firewall port open, network profile Private",
+      "reassert": "on-demand"
     },
     {
       "id": "npcap",
       "since": 1,
-      "description": "Npcap packet-capture driver (interactive install)"
+      "description": "Npcap packet-capture driver (interactive install)",
+      "reassert": "console"
     },
     {
       "id": "computer-rename",
       "since": 1,
-      "description": "Rename the computer to mastNN"
+      "description": "Rename the computer to mastNN",
+      "reassert": "console"
     },
     {
       "id": "telemetry-privacy-harden",
       "since": 1,
-      "description": "Diagnostic data = Security; disable DiagTrack/dmwappushservice, advertising ID, activity feed, Cortana/web search"
+      "description": "Diagnostic data = Security; disable DiagTrack/dmwappushservice, advertising ID, activity feed, Cortana/web search",
+      "reassert": "routine"
     },
     {
       "id": "locale-en-us",
       "since": 1,
-      "description": "Regional format English (United States), system + per-user"
+      "description": "Regional format English (United States), system + per-user",
+      "reassert": "routine"
     },
     {
       "id": "firewall-off",
       "since": 1,
-      "description": "Disable Windows Firewall on all profiles (units sit on an isolated VLAN)"
+      "description": "Disable Windows Firewall on all profiles (units sit on an isolated VLAN)",
+      "reassert": "routine"
     },
     {
       "id": "service-trim",
       "since": 1,
-      "description": "Stop + disable non-essential vendor services (Spooler, Search, Intel LMS, vendor helpers)"
+      "description": "Stop + disable non-essential vendor services (Spooler, Search, Intel LMS, vendor helpers)",
+      "reassert": "routine"
     },
     {
       "id": "execution-policy",
       "since": 9,
-      "description": "Set LocalMachine ExecutionPolicy to RemoteSigned (was a printed manual step, skipped on mast04 and mast03 -- see #51)"
+      "description": "Set LocalMachine ExecutionPolicy to RemoteSigned (was a printed manual step, skipped on mast04 and mast03 -- see #51)",
+      "reassert": "provider",
+      "provider": "execution-policy"
     },
     {
       "id": "hardware-preflight",
       "since": 10,
-      "description": "Assert 64 GB RAM and a free drive letter D: before anything is changed (both are required by the imdisk 32 GB RAM-backed D: mount)"
+      "description": "Assert 64 GB RAM and a free drive letter D: before anything is changed (both are required by the imdisk 32 GB RAM-backed D: mount)",
+      "reassert": "console"
     },
     {
       "id": "bootstrap-media-handling",
       "since": 11,
-      "description": "Treat D: held by the bootstrap medium itself as no conflict, and tell the operator at the end of the run to unplug it, so a forgotten drive does not take D: back on the next boot"
+      "description": "Treat D: held by the bootstrap medium itself as no conflict, and tell the operator at the end of the run to unplug it, so a forgotten drive does not take D: back on the next boot",
+      "reassert": "console"
     },
     {
       "id": "openssh-from-msi",
       "since": 12,
-      "description": "Install OpenSSH from the bundled Win32-OpenSSH MSI instead of the OpenSSH.Server Features-on-Demand capability, which reported success before registering sshd and left units with no SSH server (#123); a missing sshd is now a run blocker rather than a warning"
+      "description": "Install OpenSSH from the bundled Win32-OpenSSH MSI instead of the OpenSSH.Server Features-on-Demand capability, which reported success before registering sshd and left units with no SSH server (#123); a missing sshd is now a run blocker rather than a warning",
+      "reassert": "on-demand"
     },
     {
       "id": "bios-power-policy-check",
       "since": 13,
-      "description": "Read the BIOS power policy (Restore AC Power Loss and the APM wake sources) from the UEFI setup varstore and compare against server/data/firmware-baseline.json; a unit that would not power itself back on after a mains event gets a red banner and waits for the operator to acknowledge, then continues on its own -- provisioning cannot write BIOS setup, so this informs and never blocks. Result and acknowledgment are stamped into bootstrap-manifest.json"
+      "description": "Read the BIOS power policy (Restore AC Power Loss and the APM wake sources) from the UEFI setup varstore and compare against server/data/firmware-baseline.json; a unit that would not power itself back on after a mains event gets a red banner and waits for the operator to acknowledge, then continues on its own -- provisioning cannot write BIOS setup, so this informs and never blocks. Result and acknowledgment are stamped into bootstrap-manifest.json",
+      "reassert": "provider",
+      "provider": "power-management"
     }
   ]
 }

@@ -122,6 +122,12 @@ ${stagingLib} = Join-Path ${PSScriptRoot} 'build-staging-lib.ps1'
 if (-not (Test-Path ${stagingLib})) { throw "Missing build-staging-lib.ps1 at ${stagingLib}" }
 . ${stagingLib}
 
+# Bootstrap element-registry helpers, dot-sourced for the same reason:
+# server/tests/build-bootstrap-lib.Tests.ps1 exercises this implementation.
+${bootstrapLib} = Join-Path ${PSScriptRoot} 'build-bootstrap-lib.ps1'
+if (-not (Test-Path ${bootstrapLib})) { throw "Missing build-bootstrap-lib.ps1 at ${bootstrapLib}" }
+. ${bootstrapLib}
+
 [string]${LicensesRoot} = (Join-Path ${Top} 'vault\nomachine-licenses')
 ${licensesVault} = (Join-Path ${vault} 'nomachine-licenses')
 
@@ -206,6 +212,7 @@ function Assert-BootstrapMemoryRequirementInSync {
 
 Assert-BootstrapKnownSitesInSync -ClientRoot ${clientRoot} -ProvidersRoot ${providersRoot}
 Assert-BootstrapMemoryRequirementInSync -ClientRoot ${clientRoot}
+Assert-MastBootstrapElementRegistry -ClientRoot ${clientRoot} -ProvidersRoot ${providersRoot}
 
 # If no -Modules were passed (or the normalization above collapsed to empty),
 # default to the providers discovered on disk. Get-AllProviderModules lives in
