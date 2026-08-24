@@ -50,6 +50,13 @@ front. Expect it to be wrong in places and to shift.
 | `fleet migration` | One-time, supervised changes applied across production units |
 | `hardware startup` | When a device is powered, homed or moved, relative to when software starts -- process lifetime versus hardware lifetime, and who commands the transition |
 | `static analysis` | What is checked without running the code: lint, formatting, type checking, the PowerShell parse sweep -- rule selection, what is deferred, and whether the gate blocks |
+| `licensing` | Purchased entitlements and the files that carry them: which host holds which seat, where the authoritative copy lives, expiry and renewal |
+
+Added 2026-08-24 with the NoMachine seat record. Not `reproducibility`: a pinned asset is
+about getting the same result twice, where this is about an entitlement that exists in
+finite supply and is allocated to a host. Not `drift` either -- an expired certificate is
+not an installed-versus-expected mismatch, and the module that installs one never reads its
+`Expiry`.
 
 Added 2026-08-17 with the pyright record. Distinct from `reproducibility`, which covers the
 *pins* that make a checker's verdict stable, and from `docs-process`, which the earlier CI
