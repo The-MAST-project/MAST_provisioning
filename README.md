@@ -417,6 +417,38 @@ missing manifest shows as `NO-MANIFEST`). It also reads each unit's
 an older or unstamped bootstrap, listing the bootstrap elements they may be missing
 (element history in `client/bootstrap-elements.json`). It changes nothing on the units.
 
+### The bootstrap element registry
+
+`client/bootstrap-elements.json` records what a bootstrap of version N establishes:
+one entry per element, with the `since:` version that introduced it. It is what
+lets the report above name what a unit is missing.
+
+Each element also declares **`reassert:`** — whether it may be run again on an
+**already-provisioned** unit. That is the question a remote re-bootstrap has to
+answer per element (see #143), because some of them would cut the channel the run
+travels over:
+
+| `reassert` | Meaning |
+|---|---|
+| `routine` | Safe to re-assert on every provisioning run |
+| `provider` | A provisioning provider already re-asserts it — named in `provider:`. Do **not** run bootstrap's copy again |
+| `on-demand` | Can run remotely, but never on a routine run. Invoked explicitly, for repair |
+| `console` | First touch only. Never remote |
+
+`winrm-http-basic` and `openssh-from-msi` are `on-demand` deliberately: reinstalling
+the transport under a live session is how a healthy unit becomes an unreachable one
+(#123 — mast06 finished a "clean" bootstrap with no SSH server). Repair is still
+remote, because **each transport is the other's rescue path** — fix sshd over WinRM,
+fix the WinRM listener over SSH.
+
+`build-mast.ps1` fails the build if the registry is malformed, if an element omits or
+mis-spells `reassert`, if a `provider`-backed element names a provider that does not
+exist, or if `current_version` disagrees with either the newest `since:` or
+`$script:BootstrapVersion` in `bootstrap.ps1`. What it cannot yet check is whether the
+registry **covers** the script — the ids are labels the report prints, matched against
+nothing in `bootstrap.ps1`, and that guard has to wait until the elements are
+individually dispatchable.
+
 ```
 # from the repo root on the prov server (or labcomp)
 python tools/fleet-drift-report.py                       # all hosts in unit-registry.json
