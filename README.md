@@ -468,6 +468,15 @@ does not touch `bootstrap_version`**: a re-assert applies the routine elements a
 construction not the console ones, so the unit is not at the current bootstrap version
 afterwards, and the drift report must go on saying so.
 
+**This runs by itself.** The `bootstrap-reassert` provider (`always: true`, order 15 —
+after `execution-policy`, ahead of everything that installs) invokes it on **every**
+provisioning cycle, so a unit converges without anyone visiting it. It runs
+unconditionally rather than only when a unit looks behind: a unit whose
+`bootstrap_version` is `null` because it predates stamping is not "behind" by that test,
+and that unit is exactly the one most in need of converging. `bootstrap.ps1` and
+`mast-client-util.ps1` reach the unit as the provider's `repofiles`. A failed element
+fails the module — unlike the BIOS check, this is work provisioning owns and can retry.
+
 `build-mast.ps1` fails the build if the registry is malformed, if an element omits or
 mis-spells `reassert`, if a `provider`-backed element names a provider that does not
 exist, if `current_version` disagrees with either the newest `since:` or

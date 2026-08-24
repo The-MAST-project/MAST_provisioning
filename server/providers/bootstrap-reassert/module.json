@@ -1,0 +1,17 @@
+{
+  "name": "bootstrap-reassert",
+  "version": "1.0",
+  "description": "Re-apply the re-assertable bootstrap elements on every run, so a unit converges on the current bootstrap without anyone carrying a USB stick to it. Runs client/bootstrap.ps1 -ReassertOnly, which applies the 'routine' elements only: 'console' elements are first touch and stay untouched, 'on-demand' elements (the two that re-assert the transport) run only when named by hand, and 'provider' elements are owned by their own provider. Does not stamp bootstrap_version -- see docs/decisions/2026-08-24-a-re-assert-run-does-not-claim-the-unit-is-bootstrapped.md.",
+  "order": 15,
+  "always": true,
+  "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-bootstrap-reassert.ps1\"",
+  "commandfiles": [
+    "provide-bootstrap-reassert.ps1",
+    "verify-bootstrap-reassert.ps1"
+  ],
+  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\verify-bootstrap-reassert.ps1\"",
+  "repofiles": [
+    "client/bootstrap.ps1",
+    "client/mast-client-util.ps1"
+  ]
+}
