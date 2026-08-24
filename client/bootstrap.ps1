@@ -1,4 +1,4 @@
-﻿#Requires -RunAsAdministrator
+#Requires -RunAsAdministrator
 <#
 .SYNOPSIS
     Manual first-time MAST unit bootstrap: mast admin, auto-logon, WinRM HTTP for prov server, optional computer rename.
@@ -972,89 +972,22 @@ function Set-MastIntlValues {
     }
 }
 
-$exitCode = 0
-try {
-    Write-BootstrapBanner '======================================================================' 'Cyan'
-    Write-BootstrapBanner ' MAST bootstrap.ps1 (manual first-time setup)' 'Cyan'
-    Write-BootstrapBanner '======================================================================' 'Cyan'
-    Write-BootstrapMsg ("Log file (append): {0}" -f $script:BootstrapLog) 'DarkGray'
+# --- Bootstrap elements: the re-assertable ones, addressable by id -----------
+#
+# One function per element of client/bootstrap-elements.json, each holding
+# exactly the code that used to sit inline in the main flow -- moved, not
+# rewritten. The main flow calls them by id through the map below, so the SAME
+# code can be re-run on an already-provisioned unit without re-running the
+# whole script (#143).
+#
+# Only elements the registry marks 'routine' or 'on-demand' are here: those are
+# the ones that must be individually invocable. 'console' elements (the account,
+# autologon, rename, Npcap, the preflight, media handling) are first touch only
+# and stay inline; 'provider' elements are re-asserted by a provisioning
+# provider, not by re-running bootstrap's copy. build-mast.ps1 fails the build
+# if this map and the registry disagree.
 
-    # First, ahead of the prompts: a machine that fails this must be left untouched.
-    Assert-MastUnitHardware -IsVmTestRun:$VmTestRun
-
-    # Read-only, and deliberately separate from the assert above: a wrong BIOS
-    # power policy is worth an operator's attention but is not a reason to
-    # refuse to build the unit.
-    Show-MastFirmwarePowerPolicy -IsNonInteractive:$NonInteractive
-
-    if ([string]::IsNullOrWhiteSpace($MastHostName)) {
-        if ($NonInteractive) {
-            throw "Pass -MastHostName mastNN (required when -NonInteractive is set)."
-        }
-        Write-BootstrapMsg '' 'White'
-        Write-BootstrapMsg 'UNIT HOSTNAME (Windows computer name)' 'Yellow'
-        Write-BootstrapMsg '  Examples: mast01, mast05. Max 15 characters; letters, digits, hyphen only.' 'Yellow'
-        Write-BootstrapMsg '  This name must match what the provisioning server will use in DNS/hosts.' 'Yellow'
-        # Default to the current computer name so a re-run keeps the machine as-is on
-        # plain Enter. On a bare unit the current name is the throwaway OEM name from
-        # autounattend -- the operator types the real mastNN over it.
-        $MastHostName = Read-Host ('Enter MastHostName [{0}]' -f $env:COMPUTERNAME)
-        if ([string]::IsNullOrWhiteSpace($MastHostName)) { $MastHostName = $env:COMPUTERNAME }
-    }
-    $MastHostName = $MastHostName.Trim()
-    if ($MastHostName -notmatch '^[A-Za-z0-9-]{1,15}$') {
-        throw "Invalid MastHostName '$MastHostName'. Use 1-15 characters: letters, digits, hyphen."
-    }
-    Write-BootstrapMsg ("Using MastHostName (computer rename target): {0}" -f $MastHostName) 'White'
-
-    # Site selection -- drives the provisioning config profile (config-bootstrap).
-    # Like the hostname, it is the operator's explicit choice, NEVER derived from the
-    # hostname. Persisted to C:\ProgramData\MAST\site.txt so onboard-mast-unit.ps1 can
-    # record it in the prov server's unit-registry.json.
-    #
-    # SINGLE SOURCE OF TRUTH for the site list is server\providers\config-bootstrap\
-    # sites\*.toml. This script runs offline on a bare unit (USB/ISO) before the prov
-    # server is reachable, so it cannot enumerate that directory and must embed the
-    # list below for early operator validation at the console. build-mast.ps1 runs
-    # Assert-BootstrapKnownSitesInSync on the prov server (where both are visible) and
-    # FAILS THE BUILD if this list drifts from sites\*.toml -- so keep the two in sync
-    # (add a site by dropping sites\<code>.toml AND adding <code> here).
-    $knownSites = @('ns', 'wis')
-    if ([string]::IsNullOrWhiteSpace($Site)) {
-        if ($NonInteractive) {
-            throw "Pass -Site <site> (one of: $($knownSites -join ', ')) when -NonInteractive is set."
-        }
-        # Default to the previously persisted choice (re-run), else ns.
-        $siteDefault = 'ns'
-        $persistedSiteFile = Join-Path (Join-Path $env:ProgramData 'MAST') 'site.txt'
-        if (Test-Path -LiteralPath $persistedSiteFile) {
-            $prevSite = Get-Content -LiteralPath $persistedSiteFile -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($prevSite) { $prevSite = $prevSite.Trim().ToLower() }
-            if ($knownSites -contains $prevSite) { $siteDefault = $prevSite }
-        }
-        Write-BootstrapMsg '' 'White'
-        Write-BootstrapMsg 'SITE (selects the unit configuration profile)' 'Yellow'
-        Write-BootstrapMsg ('  Known sites: {0}. Default: {1}.' -f ($knownSites -join ', '), $siteDefault) 'Yellow'
-        $Site = Read-Host ('Enter site [{0}]' -f $siteDefault)
-        if ([string]::IsNullOrWhiteSpace($Site)) { $Site = $siteDefault }
-    }
-    $Site = $Site.Trim().ToLower()
-    if ($knownSites -notcontains $Site) {
-        throw "Invalid site '$Site'. Known sites: $($knownSites -join ', ') (add a profile under server\providers\config-bootstrap\sites\ and this list to add one)."
-    }
-    $siteDir = Join-Path $env:ProgramData 'MAST'
-    New-Item -ItemType Directory -Path $siteDir -Force | Out-Null
-    $siteFile = Join-Path $siteDir 'site.txt'
-    Set-Content -LiteralPath $siteFile -Value $Site -Encoding ASCII
-    Write-BootstrapMsg ('Using site: {0} (persisted to {1})' -f $Site, $siteFile) 'White'
-
-    # --- Time zone: Israel Standard Time with automatic DST ---
-    # The autounattend answer file already sets the zone, but machines have
-    # shown up on the right zone with automatic DST adjustment DISABLED
-    # (DynamicDaylightTimeDisabled=1), leaving the local clock an hour off all
-    # summer. Assert both here: tzutil /s without the _dstoff suffix sets the
-    # zone AND re-enables dynamic DST in one idempotent call.
-    Write-BootstrapMsg '' 'Cyan'
+function Invoke-MastBootstrapElementTimezoneIsraelDst {
     Write-BootstrapMsg '--- Time zone (Israel Standard Time, auto-DST) ---' 'Cyan'
     try {
         ${tzKey} = 'HKLM:\SYSTEM\CurrentControlSet\Control\TimeZoneInformation'
@@ -1076,99 +1009,17 @@ try {
     }
 
     # --- Sync system time with public NTP (before anything TLS-sensitive) ---
-    Write-BootstrapMsg '' 'Cyan'
-    Write-BootstrapMsg '--- Sync system time (NTP) ---' 'Cyan'
-    Sync-MastSystemTime
+}
 
-    # --- OEM factory account: leave intact, create fresh 'mast' instead ---
-    #
-    # Previous behavior renamed the OEM account ('user') to 'mast' in place.
-    # That left %USERPROFILE% pointing at C:\Users\user even after the rename
-    # (Windows does not migrate the profile directory on Rename-LocalUser), so
-    # everything hard-coded to C:\Users\mast silently broke on the VM. See
-    # compare-mastw/GAPS.md (2026-05-18) "Profile-dir anomaly on the VM".
-    #
-    # New policy: create a brand-new local 'mast' account (block below). The
-    # OEM account is left untouched. The -FactoryUser parameter is preserved
-    # for backward compatibility but is now a no-op.
-    Write-BootstrapMsg '' 'Cyan'
-    Write-BootstrapMsg '--- OEM factory account policy ---' 'Cyan'
-    if ($FactoryUser) {
-        Write-BootstrapMsg "  -FactoryUser is deprecated and ignored; OEM '$FactoryUser' is left intact." 'DarkGray'
-        Write-BootstrapMsg "  A separate '$MastUser' account will be created/ensured below." 'DarkGray'
-    }
-
-    # --- mast admin ---
-    Write-BootstrapMsg '' 'Cyan'
-    Write-BootstrapMsg '--- Ensuring local admin mast ---' 'Cyan'
-    $secPwd = ConvertTo-SecureString $MastPassword -AsPlainText -Force
-    $existing = Get-LocalUser -Name $MastUser -ErrorAction SilentlyContinue
-    if ($existing) {
-        Set-LocalUser -Name $MastUser -Password $secPwd -PasswordNeverExpires $true -FullName $MastUser
-        Write-BootstrapMsg "  Password and display name synced for '$MastUser'." 'Green'
-    } else {
-        New-LocalUser -Name $MastUser -Password $secPwd `
-            -FullName $MastUser -PasswordNeverExpires `
-            -UserMayNotChangePassword | Out-Null
-        Write-BootstrapMsg "  Created local user '$MastUser'." 'Green'
-    }
-    $mastSid = (Get-LocalUser -Name $MastUser).Sid
-    $alreadyAdmin = $false
-    foreach ($m in @(Get-LocalGroupMember -Group 'Administrators' -ErrorAction SilentlyContinue)) {
-        if ($m.SID -eq $mastSid) { $alreadyAdmin = $true; break }
-    }
-    if (-not $alreadyAdmin) {
-        try {
-            Add-LocalGroupMember -Group 'Administrators' -Member $MastUser -ErrorAction Stop
-            Write-BootstrapMsg "  Added '$MastUser' to Administrators." 'Green'
-        } catch {
-            $fe = $_.FullyQualifiedErrorId
-            if ($fe -notmatch 'MemberExists|ResourceExists') { throw }
-            Write-BootstrapMsg "  '$MastUser' already in Administrators." 'DarkGray'
-        }
-    } else {
-        Write-BootstrapMsg "  '$MastUser' already an Administrator." 'DarkGray'
-    }
-
-    # --- Auto-logon: log the mast account in automatically at boot ---
-    # MAST units are headless control boxes: after any reboot the mast account must log
-    # in unattended so the control stack (which lives in the interactive desktop session,
-    # not as a Windows service) comes back up without a console operator. Configured via
-    # the classic Winlogon AutoAdminLogon registry values (HKLM). The password is stored
-    # in plaintext under DefaultPassword -- acceptable here because the mast account uses
-    # the well-known non-secret fleet default and units sit on an isolated VLAN; Sysinternals
-    # Autologon (LSA secret) is the hardening path if that ever changes.
-    if ($SkipAutoLogon) {
-        Write-BootstrapMsg '' 'Cyan'
-        Write-BootstrapMsg '--- Skipping auto-logon (-SkipAutoLogon) ---' 'Yellow'
-    } else {
-        Write-BootstrapMsg '' 'Cyan'
-        Write-BootstrapMsg "--- Configuring auto-logon for '$MastUser' ---" 'Cyan'
-        # DefaultDomainName must match the machine's eventual name. The rename below
-        # changes it, so use the target hostname when a rename is pending.
-        $autoLogonDomain = if (-not $SkipComputerRename -and $MastHostName) { $MastHostName } else { $env:COMPUTERNAME }
-        $winlogonKey = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
-        Set-ItemProperty -Path $winlogonKey -Name 'AutoAdminLogon'    -Value '1'              -Type String
-        Set-ItemProperty -Path $winlogonKey -Name 'DefaultUserName'   -Value $MastUser        -Type String
-        Set-ItemProperty -Path $winlogonKey -Name 'DefaultPassword'   -Value $MastPassword    -Type String
-        Set-ItemProperty -Path $winlogonKey -Name 'DefaultDomainName' -Value $autoLogonDomain -Type String
-        # AutoLogonCount decrements each boot and disables auto-logon at zero; ForceAutoLogon
-        # and a stale AutoLogonSID can fight a clean unattended logon. Clear them so auto-logon
-        # is permanent and tied to the credentials above.
-        foreach ($stale in 'AutoLogonCount', 'AutoLogonSID', 'ForceAutoLogon') {
-            Remove-ItemProperty -Path $winlogonKey -Name $stale -ErrorAction SilentlyContinue
-        }
-        Write-BootstrapMsg "  AutoAdminLogon enabled for '$MastUser' (DefaultDomainName=$autoLogonDomain)." 'Green'
-    }
-
-    # --- Windows Update policy ---
-    Write-BootstrapMsg '' 'Cyan'
+function Invoke-MastBootstrapElementWindowsUpdateSuppress {
     Write-BootstrapMsg '--- Suppressing Windows Update (provisioning window) ---' 'Cyan'
     Disable-WindowsAutoUpdate
     Write-BootstrapMsg '  Windows Update service disabled for AUOptions=1.' 'Green'
 
     # --- Suppress Windows popup notifications ---
-    Write-BootstrapMsg '' 'Cyan'
+}
+
+function Invoke-MastBootstrapElementPopupNotificationSuppress {
     Write-BootstrapMsg '--- Suppressing Windows popup notifications ---' 'Cyan'
 
     # MACHINE-WIDE ONLY. Consumer cloud content ("Get even more out of Windows" nags)
@@ -1216,7 +1067,9 @@ try {
     #         at first login -- a freshly created account has no hive yet)
     #       - the mast account hive, if its profile already exists
     # Idempotent; safe to re-run.
-    Write-BootstrapMsg '' 'Cyan'
+}
+
+function Invoke-MastBootstrapElementLocaleEnUs {
     Write-BootstrapMsg '--- Regional format: English (United States) ---' 'Cyan'
 
     try {
@@ -1301,7 +1154,9 @@ try {
     # (active hours, NoAutoRebootWithLoggedOnUsers). Those are intentionally NOT
     # applied here: bootstrap fully disables wuauserv via Disable-WindowsAutoUpdate
     # (see the Windows Update section above), so active-hours keys would be inert.
-    Write-BootstrapMsg '' 'Cyan'
+}
+
+function Invoke-MastBootstrapElementTelemetryPrivacyHarden {
     Write-BootstrapMsg '--- Hardening: telemetry / privacy ---' 'Cyan'
 
     $dataCollection = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection'
@@ -1378,7 +1233,9 @@ try {
     # -SkipTrim. Names vary by driver version, so Resolve-MastTrimService falls
     # back to a display-name pattern; a service that resolves to neither is
     # reported "not present" and skipped. Idempotent.
-    Write-BootstrapMsg '' 'Cyan'
+}
+
+function Invoke-MastBootstrapElementServiceTrim {
     Write-BootstrapMsg '--- Trimming non-essential / vendor services ---' 'Cyan'
     $trimmed = 0
     foreach ($t in $script:TrimList) {
@@ -1403,12 +1260,16 @@ try {
     Write-BootstrapMsg ("  Trim complete: {0} service(s) disabled." -f $trimmed) 'Green'
 
     # --- Network: ensure DHCP for IPv4 (fleet requires DHCP addressing) ---
-    Write-BootstrapMsg '' 'Cyan'
+}
+
+function Invoke-MastBootstrapElementDhcpIpv4 {
     Write-BootstrapMsg '--- Network: ensure DHCP for IPv4 ---' 'Cyan'
     Set-MastAdaptersToDhcp
 
     # --- WinRM ---
-    Write-BootstrapMsg '' 'Cyan'
+}
+
+function Invoke-MastBootstrapElementWinrmHttpBasic {
     Write-BootstrapMsg '--- Enabling WinRM (HTTP, Basic) ---' 'Cyan'
     Write-BootstrapMsg '  Setting connection profiles to Private (best-effort)...' 'DarkGray'
     try {
@@ -1534,7 +1395,9 @@ try {
     #
     # 1 was Add-WindowsCapability until #123; steps 2, 4 and 5 now record a
     # blocker rather than a warning when they cannot complete.
-    Write-BootstrapMsg '' 'Cyan'
+}
+
+function Invoke-MastBootstrapElementOpensshFromMsi {
     Write-BootstrapMsg '--- OpenSSH Server ---' 'Cyan'
     # Installed from the bundled Win32-OpenSSH MSI, not from the OpenSSH.Server
     # Features-on-Demand capability. The capability needs a servicing payload
@@ -1649,7 +1512,9 @@ try {
     # 5985 (WinRM) and 22 (SSH) inbound rules added above are kept deliberately:
     # they are harmless while the firewall is off and keep both services reachable
     # immediately if the firewall is ever re-enabled. See DECISIONS.md.
-    Write-BootstrapMsg '' 'Cyan'
+}
+
+function Invoke-MastBootstrapElementFirewallOff {
     Write-BootstrapMsg '--- Windows Firewall: disable (perimeter-protected) ---' 'Cyan'
     try {
         Set-NetFirewallProfile -Profile Domain, Private, Public -Enabled False -ErrorAction Stop
@@ -1677,6 +1542,218 @@ try {
     # GUI here, with the operator present, sidesteps both problems. The npcap
     # provider is now a post-bootstrap presence check + npcapwatchdog task.
     # See DECISIONS.md 2026-05-27.
+}
+
+$script:MastBootstrapElementActions = [ordered]@{
+    'timezone-israel-dst' = 'Invoke-MastBootstrapElementTimezoneIsraelDst'
+    'windows-update-suppress' = 'Invoke-MastBootstrapElementWindowsUpdateSuppress'
+    'popup-notification-suppress' = 'Invoke-MastBootstrapElementPopupNotificationSuppress'
+    'locale-en-us' = 'Invoke-MastBootstrapElementLocaleEnUs'
+    'telemetry-privacy-harden' = 'Invoke-MastBootstrapElementTelemetryPrivacyHarden'
+    'service-trim' = 'Invoke-MastBootstrapElementServiceTrim'
+    'dhcp-ipv4' = 'Invoke-MastBootstrapElementDhcpIpv4'
+    'winrm-http-basic' = 'Invoke-MastBootstrapElementWinrmHttpBasic'
+    'openssh-from-msi' = 'Invoke-MastBootstrapElementOpensshFromMsi'
+    'firewall-off' = 'Invoke-MastBootstrapElementFirewallOff'
+}
+
+function Invoke-MastBootstrapElement {
+    # Run one registered bootstrap element by id.
+    param([Parameter(Mandatory)][string]$Id)
+    if (-not $script:MastBootstrapElementActions.Contains($Id)) {
+        throw ("unknown bootstrap element '{0}'" -f $Id)
+    }
+    & $script:MastBootstrapElementActions[$Id]
+}
+
+$exitCode = 0
+try {
+    Write-BootstrapBanner '======================================================================' 'Cyan'
+    Write-BootstrapBanner ' MAST bootstrap.ps1 (manual first-time setup)' 'Cyan'
+    Write-BootstrapBanner '======================================================================' 'Cyan'
+    Write-BootstrapMsg ("Log file (append): {0}" -f $script:BootstrapLog) 'DarkGray'
+
+    # First, ahead of the prompts: a machine that fails this must be left untouched.
+    Assert-MastUnitHardware -IsVmTestRun:$VmTestRun
+
+    # Read-only, and deliberately separate from the assert above: a wrong BIOS
+    # power policy is worth an operator's attention but is not a reason to
+    # refuse to build the unit.
+    Show-MastFirmwarePowerPolicy -IsNonInteractive:$NonInteractive
+
+    if ([string]::IsNullOrWhiteSpace($MastHostName)) {
+        if ($NonInteractive) {
+            throw "Pass -MastHostName mastNN (required when -NonInteractive is set)."
+        }
+        Write-BootstrapMsg '' 'White'
+        Write-BootstrapMsg 'UNIT HOSTNAME (Windows computer name)' 'Yellow'
+        Write-BootstrapMsg '  Examples: mast01, mast05. Max 15 characters; letters, digits, hyphen only.' 'Yellow'
+        Write-BootstrapMsg '  This name must match what the provisioning server will use in DNS/hosts.' 'Yellow'
+        # Default to the current computer name so a re-run keeps the machine as-is on
+        # plain Enter. On a bare unit the current name is the throwaway OEM name from
+        # autounattend -- the operator types the real mastNN over it.
+        $MastHostName = Read-Host ('Enter MastHostName [{0}]' -f $env:COMPUTERNAME)
+        if ([string]::IsNullOrWhiteSpace($MastHostName)) { $MastHostName = $env:COMPUTERNAME }
+    }
+    $MastHostName = $MastHostName.Trim()
+    if ($MastHostName -notmatch '^[A-Za-z0-9-]{1,15}$') {
+        throw "Invalid MastHostName '$MastHostName'. Use 1-15 characters: letters, digits, hyphen."
+    }
+    Write-BootstrapMsg ("Using MastHostName (computer rename target): {0}" -f $MastHostName) 'White'
+
+    # Site selection -- drives the provisioning config profile (config-bootstrap).
+    # Like the hostname, it is the operator's explicit choice, NEVER derived from the
+    # hostname. Persisted to C:\ProgramData\MAST\site.txt so onboard-mast-unit.ps1 can
+    # record it in the prov server's unit-registry.json.
+    #
+    # SINGLE SOURCE OF TRUTH for the site list is server\providers\config-bootstrap\
+    # sites\*.toml. This script runs offline on a bare unit (USB/ISO) before the prov
+    # server is reachable, so it cannot enumerate that directory and must embed the
+    # list below for early operator validation at the console. build-mast.ps1 runs
+    # Assert-BootstrapKnownSitesInSync on the prov server (where both are visible) and
+    # FAILS THE BUILD if this list drifts from sites\*.toml -- so keep the two in sync
+    # (add a site by dropping sites\<code>.toml AND adding <code> here).
+    $knownSites = @('ns', 'wis')
+    if ([string]::IsNullOrWhiteSpace($Site)) {
+        if ($NonInteractive) {
+            throw "Pass -Site <site> (one of: $($knownSites -join ', ')) when -NonInteractive is set."
+        }
+        # Default to the previously persisted choice (re-run), else ns.
+        $siteDefault = 'ns'
+        $persistedSiteFile = Join-Path (Join-Path $env:ProgramData 'MAST') 'site.txt'
+        if (Test-Path -LiteralPath $persistedSiteFile) {
+            $prevSite = Get-Content -LiteralPath $persistedSiteFile -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($prevSite) { $prevSite = $prevSite.Trim().ToLower() }
+            if ($knownSites -contains $prevSite) { $siteDefault = $prevSite }
+        }
+        Write-BootstrapMsg '' 'White'
+        Write-BootstrapMsg 'SITE (selects the unit configuration profile)' 'Yellow'
+        Write-BootstrapMsg ('  Known sites: {0}. Default: {1}.' -f ($knownSites -join ', '), $siteDefault) 'Yellow'
+        $Site = Read-Host ('Enter site [{0}]' -f $siteDefault)
+        if ([string]::IsNullOrWhiteSpace($Site)) { $Site = $siteDefault }
+    }
+    $Site = $Site.Trim().ToLower()
+    if ($knownSites -notcontains $Site) {
+        throw "Invalid site '$Site'. Known sites: $($knownSites -join ', ') (add a profile under server\providers\config-bootstrap\sites\ and this list to add one)."
+    }
+    $siteDir = Join-Path $env:ProgramData 'MAST'
+    New-Item -ItemType Directory -Path $siteDir -Force | Out-Null
+    $siteFile = Join-Path $siteDir 'site.txt'
+    Set-Content -LiteralPath $siteFile -Value $Site -Encoding ASCII
+    Write-BootstrapMsg ('Using site: {0} (persisted to {1})' -f $Site, $siteFile) 'White'
+
+    # --- Time zone: Israel Standard Time with automatic DST ---
+    # The autounattend answer file already sets the zone, but machines have
+    # shown up on the right zone with automatic DST adjustment DISABLED
+    # (DynamicDaylightTimeDisabled=1), leaving the local clock an hour off all
+    # summer. Assert both here: tzutil /s without the _dstoff suffix sets the
+    # zone AND re-enables dynamic DST in one idempotent call.
+    Write-BootstrapMsg '' 'Cyan'
+    Invoke-MastBootstrapElement -Id 'timezone-israel-dst'
+    Write-BootstrapMsg '' 'Cyan'
+    Write-BootstrapMsg '--- Sync system time (NTP) ---' 'Cyan'
+    Sync-MastSystemTime
+
+    # --- OEM factory account: leave intact, create fresh 'mast' instead ---
+    #
+    # Previous behavior renamed the OEM account ('user') to 'mast' in place.
+    # That left %USERPROFILE% pointing at C:\Users\user even after the rename
+    # (Windows does not migrate the profile directory on Rename-LocalUser), so
+    # everything hard-coded to C:\Users\mast silently broke on the VM. See
+    # compare-mastw/GAPS.md (2026-05-18) "Profile-dir anomaly on the VM".
+    #
+    # New policy: create a brand-new local 'mast' account (block below). The
+    # OEM account is left untouched. The -FactoryUser parameter is preserved
+    # for backward compatibility but is now a no-op.
+    Write-BootstrapMsg '' 'Cyan'
+    Write-BootstrapMsg '--- OEM factory account policy ---' 'Cyan'
+    if ($FactoryUser) {
+        Write-BootstrapMsg "  -FactoryUser is deprecated and ignored; OEM '$FactoryUser' is left intact." 'DarkGray'
+        Write-BootstrapMsg "  A separate '$MastUser' account will be created/ensured below." 'DarkGray'
+    }
+
+    # --- mast admin ---
+    Write-BootstrapMsg '' 'Cyan'
+    Write-BootstrapMsg '--- Ensuring local admin mast ---' 'Cyan'
+    $secPwd = ConvertTo-SecureString $MastPassword -AsPlainText -Force
+    $existing = Get-LocalUser -Name $MastUser -ErrorAction SilentlyContinue
+    if ($existing) {
+        Set-LocalUser -Name $MastUser -Password $secPwd -PasswordNeverExpires $true -FullName $MastUser
+        Write-BootstrapMsg "  Password and display name synced for '$MastUser'." 'Green'
+    } else {
+        New-LocalUser -Name $MastUser -Password $secPwd `
+            -FullName $MastUser -PasswordNeverExpires `
+            -UserMayNotChangePassword | Out-Null
+        Write-BootstrapMsg "  Created local user '$MastUser'." 'Green'
+    }
+    $mastSid = (Get-LocalUser -Name $MastUser).Sid
+    $alreadyAdmin = $false
+    foreach ($m in @(Get-LocalGroupMember -Group 'Administrators' -ErrorAction SilentlyContinue)) {
+        if ($m.SID -eq $mastSid) { $alreadyAdmin = $true; break }
+    }
+    if (-not $alreadyAdmin) {
+        try {
+            Add-LocalGroupMember -Group 'Administrators' -Member $MastUser -ErrorAction Stop
+            Write-BootstrapMsg "  Added '$MastUser' to Administrators." 'Green'
+        } catch {
+            $fe = $_.FullyQualifiedErrorId
+            if ($fe -notmatch 'MemberExists|ResourceExists') { throw }
+            Write-BootstrapMsg "  '$MastUser' already in Administrators." 'DarkGray'
+        }
+    } else {
+        Write-BootstrapMsg "  '$MastUser' already an Administrator." 'DarkGray'
+    }
+
+    # --- Auto-logon: log the mast account in automatically at boot ---
+    # MAST units are headless control boxes: after any reboot the mast account must log
+    # in unattended so the control stack (which lives in the interactive desktop session,
+    # not as a Windows service) comes back up without a console operator. Configured via
+    # the classic Winlogon AutoAdminLogon registry values (HKLM). The password is stored
+    # in plaintext under DefaultPassword -- acceptable here because the mast account uses
+    # the well-known non-secret fleet default and units sit on an isolated VLAN; Sysinternals
+    # Autologon (LSA secret) is the hardening path if that ever changes.
+    if ($SkipAutoLogon) {
+        Write-BootstrapMsg '' 'Cyan'
+        Write-BootstrapMsg '--- Skipping auto-logon (-SkipAutoLogon) ---' 'Yellow'
+    } else {
+        Write-BootstrapMsg '' 'Cyan'
+        Write-BootstrapMsg "--- Configuring auto-logon for '$MastUser' ---" 'Cyan'
+        # DefaultDomainName must match the machine's eventual name. The rename below
+        # changes it, so use the target hostname when a rename is pending.
+        $autoLogonDomain = if (-not $SkipComputerRename -and $MastHostName) { $MastHostName } else { $env:COMPUTERNAME }
+        $winlogonKey = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
+        Set-ItemProperty -Path $winlogonKey -Name 'AutoAdminLogon'    -Value '1'              -Type String
+        Set-ItemProperty -Path $winlogonKey -Name 'DefaultUserName'   -Value $MastUser        -Type String
+        Set-ItemProperty -Path $winlogonKey -Name 'DefaultPassword'   -Value $MastPassword    -Type String
+        Set-ItemProperty -Path $winlogonKey -Name 'DefaultDomainName' -Value $autoLogonDomain -Type String
+        # AutoLogonCount decrements each boot and disables auto-logon at zero; ForceAutoLogon
+        # and a stale AutoLogonSID can fight a clean unattended logon. Clear them so auto-logon
+        # is permanent and tied to the credentials above.
+        foreach ($stale in 'AutoLogonCount', 'AutoLogonSID', 'ForceAutoLogon') {
+            Remove-ItemProperty -Path $winlogonKey -Name $stale -ErrorAction SilentlyContinue
+        }
+        Write-BootstrapMsg "  AutoAdminLogon enabled for '$MastUser' (DefaultDomainName=$autoLogonDomain)." 'Green'
+    }
+
+    # --- Windows Update policy ---
+    Write-BootstrapMsg '' 'Cyan'
+    Invoke-MastBootstrapElement -Id 'windows-update-suppress'
+    Write-BootstrapMsg '' 'Cyan'
+    Invoke-MastBootstrapElement -Id 'popup-notification-suppress'
+    Write-BootstrapMsg '' 'Cyan'
+    Invoke-MastBootstrapElement -Id 'locale-en-us'
+    Write-BootstrapMsg '' 'Cyan'
+    Invoke-MastBootstrapElement -Id 'telemetry-privacy-harden'
+    Write-BootstrapMsg '' 'Cyan'
+    Invoke-MastBootstrapElement -Id 'service-trim'
+    Write-BootstrapMsg '' 'Cyan'
+    Invoke-MastBootstrapElement -Id 'dhcp-ipv4'
+    Write-BootstrapMsg '' 'Cyan'
+    Invoke-MastBootstrapElement -Id 'winrm-http-basic'
+    Write-BootstrapMsg '' 'Cyan'
+    Invoke-MastBootstrapElement -Id 'openssh-from-msi'
+    Write-BootstrapMsg '' 'Cyan'
+    Invoke-MastBootstrapElement -Id 'firewall-off'
     Write-BootstrapMsg '' 'Cyan'
     Write-BootstrapMsg '--- Npcap packet-capture driver ---' 'Cyan'
     $npcapSvc = Get-Service -Name 'npcap' -ErrorAction SilentlyContinue

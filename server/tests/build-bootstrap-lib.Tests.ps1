@@ -3,10 +3,14 @@
 #
 # The registry exists so tools/fleet-drift-report.py can tell an operator which
 # bootstrap elements a unit is missing. Nothing ever forced it to be well-formed,
-# and it drifted: three sections of bootstrap.ps1 had no element at all. These
-# tests cover the half of that a build can check today -- shape, uniqueness, the
-# reassert vocabulary, and the two version claims. Whether the registry COVERS
-# the script is unprovable until the elements are dispatchable (#143 stage 2).
+# and it drifted: three sections of bootstrap.ps1 had no element at all.
+#
+# Two halves are covered here. Test-MastBootstrapElementRegistry checks the
+# registry against itself -- shape, uniqueness, the reassert vocabulary, the two
+# version claims. Test-MastBootstrapDispatchCoverage checks it against the
+# SCRIPT, which only became possible once the re-assertable elements were
+# extracted into functions addressed by id (#143 stage 2): every routine and
+# on-demand element must be dispatchable, and nothing else may be.
 #
 # Run (Pester 3.x, Windows PowerShell 5.1):
 #   Invoke-Pester -Path server\tests\build-bootstrap-lib.Tests.ps1
@@ -130,6 +134,82 @@ Describe 'the real bootstrap element registry' {
             $e = @($registry.elements) | Where-Object { $_.id -eq $id }
             $e | Should Not BeNullOrEmpty
             [string]$e.reassert | Should Be 'on-demand'
+        }
+    }
+}
+
+Describe 'Test-MastBootstrapDispatchCoverage' {
+
+    function New-CoverageRegistry {
+        return [pscustomobject]@{ current_version = 1; elements = @(
+            [pscustomobject]@{ id = 'routine-one'; since = 1; description = 'x'; reassert = 'routine' },
+            [pscustomobject]@{ id = 'repair-one'; since = 1; description = 'x'; reassert = 'on-demand' },
+            [pscustomobject]@{ id = 'console-one'; since = 1; description = 'x'; reassert = 'console' },
+            [pscustomobject]@{ id = 'provider-one'; since = 1; description = 'x'; reassert = 'provider'; provider = 'timesync' }
+        ) }
+    }
+
+    It 'accepts a map covering exactly the re-assertable elements' {
+        $map = [ordered]@{ 'routine-one' = 'Invoke-A'; 'repair-one' = 'Invoke-B' }
+        @(Test-MastBootstrapDispatchCoverage -Registry (New-CoverageRegistry) -DispatchMap $map).Count | Should Be 0
+    }
+
+    It 'rejects a routine element the script cannot dispatch' {
+        # A re-assert run would silently skip it -- the failure this whole
+        # mechanism exists to make impossible.
+        $map = [ordered]@{ 'repair-one' = 'Invoke-B' }
+        (@(Test-MastBootstrapDispatchCoverage -Registry (New-CoverageRegistry) -DispatchMap $map) -join ' ') |
+            Should Match "does not dispatch it"
+    }
+
+    It 'rejects a console element being made dispatchable' {
+        # Reaching a first-touch element remotely is the failure mode the
+        # classification exists to prevent.
+        $map = [ordered]@{ 'routine-one' = 'Invoke-A'; 'repair-one' = 'Invoke-B'; 'console-one' = 'Invoke-C' }
+        (@(Test-MastBootstrapDispatchCoverage -Registry (New-CoverageRegistry) -DispatchMap $map) -join ' ') |
+            Should Match "only routine and on-demand elements may be dispatchable"
+    }
+
+    It 'rejects a provider-backed element being made dispatchable' {
+        $map = [ordered]@{ 'routine-one' = 'Invoke-A'; 'repair-one' = 'Invoke-B'; 'provider-one' = 'Invoke-D' }
+        (@(Test-MastBootstrapDispatchCoverage -Registry (New-CoverageRegistry) -DispatchMap $map) -join ' ') |
+            Should Match "only routine and on-demand elements may be dispatchable"
+    }
+
+    It 'rejects a dispatched id that is not an element at all' {
+        $map = [ordered]@{ 'routine-one' = 'Invoke-A'; 'repair-one' = 'Invoke-B'; 'ghost' = 'Invoke-E' }
+        (@(Test-MastBootstrapDispatchCoverage -Registry (New-CoverageRegistry) -DispatchMap $map) -join ' ') |
+            Should Match "not an element in the registry"
+    }
+
+    It 'rejects a map naming a function the script does not define' {
+        $map = [ordered]@{ 'routine-one' = 'Invoke-A'; 'repair-one' = 'Invoke-B' }
+        $text = "function Invoke-A {`n}`n"
+        (@(Test-MastBootstrapDispatchCoverage -Registry (New-CoverageRegistry) -DispatchMap $map -ScriptText $text) -join ' ') |
+            Should Match "which is not defined in bootstrap.ps1"
+    }
+}
+
+Describe 'the real dispatch map' {
+
+    It 'covers every re-assertable element and nothing else' {
+        $client = Join-Path $here '..\..\client'
+        $script = Join-Path $client 'bootstrap.ps1'
+        $registry = Get-MastBootstrapElementRegistry -Path (Join-Path $client 'bootstrap-elements.json')
+        $map = Get-MastBootstrapDispatchMap -BootstrapScript $script
+        $text = Get-Content -LiteralPath $script -Raw -Encoding UTF8
+        @(Test-MastBootstrapDispatchCoverage -Registry $registry -DispatchMap $map -ScriptText $text).Count | Should Be 0
+    }
+
+    It 'dispatches ten elements' {
+        $map = Get-MastBootstrapDispatchMap -BootstrapScript (Join-Path $here '..\..\client\bootstrap.ps1')
+        $map.Count | Should Be 10
+    }
+
+    It 'does not dispatch the console elements' {
+        $map = Get-MastBootstrapDispatchMap -BootstrapScript (Join-Path $here '..\..\client\bootstrap.ps1')
+        foreach ($id in @('mast-admin-account', 'auto-logon', 'computer-rename', 'npcap', 'hardware-preflight', 'bootstrap-media-handling')) {
+            $map.Contains($id) | Should Be $false
         }
     }
 }
