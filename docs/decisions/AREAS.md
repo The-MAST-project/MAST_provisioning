@@ -51,6 +51,14 @@ front. Expect it to be wrong in places and to shift.
 | `hardware startup` | When a device is powered, homed or moved, relative to when software starts -- process lifetime versus hardware lifetime, and who commands the transition |
 | `static analysis` | What is checked without running the code: lint, formatting, type checking, the PowerShell parse sweep -- rule selection, what is deferred, and whether the gate blocks |
 | `licensing` | Purchased entitlements and the files that carry them: which host holds which seat, where the authoritative copy lives, expiry and renewal |
+| `firmware` | Settings that live below the OS: BIOS/UEFI setup values, how they are read, what the fleet expects them to be, and who may change them |
+
+Added 2026-08-24 with the BIOS power-policy record. Distinct from `hardware startup`,
+which is about *when* a device is powered and homed relative to software: this is about a
+setting the machine holds in NVRAM, which provisioning can read and cannot write. Not
+`drift` either, though it is compared against a baseline -- `drift` covers
+installed-versus-expected for things provisioning itself installed, and the whole point
+here is that nothing in this repo can put the value right.
 
 Added 2026-08-24 with the NoMachine seat record. Not `reproducibility`: a pinned asset is
 about getting the same result twice, where this is about an entitlement that exists in

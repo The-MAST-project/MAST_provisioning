@@ -50,7 +50,9 @@ MAST_provisioning/
 |   `-- onboard-mast-unit.ps1         # Post-bootstrap onboarder: provision + register + handoff
 |-- server/
 |   |-- lib/mast-log.ps1              # Canonical log path definitions (unit + prov server)
+|   |-- lib/mast-firmware.ps1         # The only BIOS/UEFI reader: setup varstore + power-policy verdict
 |   |-- lib/provisioning.psm1         # Shared PS helpers
+|   |-- data/firmware-baseline.json   # Known-good BIOS setup per board + BIOS version (see Firmware baseline)
 |   |-- providers/<module>/...        # Per-module install logic + assets
 |   |-- prov/                         # The driver: orchestration, transport, drift, logging (Python)
 |   |-- check_and_provision.py        # Entry point -- one cycle, or --loop for the autonomous cadence
@@ -428,6 +430,63 @@ Exit code `0` = all units in sync, `2` = drift/missing/unreachable found, `1` = 
 This is the MVP of the "Version / Drift Detection" feature in
 `autonomous-provisioning-requirements.md`; it trusts the static installed-manifest (the
 computed/live manifest + tiered self-validation are the growth path).
+
+---
+
+## Firmware baseline (BIOS power policy)
+
+A unit must power itself back on when mains returns -- the DLI switch cuts and restores
+AC, and a unit set to stay off is absent from the fleet until somebody drives to the
+site. That setting is `Advanced -> APM Configuration -> Restore AC Power Loss = S0 State`
+in BIOS setup. **Provisioning can read it and cannot write it**, so this is always a
+manual fix; what the code does is make sure nobody finds out the hard way.
+
+`server/lib/mast-firmware.ps1` is the only reader. It takes the AMI setup varstore
+(the UEFI variable `Setup`, read with `SeSystemEnvironmentPrivilege`) and compares it
+against `server/data/firmware-baseline.json`, which records, per **baseboard product +
+BIOS version**, the known-good whole-blob hash and the byte offsets of the fields we
+have named. Two callers use it, both non-blocking:
+
+- **`client/bootstrap.ps1`**, at the console. A needs-attention result prints a red
+  banner and waits up to 120 s for the operator to press `y`, then continues on its own.
+  `-NonInteractive` never prompts. The result and whether a human acknowledged it are
+  stamped into `C:\MAST\bootstrap-manifest.json`.
+- **`verify-power-management.ps1`**, during a provisioning run. It logs `[WARN]` lines
+  and writes module facts; it never fails the module. The facts reach
+  `installed-manifest.json`, so `tools/fleet-drift-report.py` shows a **BIOS power
+  policy** section across the fleet.
+
+Statuses: `match`; `field-drift` (a named power field is wrong -- attention);
+`unknown-baseline` (no entry for this board and BIOS, or a varstore whose length the
+baseline does not describe -- attention, because unverified is not the same as good);
+`blob-drift` (the hash moved but every named field is right -- reported, no prompt);
+`unavailable` (no such variable: the dev VM, a legacy-BIOS box).
+
+### Re-baselining, and adding a board
+
+**A BIOS update or a new board model invalidates both the hash and every offset**, and
+new hardware reports `unknown-baseline` until it is added. Offsets are *measured*, never
+derived -- the ASUS setup-item catalog preserves order but not spacing, so counting it
+gives wrong answers. To add a board:
+
+1. At the console, confirm `Restore AC Power Loss` reads `S0 State` (and the APM wake
+   sources read `Disabled`). The baseline must be verified by eye, not assumed.
+2. On the unit, dump the varstore:
+   `. mast-firmware.ps1; $s = Get-MastFirmwareSetup; $s.Sha256; $s.Length; [Convert]::ToBase64String($s.Bytes)`
+3. To locate a field: dump, toggle **that one setting** in BIOS setup, save, reboot, dump
+   again, and diff. Exactly one byte moves; that is the offset, and the value in the
+   known-good dump is `expect`. Change one setting per pass or the diff is ambiguous.
+4. Add a `boards[]` entry with `baseboard_product`, `bios_version`, `setup_length`,
+   `setup_sha256`, `setup_base64`, `captured_from`, `captured_at`, `verified_by` and the
+   `fields`. `server/tests/mast-firmware.Tests.ps1` checks the entry is internally
+   consistent.
+5. **Re-cut the USB/ISO kit.** The reader and the baseline are staged onto the bootstrap
+   medium, so a kit cut before the change carries the old baseline and will report
+   `unknown-baseline` on hardware that is actually fine.
+
+Known offsets for `PE2100U-C7136ES` BIOS `1.03.00` (measured on mast08, 2026-08-24):
+`Restore AC Power Loss` = 3378 (expect 1), `Power On By PCIE/PCI` = 3380 (expect 0),
+`Power On By Ring` = 3381 (expect 0).
 
 ---
 

@@ -1,12 +1,16 @@
 {
   "name": "power-management",
   "version": "1.0",
-  "description": "Keep the unit awake and reachable: disable system sleep/standby/hibernate (powercfg) and, on the onboard Intel I225/I226 NIC, disable power management (allow computer to turn off device, selective suspend) and Wake-on-LAN.",
+  "description": "Keep the unit awake and reachable: disable system sleep/standby/hibernate (powercfg) and, on the onboard Intel I225/I226 NIC, disable power management (allow computer to turn off device, selective suspend) and Wake-on-LAN. Verify also reports the BIOS power policy, which provisioning can read but not write.",
   "order": 2300,
   "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-power-management.ps1\"",
   "commandfiles": [
     "provide-power-management.ps1",
     "verify-power-management.ps1"
   ],
-  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\verify-power-management.ps1\""
+  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\verify-power-management.ps1\"",
+  "repofiles": [
+    "server/lib/mast-firmware.ps1",
+    "server/data/firmware-baseline.json"
+  ]
 }
