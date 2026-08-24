@@ -12,10 +12,17 @@
 # automatic-DST assertion, so a unit missing it could not be reported as missing
 # it.
 #
-# These checks are the half of that problem the build can see today. Whether the
-# registry covers every section of the script cannot be checked until the
-# elements are individually dispatchable -- that guard belongs with the
-# extraction that makes it expressible, not here.
+# Two halves are checked here. Test-MastBootstrapElementRegistry holds the
+# registry to itself; Test-MastBootstrapDispatchCoverage holds it to the SCRIPT,
+# which became expressible once the re-assertable elements were extracted into
+# functions addressed by id. The second also guards the classification bootstrap
+# EMBEDS: it runs offline from removable media and cannot read the registry, so
+# it carries a copy, and a copy that drifts silently is worse than no copy --
+# a console element mislabelled 'routine' would be re-asserted remotely.
+#
+# Still not checked: whether the registry covers every SECTION of the script.
+# The console elements remain inline, so nothing forces a new one to be
+# registered. That needs a different mechanism than id correspondence.
 
 # The four values of an element's 'reassert' field. Says whether the element may
 # be run again on an ALREADY-PROVISIONED unit -- the question a remote
@@ -184,8 +191,9 @@ function Get-MastBootstrapDispatchMap {
         throw ("Cannot find a '`$script:MastBootstrapElementActions = [ordered]@{...}' map in {0}." -f $BootstrapScript)
     }
     $map = [ordered]@{}
-    foreach ($m in [regex]::Matches($block.Groups[1].Value, "'([\w-]+)'\s*=\s*'([\w-]+)'")) {
-        $map[$m.Groups[1].Value] = $m.Groups[2].Value
+    $rx = "'([\w-]+)'\s*=\s*@\{\s*Kind\s*=\s*'([\w-]+)'\s*;\s*Function\s*=\s*'([\w-]+)'\s*\}"
+    foreach ($m in [regex]::Matches($block.Groups[1].Value, $rx)) {
+        $map[$m.Groups[1].Value] = @{ Kind = $m.Groups[2].Value; Function = $m.Groups[3].Value }
     }
     return $map
 }
@@ -238,8 +246,19 @@ function Test-MastBootstrapDispatchCoverage {
                 $problems += ("bootstrap.ps1 dispatches '{0}', but the registry marks it reassert='{1}'; only routine and on-demand elements may be dispatchable" -f $id, [string]$known[0].reassert)
             }
         }
+        # The embedded Kind is a COPY of the registry's classification -- bootstrap
+        # runs offline and cannot read the registry, the same constraint
+        # $knownSites has. A copy that can drift silently is worse than no copy:
+        # a console element mis-labelled 'routine' here would be re-asserted
+        # remotely, which is the one thing the classification forbids.
+        if ($reassertable.ContainsKey($id)) {
+            $embeddedKind = [string]$DispatchMap[$id].Kind
+            if ($embeddedKind -ne $reassertable[$id]) {
+                $problems += ("element '{0}' is reassert='{1}' in the registry but Kind='{2}' in bootstrap.ps1" -f $id, $reassertable[$id], $embeddedKind)
+            }
+        }
         if ($ScriptText) {
-            $fn = [string]$DispatchMap[$id]
+            $fn = [string]$DispatchMap[$id].Function
             if ($ScriptText -notmatch ('(?m)^function\s+' + [regex]::Escape($fn) + '\s*\{')) {
                 $problems += ("element '{0}' maps to function '{1}', which is not defined in bootstrap.ps1" -f $id, $fn)
             }

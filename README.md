@@ -447,6 +447,27 @@ main flow through `Invoke-MastBootstrapElement -Id <id>`. `console` and `provide
 elements deliberately are **not** — reaching a first-touch element remotely is the
 failure the classification exists to prevent.
 
+### Re-asserting an already-provisioned unit
+
+```powershell
+.\bootstrap.ps1 -ReassertOnly                              # every 'routine' element
+.\bootstrap.ps1 -ReassertOnly -Elements locale-en-us,service-trim
+.\bootstrap.ps1 -ReassertOnly -Elements openssh-from-msi   # repair, named explicitly
+```
+
+No prompts, no reboot, and none of bootstrap's first-touch work — no hardware preflight,
+account, autologon, rename, Npcap or media handling. The default set is every `routine`
+element; an `on-demand` element runs **only** when named, which is what keeps the two
+transport elements out of a routine convergence pass. Naming a `console` or `provider`
+element, or an unknown id, **refuses the whole run** (exit 1, nothing applied) rather
+than skipping it quietly — a silent skip would let you believe an element you explicitly
+asked for had been applied.
+
+It records a `reassert` block in `C:\MAST\bootstrap-manifest.json` and **deliberately
+does not touch `bootstrap_version`**: a re-assert applies the routine elements and by
+construction not the console ones, so the unit is not at the current bootstrap version
+afterwards, and the drift report must go on saying so.
+
 `build-mast.ps1` fails the build if the registry is malformed, if an element omits or
 mis-spells `reassert`, if a `provider`-backed element names a provider that does not
 exist, if `current_version` disagrees with either the newest `since:` or

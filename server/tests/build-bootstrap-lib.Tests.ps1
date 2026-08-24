@@ -150,14 +150,14 @@ Describe 'Test-MastBootstrapDispatchCoverage' {
     }
 
     It 'accepts a map covering exactly the re-assertable elements' {
-        $map = [ordered]@{ 'routine-one' = 'Invoke-A'; 'repair-one' = 'Invoke-B' }
+        $map = [ordered]@{ 'routine-one' = @{ Kind = 'routine'; Function = 'Invoke-A' }; 'repair-one' = @{ Kind = 'on-demand'; Function = 'Invoke-B' } }
         @(Test-MastBootstrapDispatchCoverage -Registry (New-CoverageRegistry) -DispatchMap $map).Count | Should Be 0
     }
 
     It 'rejects a routine element the script cannot dispatch' {
         # A re-assert run would silently skip it -- the failure this whole
         # mechanism exists to make impossible.
-        $map = [ordered]@{ 'repair-one' = 'Invoke-B' }
+        $map = [ordered]@{ 'repair-one' = @{ Kind = 'on-demand'; Function = 'Invoke-B' } }
         (@(Test-MastBootstrapDispatchCoverage -Registry (New-CoverageRegistry) -DispatchMap $map) -join ' ') |
             Should Match "does not dispatch it"
     }
@@ -165,25 +165,34 @@ Describe 'Test-MastBootstrapDispatchCoverage' {
     It 'rejects a console element being made dispatchable' {
         # Reaching a first-touch element remotely is the failure mode the
         # classification exists to prevent.
-        $map = [ordered]@{ 'routine-one' = 'Invoke-A'; 'repair-one' = 'Invoke-B'; 'console-one' = 'Invoke-C' }
+        $map = [ordered]@{ 'routine-one' = 'Invoke-A'; 'repair-one' = 'Invoke-B'; 'console-one' = @{ Kind = 'console'; Function = 'Invoke-C' } }
         (@(Test-MastBootstrapDispatchCoverage -Registry (New-CoverageRegistry) -DispatchMap $map) -join ' ') |
             Should Match "only routine and on-demand elements may be dispatchable"
     }
 
     It 'rejects a provider-backed element being made dispatchable' {
-        $map = [ordered]@{ 'routine-one' = 'Invoke-A'; 'repair-one' = 'Invoke-B'; 'provider-one' = 'Invoke-D' }
+        $map = [ordered]@{ 'routine-one' = 'Invoke-A'; 'repair-one' = 'Invoke-B'; 'provider-one' = @{ Kind = 'provider'; Function = 'Invoke-D' } }
         (@(Test-MastBootstrapDispatchCoverage -Registry (New-CoverageRegistry) -DispatchMap $map) -join ' ') |
             Should Match "only routine and on-demand elements may be dispatchable"
     }
 
     It 'rejects a dispatched id that is not an element at all' {
-        $map = [ordered]@{ 'routine-one' = 'Invoke-A'; 'repair-one' = 'Invoke-B'; 'ghost' = 'Invoke-E' }
+        $map = [ordered]@{ 'routine-one' = 'Invoke-A'; 'repair-one' = 'Invoke-B'; 'ghost' = @{ Kind = 'routine'; Function = 'Invoke-E' } }
         (@(Test-MastBootstrapDispatchCoverage -Registry (New-CoverageRegistry) -DispatchMap $map) -join ' ') |
             Should Match "not an element in the registry"
     }
 
+    It 'rejects an embedded Kind that disagrees with the registry' {
+        # bootstrap embeds the classification because it runs offline and cannot
+        # read the registry. A console element mislabelled 'routine' in that copy
+        # would be re-asserted remotely -- the one thing the split forbids.
+        $map = [ordered]@{ 'routine-one' = @{ Kind = 'on-demand'; Function = 'Invoke-A' }; 'repair-one' = @{ Kind = 'on-demand'; Function = 'Invoke-B' } }
+        (@(Test-MastBootstrapDispatchCoverage -Registry (New-CoverageRegistry) -DispatchMap $map) -join ' ') |
+            Should Match "Kind='on-demand' in bootstrap.ps1"
+    }
+
     It 'rejects a map naming a function the script does not define' {
-        $map = [ordered]@{ 'routine-one' = 'Invoke-A'; 'repair-one' = 'Invoke-B' }
+        $map = [ordered]@{ 'routine-one' = @{ Kind = 'routine'; Function = 'Invoke-A' }; 'repair-one' = @{ Kind = 'on-demand'; Function = 'Invoke-B' } }
         $text = "function Invoke-A {`n}`n"
         (@(Test-MastBootstrapDispatchCoverage -Registry (New-CoverageRegistry) -DispatchMap $map -ScriptText $text) -join ' ') |
             Should Match "which is not defined in bootstrap.ps1"
@@ -204,6 +213,16 @@ Describe 'the real dispatch map' {
     It 'dispatches ten elements' {
         $map = Get-MastBootstrapDispatchMap -BootstrapScript (Join-Path $here '..\..\client\bootstrap.ps1')
         $map.Count | Should Be 10
+    }
+
+    It 'embeds a Kind matching the registry for every dispatched element' {
+        $client = Join-Path $here '..\..\client'
+        $registry = Get-MastBootstrapElementRegistry -Path (Join-Path $client 'bootstrap-elements.json')
+        $map = Get-MastBootstrapDispatchMap -BootstrapScript (Join-Path $client 'bootstrap.ps1')
+        foreach ($id in $map.Keys) {
+            $e = @($registry.elements) | Where-Object { $_.id -eq $id }
+            [string]$map[$id].Kind | Should Be ([string]$e.reassert)
+        }
     }
 
     It 'does not dispatch the console elements' {
