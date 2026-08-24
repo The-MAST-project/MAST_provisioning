@@ -138,7 +138,16 @@ param(
     [switch]$SkipComputerRename,
     [switch]$VmTestRun,
     [switch]$SkipAutoLogon,
-    [string[]]$SkipTrim = @()
+    [string[]]$SkipTrim = @(),
+    # Re-assert already-provisioned units instead of bootstrapping a bare one.
+    # Runs ONLY the elements the registry marks re-assertable, never prompts and
+    # never reboots, so provisioning can converge the fleet without a USB stick
+    # and without a person at the console (#143).
+    [switch]$ReassertOnly,
+    # Comma-separated element ids. Default (empty) is every 'routine' element.
+    # An 'on-demand' element runs only when named here -- notably the two that
+    # re-assert the transport the run may be travelling over.
+    [string]$Elements = ''
 )
 
 Set-StrictMode -Version Latest
@@ -1544,17 +1553,23 @@ function Invoke-MastBootstrapElementFirewallOff {
     # See DECISIONS.md 2026-05-27.
 }
 
+# Each entry carries the element's reassert KIND as well as its function.
+# bootstrap runs offline from removable media and cannot read
+# client/bootstrap-elements.json, so it embeds the classification -- the same
+# constraint $knownSites and $script:RequiredMemoryGB have, resolved the same
+# way: build-mast.ps1 fails the build if the embedded kind and the registry
+# disagree. Only 'routine' and 'on-demand' can appear here at all.
 $script:MastBootstrapElementActions = [ordered]@{
-    'timezone-israel-dst' = 'Invoke-MastBootstrapElementTimezoneIsraelDst'
-    'windows-update-suppress' = 'Invoke-MastBootstrapElementWindowsUpdateSuppress'
-    'popup-notification-suppress' = 'Invoke-MastBootstrapElementPopupNotificationSuppress'
-    'locale-en-us' = 'Invoke-MastBootstrapElementLocaleEnUs'
-    'telemetry-privacy-harden' = 'Invoke-MastBootstrapElementTelemetryPrivacyHarden'
-    'service-trim' = 'Invoke-MastBootstrapElementServiceTrim'
-    'dhcp-ipv4' = 'Invoke-MastBootstrapElementDhcpIpv4'
-    'winrm-http-basic' = 'Invoke-MastBootstrapElementWinrmHttpBasic'
-    'openssh-from-msi' = 'Invoke-MastBootstrapElementOpensshFromMsi'
-    'firewall-off' = 'Invoke-MastBootstrapElementFirewallOff'
+    'timezone-israel-dst' = @{ Kind = 'routine'; Function = 'Invoke-MastBootstrapElementTimezoneIsraelDst' }
+    'windows-update-suppress' = @{ Kind = 'routine'; Function = 'Invoke-MastBootstrapElementWindowsUpdateSuppress' }
+    'popup-notification-suppress' = @{ Kind = 'routine'; Function = 'Invoke-MastBootstrapElementPopupNotificationSuppress' }
+    'locale-en-us' = @{ Kind = 'routine'; Function = 'Invoke-MastBootstrapElementLocaleEnUs' }
+    'telemetry-privacy-harden' = @{ Kind = 'routine'; Function = 'Invoke-MastBootstrapElementTelemetryPrivacyHarden' }
+    'service-trim' = @{ Kind = 'routine'; Function = 'Invoke-MastBootstrapElementServiceTrim' }
+    'dhcp-ipv4' = @{ Kind = 'routine'; Function = 'Invoke-MastBootstrapElementDhcpIpv4' }
+    'winrm-http-basic' = @{ Kind = 'on-demand'; Function = 'Invoke-MastBootstrapElementWinrmHttpBasic' }
+    'openssh-from-msi' = @{ Kind = 'on-demand'; Function = 'Invoke-MastBootstrapElementOpensshFromMsi' }
+    'firewall-off' = @{ Kind = 'routine'; Function = 'Invoke-MastBootstrapElementFirewallOff' }
 }
 
 function Invoke-MastBootstrapElement {
@@ -1563,7 +1578,146 @@ function Invoke-MastBootstrapElement {
     if (-not $script:MastBootstrapElementActions.Contains($Id)) {
         throw ("unknown bootstrap element '{0}'" -f $Id)
     }
-    & $script:MastBootstrapElementActions[$Id]
+    & $script:MastBootstrapElementActions[$Id].Function
+}
+
+function Get-MastReassertSelection {
+    <#
+    .SYNOPSIS
+      Which elements a -ReassertOnly run should apply, or the reason it cannot.
+    .DESCRIPTION
+      Pure decision, separated from the running so it is testable. Returns an
+      object with Ids and Problems; a non-empty Problems means run nothing.
+
+      An unrunnable request is an ERROR, never a silent skip. Asking for a
+      console element and getting a quiet no-op would let an operator believe a
+      unit had been brought up to date when the very element they named was the
+      one that did not run.
+    #>
+    [CmdletBinding()]
+    param([string]$Requested = '')
+
+    $problems = @()
+    $ids = @()
+    $known = $script:MastBootstrapElementActions
+
+    if ([string]::IsNullOrWhiteSpace($Requested)) {
+        foreach ($k in $known.Keys) {
+            if ($known[$k].Kind -eq 'routine') { $ids += $k }
+        }
+        return [pscustomobject]@{ Ids = $ids; Problems = $problems }
+    }
+
+    foreach ($raw in ($Requested -split ',')) {
+        $id = $raw.Trim()
+        if (-not $id) { continue }
+        if (-not $known.Contains($id)) {
+            $problems += ("'{0}' is not a re-assertable element. Re-assertable: {1}" -f $id, (($known.Keys) -join ', '))
+            continue
+        }
+        if ($ids -contains $id) { continue }
+        $ids += $id
+    }
+    return [pscustomobject]@{ Ids = $ids; Problems = $problems }
+}
+
+function Invoke-MastBootstrapReassert {
+    <#
+    .SYNOPSIS
+      Re-apply the re-assertable elements on an already-provisioned unit.
+    .DESCRIPTION
+      Deliberately does NOT do any of bootstrap's first-touch work: no hardware
+      preflight (it throws by design, and asserts a FREE D: that a provisioned
+      unit has legitimately filled with the index volume), no prompts, no
+      account or autologon, no rename, no Npcap, no reboot, no media handling.
+
+      It also does not stamp bootstrap_version. A re-assert applies the routine
+      elements and by construction not the console ones, so the unit is NOT at
+      the current bootstrap version afterwards -- claiming otherwise would tell
+      the drift report a unit is current while console elements are still
+      missing. It records what it did, next to whatever version is already
+      stamped, and leaves that version alone.
+    #>
+    [CmdletBinding()]
+    param([string]$Requested = '')
+
+    Write-BootstrapBanner '======================================================================' 'Cyan'
+    Write-BootstrapBanner ' MAST bootstrap -- RE-ASSERT ONLY (no first-touch work, no reboot)' 'Cyan'
+    Write-BootstrapBanner '======================================================================' 'Cyan'
+
+    $selection = Get-MastReassertSelection -Requested $Requested
+    if (@($selection.Problems).Count -gt 0) {
+        foreach ($p in $selection.Problems) { Write-BootstrapMsg ("  [FAIL] {0}" -f $p) 'Red' }
+        throw 'Nothing was run: the requested element list is not re-assertable.'
+    }
+    if (@($selection.Ids).Count -eq 0) {
+        Write-BootstrapMsg '  Nothing selected; nothing to do.' 'Yellow'
+        return 0
+    }
+
+    Write-BootstrapMsg ("  Applying {0} element(s): {1}" -f @($selection.Ids).Count, ($selection.Ids -join ', ')) 'White'
+    $applied = @()
+    $failed = @()
+    foreach ($id in $selection.Ids) {
+        $kind = $script:MastBootstrapElementActions[$id].Kind
+        Write-BootstrapMsg '' 'Cyan'
+        Write-BootstrapMsg ("=== {0} ({1}) ===" -f $id, $kind) 'Cyan'
+        try {
+            Invoke-MastBootstrapElement -Id $id
+            $applied += $id
+        } catch {
+            # One element failing must not abandon the rest -- but the run must
+            # not report success either.
+            $failed += $id
+            Write-BootstrapMsg ("  [FAIL] {0}: {1}" -f $id, $_.Exception.Message) 'Red'
+        }
+    }
+
+    Write-MastReassertRecord -Applied $applied -Failed $failed -Requested $selection.Ids
+
+    Write-BootstrapMsg '' 'Cyan'
+    Write-BootstrapMsg '--- Re-assert summary ---' 'Cyan'
+    Write-BootstrapMsg ("  applied: {0}" -f $(if ($applied.Count) { $applied -join ', ' } else { '(none)' })) 'White'
+    if ($failed.Count -gt 0) {
+        Write-BootstrapMsg ("  FAILED : {0}" -f ($failed -join ', ')) 'Red'
+        Write-BootstrapBanner '[FAIL] Re-assert completed with failures.' 'Red'
+        return 1
+    }
+    Write-BootstrapBanner '[OK] Re-assert complete.' 'Green'
+    return 0
+}
+
+function Write-MastReassertRecord {
+    # Merge a 'reassert' block into bootstrap-manifest.json WITHOUT touching
+    # bootstrap_version: see Invoke-MastBootstrapReassert. On a unit that has no
+    # manifest at all (provisioned before stamping existed) the version stays
+    # null rather than being invented.
+    param([string[]]$Applied, [string[]]$Failed, [string[]]$Requested)
+
+    try {
+        $dir = Join-Path $env:SystemDrive 'MAST'
+        if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+        $path = Join-Path $dir 'bootstrap-manifest.json'
+        $doc = [ordered]@{}
+        if (Test-Path -LiteralPath $path) {
+            $existing = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+            foreach ($prop in $existing.PSObject.Properties) {
+                if ($prop.Name -ne 'reassert') { $doc[$prop.Name] = $prop.Value }
+            }
+        }
+        if (-not $doc.Contains('bootstrap_version')) { $doc['bootstrap_version'] = $null }
+        $doc['reassert'] = [ordered]@{
+            at             = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+            script_version = $script:BootstrapVersion
+            requested      = @($Requested)
+            applied        = @($Applied)
+            failed         = @($Failed)
+        }
+        ($doc | ConvertTo-Json -Depth 5) | Set-Content -LiteralPath $path -Encoding UTF8
+        Write-BootstrapMsg ("  Recorded the re-assert in {0} (bootstrap_version left as-is)." -f $path) 'White'
+    } catch {
+        Write-BootstrapMsg ("  [WARN] could not record the re-assert: {0}" -f $_.Exception.Message) 'Yellow'
+    }
 }
 
 $exitCode = 0
@@ -1572,6 +1726,13 @@ try {
     Write-BootstrapBanner ' MAST bootstrap.ps1 (manual first-time setup)' 'Cyan'
     Write-BootstrapBanner '======================================================================' 'Cyan'
     Write-BootstrapMsg ("Log file (append): {0}" -f $script:BootstrapLog) 'DarkGray'
+
+    if ($ReassertOnly) {
+        # Converge an already-provisioned unit. Returns rather than falling
+        # through: everything below this point is first-touch work.
+        $script:exitCode = Invoke-MastBootstrapReassert -Requested $Elements
+        exit $script:exitCode
+    }
 
     # First, ahead of the prompts: a machine that fails this must be left untouched.
     Assert-MastUnitHardware -IsVmTestRun:$VmTestRun
@@ -1952,11 +2113,15 @@ try {
 catch {
     $exitCode = 1
     Write-BootstrapMsg '' 'Red'
-    Write-BootstrapBanner '[FAIL] MAST bootstrap did not complete.' 'Red'
+    Write-BootstrapBanner $(if ($ReassertOnly) { '[FAIL] MAST re-assert did not complete.' } else { '[FAIL] MAST bootstrap did not complete.' }) 'Red'
     Write-BootstrapMsg $_.Exception.Message 'Red'
     Write-BootstrapMsg ('At line: {0}' -f $_.InvocationInfo.PositionMessage) 'DarkRed'
     Write-BootstrapMsg '' 'Yellow'
-    Write-BootstrapMsg 'If the error mentions Public network or AllowUnencrypted, fix profiles (see log) and re-run.' 'Yellow'
+    # The WinRM hint belongs to first touch, where a Public profile is the usual
+    # cause. In a re-assert it is noise pointing at the wrong thing.
+    if (-not $ReassertOnly) {
+        Write-BootstrapMsg 'If the error mentions Public network or AllowUnencrypted, fix profiles (see log) and re-run.' 'Yellow'
+    }
     Write-BootstrapMsg ("Full log: {0}" -f $script:BootstrapLog) 'Yellow'
 }
 
