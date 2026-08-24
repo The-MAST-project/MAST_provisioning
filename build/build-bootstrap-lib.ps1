@@ -164,6 +164,90 @@ function Get-MastProviderNames {
     )
 }
 
+function Get-MastBootstrapDispatchMap {
+    <#
+    .SYNOPSIS
+      The id -> function map bootstrap.ps1 declares, as an ordered hashtable.
+    .DESCRIPTION
+      Parsed, not dot-sourced: bootstrap.ps1 is admin-only and has side effects,
+      the same reason the site-list and memory-figure guards parse.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$BootstrapScript)
+
+    if (-not (Test-Path -LiteralPath $BootstrapScript)) {
+        throw ("Cannot read the element dispatch map: script not found at {0}" -f $BootstrapScript)
+    }
+    $text = Get-Content -LiteralPath $BootstrapScript -Raw -Encoding UTF8
+    $block = [regex]::Match($text, '\$script:MastBootstrapElementActions\s*=\s*\[ordered\]@\{(.*?)^\}', 'Singleline,Multiline')
+    if (-not $block.Success) {
+        throw ("Cannot find a '`$script:MastBootstrapElementActions = [ordered]@{...}' map in {0}." -f $BootstrapScript)
+    }
+    $map = [ordered]@{}
+    foreach ($m in [regex]::Matches($block.Groups[1].Value, "'([\w-]+)'\s*=\s*'([\w-]+)'")) {
+        $map[$m.Groups[1].Value] = $m.Groups[2].Value
+    }
+    return $map
+}
+
+function Test-MastBootstrapDispatchCoverage {
+    <#
+    .SYNOPSIS
+      Every problem with the registry-to-script correspondence. Empty = valid.
+    .DESCRIPTION
+      THE CHECK THE REGISTRY NEVER HAD. Its 'id' was a label the drift report
+      printed, matched against nothing in bootstrap.ps1, so the registry could
+      silently stop describing the script -- and did, for three elements.
+      Now that the re-assertable elements are functions addressed by id, the two
+      can be held to each other.
+
+      Scope is exactly the re-assertable set: an element marked 'routine' or
+      'on-demand' MUST be dispatchable, because a re-assert run has to be able to
+      call it. 'console' and 'provider' elements must NOT be, because nothing may
+      invoke them that way -- a console element reached remotely is the failure
+      this design exists to prevent.
+    .PARAMETER ScriptText
+      The full text of bootstrap.ps1, for confirming each mapped function exists.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$Registry,
+        [Parameter(Mandatory)]$DispatchMap,
+        [string]$ScriptText = ''
+    )
+
+    $problems = @()
+    $reassertable = @{}
+    foreach ($e in @($Registry.elements)) {
+        $kind = [string]$e.reassert
+        if ($kind -eq 'routine' -or $kind -eq 'on-demand') { $reassertable[[string]$e.id] = $kind }
+    }
+
+    foreach ($id in $reassertable.Keys) {
+        if (-not $DispatchMap.Contains($id)) {
+            $problems += ("element '{0}' is reassert='{1}' but bootstrap.ps1 does not dispatch it; a re-assert run could not call it" -f $id, $reassertable[$id])
+        }
+    }
+    foreach ($id in $DispatchMap.Keys) {
+        if (-not $reassertable.ContainsKey($id)) {
+            $known = @(@($Registry.elements) | Where-Object { [string]$_.id -eq $id })
+            if ($known.Count -eq 0) {
+                $problems += ("bootstrap.ps1 dispatches '{0}', which is not an element in the registry" -f $id)
+            }
+            else {
+                $problems += ("bootstrap.ps1 dispatches '{0}', but the registry marks it reassert='{1}'; only routine and on-demand elements may be dispatchable" -f $id, [string]$known[0].reassert)
+            }
+        }
+        if ($ScriptText) {
+            $fn = [string]$DispatchMap[$id]
+            if ($ScriptText -notmatch ('(?m)^function\s+' + [regex]::Escape($fn) + '\s*\{')) {
+                $problems += ("element '{0}' maps to function '{1}', which is not defined in bootstrap.ps1" -f $id, $fn)
+            }
+        }
+    }
+    return $problems
+}
+
 function Assert-MastBootstrapElementRegistry {
     <#
     .SYNOPSIS
@@ -186,11 +270,19 @@ function Assert-MastBootstrapElementRegistry {
         throw ("{0} is invalid: {1}" -f $registryPath, ($problems -join '; '))
     }
 
+    $dispatch = Get-MastBootstrapDispatchMap -BootstrapScript $bootstrapScript
+    $scriptText = Get-Content -LiteralPath $bootstrapScript -Raw -Encoding UTF8
+    $coverage = @(Test-MastBootstrapDispatchCoverage -Registry $registry -DispatchMap $dispatch -ScriptText $scriptText)
+    if ($coverage.Count -gt 0) {
+        throw ("{0} and {1} disagree: {2}" -f $registryPath, $bootstrapScript, ($coverage -join '; '))
+    }
+
     $counts = @{}
     foreach ($k in $script:MastReassertKinds) {
         $counts[$k] = @(@($registry.elements) | Where-Object { [string]$_.reassert -eq $k }).Count
     }
-    Write-Host ('[build-mast] Bootstrap element registry valid: {0} elements at version {1} ({2}).' -f `
+    Write-Host ('[build-mast] Bootstrap element registry valid: {0} elements at version {1} ({2}); {3} dispatchable.' -f `
         @($registry.elements).Count, $embedded,
-        (($script:MastReassertKinds | ForEach-Object { "$_=$($counts[$_])" }) -join ' '))
+        (($script:MastReassertKinds | ForEach-Object { "$_=$($counts[$_])" }) -join ' '),
+        $dispatch.Count)
 }
