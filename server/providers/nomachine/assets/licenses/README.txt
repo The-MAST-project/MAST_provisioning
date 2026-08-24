@@ -53,8 +53,20 @@ mastw is UNLICENSED ON PURPOSE, and this is meant to be temporary:
   - mastw is expected to join the fleet under a MASTxx unit name, at which
     point it takes a seat through allocated.csv like any production unit.
 
-Reinstating it is a rename away -- its released certificate is kept beside
-server.lic on the machine itself.
+mastw therefore no longer runs Enterprise Desktop at all. An unlicensed
+Enterprise Desktop does not degrade -- it refuses connections outright
+(`NX> 630 ERROR: No subscription found on this server`) -- so on 2026-08-24
+mastw was moved to the FREE NoMachine product (8.11.3, from the same share),
+which needs no certificate and reports `Subscription id: None, period:
+Unlimited`. Remote access works again.
+
+Reinstating a seat on mastw therefore means reinstalling Enterprise Desktop
+and giving it a certificate from the share, not just dropping a file in.
+Its released Enterprise certificate was preserved at
+C:\MAST\tmp\nomachine-etc-backup-20260824 on the machine, but that copy is an
+audit trail only -- it is LI06X02774, which is mast00's live subscription, so
+do NOT reinstate from it. Take a free row from allocated.csv and the matching
+file from the share.
 
 Owed
 ----
