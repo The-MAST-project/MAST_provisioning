@@ -265,6 +265,30 @@ Scripts that need to run standalone (e.g. bootstrap on a USB drive) must use the
 variant (no `throw`) and keep a local fallback only for functions the lib may not be present
 to supply.
 
+### A bootstrap element that needs an interactive session is `console`
+
+`client/bootstrap-elements.json` classifies every element with `reassert:`, and the
+`bootstrap-reassert` provider runs the `routine` ones on **every provisioning cycle** --
+over SSH or WinRM, which is **Session 0**. So the classification is not bookkeeping: it
+decides whether an element is ever executed without an interactive session.
+
+If an element needs a console -- an interactive user, a loaded user profile, a UI, or a
+COM server registered `RunAs = Interactive User` -- it must be `reassert: console`, and it
+must NOT appear in `$script:MastBootstrapElementActions`. `build-mast.ps1` fails the build
+if the registry and that map disagree.
+
+**Why this is a rule and not advice.** `locale-en-us` was correct for years: its
+`Set-WinHomeLocation` activates `CDPComActivityStore` (`RunAs = Interactive User`), and
+bootstrap always ran at a console, where the call costs 0 s. Classifying it `routine` put
+it in Session 0 for the first time, where the activation waits out a **600 s** timeout,
+logs DCOM 10016, and then **succeeds anyway** -- ten minutes per cycle per unit, with
+nothing reporting a failure because there was none. See
+`docs/decisions/2026-08-25-locale-en-us-is-console-only-until-its-session-0-stall-is-fixed.md`
+and MAST_provisioning#148.
+
+The failure mode to watch for is not a crash. It is an element that **quietly does less**,
+or the same thing much more slowly, when it does not get the session it assumed.
+
 ### Python shared helpers (`server/prov/transport.py`)
 
 The WinRM/SSH transport is the canonical `server/prov/transport.py` (lifted out of
