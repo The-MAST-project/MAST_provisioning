@@ -143,3 +143,110 @@ Describe 'the real assets directory' {
         { Assert-MastNoLicensesInAssets -AssetsLicenseDir $d } | Should Not Throw
     }
 }
+
+
+Describe 'Format-MastLicenseStoreSummary' {
+
+    function Row {
+        param($Name, $Expiry, $State, $Days, $HostName = '(unallocated)')
+        [pscustomobject]@{ Name = $Name; Subscription = 'LI0X'; RawExpiry = $Expiry; State = $State; DaysLeft = $Days; Host = $HostName }
+    }
+
+    It 'collapses seats sharing one expiry into a single line' {
+        # Every seat the fleet owns expires on the same day. Ten identical
+        # warnings is the worst way to say one renewal is due.
+        $rows = 1..10 | ForEach-Object { Row "server-$_.lic" 'Thu Jul 01 15:47:19 CEST 2027' 'expiring' 47 "mast0$_" }
+        $r = Format-MastLicenseStoreSummary -Report $rows
+        @($r.Lines).Count | Should Be 1
+        $r.Lines[0] | Should Match '^10 seat\(s\) expire'
+        $r.Worst | Should Be 'expiring'
+    }
+
+    It 'keeps distinct expiry dates on separate lines' {
+        $rows = @(
+            (Row 'server-01.lic' 'Thu Jul 01 15:47:19 CEST 2027' 'ok' 310),
+            (Row 'server-02.lic' 'Wed Oct 01 12:00:00 CEST 2026' 'expiring' 37)
+        )
+        @((Format-MastLicenseStoreSummary -Report $rows).Lines).Count | Should Be 2
+    }
+
+    It 'sorts the most urgent group first' {
+        $rows = @(
+            (Row 'server-01.lic' 'Thu Jul 01 15:47:19 CEST 2027' 'ok' 310),
+            (Row 'server-02.lic' 'Wed Oct 01 12:00:00 CEST 2026' 'expiring' 37)
+        )
+        (Format-MastLicenseStoreSummary -Report $rows).Lines[0] | Should Match 'expire'
+    }
+
+    It 'reports the worst state across the whole store' {
+        $rows = @(
+            (Row 'server-01.lic' 'Thu Jul 01 15:47:19 CEST 2027' 'ok' 310),
+            (Row 'server-02.lic' 'Wed Jul 01 14:35:25 CEST 2026' 'expired' -55)
+        )
+        (Format-MastLicenseStoreSummary -Report $rows).Worst | Should Be 'expired'
+    }
+
+    It 'names the hosts affected, so the line is actionable' {
+        $rows = @((Row 'server-05.lic' 'Wed Oct 01 12:00:00 CEST 2026' 'expiring' 37 'mast-ns-spec'))
+        (Format-MastLicenseStoreSummary -Report $rows).Lines[0] | Should Match 'mast-ns-spec'
+    }
+
+    It 'says so plainly when the store is empty' {
+        (Format-MastLicenseStoreSummary -Report @()).Worst | Should Be 'none'
+    }
+}
+
+Describe 'Get-MastLicenseStoreReport' {
+
+    function New-Store {
+        param([hashtable]$Files)
+        $d = Join-Path $env:TEMP ("mast-store-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
+        New-Item -ItemType Directory -Path $d -Force | Out-Null
+        foreach ($n in $Files.Keys) {
+            @('----- Begin subscription data -----', "Subscription Id:       LI-$n", "Expiry:                $($Files[$n])") |
+                Set-Content -LiteralPath (Join-Path $d $n) -Encoding ASCII
+        }
+        return $d
+    }
+
+    It 'covers a seat whose host no build ever runs for' {
+        # mast-ns-spec holds server-05.lic and is not in unit-registry.json, so
+        # the per-staged-certificate check never sees it. This is why the scan
+        # reads the store rather than the payload.
+        $d = New-Store @{ 'server-05.lic' = 'Wed Oct 01 12:00:00 CEST 2026' }
+        try {
+            $rep = Get-MastLicenseStoreReport -StoreDir $d -AllocationByLicense @{ 'server-05.lic' = 'mast-ns-spec' } -Now ([datetime]'2026-08-25')
+            @($rep).Count | Should Be 1
+            $rep[0].Host | Should Be 'mast-ns-spec'
+            $rep[0].State | Should Be 'expiring'
+        } finally { Remove-Item -LiteralPath $d -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+
+    It 'marks an unclaimed spare as unallocated rather than dropping it' {
+        $d = New-Store @{ 'server-09.lic' = 'Thu Jul 01 15:47:19 CEST 2027' }
+        try {
+            (Get-MastLicenseStoreReport -StoreDir $d -Now ([datetime]'2026-08-25'))[0].Host | Should Be '(unallocated)'
+        } finally { Remove-Item -LiteralPath $d -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+
+    It 'returns nothing for a store that is not there' {
+        @(Get-MastLicenseStoreReport -StoreDir (Join-Path $env:TEMP 'no-store-here')).Count | Should Be 0
+    }
+}
+
+Describe 'Show-MastLicenseStoreSummary' {
+
+    It 'never throws, whatever the store looks like' {
+        # It runs on every build. A store it cannot read must not stop one.
+        { Show-MastLicenseStoreSummary -StoreDir (Join-Path $env:TEMP 'definitely-not-here') } | Should Not Throw
+    }
+
+    It 'reports an absent store as absent, not as an internal error' {
+        # 'Should Not Throw' alone passed while the function was quietly falling
+        # into its own catch: an empty array returned from a function arrives as
+        # $null. Assert the verdict, not merely the absence of an exception.
+        $r = Show-MastLicenseStoreSummary -StoreDir (Join-Path $env:TEMP 'definitely-not-here')
+        $r | Should Not BeNullOrEmpty
+        $r.Worst | Should Be 'none'
+    }
+}
