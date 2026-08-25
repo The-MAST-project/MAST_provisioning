@@ -31,6 +31,13 @@
 #: unblock. Expiry itself is a different matter and fails.
 $script:MastLicenseWarnDays = 60
 
+#: Closer than this and a warning is no longer proportionate -- at a month out
+#: the renewal needs to be in progress, not noticed. It still does not fail a
+#: build: this is a purchasing timescale, and provisioning cannot buy anything.
+#: The only hard stop is a certificate that has ALREADY expired, and that one
+#: belongs to Assert-MastLicenseIsShippable, which sees what actually ships.
+$script:MastLicenseUrgentDays = 30
+
 function Get-MastLicenseField {
     <#
     .SYNOPSIS
@@ -177,5 +184,144 @@ function Assert-MastNoLicensesInAssets {
     if ($stray.Count -gt 0) {
         throw ("{0} certificate(s) found in {1}: {2}. Certificates live ONLY in the vault store the build reads; a copy here is shipped to nobody and drifts silently. Delete them (the store is the source of truth) -- see that directory's README.txt." -f `
             $stray.Count, $AssetsLicenseDir, (($stray | ForEach-Object { $_.Name }) -join ', '))
+    }
+}
+
+
+function Get-MastLicenseStoreReport {
+    <#
+    .SYNOPSIS
+      Every certificate in the store, with its verdict. Not just the one being staged.
+    .DESCRIPTION
+      The per-certificate check in Assert-MastLicenseIsShippable only ever sees
+      the seat for the host currently being built. Two things fall through that:
+      a seat allocated to a host no build runs for -- mast-ns-spec holds one and
+      is not in unit-registry.json, so nothing checks it -- and a spare nobody
+      has claimed yet.
+
+      This reads the whole store instead, so a build reports on every seat the
+      fleet owns regardless of which unit prompted it.
+    .PARAMETER AllocationByLicense
+      Optional map of licence filename -> host, so the summary can name the
+      units affected. Absent, seats are reported by filename alone.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$StoreDir,
+        [hashtable]$AllocationByLicense = @{},
+        [datetime]$Now = (Get-Date)
+    )
+
+    if (-not (Test-Path -LiteralPath $StoreDir)) { return @() }
+    $out = @()
+    foreach ($f in (Get-ChildItem -LiteralPath $StoreDir -Filter '*.lic' -File -ErrorAction SilentlyContinue | Sort-Object Name)) {
+        $raw = Get-MastLicenseField -Path $f.FullName -Field 'Expiry'
+        $v = Test-MastLicenseExpiry -RawExpiry $raw -Now $Now
+        $host_ = ''
+        if ($AllocationByLicense.ContainsKey($f.Name)) { $host_ = [string]$AllocationByLicense[$f.Name] }
+        $out += [pscustomobject]@{
+            Name         = $f.Name
+            Subscription = Get-MastLicenseField -Path $f.FullName -Field 'Subscription Id'
+            RawExpiry    = $raw
+            State        = $v.State
+            DaysLeft     = $v.DaysLeft
+            Host         = $(if ($host_) { $host_ } else { '(unallocated)' })
+        }
+    }
+    return $out
+}
+
+function Format-MastLicenseStoreSummary {
+    <#
+    .SYNOPSIS
+      Collapse a store report into the fewest lines that say what is owed.
+    .DESCRIPTION
+      GROUPED BY EXPIRY DATE, not by seat. Every certificate the fleet owns
+      expires on the same day (2027-07-01), so a per-seat rendering would print
+      ten identical warnings in every build once the window opens -- which is the
+      worst possible presentation of "one renewal is due". Output should scale
+      with the number of RENEWALS, not the number of units.
+
+      Pure: takes the report and returns lines plus the worst state seen, so the
+      grouping can be tested without a store or a clock.
+    #>
+    [CmdletBinding()]
+    param([AllowNull()][Parameter(Mandatory)]$Report)
+
+    $rows = @($Report)
+    if ($rows.Count -eq 0) {
+        return [pscustomobject]@{ Worst = 'none'; Lines = @('certificate store: empty or absent') }
+    }
+
+    $rank = @{ 'ok' = 0; 'unknown' = 1; 'expiring' = 2; 'expired' = 3 }
+    $worst = 'ok'
+    foreach ($r in $rows) { if ($rank[[string]$r.State] -gt $rank[$worst]) { $worst = [string]$r.State } }
+
+    $lines = @()
+    foreach ($g in ($rows | Group-Object RawExpiry | Sort-Object { @($_.Group)[0].DaysLeft })) {
+        $first = @($g.Group)[0]
+        $hosts = (@($g.Group) | ForEach-Object { $_.Host } | Sort-Object) -join ', '
+        $when = $(if ($first.RawExpiry) { $first.RawExpiry } else { 'an unreadable date' })
+        switch ([string]$first.State) {
+            'expired'  { $lines += ("{0} seat(s) EXPIRED on {1} ({2} day(s) ago): {3}" -f $g.Count, $when, [math]::Abs($first.DaysLeft), $hosts) }
+            'expiring' { $lines += ("{0} seat(s) expire {1} -- {2} day(s) left: {3}" -f $g.Count, $when, $first.DaysLeft, $hosts) }
+            'unknown'  { $lines += ("{0} seat(s) have an unreadable expiry ({1}): {2}" -f $g.Count, $when, $hosts) }
+            default    { $lines += ("{0} seat(s) valid until {1} ({2} day(s))" -f $g.Count, $when, $first.DaysLeft) }
+        }
+    }
+    return [pscustomobject]@{ Worst = $worst; Lines = $lines }
+}
+
+function Show-MastLicenseStoreSummary {
+    <#
+    .SYNOPSIS
+      Report on every seat the fleet owns, once per build. Never throws.
+    .DESCRIPTION
+      Runs on every build, including dev-VM cycles: the cost is reading ten small
+      text files, and the alternative is that the one build which would have told
+      you is the one nobody ran.
+
+      It NEVER fails the build, at any proximity. Renewal is a purchase with
+      institutional lead time; a build that refuses to run because a certificate
+      expires in three weeks would block unit work for a reason nobody on the run
+      can fix. The hard stop is Assert-MastLicenseIsShippable, and it fires only
+      on a certificate that has already expired -- where the unit would lose
+      NoMachine outright.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$StoreDir,
+        [hashtable]$AllocationByLicense = @{},
+        [datetime]$Now = (Get-Date)
+    )
+
+    try {
+        # @() at the call site: an empty array returned from a function arrives
+        # here as $null, which the summary would otherwise refuse to bind.
+        $report = @(Get-MastLicenseStoreReport -StoreDir $StoreDir -AllocationByLicense $AllocationByLicense -Now $Now)
+        $summary = Format-MastLicenseStoreSummary -Report $report
+        $urgent = @($report | Where-Object { $_.State -eq 'expiring' -and $_.DaysLeft -le $script:MastLicenseUrgentDays }).Count -gt 0
+
+        if ($summary.Worst -eq 'ok') {
+            foreach ($l in $summary.Lines) { Write-Host ("[build-mast] {0}" -f $l) }
+            return $summary
+        }
+
+        Write-Host '==================================================================='
+        Write-Host ('[build-mast] *** NoMachine seats need attention ***' + $(if ($urgent) { ' -- URGENT' } else { '' }))
+        foreach ($l in $summary.Lines) { Write-Warning ("[build-mast] {0}" -f $l) }
+        if ($summary.Worst -eq 'expiring') {
+            Write-Warning '[build-mast] Renewal is a purchase with lead time -- start it now; the build will not do it for you.'
+        }
+        if ($summary.Worst -eq 'expired') {
+            Write-Warning '[build-mast] An expired seat cannot be shipped: the build refuses the host it belongs to.'
+        }
+        Write-Host '==================================================================='
+        return $summary
+    }
+    catch {
+        # A store that cannot be read must not stop a build; say so and continue.
+        Write-Warning ("[build-mast] certificate store could not be summarised: {0}" -f $_.Exception.Message)
+        return $null
     }
 }

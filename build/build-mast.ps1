@@ -314,6 +314,17 @@ ${allocCsv} = Join-Path ${TOP} 'server\providers\nomachine\assets\licenses\alloc
 # allocRows
 ${allocRows} = Import-AllocCsv ${allocCsv}
 
+# Report on EVERY seat the fleet owns, not just the one this build stages. A
+# seat allocated to a host no build runs for -- mast-ns-spec holds one and is
+# not in unit-registry.json -- is otherwise checked by nothing. Grouped by
+# expiry date, because all ten seats share one, and ten identical warnings is
+# the worst way to say a single renewal is due. Never fails the build.
+${allocMap} = @{}
+foreach (${row} in ${allocRows}) {
+    if (${row}.license) { ${allocMap}[[string]${row}.license] = [string]${row}.host }
+}
+${null} = Show-MastLicenseStoreSummary -StoreDir ${LicensesRoot} -AllocationByLicense ${allocMap}
+
 # allLicFiles
 ${allLicFiles} = Get-ChildItem -Path ${licensesVault} -Filter '*.lic' -File -ErrorAction SilentlyContinue | Sort-Object Name
 
