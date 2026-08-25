@@ -49,6 +49,12 @@ re-introduction.
 
 ## nomachine-licenses/
 
-One `.lic` file per licensed unit. The build script (`build/build-mast.ps1`)
-allocates them to hostnames and tracks the assignment in
-`server/providers/nomachine/assets/licenses/allocated.csv`.
+**This is the only place NoMachine certificates live.** One `.lic` file per
+licensed seat. `build/build-mast.ps1` reads the seat-to-host assignment from
+`server/providers/nomachine/assets/licenses/allocated.csv` and the certificate
+itself from **here**, then stages it as the payload's `nomachine.lic`.
+
+Do not keep a second copy next to `allocated.csv`: the build fails if it finds
+one, because an unread copy drifts silently from what ships. That is how
+expired certificates reached mast06 and mast07 on 2026-08-23 -- see that
+directory's `README.txt` for how to fetch and check a set.

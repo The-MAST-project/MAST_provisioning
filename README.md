@@ -74,7 +74,7 @@ MAST_provisioning/
 |   `-- vm-fix-winrm.ps1              # Break-glass WinRM recovery (run locally on unit)
 |-- vault/                            # Secrets, gitignored
 |   |-- creds.json                    # WinRM credentials for units
-|   `-- nomachine-licenses/*.lic
+|   `-- nomachine-licenses/*.lic          # the ONLY home for NoMachine certificates
 |-- staging/<host>/01-provisioning/   # Build output, gitignored
 |-- docs/
 |   |-- decisions/                    # Design rationale: one file per decision + the frozen archive

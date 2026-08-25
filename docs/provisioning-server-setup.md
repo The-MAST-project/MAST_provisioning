@@ -123,9 +123,15 @@ staging payload. Choose a strong password; you will not type it interactively.
 
 ### 2c. NoMachine license files
 
-Copy one `.lic` file per unit into `vault\nomachine-licenses\`. The build script
-allocates licenses to hostnames and tracks the assignment in
-`server\providers\nomachine\assets\licenses\allocated.csv`.
+Copy one `.lic` file per seat into `vault\nomachine-licenses\` -- **the only
+place certificates live**. The build reads the seat-to-host assignment from
+`server\providers\nomachine\assets\licenses\allocated.csv` and the certificate
+itself from the vault store.
+
+Do not put a `.lic` beside `allocated.csv`: the build fails if it finds one.
+An unread second copy drifts from what ships, which is how expired
+certificates reached mast06 and mast07 on 2026-08-23. The build also refuses
+to stage an expired certificate at all, and warns within 60 days of expiry.
 
 If you are setting up a dev/test server that uses throwaway VMs, pass `--test-mode`
 to the driver (or use the VM test orchestrator) to skip license checks. A production run
