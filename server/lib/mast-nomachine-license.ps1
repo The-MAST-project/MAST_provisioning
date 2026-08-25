@@ -1,4 +1,11 @@
-# What a NoMachine expiry date MEANS. Shared, deliberately: this verdict is
+# What a NoMachine expiry date MEANS. NOMACHINE ONLY -- the name says so on
+# purpose. The parser strips a leading weekday and a CEST-style timezone, which
+# is nxserver's format and nobody else's; hand it a PlaneWave or ASCOM licence
+# date and it returns 'unknown', which warns forever rather than failing. If a
+# second vendor ever needs this, generalise it then, with two real formats in
+# hand rather than one imagined one.
+#
+# Shared, deliberately: this verdict is
 # needed in two places that cannot see each other's code -- build/build-mast.ps1
 # on the prov server, deciding whether to ship a certificate, and
 # verify-nomachine.ps1 on a unit, reading what nxserver actually loaded.
@@ -7,20 +14,20 @@
 # the unit is a threshold that drifts, and drift between copies is exactly how
 # the certificates themselves went wrong (MAST_provisioning#154).
 #
-# Dot-sourced by build/build-licenses-lib.ps1 on the server, and shipped to
+# Dot-sourced by build/build-nomachine-lib.ps1 on the server, and shipped to
 # units as a repofiles entry of the nomachine module.
 
 #: Lead time on a renewal. Inside this window a certificate still works and
 #: still builds; it warns, because provisioning cannot buy a subscription and
 #: failing over a purchasing timescale blocks work nobody on the run can
 #: unblock. Expiry itself is a different matter and does fail.
-$script:MastLicenseWarnDays = 60
+$script:MastNoMachineWarnDays = 60
 
 #: Closer than this and a warning is no longer proportionate -- at a month out
 #: the renewal needs to be in progress, not noticed. Still never fails.
-$script:MastLicenseUrgentDays = 30
+$script:MastNoMachineUrgentDays = 30
 
-function ConvertFrom-MastLicenseExpiry {
+function ConvertFrom-MastNoMachineExpiry {
     <#
     .SYNOPSIS
       Parse a NoMachine expiry string, or [datetime]::MinValue if it will not parse.
@@ -46,7 +53,7 @@ function ConvertFrom-MastLicenseExpiry {
     return [datetime]::MinValue
 }
 
-function Test-MastLicenseExpiry {
+function Test-MastNoMachineExpiry {
     <#
     .SYNOPSIS
       Verdict on a certificate the build is about to ship.
@@ -65,10 +72,10 @@ function Test-MastLicenseExpiry {
     param(
         [string]$RawExpiry,
         [datetime]$Now = (Get-Date),
-        [int]$WarnDays = $script:MastLicenseWarnDays
+        [int]$WarnDays = $script:MastNoMachineWarnDays
     )
 
-    $expiry = ConvertFrom-MastLicenseExpiry -Raw $RawExpiry
+    $expiry = ConvertFrom-MastNoMachineExpiry -Raw $RawExpiry
     if ($expiry -eq [datetime]::MinValue) {
         return [pscustomobject]@{
             State = 'unknown'; DaysLeft = $null

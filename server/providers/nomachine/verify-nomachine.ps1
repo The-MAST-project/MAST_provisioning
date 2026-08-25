@@ -11,8 +11,8 @@ if (-not (Test-Path ${mastLogDot})) { ${mastLogDot} = Join-Path ${PSScriptRoot} 
 Set-StrictMode -Off  # mast-log.ps1 enables StrictMode; verify scripts predate it and probe optional properties
 # The expiry verdict is shared with the build side, so the two cannot drift
 # apart on what "expiring" means. Staged flat as a repofiles entry.
-${licDot} = Join-Path ${PSScriptRoot} 'mast-license.ps1'
-if (-not (Test-Path ${licDot})) { ${licDot} = Join-Path ${PSScriptRoot} '..\..\lib\mast-license.ps1' }
+${licDot} = Join-Path ${PSScriptRoot} 'mast-nomachine-license.ps1'
+if (-not (Test-Path ${licDot})) { ${licDot} = Join-Path ${PSScriptRoot} '..\..\lib\mast-nomachine-license.ps1' }
 if (Test-Path ${licDot}) { . ${licDot} }
 
 ${verifyLog} = Get-MastVerifyLog -Module 'nomachine'
@@ -118,8 +118,8 @@ if (Test-Path -LiteralPath ${nxExe}) {
         # from silent to failing on the day -- and for NoMachine that is the day
         # the unit stops accepting connections, because an expired server
         # refuses them outright rather than degrading.
-        if (Get-Command Test-MastLicenseExpiry -ErrorAction SilentlyContinue) {
-            ${verdict} = Test-MastLicenseExpiry -RawExpiry ${expiryRaw}
+        if (Get-Command Test-MastNoMachineExpiry -ErrorAction SilentlyContinue) {
+            ${verdict} = Test-MastNoMachineExpiry -RawExpiry ${expiryRaw}
             ${licenseState} = [string]${verdict}.State
             ${licenseDays} = ${verdict}.DaysLeft
             if (${licenseState} -eq 'expiring') {

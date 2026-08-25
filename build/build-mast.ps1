@@ -129,9 +129,9 @@ if (-not (Test-Path ${bootstrapLib})) { throw "Missing build-bootstrap-lib.ps1 a
 . ${bootstrapLib}
 
 # NoMachine certificate guards, dot-sourced for the same reason:
-# server/tests/build-licenses-lib.Tests.ps1 exercises this implementation.
-${licensesLib} = Join-Path ${PSScriptRoot} 'build-licenses-lib.ps1'
-if (-not (Test-Path ${licensesLib})) { throw "Missing build-licenses-lib.ps1 at ${licensesLib}" }
+# server/tests/build-nomachine-lib.Tests.ps1 exercises this implementation.
+${licensesLib} = Join-Path ${PSScriptRoot} 'build-nomachine-lib.ps1'
+if (-not (Test-Path ${licensesLib})) { throw "Missing build-nomachine-lib.ps1 at ${licensesLib}" }
 . ${licensesLib}
 
 [string]${LicensesRoot} = (Join-Path ${Top} 'vault\nomachine-licenses')
@@ -219,7 +219,7 @@ function Assert-BootstrapMemoryRequirementInSync {
 Assert-BootstrapKnownSitesInSync -ClientRoot ${clientRoot} -ProvidersRoot ${providersRoot}
 Assert-BootstrapMemoryRequirementInSync -ClientRoot ${clientRoot}
 Assert-MastBootstrapElementRegistry -ClientRoot ${clientRoot} -ProvidersRoot ${providersRoot}
-Assert-MastNoLicensesInAssets -AssetsLicenseDir (Join-Path ${providersRoot} 'nomachine\assets\licenses')
+Assert-MastNoNoMachineCertsInAssets -AssetsLicenseDir (Join-Path ${providersRoot} 'nomachine\assets\licenses')
 
 # If no -Modules were passed (or the normalization above collapsed to empty),
 # default to the providers discovered on disk. Get-AllProviderModules lives in
@@ -323,7 +323,7 @@ ${allocMap} = @{}
 foreach (${row} in ${allocRows}) {
     if (${row}.license) { ${allocMap}[[string]${row}.license] = [string]${row}.host }
 }
-${null} = Show-MastLicenseStoreSummary -StoreDir ${LicensesRoot} -AllocationByLicense ${allocMap}
+${null} = Show-MastNoMachineStoreSummary -StoreDir ${LicensesRoot} -AllocationByLicense ${allocMap}
 
 # allLicFiles
 ${allLicFiles} = Get-ChildItem -Path ${licensesVault} -Filter '*.lic' -File -ErrorAction SilentlyContinue | Sort-Object Name
@@ -609,7 +609,7 @@ if (${Modules} -contains 'nomachine') {
     if (${existing}) {
         $licPath = Join-Path ${LicensesRoot} ${existing}.license
         if (Test-Path $licPath) {
-            ${null} = Assert-MastLicenseIsShippable -LicensePath $licPath -HostName ${HostName}
+            ${null} = Assert-MastNoMachineCertIsShippable -LicensePath $licPath -HostName ${HostName}
             Copy-Item -Force -Path $licPath -Destination (Join-Path ${staging} "nomachine.lic")
         } elseif (${AllowMissingNoMachineLicense}) {
             Write-Warning "NoMachine license '$licPath' missing; continuing due to -AllowMissingNoMachineLicense."
@@ -622,7 +622,7 @@ if (${Modules} -contains 'nomachine') {
         if (-not ${free}) {
             Write-Warning "No free NoMachine license left for ${HostName} (have $(@(${allLicFiles}).Count) total)."
         } else {
-            ${null} = Assert-MastLicenseIsShippable -LicensePath ${free}.FullName -HostName ${HostName}
+            ${null} = Assert-MastNoMachineCertIsShippable -LicensePath ${free}.FullName -HostName ${HostName}
             ${allocRows} += [pscustomobject]@{ license=${free}.Name; host=${HostName} }
             # stage that single .lic
             Copy-Item -Force ${free}.FullName (Join-Path ${staging} "nomachine.lic")

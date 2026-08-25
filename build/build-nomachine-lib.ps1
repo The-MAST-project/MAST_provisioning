@@ -1,5 +1,5 @@
 # NoMachine certificate helpers for build-mast.ps1. Dot-sourceable and
-# side-effect-free so server/tests/build-licenses-lib.Tests.ps1 can exercise
+# side-effect-free so server/tests/build-nomachine-lib.Tests.ps1 can exercise
 # them without running a build, the same arrangement build-staging-lib.ps1 and
 # build-bootstrap-lib.ps1 have.
 #
@@ -16,9 +16,9 @@
 # Two guards, both at build time, because the build is the last place that sees
 # a certificate before it reaches a unit:
 #
-#   Assert-MastNoLicensesInAssets  -- the assets directory holds no *.lic at all,
+#   Assert-MastNoNoMachineCertsInAssets  -- the assets directory holds no *.lic at all,
 #                                     so the ambiguous second home cannot re-form.
-#   Test-MastLicenseExpiry         -- the certificate about to ship is not expired.
+#   Test-MastNoMachineExpiry         -- the certificate about to ship is not expired.
 #
 # The second is the one that would have stopped the original incident outright.
 # It reads the file the build is copying, before any transfer, so it does not
@@ -26,12 +26,12 @@
 # unit-side check demonstrably never got the chance.
 
 
-# The expiry verdict is shared with the unit side; see server/lib/mast-license.ps1.
-${_licDot} = Join-Path ${PSScriptRoot} '..\server\lib\mast-license.ps1'
-if (-not (Test-Path ${_licDot})) { throw "mast-license.ps1 not found at ${_licDot}" }
+# The expiry verdict is shared with the unit side; see server/lib/mast-nomachine-license.ps1.
+${_licDot} = Join-Path ${PSScriptRoot} '..\server\lib\mast-nomachine-license.ps1'
+if (-not (Test-Path ${_licDot})) { throw "mast-nomachine-license.ps1 not found at ${_licDot}" }
 . ${_licDot}
 
-function Get-MastLicenseField {
+function Get-MastNoMachineLicenseField {
     <#
     .SYNOPSIS
       One field out of a NoMachine .lic (a signed text file with a plain header).
@@ -49,7 +49,7 @@ function Get-MastLicenseField {
 
 
 
-function Assert-MastLicenseIsShippable {
+function Assert-MastNoMachineCertIsShippable {
     <#
     .SYNOPSIS
       Fail the build rather than ship an expired certificate to a unit.
@@ -66,9 +66,9 @@ function Assert-MastLicenseIsShippable {
         [Parameter(Mandatory)][string]$HostName
     )
 
-    $raw = Get-MastLicenseField -Path $LicensePath -Field 'Expiry'
-    $sub = Get-MastLicenseField -Path $LicensePath -Field 'Subscription Id'
-    $v = Test-MastLicenseExpiry -RawExpiry $raw
+    $raw = Get-MastNoMachineLicenseField -Path $LicensePath -Field 'Expiry'
+    $sub = Get-MastNoMachineLicenseField -Path $LicensePath -Field 'Subscription Id'
+    $v = Test-MastNoMachineExpiry -RawExpiry $raw
     $label = ("{0} ({1}) for {2}" -f (Split-Path $LicensePath -Leaf), $(if ($sub) { $sub } else { 'no subscription id' }), $HostName)
 
     switch ($v.State) {
@@ -82,7 +82,7 @@ function Assert-MastLicenseIsShippable {
     return $v
 }
 
-function Assert-MastNoLicensesInAssets {
+function Assert-MastNoNoMachineCertsInAssets {
     <#
     .SYNOPSIS
       Fail the build if certificates reappear beside the allocation table.
@@ -109,12 +109,12 @@ function Assert-MastNoLicensesInAssets {
 }
 
 
-function Get-MastLicenseStoreReport {
+function Get-MastNoMachineStoreReport {
     <#
     .SYNOPSIS
       Every certificate in the store, with its verdict. Not just the one being staged.
     .DESCRIPTION
-      The per-certificate check in Assert-MastLicenseIsShippable only ever sees
+      The per-certificate check in Assert-MastNoMachineCertIsShippable only ever sees
       the seat for the host currently being built. Two things fall through that:
       a seat allocated to a host no build runs for -- mast-ns-spec holds one and
       is not in unit-registry.json, so nothing checks it -- and a spare nobody
@@ -136,13 +136,13 @@ function Get-MastLicenseStoreReport {
     if (-not (Test-Path -LiteralPath $StoreDir)) { return @() }
     $out = @()
     foreach ($f in (Get-ChildItem -LiteralPath $StoreDir -Filter '*.lic' -File -ErrorAction SilentlyContinue | Sort-Object Name)) {
-        $raw = Get-MastLicenseField -Path $f.FullName -Field 'Expiry'
-        $v = Test-MastLicenseExpiry -RawExpiry $raw -Now $Now
+        $raw = Get-MastNoMachineLicenseField -Path $f.FullName -Field 'Expiry'
+        $v = Test-MastNoMachineExpiry -RawExpiry $raw -Now $Now
         $host_ = ''
         if ($AllocationByLicense.ContainsKey($f.Name)) { $host_ = [string]$AllocationByLicense[$f.Name] }
         $out += [pscustomobject]@{
             Name         = $f.Name
-            Subscription = Get-MastLicenseField -Path $f.FullName -Field 'Subscription Id'
+            Subscription = Get-MastNoMachineLicenseField -Path $f.FullName -Field 'Subscription Id'
             RawExpiry    = $raw
             State        = $v.State
             DaysLeft     = $v.DaysLeft
@@ -152,7 +152,7 @@ function Get-MastLicenseStoreReport {
     return $out
 }
 
-function Format-MastLicenseStoreSummary {
+function Format-MastNoMachineStoreSummary {
     <#
     .SYNOPSIS
       Collapse a store report into the fewest lines that say what is owed.
@@ -193,7 +193,7 @@ function Format-MastLicenseStoreSummary {
     return [pscustomobject]@{ Worst = $worst; Lines = $lines }
 }
 
-function Show-MastLicenseStoreSummary {
+function Show-MastNoMachineStoreSummary {
     <#
     .SYNOPSIS
       Report on every seat the fleet owns, once per build. Never throws.
@@ -205,7 +205,7 @@ function Show-MastLicenseStoreSummary {
       It NEVER fails the build, at any proximity. Renewal is a purchase with
       institutional lead time; a build that refuses to run because a certificate
       expires in three weeks would block unit work for a reason nobody on the run
-      can fix. The hard stop is Assert-MastLicenseIsShippable, and it fires only
+      can fix. The hard stop is Assert-MastNoMachineCertIsShippable, and it fires only
       on a certificate that has already expired -- where the unit would lose
       NoMachine outright.
     #>
@@ -219,9 +219,9 @@ function Show-MastLicenseStoreSummary {
     try {
         # @() at the call site: an empty array returned from a function arrives
         # here as $null, which the summary would otherwise refuse to bind.
-        $report = @(Get-MastLicenseStoreReport -StoreDir $StoreDir -AllocationByLicense $AllocationByLicense -Now $Now)
-        $summary = Format-MastLicenseStoreSummary -Report $report
-        $urgent = @($report | Where-Object { $_.State -eq 'expiring' -and $_.DaysLeft -le $script:MastLicenseUrgentDays }).Count -gt 0
+        $report = @(Get-MastNoMachineStoreReport -StoreDir $StoreDir -AllocationByLicense $AllocationByLicense -Now $Now)
+        $summary = Format-MastNoMachineStoreSummary -Report $report
+        $urgent = @($report | Where-Object { $_.State -eq 'expiring' -and $_.DaysLeft -le $script:MastNoMachineUrgentDays }).Count -gt 0
 
         if ($summary.Worst -eq 'ok') {
             foreach ($l in $summary.Lines) { Write-Host ("[build-mast] {0}" -f $l) }

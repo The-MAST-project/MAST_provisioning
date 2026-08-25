@@ -11,6 +11,6 @@
   ],
   "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\verify-nomachine.ps1\"",
   "repofiles": [
-    "server/lib/mast-license.ps1"
+    "server/lib/mast-nomachine-license.ps1"
   ]
 }
