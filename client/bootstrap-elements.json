@@ -72,8 +72,8 @@
     {
       "id": "locale-en-us",
       "since": 1,
-      "description": "Regional format English (United States), system + per-user",
-      "reassert": "routine"
+      "description": "Regional format English (United States), system + per-user. CONSOLE ONLY: its Set-WinHomeLocation call activates a RunAs='Interactive User' COM server, which blocks for a 600 s timeout in Session 0 -- i.e. on every remote run -- and then succeeds anyway (#148)",
+      "reassert": "console"
     },
     {
       "id": "firewall-off",

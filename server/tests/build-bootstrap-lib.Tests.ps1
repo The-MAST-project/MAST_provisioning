@@ -210,9 +210,22 @@ Describe 'the real dispatch map' {
         @(Test-MastBootstrapDispatchCoverage -Registry $registry -DispatchMap $map -ScriptText $text).Count | Should Be 0
     }
 
-    It 'dispatches ten elements' {
+    It 'dispatches nine elements' {
         $map = Get-MastBootstrapDispatchMap -BootstrapScript (Join-Path $here '..\..\client\bootstrap.ps1')
-        $map.Count | Should Be 10
+        $map.Count | Should Be 9
+    }
+
+    It 'does not dispatch locale-en-us, which stalls 600s in Session 0' {
+        # #148: Set-WinHomeLocation activates a RunAs='Interactive User' COM
+        # server. In Session 0 -- every remote run -- that waits out a 600 s
+        # timeout and then succeeds anyway. Bootstrap runs it at a console,
+        # where it costs 0 s; a re-assert must never reach it.
+        $client = Join-Path $here '..\..\client'
+        $registry = Get-MastBootstrapElementRegistry -Path (Join-Path $client 'bootstrap-elements.json')
+        $e = @($registry.elements) | Where-Object { $_.id -eq 'locale-en-us' }
+        [string]$e.reassert | Should Be 'console'
+        $map = Get-MastBootstrapDispatchMap -BootstrapScript (Join-Path $client 'bootstrap.ps1')
+        $map.Contains('locale-en-us') | Should Be $false
     }
 
     It 'embeds a Kind matching the registry for every dispatched element' {

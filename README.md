@@ -470,7 +470,11 @@ afterwards, and the drift report must go on saying so.
 
 **This runs by itself.** The `bootstrap-reassert` provider (`always: true`, order 15 —
 after `execution-policy`, ahead of everything that installs) invokes it on **every**
-provisioning cycle, so a unit converges without anyone visiting it. It runs
+provisioning cycle, so a unit converges without anyone visiting it. That is also why an
+element which assumes an interactive session must be classified `console`: a provisioning
+run is Session 0. `locale-en-us` is the worked example — its `Set-WinHomeLocation`
+activates a `RunAs = Interactive User` COM server that stalls 600 s in Session 0 and then
+succeeds anyway (#148), so it is console-only. It runs
 unconditionally rather than only when a unit looks behind: a unit whose
 `bootstrap_version` is `null` because it predates stamping is not "behind" by that test,
 and that unit is exactly the one most in need of converging. `bootstrap.ps1` and

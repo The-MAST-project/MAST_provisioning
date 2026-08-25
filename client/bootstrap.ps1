@@ -1563,7 +1563,6 @@ $script:MastBootstrapElementActions = [ordered]@{
     'timezone-israel-dst' = @{ Kind = 'routine'; Function = 'Invoke-MastBootstrapElementTimezoneIsraelDst' }
     'windows-update-suppress' = @{ Kind = 'routine'; Function = 'Invoke-MastBootstrapElementWindowsUpdateSuppress' }
     'popup-notification-suppress' = @{ Kind = 'routine'; Function = 'Invoke-MastBootstrapElementPopupNotificationSuppress' }
-    'locale-en-us' = @{ Kind = 'routine'; Function = 'Invoke-MastBootstrapElementLocaleEnUs' }
     'telemetry-privacy-harden' = @{ Kind = 'routine'; Function = 'Invoke-MastBootstrapElementTelemetryPrivacyHarden' }
     'service-trim' = @{ Kind = 'routine'; Function = 'Invoke-MastBootstrapElementServiceTrim' }
     'dhcp-ipv4' = @{ Kind = 'routine'; Function = 'Invoke-MastBootstrapElementDhcpIpv4' }
@@ -1902,7 +1901,12 @@ try {
     Write-BootstrapMsg '' 'Cyan'
     Invoke-MastBootstrapElement -Id 'popup-notification-suppress'
     Write-BootstrapMsg '' 'Cyan'
-    Invoke-MastBootstrapElement -Id 'locale-en-us'
+    # Called directly, not dispatched: locale-en-us is a CONSOLE element. Its
+    # Set-WinHomeLocation activates a RunAs='Interactive User' COM server, which
+    # in Session 0 -- every remote run -- waits out a 600 s timeout and then
+    # succeeds anyway (#148). Bootstrap itself runs at a console, where the call
+    # costs 0 s, so it stays here; it just must never be re-asserted remotely.
+    Invoke-MastBootstrapElementLocaleEnUs
     Write-BootstrapMsg '' 'Cyan'
     Invoke-MastBootstrapElement -Id 'telemetry-privacy-harden'
     Write-BootstrapMsg '' 'Cyan'
