@@ -502,6 +502,47 @@ This is the MVP of the "Version / Drift Detection" feature in
 `autonomous-provisioning-requirements.md`; it trusts the static installed-manifest (the
 computed/live manifest + tiered self-validation are the growth path).
 
+### Runbook: the report says a unit is behind -- now what?
+
+The bootstrap section answers this directly. It splits what a unit is missing by **who
+can fix it**, so the only question left is whether you need to go anywhere:
+
+```
+  mast02: v2 OUTDATED (current 13)
+      self-heals next cycle : service-trim, timezone-israel-dst
+      NEEDS A CONSOLE VISIT : npcap
+      on-demand             : openssh-from-msi
+      provider              : execution-policy
+      re-asserted 2026-08-25T06:59:44Z (7 routine element(s) applied)
+```
+
+Read it line by line:
+
+- **`self-heals next cycle`** — nothing to do. The `bootstrap-reassert` provider applies
+  these on the unit's next provisioning cycle. If you want them now, trigger a cycle.
+- **`NEEDS A CONSOLE VISIT`** — the only line that costs you a trip. These are `console`
+  elements: first-touch work (the account, autologon, rename), or work that needs an
+  interactive session. Nothing remote will ever apply them.
+- **`on-demand`** — capable of running remotely, but never on a routine run, because
+  both entries re-assert the transport the run travels over. To repair one, name it, on
+  one unit, over the *other* channel:
+  ```powershell
+  .\bootstrap.ps1 -ReassertOnly -Elements openssh-from-msi   # fix sshd over WinRM
+  .\bootstrap.ps1 -ReassertOnly -Elements winrm-http-basic   # fix WinRM over SSH
+  ```
+- **`provider`** — nothing to do here either; a provisioning provider owns it (named in
+  `bootstrap-elements.json`), and it is re-asserted on its own schedule.
+- **`re-asserted <when>`** — an annotation, not an all-clear. It says the routine
+  elements were applied then. The unit stays flagged because `bootstrap_version` does
+  not advance on a re-assert, and the console line above is still outstanding.
+
+`UNSTAMPED` means the unit predates bootstrap version stamping, so **nothing** is known
+about which elements it has -- every element is listed as unverified. That is not the
+same as being broken; it is the same work order, with no evidence to narrow it.
+
+The `RESULT` block at the end names only the units that actually need a person, or says
+plainly that every gap self-heals on the next cycle.
+
 ---
 
 ## Firmware baseline (BIOS power policy)
