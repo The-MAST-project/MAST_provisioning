@@ -8,11 +8,12 @@ mast03             UNREACHABLE  -             -             none    -  no route 
 upstream repos: 1 of 2 consistent (unit differ)
 
 === Module status vs build (ok / STALE / MISSING / extra) ===
-module             BUILD (reference)      mast01                 mast02                 
-----------------------------------------------------------------------------------------
-git                (absent)               ok                     ok                     
-desktop-shortcuts  (absent)               STALE*                 ok                     
-mongodb-client     (absent)               ok                     ok                     
+module              BUILD (reference)      mast01                 mast02                 
+-----------------------------------------------------------------------------------------
+git                 (absent)               ok                     ok                     
+desktop-shortcuts   (absent)               STALE*                 ok                     
+mongodb-client      (absent)               ok                     ok                     
+bootstrap-reassert  (absent)               -                      extra*                 
 
 === Tier-2 verify (computed live state) ===
   BUILD (reference): never run (run-verify-only.ps1 has not written a report)
@@ -30,17 +31,30 @@ unit      n/a        bbbbbbb!   ccccccc!   v1.2
   [WARN] unit: pinned in the manifest but on a branch on mast01, mast02 -- a --branch override, or a clone from before the pin.
 
 === Module-reported facts (what each module FOUND; '*' = units disagree, '-' = not reported) ===
-fact                                      BUILD (reference)  mast01   mast02
-----------------------------------------------------------------------------
-mongodb-client.compass_installer_version  -                  1.43.0   1.43.0
-mongodb-client.compass_version*           -                  1.49.14  1.43.0
+fact                                       BUILD (reference)  mast01   mast02
+-------------------------------------------------------------------------------------------
+bootstrap-reassert.reassert_applied_count  -                  -        2
+bootstrap-reassert.reassert_at             -                  -        2026-08-25T06:59:44Z
+bootstrap-reassert.reassert_state          -                  -        applied
+mongodb-client.compass_installer_version   -                  1.43.0   1.43.0
+mongodb-client.compass_version*            -                  1.49.14  1.43.0
 
 === Bootstrap (current version: 3) ===
   [WARN] client/bootstrap.ps1 $script:BootstrapVersion=4 != bootstrap-elements.json current_version=3 -- bump them together.
   mast01: v3 (current)
-  mast02: v2 OUTDATED (current 3) -- may need: (none listed)
-  mast03: UNSTAMPED -- no bootstrap-manifest.json (pre-versioning, or bootstrap not re-run since stamping was added)
+  mast02: v2 OUTDATED (current 3)
+      self-heals next cycle : service-trim
+      NEEDS A CONSOLE VISIT : npcap
+      on-demand             : openssh-from-msi
+      provider              : execution-policy
+      re-asserted 2026-08-25T06:59:44Z (2 routine element(s) applied)
+  mast03: UNSTAMPED -- no bootstrap-manifest.json (pre-versioning, or bootstrap not re-run since stamping was added); treat every element as unverified
+      self-heals next cycle : firewall-off, service-trim
+      NEEDS A CONSOLE VISIT : mast-admin-account, npcap
+      on-demand             : openssh-from-msi
+      provider              : execution-policy
 
 RESULT: payload drift/gaps on 2 unit(s): mast01, mast03
 RESULT: bootstrap outdated/unstamped on 2 unit(s): mast02, mast03
+RESULT: needs a console visit: mast02, mast03
 RESULT: upstream repo divergence on 1 repo(s): unit

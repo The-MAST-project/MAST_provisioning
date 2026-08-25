@@ -497,20 +497,81 @@ def compare_repos(units: list[UnitRecord], reference: UnitRecord | None, expecte
     }
 
 
+#: Element classifications that a provisioning run can apply by itself. Anything
+#: else in a unit's missing list needs a person, or belongs to another provider.
+SELF_HEALING_KINDS = ("routine",)
+
+
+def _split_by_kind(missing: list[str], elements: list[dict]) -> dict[str, list[str]]:
+    """Group missing element ids by their ``reassert`` classification.
+
+    This is what turns a list into a work order: 'three of these fix themselves
+    on the next cycle, one needs a trip to the site' is actionable where a flat
+    list of five ids is not.
+    """
+    kind_of = {str(e["id"]): str(e.get("reassert", "")) for e in elements}
+    out: dict[str, list[str]] = {}
+    for eid in missing:
+        out.setdefault(kind_of.get(eid) or "unclassified", []).append(eid)
+    return out
+
+
 def bootstrap_gaps(units: list[UnitRecord], elements_doc: dict) -> dict:
-    """Per-unit bootstrap state vs the current bootstrap version + missing elements."""
+    """Per-unit bootstrap state vs the current version, split into who-fixes-what.
+
+    Two behaviours here are deliberate and were wrong or absent before:
+
+    * **Unstamped means nothing is KNOWN, not that nothing is missing.** Without a
+      stamped version there is nothing to compare ``since`` against, so every
+      element is unverified. Reporting an empty missing list made the one unit
+      whose state is least known (mast02, which predates stamping) the one the
+      report had least to say about.
+    * **A recent re-assert annotates, it does not suppress.** Since #147 a
+      provisioning run applies the routine elements every cycle, so a unit can be
+      behind on ``bootstrap_version`` and yet have everything remotely-fixable
+      already applied. That is worth showing -- but the console remainder is
+      exactly what a work order must keep shouting about, so the unit stays
+      flagged either way.
+    """
     current = elements_doc.get("current_version")
     elements = elements_doc.get("elements", []) if elements_doc else []
+    all_ids = [str(e["id"]) for e in elements]
     result: dict[str, dict] = {}
     for u in units:
         v = u.bootstrap_version
         if v is None:
-            result[u.host] = {"state": "unstamped", "version": None, "missing": []}
+            # Nothing known: treat every element as unverified rather than none.
+            missing = list(all_ids)
+            state = "unstamped"
         elif current is not None and v < current:
-            missing = [e["id"] for e in elements if int(e.get("since", 0)) > v]
-            result[u.host] = {"state": "outdated", "version": v, "missing": missing}
+            missing = [str(e["id"]) for e in elements if int(e.get("since", 0)) > v]
+            state = "outdated"
         else:
-            result[u.host] = {"state": "current", "version": v, "missing": []}
+            missing = []
+            state = "current"
+
+        by_kind = _split_by_kind(missing, elements)
+        self_healing = [e for k in SELF_HEALING_KINDS for e in by_kind.get(k, [])]
+        needs_console = by_kind.get("console", [])
+
+        facts = (u.facts.get("bootstrap-reassert") or {}) if u.facts else {}
+        reassert = None
+        if facts.get("reassert_state"):
+            reassert = {
+                "state": str(facts.get("reassert_state")),
+                "at": str(facts.get("reassert_at") or ""),
+                "applied_count": facts.get("reassert_applied_count"),
+            }
+
+        result[u.host] = {
+            "state": state,
+            "version": v,
+            "missing": missing,
+            "by_kind": by_kind,
+            "self_healing": self_healing,
+            "needs_console": needs_console,
+            "reassert": reassert,
+        }
     return {"current": current, "by_host": result}
 
 
@@ -795,6 +856,62 @@ def _render_repo_warnings(repos: dict) -> list[str]:
     return out
 
 
+def _render_work_order(g: dict) -> list[str]:
+    """Who fixes what: the split that makes a missing list actionable."""
+    healing = g.get("self_healing") or []
+    console = g.get("needs_console") or []
+    other = {k: v for k, v in (g.get("by_kind") or {}).items() if k not in SELF_HEALING_KINDS and k != "console" and v}
+    out: list[str] = []
+    if healing:
+        out.append(f"      self-heals next cycle : {', '.join(healing)}")
+    if console:
+        out.append(f"      NEEDS A CONSOLE VISIT : {', '.join(console)}")
+    for kind, ids in sorted(other.items()):
+        out.append(f"      {kind:<21} : {', '.join(ids)}")
+    if not out:
+        out.append("      (no elements listed)")
+    return out
+
+
+def _render_reassert_note(g: dict) -> list[str]:
+    """Annotate, never suppress.
+
+    A unit can be behind on ``bootstrap_version`` and still have had every
+    routine element applied an hour ago -- 'behind but converging' rather than
+    'behind and unattended'. Worth showing; not worth clearing the flag for,
+    because the console remainder is exactly what a work order must keep saying.
+    """
+    ra = g.get("reassert")
+    if not ra:
+        return []
+    when = ra.get("at") or "unknown time"
+    if ra.get("state") == "applied":
+        return [f"      re-asserted {when} ({ra.get('applied_count')} routine element(s) applied)"]
+    if ra.get("state") == "failed":
+        return [f"      [WARN] last re-assert FAILED at {when}"]
+    return [f"      last re-assert: {ra.get('state')} at {when}"]
+
+
+def _render_bootstrap_unit(host: str, g: dict, cur: int | None) -> list[str]:
+    """One unit's bootstrap state, as a work order rather than a list of ids."""
+    out: list[str] = []
+    if g["state"] == "unstamped":
+        out.append(
+            f"  {host}: UNSTAMPED -- no bootstrap-manifest.json "
+            f"(pre-versioning, or bootstrap not re-run since stamping was added); "
+            f"treat every element as unverified"
+        )
+    elif g["state"] == "outdated":
+        out.append(f"  {host}: v{g['version']} OUTDATED (current {cur})")
+    else:
+        out.append(f"  {host}: v{g['version']} (current)")
+
+    if g["state"] != "current":
+        out += _render_work_order(g)
+    out += _render_reassert_note(g)
+    return out
+
+
 def _render_bootstrap(units: list[UnitRecord], boot: dict, repo_boot_v: int | None) -> list[str]:
     cur = boot["current"]
     out = ["", f"=== Bootstrap (current version: {cur if cur is not None else 'unknown'}) ==="]
@@ -803,18 +920,9 @@ def _render_bootstrap(units: list[UnitRecord], boot: dict, repo_boot_v: int | No
             f"  [WARN] client/bootstrap.ps1 $script:BootstrapVersion={repo_boot_v} "
             f"!= bootstrap-elements.json current_version={cur} -- bump them together."
         )
+    default = {"state": "unstamped", "version": None, "missing": []}
     for u in units:
-        g = boot["by_host"].get(u.host, {"state": "unstamped", "version": None, "missing": []})
-        if g["state"] == "unstamped":
-            out.append(
-                f"  {u.host}: UNSTAMPED -- no bootstrap-manifest.json "
-                f"(pre-versioning, or bootstrap not re-run since stamping was added)"
-            )
-        elif g["state"] == "outdated":
-            miss = ", ".join(g["missing"]) if g["missing"] else "(none listed)"
-            out.append(f"  {u.host}: v{g['version']} OUTDATED (current {cur}) -- may need: {miss}")
-        else:
-            out.append(f"  {u.host}: v{g['version']} (current)")
+        out += _render_bootstrap_unit(u.host, boot["by_host"].get(u.host, default), cur)
     return out
 
 
@@ -829,6 +937,13 @@ def _render_result(units: list[UnitRecord], cmp: dict, boot: dict, repos: dict |
         out.append(f"RESULT: payload drift/gaps on {len(module_problems)} unit(s): {', '.join(module_problems)}")
     if boot_problems:
         out.append(f"RESULT: bootstrap outdated/unstamped on {len(boot_problems)} unit(s): {', '.join(boot_problems)}")
+        # A fleet whose gaps all self-heal on the next cycle should not read like
+        # a fleet needing four site visits. Name the units that actually do.
+        visits = sorted(h for h in boot_problems if (boot["by_host"].get(h) or {}).get("needs_console"))
+        if visits:
+            out.append(f"RESULT: needs a console visit: {', '.join(visits)}")
+        else:
+            out.append("RESULT: every bootstrap gap self-heals on the next provisioning cycle")
     # Reported even when every module matches the build: that combination is
     # precisely the 08-11 state, and the old RESULT line called it in sync.
     if repo_problems:

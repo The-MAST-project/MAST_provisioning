@@ -65,6 +65,22 @@ def test_status_matrix_keys_on_hash_not_version(fdr):
 _GOLDEN = Path(__file__).parent / "data" / "fleet_report_golden.txt"
 
 
+#: Elements for the golden fixture. Mixed classifications on purpose: the
+#: work-order split (self-heals / needs a console visit / neither) only renders
+#: when a unit's missing list spans more than one kind.
+GOLDEN_ELEMENTS = {
+    "current_version": 3,
+    "elements": [
+        {"id": "firewall-off", "since": 1, "description": "x", "reassert": "routine"},
+        {"id": "mast-admin-account", "since": 1, "description": "x", "reassert": "console"},
+        {"id": "service-trim", "since": 3, "description": "x", "reassert": "routine"},
+        {"id": "npcap", "since": 3, "description": "x", "reassert": "console"},
+        {"id": "openssh-from-msi", "since": 3, "description": "x", "reassert": "on-demand"},
+        {"id": "execution-policy", "since": 3, "description": "x", "reassert": "provider", "provider": "execution-policy"},
+    ],
+}
+
+
 def _golden_fixture(fdr):
     """A fleet that exercises every section render() can emit.
 
@@ -114,6 +130,18 @@ def _golden_fixture(fdr):
         git_sha="gitsha123456",
         installed_at="2026-08-01T11:00:00Z",
         modules={
+            # Behind on bootstrap_version, yet every routine element was applied
+            # this morning: the 'behind but converging' case the annotation exists
+            # for. It must NOT clear the flag -- console work is still outstanding.
+            "bootstrap-reassert": {
+                **entry("h-reassert"),
+                "facts": {
+                    "reassert_state": "applied",
+                    "reassert_at": "2026-08-25T06:59:44Z",
+                    "reassert_applied_count": 2,
+                    "observed_at": "2026-08-25T06:59:48Z",
+                },
+            },
             "git": entry("h-git"),
             "desktop-shortcuts": entry("NEW"),
             "mongodb-client": {
@@ -155,7 +183,7 @@ def _golden_fixture(fdr):
         "units": units,
         "reference": ref,
         "cmp": fdr.compare_to_build(units, build),
-        "boot": fdr.bootstrap_gaps(units, {"current_version": 3, "elements": {}}),
+        "boot": fdr.bootstrap_gaps(units, GOLDEN_ELEMENTS),
         "repo_boot_v": 4,
         "repos": fdr.compare_repos(units, ref, expected={"common", "unit"}),
         "facts": fdr.compare_facts(units),
@@ -558,3 +586,84 @@ def test_blob_drift_is_noted_but_never_warned(fdr):
     out = "\n".join(fdr._render_bios_policy([_bios_unit(fdr, "mast04", bios_check="blob-drift", needs_attention=False)]))
     assert "[WARN]" not in out
     assert "[note] mast04" in out
+
+
+# --- Bootstrap gaps as a work order (#143 stage 5) ---------------------------
+
+_WO_ELEMENTS = {
+    "current_version": 3,
+    "elements": [
+        {"id": "firewall-off", "since": 1, "description": "x", "reassert": "routine"},
+        {"id": "mast-admin-account", "since": 1, "description": "x", "reassert": "console"},
+        {"id": "service-trim", "since": 3, "description": "x", "reassert": "routine"},
+        {"id": "npcap", "since": 3, "description": "x", "reassert": "console"},
+    ],
+}
+
+
+def _boot_unit(fdr, host, version, **facts):
+    rec = _unit(fdr, host, git={"version": "1.0", "hash": "h"})
+    rec.bootstrap_version = version
+    if facts:
+        rec.facts = {"bootstrap-reassert": dict(facts)}
+    return rec
+
+
+def test_an_unstamped_unit_reports_every_element_as_unverified(fdr):
+    # Not an empty list: without a stamped version there is nothing to compare
+    # 'since' against, so nothing is KNOWN to be applied. Reporting zero made the
+    # unit whose state is least known the one the report had least to say about.
+    gaps = fdr.bootstrap_gaps([_boot_unit(fdr, "mast02", None)], _WO_ELEMENTS)["by_host"]["mast02"]
+    assert gaps["state"] == "unstamped"
+    assert sorted(gaps["missing"]) == ["firewall-off", "mast-admin-account", "npcap", "service-trim"]
+
+
+def test_missing_elements_are_split_by_who_can_fix_them(fdr):
+    gaps = fdr.bootstrap_gaps([_boot_unit(fdr, "mast03", 2)], _WO_ELEMENTS)["by_host"]["mast03"]
+    assert gaps["state"] == "outdated"
+    assert gaps["self_healing"] == ["service-trim"]
+    assert gaps["needs_console"] == ["npcap"]
+
+
+def test_a_current_unit_has_nothing_to_do(fdr):
+    gaps = fdr.bootstrap_gaps([_boot_unit(fdr, "mast01", 3)], _WO_ELEMENTS)["by_host"]["mast01"]
+    assert gaps["state"] == "current"
+    assert gaps["missing"] == []
+    assert gaps["needs_console"] == []
+
+
+def test_a_recent_re_assert_annotates_but_does_not_clear_the_flag(fdr):
+    # The whole point of annotate-not-suppress: console work is still outstanding,
+    # so the unit stays flagged however recently it converged.
+    unit = _boot_unit(
+        fdr, "mast02", 2, reassert_state="applied", reassert_at="2026-08-25T06:59:44Z", reassert_applied_count=1
+    )
+    boot = fdr.bootstrap_gaps([unit], _WO_ELEMENTS)
+    gaps = boot["by_host"]["mast02"]
+    assert gaps["state"] == "outdated"
+    assert gaps["needs_console"] == ["npcap"]
+    assert gaps["reassert"]["state"] == "applied"
+    rendered = "\n".join(fdr._render_bootstrap([unit], boot, None))
+    assert "re-asserted 2026-08-25T06:59:44Z" in rendered
+    assert "OUTDATED" in rendered
+    assert "NEEDS A CONSOLE VISIT" in rendered
+
+
+def test_a_failed_re_assert_is_warned_about(fdr):
+    unit = _boot_unit(fdr, "mast02", 3, reassert_state="failed", reassert_at="2026-08-25T06:59:44Z")
+    boot = fdr.bootstrap_gaps([unit], _WO_ELEMENTS)
+    rendered = "\n".join(fdr._render_bootstrap([unit], boot, None))
+    assert "[WARN] last re-assert FAILED" in rendered
+
+
+def test_result_line_names_only_the_units_needing_a_person(fdr):
+    healing = _boot_unit(fdr, "mast01", 2)
+    only_routine = {
+        "current_version": 3,
+        "elements": [{"id": "service-trim", "since": 3, "description": "x", "reassert": "routine"}],
+    }
+    boot = fdr.bootstrap_gaps([healing], only_routine)
+    cmp = fdr.compare([healing], None)
+    out = "\n".join(fdr._render_result([healing], cmp, boot, None))
+    assert "every bootstrap gap self-heals" in out
+    assert "needs a console visit" not in out
