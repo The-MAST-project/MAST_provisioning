@@ -1,7 +1,7 @@
-﻿{
+{
   "name": "nomachine",
   "version": "9.0.188",
-  "description": "Install NoMachine Enterprise Desktop (server-side, accepts incoming sessions) and apply license if provided. Client is intentionally not installed.",
+  "description": "Install NoMachine Enterprise Desktop (server-side, accepts incoming sessions) and apply license if provided. Client is intentionally not installed. Verify also reports how long the loaded subscription has left, warning inside its renewal window.",
   "order": 1300,
   "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-nomachine.ps1\" -AssetsRoot \".\"",
   "commandfiles": [
@@ -9,6 +9,8 @@
     "verify-nomachine.ps1",
     "assets/nomachine-enterprise-desktop_9.0.188_11_x64.exe"
   ],
-  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\verify-nomachine.ps1\""
+  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\verify-nomachine.ps1\"",
+  "repofiles": [
+    "server/lib/mast-license.ps1"
+  ]
 }
-

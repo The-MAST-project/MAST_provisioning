@@ -9,6 +9,12 @@ ${mastLogDot} = Join-Path ${PSScriptRoot} 'mast-log.ps1'
 if (-not (Test-Path ${mastLogDot})) { ${mastLogDot} = Join-Path ${PSScriptRoot} '..\..\lib\mast-log.ps1' }
 . ${mastLogDot}
 Set-StrictMode -Off  # mast-log.ps1 enables StrictMode; verify scripts predate it and probe optional properties
+# The expiry verdict is shared with the build side, so the two cannot drift
+# apart on what "expiring" means. Staged flat as a repofiles entry.
+${licDot} = Join-Path ${PSScriptRoot} 'mast-license.ps1'
+if (-not (Test-Path ${licDot})) { ${licDot} = Join-Path ${PSScriptRoot} '..\..\lib\mast-license.ps1' }
+if (Test-Path ${licDot}) { . ${licDot} }
+
 ${verifyLog} = Get-MastVerifyLog -Module 'nomachine'
 
 # A 'Running' nxservice is NOT proof the unit is reachable: when the 9.0.188
@@ -26,6 +32,10 @@ ${REQUIRED_CFG} = [ordered]@{
 ${EXPIRY_FORMAT} = 'MMM dd HH:mm:ss yyyy'
 
 ${report}   = New-Object System.Collections.Generic.List[string]
+${licenseState} = 'unknown'
+${expiryRaw} = ''
+${licenseDays} = $null
+${licenseSub} = ''
 ${failures} = New-Object System.Collections.Generic.List[string]
 
 ${svcMatches} = @(Get-Service -ErrorAction SilentlyContinue | Where-Object {
@@ -86,6 +96,8 @@ if (Test-Path -LiteralPath ${nxExe}) {
     } else {
         ${expiryRaw} = ${expiryMatch}.Matches[0].Groups[1].Value.Trim()
         ${report}.Add("subscription expiry: ${expiryRaw}")
+        ${subMatch} = ${sub} | Select-String -Pattern 'Subscription id:\s*(\S+?)\.?\s*$' | Select-Object -First 1
+        if (${subMatch}) { ${licenseSub} = ${subMatch}.Matches[0].Groups[1].Value }
         # Drop the leading weekday and the timezone abbreviation (.NET parses
         # neither usefully here), then compare. An unparseable date is reported
         # verbatim rather than failed, so a formatting quirk cannot fail a unit.
@@ -101,7 +113,39 @@ if (Test-Path -LiteralPath ${nxExe}) {
         } else {
             ${report}.Add('  (expiry not parsed for comparison; reported verbatim)')
         }
+
+        # Warn on APPROACH, not only after the fact. Until now this check went
+        # from silent to failing on the day -- and for NoMachine that is the day
+        # the unit stops accepting connections, because an expired server
+        # refuses them outright rather than degrading.
+        if (Get-Command Test-MastLicenseExpiry -ErrorAction SilentlyContinue) {
+            ${verdict} = Test-MastLicenseExpiry -RawExpiry ${expiryRaw}
+            ${licenseState} = [string]${verdict}.State
+            ${licenseDays} = ${verdict}.DaysLeft
+            if (${licenseState} -eq 'expiring') {
+                ${report}.Add("  [WARN] $(${verdict}.Message)")
+                Write-Warning ("nomachine: {0}" -f ${verdict}.Message)
+            } elseif (${licenseState} -eq 'unknown') {
+                ${report}.Add("  [WARN] $(${verdict}.Message)")
+            }
+        }
     }
+}
+
+# Facts, so the certificate's remaining life reaches installed-manifest.json and
+# from there the fleet report. Written on BOTH paths: a unit whose subscription
+# already failed is precisely the one whose expiry the fleet view must show.
+# Until now this verify emitted no facts at all, which is why nothing about
+# licences was ever visible outside a single unit's log.
+try {
+    ${null} = Write-MastModuleFacts -Module 'nomachine' -Facts @{
+        nomachine_state        = ${licenseState}
+        nomachine_days_left    = ${licenseDays}
+        nomachine_expiry       = ${expiryRaw}
+        nomachine_subscription = ${licenseSub}
+    }
+} catch {
+    Write-Warning ("could not write nomachine facts: {0}" -f $_.Exception.Message)
 }
 
 if (${failures}.Count -gt 0) {

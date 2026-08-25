@@ -667,3 +667,76 @@ def test_result_line_names_only_the_units_needing_a_person(fdr):
     out = "\n".join(fdr._render_result([healing], cmp, boot, None))
     assert "every bootstrap gap self-heals" in out
     assert "needs a console visit" not in out
+
+
+# --- NoMachine certificates (#153) -------------------------------------------
+
+
+def _nm_unit(fdr, host, **facts):
+    rec = _unit(fdr, host, nomachine={"version": "1.0", "hash": "h"})
+    rec.facts = {"nomachine": dict(facts)}
+    return rec
+
+
+def test_no_unit_reports_a_certificate_renders_no_section(fdr):
+    assert fdr._render_nomachine([_unit(fdr, "mast01", git={"version": "1.0", "hash": "h"})]) == []
+
+
+def test_current_certificates_warn_about_nothing(fdr):
+    units = [
+        _nm_unit(fdr, "mast01", nomachine_state="ok", nomachine_expiry="Thu Jul 01 2027", nomachine_days_left=310),
+        _nm_unit(fdr, "mast02", nomachine_state="ok", nomachine_expiry="Thu Jul 01 2027", nomachine_days_left=310),
+    ]
+    out = "\n".join(fdr._render_nomachine(units))
+    assert "[WARN]" not in out
+    assert "All reporting units hold a current certificate." in out
+
+
+def test_units_sharing_an_expiry_collapse_to_one_line(fdr):
+    # Every seat the fleet owns expires the same day; ten lines would say one
+    # renewal ten times.
+    units = [
+        _nm_unit(fdr, f"mast0{n}", nomachine_state="expiring", nomachine_expiry="Thu Jul 01 2027", nomachine_days_left=47)
+        for n in range(1, 6)
+    ]
+    lines = [ln for ln in fdr._render_nomachine(units) if "unit(s) expire" in ln]
+    assert len(lines) == 1
+    assert lines[0].strip().startswith("5 unit(s) expire")
+
+
+def test_an_expiring_certificate_warns_with_the_lead_time_reason(fdr):
+    out = "\n".join(
+        fdr._render_nomachine(
+            [_nm_unit(fdr, "mast01", nomachine_state="expiring", nomachine_expiry="x", nomachine_days_left=40)]
+        )
+    )
+    assert "[WARN]" in out
+    assert "lead time" in out
+
+
+def test_an_expired_certificate_says_the_unit_refuses_connections_now(fdr):
+    # The operational fact that matters: it does not degrade, it stops.
+    out = "\n".join(
+        fdr._render_nomachine(
+            [_nm_unit(fdr, "mast06", nomachine_state="expired", nomachine_expiry="x", nomachine_days_left=-55)]
+        )
+    )
+    assert "EXPIRED" in out
+    assert "mast06" in out
+
+
+def test_the_most_urgent_group_is_listed_first(fdr):
+    units = [
+        _nm_unit(fdr, "mast01", nomachine_state="ok", nomachine_expiry="far", nomachine_days_left=310),
+        _nm_unit(fdr, "mast02", nomachine_state="expiring", nomachine_expiry="near", nomachine_days_left=20),
+    ]
+    lines = [ln for ln in fdr._render_nomachine(units) if "unit(s) expire" in ln]
+    assert "near" in lines[0]
+
+
+def test_an_unreadable_expiry_warns_rather_than_passing(fdr):
+    out = "\n".join(
+        fdr._render_nomachine([_nm_unit(fdr, "mast01", nomachine_state="unknown", nomachine_expiry="(unreported)")])
+    )
+    assert "[WARN]" in out
+    assert "could not be read" in out
