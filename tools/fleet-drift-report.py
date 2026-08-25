@@ -831,6 +831,53 @@ def _render_bios_policy(ok_cols: list[UnitRecord]) -> list[str]:
     return out
 
 
+def _render_nomachine(ok_cols: list[UnitRecord]) -> list[str]:
+    """NoMachine certificate life per unit, grouped, and it warns.
+
+    Its own section for the same reason the bootstrap one has: the facts matrix
+    deliberately does not warn, on the grounds that a fact varying across the
+    fleet is usually an observation. A certificate about to lapse is not an
+    observation -- an expired NoMachine refuses connections outright, so the
+    unit loses its remote desktop on the day, four hours' drive away.
+
+    Grouped by expiry date because every seat the fleet owns expires on the same
+    day: per-unit lines would print the same renewal ten times.
+    """
+    rows = [(u.host, (u.facts.get("nomachine") or {})) for u in ok_cols]
+    rows = [(h, f) for h, f in rows if f.get("nomachine_state")]
+    if not rows:
+        return []
+
+    out = ["", "=== NoMachine certificates ==="]
+    by_expiry: dict[str, list[tuple[str, dict]]] = {}
+    for host, f in rows:
+        by_expiry.setdefault(str(f.get("nomachine_expiry") or "(unreported)"), []).append((host, f))
+
+    def _days(group):
+        d = group[0][1].get("nomachine_days_left")
+        return d if isinstance(d, int) else 10**6
+
+    warned = False
+    for expiry, group in sorted(by_expiry.items(), key=lambda kv: _days(kv[1])):
+        hosts = ", ".join(sorted(h for h, _ in group))
+        state = str(group[0][1].get("nomachine_state"))
+        days = group[0][1].get("nomachine_days_left")
+        left = f"{days} day(s)" if isinstance(days, int) else "unknown"
+        out.append(f"  {len(group)} unit(s) expire {expiry} -- {left}: {hosts}")
+        if state == "expired":
+            warned = True
+            out.append(f"  [WARN] EXPIRED -- these units refuse NoMachine connections now: {hosts}")
+        elif state == "expiring":
+            warned = True
+            out.append(f"  [WARN] renewal is a purchase with lead time; start it now ({left} left)")
+        elif state == "unknown":
+            warned = True
+            out.append(f"  [WARN] expiry could not be read on: {hosts}")
+    if not warned:
+        out.append("  All reporting units hold a current certificate.")
+    return out
+
+
 def _render_repo_warnings(repos: dict) -> list[str]:
     # Spelled out rather than left to the glyphs: 'pinned and yet divergent'
     # means a MOVED TAG, which is a different failure from a branch drifting.
@@ -978,6 +1025,7 @@ def render(
     lines += _render_repo_matrix(repos, ok_cols)
     lines += _render_facts_matrix(facts, ok_cols)
     lines += _render_bios_policy(ok_cols)
+    lines += _render_nomachine(ok_cols)
     lines += _render_bootstrap(units, boot, repo_boot_v)
     lines += _render_result(units, cmp, boot, repos)
     return "\n".join(lines)
