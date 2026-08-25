@@ -1,32 +1,66 @@
-NoMachine Enterprise Desktop subscriptions (Product Id WEDS)
-============================================================
+NoMachine seat allocation (Product Id WEDS)
+===========================================
 
-The ten server-NN.lic files here are the LIVE 2026-2027 set: subscriptions
-LI06X02774 through LI06X02783, issued 2026-06-22, expiring 2027-07-01.
-server-NN maps to LI06X0{2773+NN}.
+THIS DIRECTORY HOLDS THE ALLOCATION TABLE, NOT THE CERTIFICATES.
 
-Source of truth is the mast-ns-control share, NOT this directory:
+    allocated.csv   which seat each host uses   (tracked)
+    README.txt      this file                   (tracked)
+
+The certificates live in exactly one place -- the gitignored credential store
+that build-mast.ps1 actually reads:
+
+    vault\nomachine-licenses\server-NN.lic
+
+The build takes the seat NAME for a host from allocated.csv here, and the
+certificate that name refers to from the store there. Put a .lic in this
+directory and nothing will ship it: the build fails on sight rather than let
+an unread copy sit here drifting.
+
+That guard is not tidiness. On 2026-08-23 a stale 2025 set was restored into
+this directory -- the one that documents the certificates rather than the one
+that ships them. Units were unaffected, because the build never reads here
+(see "Nothing owed" below), but nobody could tell that at the time: this file
+then claimed the ten .lic files here were the live set, so the reasonable
+reading was that two units had just been given expired certificates. The
+build now refuses to start with a .lic in this directory, so the question
+cannot arise again.
+
+Getting or restoring the certificates
+-------------------------------------
+
+Source of truth is the mast-ns-control share, not any working tree:
 
     \\mast-ns-control\mast-share\Downloads\NoMachine\
         Licenses 2026\files.zip   <- the current set. USE THIS ONE.
         licenses\                 <- the 2025 set, EXPIRED 2026-07-01.
 
 Both use the same ten filenames, so an expired certificate is
-indistinguishable from a current one by name alone. Check the Expiry field
-before trusting a copy; a stale set was restored from the wrong folder on
-2026-08-23 and provisioned onto mast06 and mast07 before it was caught.
+indistinguishable from a current one by name alone. Check the Expiry field of
+whatever you copy into the store:
 
-The .lic files are deliberately NOT git-tracked (they are purchased
-credentials). They therefore live only in a working tree and can be lost to
-an ordinary git clean -- re-fetch them from the share above, not from another
-unit. This README and allocated.csv ARE tracked.
+    Select-String -Path vault\nomachine-licenses\*.lic -Pattern '^Expiry:'
+
+The live 2026-2027 set is LI06X02774 through LI06X02783, issued 2026-06-22,
+expiring 2027-07-01; server-NN maps to LI06X0{2773+NN}.
+
+The build now checks this for you: it reads the Expiry field of the
+certificate it is about to stage and REFUSES TO BUILD on an expired one,
+before anything reaches a unit. Inside 60 days of expiry it builds and warns,
+because renewal is a purchase with lead time that provisioning cannot make
+happen.
+
+The .lic files are gitignored (vault\*), so a clone does not carry them and a
+`git clean` cannot take them. Re-fetch from the share above, never from
+another unit. This README and allocated.csv ARE tracked.
 
 Allocation
 ----------
 
-allocated.csv is provider input for the PRODUCTION UNITS ONLY. mast01-mast08
-are provisioned, so provide-nomachine.ps1 reads that file and installs the
-right certificate as <install>\etc\server.lic.
+allocated.csv is build input for the PRODUCTION UNITS ONLY. mast01-mast08 are
+provisioned, so build-mast.ps1 resolves the row here, copies the named
+certificate out of the store, and stages it as nomachine.lic;
+provide-nomachine.ps1 on the unit installs that staged file as
+<install>\etc\server.lic.
 
 mast00, mastw and mast-ns-spec are NOT provisioned. Their certificates were
 installed by hand and their rows (or absence) here are a record, nothing more.
@@ -68,14 +102,30 @@ audit trail only -- it is LI06X02774, which is mast00's live subscription, so
 do NOT reinstate from it. Take a free row from allocated.csv and the matching
 file from the share.
 
-Owed
-----
+Nothing owed (corrected 2026-08-25)
+-----------------------------------
 
-mast05, mast06 and mast07 need their certificates refreshed by a provisioning
-run: mast06 and mast07 hold expired 2025 certificates, and mast05 is
-unverified. Replacing the files in this directory changes the nomachine
-module's content hash, so an ordinary run classifies each as NEEDS_UPDATE and
-converges it -- no --force, no hand-install.
+An earlier version of this section said mast05, mast06 and mast07 needed their
+certificates refreshed because mast06 and mast07 "hold expired 2025
+certificates". That was wrong, and the reason it was wrong is the subject of
+this README.
+
+The stale set restored on 2026-08-23 went into THIS directory, which the build
+does not read. The store was untouched -- its files still carry their 2026-07-07
+timestamps -- so every unit built since has been staged a current certificate.
+The payloads that actually went to those three units say so:
+
+    mast05  LI06X02781  expiry 2027-07-01     (server-08.lic)
+    mast06  LI06X02782  expiry 2027-07-01     (server-09.lic)
+    mast07  LI06X02783  expiry 2027-07-01     (server-10.lic)
+
+each matching its allocated.csv row. No refresh is owed.
+
+The mistaken entry is itself the clearest illustration of the hazard: whoever
+found a stale set here reasonably concluded the units had received it, because
+this README told them the certificates here were the ones that ship. A
+misleading layout produced a false incident report, and the report was believed
+for two days.
 
 Rationale, and the full history of how the duplicate arose:
 docs/decisions/2026-08-24-a-nomachine-seat-is-a-file-and-mastw-gives-one-up.md
