@@ -16,11 +16,14 @@ certificate that name refers to from the store there. Put a .lic in this
 directory and nothing will ship it: the build fails on sight rather than let
 an unread copy sit here drifting.
 
-That guard is not tidiness. A second copy beside this README is how expired
-certificates reached mast06 and mast07 on 2026-08-23 -- somebody refreshed
-"the licences" in the directory that documents them, which is not the
-directory that ships them. Until 2026-08-25 this file said the ten .lic files
-were here, and the paragraph below still told you to replace them here.
+That guard is not tidiness. On 2026-08-23 a stale 2025 set was restored into
+this directory -- the one that documents the certificates rather than the one
+that ships them. Units were unaffected, because the build never reads here
+(see "Nothing owed" below), but nobody could tell that at the time: this file
+then claimed the ten .lic files here were the live set, so the reasonable
+reading was that two units had just been given expired certificates. The
+build now refuses to start with a .lic in this directory, so the question
+cannot arise again.
 
 Getting or restoring the certificates
 -------------------------------------
@@ -99,19 +102,30 @@ audit trail only -- it is LI06X02774, which is mast00's live subscription, so
 do NOT reinstate from it. Take a free row from allocated.csv and the matching
 file from the share.
 
-Owed
-----
+Nothing owed (corrected 2026-08-25)
+-----------------------------------
 
-mast05, mast06 and mast07 need their certificates refreshed by a provisioning
-run: mast06 and mast07 hold expired 2025 certificates, and mast05 is
-unverified. Replace the files in the STORE (vault\nomachine-licenses) -- that
-changes what the build stages, and so the nomachine module's content hash, and
-an ordinary run classifies each unit as NEEDS_UPDATE and converges it. No
---force, no hand-install.
+An earlier version of this section said mast05, mast06 and mast07 needed their
+certificates refreshed because mast06 and mast07 "hold expired 2025
+certificates". That was wrong, and the reason it was wrong is the subject of
+this README.
 
-(This paragraph used to say "this directory", which would have changed
-nothing that ships. That is the same confusion that put the expired set on
-mast06 and mast07 in the first place.)
+The stale set restored on 2026-08-23 went into THIS directory, which the build
+does not read. The store was untouched -- its files still carry their 2026-07-07
+timestamps -- so every unit built since has been staged a current certificate.
+The payloads that actually went to those three units say so:
+
+    mast05  LI06X02781  expiry 2027-07-01     (server-08.lic)
+    mast06  LI06X02782  expiry 2027-07-01     (server-09.lic)
+    mast07  LI06X02783  expiry 2027-07-01     (server-10.lic)
+
+each matching its allocated.csv row. No refresh is owed.
+
+The mistaken entry is itself the clearest illustration of the hazard: whoever
+found a stale set here reasonably concluded the units had received it, because
+this README told them the certificates here were the ones that ship. A
+misleading layout produced a false incident report, and the report was believed
+for two days.
 
 Rationale, and the full history of how the duplicate arose:
 docs/decisions/2026-08-24-a-nomachine-seat-is-a-file-and-mastw-gives-one-up.md
