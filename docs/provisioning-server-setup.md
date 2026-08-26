@@ -287,6 +287,51 @@ New-NetFirewallRule -DisplayName 'MAST: ICMP outbound' `
 
 ---
 
+## Step 5b - Power and NIC settings (elevated, once)
+
+The provisioning server must never sleep and its NIC must never idle down. Both
+defaults are wrong for this role, and both were caught the hard way on 2026-08-26.
+
+```powershell
+# Never sleep, never spin down. A laptop-class provisioning server on mains
+# ships with a standby timeout -- 'High performance' on labcomp2 carried a
+# 600 s AC standby, which slept the host mid-session.
+powercfg /change standby-timeout-ac 0
+powercfg /change hibernate-timeout-ac 0
+powercfg /change disk-timeout-ac 0
+
+# Stop the NIC that faces the units from entering low-power idle. Name the
+# adapter that carries the unit traffic, not the Wi-Fi one.
+Set-NetAdapterAdvancedProperty -Name 'Ethernet' -RegistryKeyword '*EEE'    -RegistryValue 0
+Set-NetAdapterAdvancedProperty -Name 'Ethernet' -RegistryKeyword 'ULPMode' -RegistryValue 0
+Restart-NetAdapter -Name 'Ethernet'
+```
+
+Verify:
+
+```powershell
+powercfg /query SCHEME_CURRENT SUB_SLEEP STANDBYIDLE   # AC index must be 0
+Get-NetAdapterAdvancedProperty -Name 'Ethernet' |
+    Where-Object RegistryKeyword -in '*EEE','ULPMode'  # both Off/Disabled
+```
+
+**Why this matters.** A sleeping server drops every session it holds; a NIC in
+low-power idle makes the *first* contact after a quiet period fail. That second
+effect is not cosmetic -- it corrupts address selection. `local_address_for()`
+asks the OS which local address reaches a unit, and with the peer's neighbour
+entry unresolved the answer is whatever interface wins the fallback, which on
+this host is the Wi-Fi or VirtualBox host-only address rather than the bench
+Ethernet. A run that draws the wrong address aborts at
+`PREFLIGHT_UNIT_SMB_FAIL`; one that draws the Wi-Fi address instead *succeeds*,
+slowly, over the wrong link.
+
+**Known not to take:** `Set-NetAdapterPowerManagement -SelectiveSuspend Disabled`
+reports success on the Intel driver here and reads back `Enabled`. The effective
+control is the Device Manager "allow the computer to turn off this device"
+checkbox on the adapter's Power Management tab. Set it by hand.
+
+---
+
 ## Step 6 - DNS / hostname resolution
 
 The provisioning server must resolve `mast01`, `mast02`, etc. to the current
