@@ -321,9 +321,15 @@ effect is not cosmetic -- it corrupts address selection. `local_address_for()`
 asks the OS which local address reaches a unit, and with the peer's neighbour
 entry unresolved the answer is whatever interface wins the fallback, which on
 this host is the Wi-Fi or VirtualBox host-only address rather than the bench
-Ethernet. A run that draws the wrong address aborts at
-`PREFLIGHT_UNIT_SMB_FAIL`; one that draws the Wi-Fi address instead *succeeds*,
-slowly, over the wrong link.
+Ethernet. The run then hands that address to the unit as `-ProvAddress` and
+aborts at `PREFLIGHT_UNIT_SMB_FAIL`, having built nothing.
+
+That abort depends on the unit being unable to reach the wrong address -- here
+the unit is on a guest network that cannot route to the server's campus
+address, so a bad address always fails loudly. On a site where the fallback
+address *is* reachable, the same defect would instead pull the payload over the
+wrong (slower) interface and report success. Do not rely on the network to
+catch it; see `MAST_provisioning#166`.
 
 **Known not to take:** `Set-NetAdapterPowerManagement -SelectiveSuspend Disabled`
 reports success on the Intel driver here and reads back `Enabled`. The effective
