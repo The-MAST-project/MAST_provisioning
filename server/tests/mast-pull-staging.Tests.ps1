@@ -53,3 +53,27 @@ Describe 'Get-MastRobocopyLogPath' {
             Should Be 'C:\MAST\logs\sessions\timingtest\robocopy.log'
     }
 }
+
+Describe 'Test-MastPayloadBytesUsable' {
+    It 'refuses the unset default rather than guessing' {
+        Test-MastPayloadBytesUsable -PayloadBytes -1 | Should Be $false
+    }
+
+    It 'accepts a real measured size' {
+        Test-MastPayloadBytesUsable -PayloadBytes 14523011072 | Should Be $true
+    }
+
+    It 'accepts zero (an empty payload is a fact, not a missing value)' {
+        Test-MastPayloadBytesUsable -PayloadBytes 0 | Should Be $true
+    }
+}
+
+Describe 'Test-StagingFits with a junction-inclusive payload' {
+    It 'refuses the 13.9 GB payload on a disk that the old 3.8 GB scan would have passed' {
+        # The defect in one assertion: a unit with ~6 GB free passed the guard on
+        # the understated size, then robocopy copied through the junctions and
+        # needed 13.9 GB (issue 7, item 6).
+        Test-StagingFits -FreeBytes 6GB -PayloadBytes 3.8GB | Should Be $true
+        Test-StagingFits -FreeBytes 6GB -PayloadBytes 13.855GB | Should Be $false
+    }
+}

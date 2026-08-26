@@ -837,6 +837,7 @@ class Driver:
             smb_pass=self.smb_pass,
             unit_stage=unit_stage,
             src_unc=src_unc,
+            payload_bytes=size.bytes,
         )
         script = (
             f"$r = & {_ps_lit(UNIT_PULL_SCRIPT)} {args}; "
@@ -868,6 +869,7 @@ class Driver:
             reason_by_outcome: dict[Any, str] = {
                 "NET_USE_FAIL": "net_use_failed",
                 "NET_USE_HUNG": "net_use_hung",
+                "PAYLOAD_BYTES_MISSING": "payload_bytes_missing",
                 "ROBOCOPY_ERROR": "robocopy_error",
                 "DISK_INSUFFICIENT": "disk_insufficient",
             }

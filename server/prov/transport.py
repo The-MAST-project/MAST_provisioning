@@ -179,6 +179,7 @@ def pull_staging_args(
     smb_pass: str,
     unit_stage: str,
     src_unc: str,
+    payload_bytes: int,
 ) -> str:
     """The argument list for ``client/mast-pull-staging.ps1``, as PS literals.
 
@@ -192,15 +193,25 @@ def pull_staging_args(
     into ``$args`` and produced the UNC ``\\\\\\mast-staging``. Every dev VM cycle
     failed at transfer for six days.
 
+    ``payload_bytes`` comes from ``staging_payload_size`` and is the ONE authoritative
+    measurement of the payload: the unit-side script no longer measures for itself,
+    because ``Get-ChildItem -Recurse`` does not descend the staging junctions and
+    understated the disk guard by ~10 GB (MAST_provisioning#7 item 6).
+
     Guarded by ``test_pull_staging_args_match_the_script``.
     """
+    # payload_bytes is quoted like every other argument, and deliberately so:
+    # test_pull_staging_args_match_the_script finds emitted flags with -(\w+) ',
+    # so a bare numeric would be invisible to the drift guard this function exists
+    # to satisfy. PowerShell coerces the string to [long] on binding.
     return (
         f"-ProvAddress {ps_lit(prov_address)} "
         f"-UnitHostname {ps_lit(unit_hostname)} "
         f"-SmbUser {ps_lit(smb_user)} "
         f"-SmbPass {ps_lit(smb_pass)} "
         f"-UnitStage {ps_lit(unit_stage)} "
-        f"-SrcUNC {ps_lit(src_unc)}"
+        f"-SrcUNC {ps_lit(src_unc)} "
+        f"-PayloadBytes {ps_lit(str(payload_bytes))}"
     )
 
 
