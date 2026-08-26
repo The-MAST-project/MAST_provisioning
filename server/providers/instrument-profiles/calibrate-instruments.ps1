@@ -218,7 +218,7 @@ if (${Interactive}) {
                 else { Write-Host '  Cancelled.' -ForegroundColor DarkGray }
                 Read-Host 'Press Enter' | Out-Null
             }
-            'Q' { Write-Host 'Bye.'; break }
+            'Q' { Write-Host 'Bye.'; exit 0 }
             default { }
         }
     }
