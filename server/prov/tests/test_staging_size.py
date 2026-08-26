@@ -45,3 +45,17 @@ def test_cycle_guard_prevents_double_count_and_loop(tmp_path):
 def test_missing_path_is_zero(tmp_path):
     r = staging_payload_size(tmp_path / "does-not-exist")
     assert r.files == 0 and r.bytes == 0
+
+
+def test_transfer_rate_is_mib_per_second():
+    from prov.driver import transfer_rate_mbps
+
+    assert transfer_rate_mbps(1_048_576 * 100, 1.0) == 100.0
+    assert transfer_rate_mbps(13_855 * 1_048_576, 132.0) == 105.0
+
+
+def test_transfer_rate_is_zero_when_elapsed_is_unusable():
+    from prov.driver import transfer_rate_mbps
+
+    assert transfer_rate_mbps(1_048_576, 0.0) == 0.0
+    assert transfer_rate_mbps(1_048_576, -1.0) == 0.0
