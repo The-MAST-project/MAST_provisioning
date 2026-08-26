@@ -41,3 +41,15 @@ Describe 'Test-StagingFits' {
         Test-StagingFits -FreeBytes 18GB -PayloadBytes 16GB -MarginBytes 2GB | Should Be $true
     }
 }
+
+Describe 'Get-MastRobocopyLogPath' {
+    It 'lands the log in the per-run session dir the driver archives' {
+        Get-MastRobocopyLogPath -UnitStage 'C:\mast-staging\run-20260826-101500' |
+            Should Be 'C:\MAST\logs\sessions\run-20260826-101500\robocopy.log'
+    }
+
+    It 'keys the dir on the run id, which is the staging leaf' {
+        Get-MastRobocopyLogPath -UnitStage 'D:\other\timingtest' |
+            Should Be 'C:\MAST\logs\sessions\timingtest\robocopy.log'
+    }
+}

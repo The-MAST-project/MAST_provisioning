@@ -83,6 +83,15 @@ function Get-RobocopyOutcome {
     if ($ExitCode -ge 8) { 'ROBOCOPY_ERROR' } else { 'OK' }
 }
 
+function Get-MastRobocopyLogPath {
+    # The per-run session dir is what the driver archives wholesale after a run
+    # (driver._download_dir), so the robocopy file log lands there and comes back
+    # with the rest of the run's evidence rather than needing a separate fetch.
+    param([string]$UnitStage)
+    $runId = Split-Path $UnitStage -Leaf
+    return (Join-Path (Join-Path 'C:\MAST\logs\sessions' $runId) 'robocopy.log')
+}
+
 function Test-StagingFits {
     # True if the payload fits on the destination drive with a safety margin.
     # Pure -- unit-tested alongside Get-RobocopyOutcome.
@@ -158,13 +167,26 @@ try {
     # robocopy creates $UnitStage if absent.
     # /E      - include subdirs (empty too)
     # /R:3 /W:5 - 3 retries, 5s wait per file
-    # /NP /NFL /NDL - suppress progress/file/dir noise over WinRM
-    Write-Host "ROBOCOPY_START src=$SrcUNC dst=$UnitStage"
-    $rbOut = & robocopy $SrcUNC $UnitStage /E /R:3 /W:5 /NP /NFL /NDL 2>&1
+    # /NP     - no per-file progress percentages
+    # /LOG:   - per-file detail to a FILE, nothing to the transport stream.
+    # /NFL /NDL used to suppress that detail everywhere, which also hid every
+    # retry: a file that fails then succeeds still reports FAILED 0, so a 34-min
+    # transfer and a 2-min one produced near-identical summaries (2026-08-26).
+    $rbLog = Get-MastRobocopyLogPath -UnitStage $UnitStage
+    New-Item -ItemType Directory -Path (Split-Path $rbLog -Parent) -Force | Out-Null
+    Write-Host "ROBOCOPY_START src=$SrcUNC dst=$UnitStage log=$rbLog"
+    $rbSw = [System.Diagnostics.Stopwatch]::StartNew()
+    $rbErr = & robocopy $SrcUNC $UnitStage /E /R:3 /W:5 /NP /LOG:$rbLog 2>&1
     $rbRc  = $LASTEXITCODE
-    $rbSummary = ($rbOut | Select-Object -Last 8 | Out-String).Trim()
+    $rbSw.Stop()
+    $rbSummary = ''
+    if (Test-Path -LiteralPath $rbLog) {
+        $rbSummary = ((Get-Content -LiteralPath $rbLog -Tail 8) -join [Environment]::NewLine).Trim()
+    }
+    if (-not $rbSummary) { $rbSummary = ($rbErr | Out-String).Trim() }
 
     $outcome = Get-RobocopyOutcome -ExitCode $rbRc
+    Write-Host ("ROBOCOPY_ELAPSED_S {0:N1}" -f $rbSw.Elapsed.TotalSeconds)
     Write-Host "ROBOCOPY_DONE rc=$rbRc outcome=$outcome"
     Write-Host "ROBOCOPY_SUMMARY $rbSummary"
     return [pscustomobject]@{

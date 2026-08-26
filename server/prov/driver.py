@@ -81,11 +81,34 @@ SMB_PORT = 445
 # ceiling; build/transfer/execute get generous ones sized to a slow real link.
 PROBE_TIMEOUT_S = 180
 BUILD_TIMEOUT_S = 1800
+#: Measured baseline (mast08 over the bench gigabit link, 2026-08-26): 13.855 GB
+#: in 132-142 s at 108-112 MB/s, reproduced four times. The timeout below is ~27x
+#: that, which is headroom, not a target. A transfer running well off baseline is
+#: a signal to investigate (see TRANSFER_SLOW), not a reason to raise the ceiling.
 TRANSFER_TIMEOUT_S = 3600
 EXECUTE_TIMEOUT_S = 3600
 
+#: Floor for a healthy pull over the bench gigabit link. Below this the transfer
+#: still succeeds, but slowly enough to be worth a distinct event: a 10x
+#: degradation was previously invisible because robocopy's summary looks the same
+#: whether the copy took two minutes or thirty-four.
+TRANSFER_SLOW_FLOOR_MBPS = 40.0
+
 #: Windows reports memory in bytes and talks about it in GiB; so does this log line.
 GIB = 1024**3
+
+
+def transfer_rate_mbps(byte_count: int, seconds: float) -> float:
+    """MiB/s for a completed transfer; 0.0 when the elapsed time is unusable.
+
+    Takes the byte count from ``staging_payload_size`` rather than anything the
+    unit measured: the unit-side scan does not descend staging junctions, so a
+    rate computed there would be understated by the size of the index seed.
+    """
+    if seconds <= 0:
+        return 0.0
+    return round((byte_count / 1_048_576) / seconds, 1)
+
 
 EXIT_OK = 0
 EXIT_UNIT_FAIL = 1
@@ -819,6 +842,7 @@ class Driver:
             f"$r = & {_ps_lit(UNIT_PULL_SCRIPT)} {args}; "
             f"Write-Output ('PULLRESULT ' + ($r | ConvertTo-Json -Compress -Depth 6))"
         )
+        t_xfer = time.monotonic()
         try:
             out = self._ps_out(session, script, f"transfer:{host}", timeout_s=TRANSFER_TIMEOUT_S)
         except TimeoutError:
@@ -826,6 +850,7 @@ class Driver:
             self.log.activity(host, "TRANSFER_FAIL", "timeout", dur(), payload_hash, git_sha)
             self.exit_code = EXIT_UNIT_FAIL
             return False
+        xfer_s = time.monotonic() - t_xfer
         res = _marker_json(out, "PULLRESULT ")
         outcome = (res or {}).get("outcome")
         rc = (res or {}).get("rc")
@@ -862,7 +887,26 @@ class Driver:
         # outcome == 'OK': robocopy rc 0-7 (0 no-op, 1 copied, 2-7 info/warning).
         note_by_rc: dict[Any, str] = {0: "no_changes", 1: "files_copied"}
         note = note_by_rc.get(rc, f"robocopy_warning_rc_{rc}")
-        self.log.event("TRANSFER_OK", unit=host, bytes=size.bytes, robocopy_rc=rc, note=note)
+        mbps = transfer_rate_mbps(size.bytes, xfer_s)
+        self.log.event(
+            "TRANSFER_OK",
+            unit=host,
+            bytes=size.bytes,
+            robocopy_rc=rc,
+            note=note,
+            seconds=round(xfer_s, 1),
+            mbps=mbps,
+        )
+        if mbps and mbps < TRANSFER_SLOW_FLOOR_MBPS:
+            self.log.event(
+                "TRANSFER_SLOW",
+                unit=host,
+                mbps=mbps,
+                floor_mbps=TRANSFER_SLOW_FLOOR_MBPS,
+                seconds=round(xfer_s, 1),
+                bytes=size.bytes,
+                hint="robocopy.log in the unit session dir carries the per-file detail",
+            )
         self._unit_stage = unit_stage
         return True
 
