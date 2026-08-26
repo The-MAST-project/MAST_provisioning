@@ -82,6 +82,7 @@ from __future__ import annotations
 import argparse
 import base64
 import ctypes
+import ipaddress
 import json
 import os
 import socket
@@ -159,6 +160,32 @@ LEGACY_REPOS_ROOT = "C:\\MAST\\repos"
 CLONE_ROOT = EXPECTED_SRC_ROOT
 PULL_REPOS_SCRIPT = REPO_ROOT / "server" / "providers" / "mast" / "pull-mast-repos.ps1"
 MAST_LOGS_BASE = "C:\\MAST\\logs"
+
+#: VirtualBox's host-only network. The dev VM always sits here and a real unit
+#: never does, which is the one reliable way to tell them apart -- names are not:
+#: a bare name in --host-unit resolves through institute DNS to a real machine,
+#: which is how two runs on 2026-08-17 reached the telescope prototype, and an
+#: explicit IP dodges the name rule entirely (a bench unit was provisioned this
+#: way on 2026-08-25). The docstring warning was the only guard and it failed twice.
+DEV_VM_SUBNET = ipaddress.ip_network("192.168.56.0/24")
+
+
+def is_dev_vm_address(addr: str) -> bool:
+    """True when ``addr`` is on the VirtualBox host-only network."""
+    try:
+        return ipaddress.ip_address(addr) in DEV_VM_SUBNET
+    except ValueError:
+        return False
+
+
+def resolve_target_address(host_unit: str) -> str:
+    """The address ``--host-unit`` actually reaches, or '' if it does not resolve."""
+    try:
+        return socket.gethostbyname(host_unit)
+    except OSError:
+        return ""
+
+
 SMOKE_LOG_DIR = f"{MAST_LOGS_BASE}\\smoke"
 VERIFY_LOG_DIR = f"{MAST_LOGS_BASE}\\verify"
 
@@ -1095,6 +1122,15 @@ def parse_args() -> argparse.Namespace:
         "provide-mast.ps1 -Force (removes existing clones and re-clones fresh).",
     )
     p.add_argument(
+        "--allow-physical-unit",
+        action="store_true",
+        help=(
+            "Permit --host-unit to be a REAL machine rather than the dev VM. Without this "
+            "the run refuses any target off the VirtualBox host-only network. Provisions "
+            "actual hardware -- pass it only when that is what you intend."
+        ),
+    )
+    p.add_argument(
         "--phases",
         default=None,
         metavar="PHASE[,PHASE...]",
@@ -1196,8 +1232,27 @@ def main() -> None:  # noqa: C901 -- argparse branching IS the CLI surface, plus
         if phases is not None:
             log(f"Phases:  {', '.join(sorted(phases))}")
         log(f"Cycles:  {args.repeat}")
-        log(f"VM:      {args.vbox_vm}  (snapshot: {args.snapshot})")
-        log(f"Unit SSH target: {args.host_unit}")
+        target_addr = resolve_target_address(args.host_unit)
+        on_dev_vm = is_dev_vm_address(target_addr)
+        if not on_dev_vm and not args.allow_physical_unit:
+            sys.exit(
+                f"REFUSING: --host-unit '{args.host_unit}' resolves to "
+                f"'{target_addr or 'nothing'}', which is not on the dev VM's host-only "
+                f"network ({DEV_VM_SUBNET}).\n"
+                "This harness PROVISIONS whatever it connects to; a real unit here installs "
+                "software on hardware. Pass the VM's current guest IP (VBoxManage guestproperty "
+                "enumerate mast-unit, Net/0/V4/IP), or --allow-physical-unit if a physical "
+                "target is genuinely intended."
+            )
+        if on_dev_vm:
+            log(f"VM:      {args.vbox_vm}  (snapshot: {args.snapshot})")
+        else:
+            # Do not claim a VM run when the target is not the VM. The banner used
+            # to print unconditionally, so the log of the 2026-08-25 run that
+            # provisioned a bench unit said "VM: mast-unit" throughout.
+            log(f"VM:      not used -- target {args.host_unit} is NOT the dev VM")
+            log("[WARN]   PHYSICAL UNIT: this installs software on real hardware")
+        log(f"Unit SSH target: {args.host_unit}" + (f" ({target_addr})" if target_addr else " (UNRESOLVED)"))
         log(f"SSH wait: {args.winrm_wait_seconds}s")
 
         cycle_results: list[bool] = []

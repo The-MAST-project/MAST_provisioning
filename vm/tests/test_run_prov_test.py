@@ -101,3 +101,18 @@ def _run_all() -> int:
 
 if __name__ == "__main__":
     sys.exit(_run_all())
+
+
+def test_dev_vm_address_recognises_the_host_only_network():
+    assert rpt.is_dev_vm_address("192.168.56.101")
+    assert rpt.is_dev_vm_address("192.168.56.1")
+
+
+def test_dev_vm_address_rejects_real_units():
+    # The bench link-local pair a physical unit uses (2026-08-25, mast08).
+    assert not rpt.is_dev_vm_address("169.254.27.222")
+    # A routable institute address, which is what a bare unit name resolves to.
+    assert not rpt.is_dev_vm_address("132.76.237.21")
+    # An unresolved name must not read as the VM.
+    assert not rpt.is_dev_vm_address("")
+    assert not rpt.is_dev_vm_address("mast08")
