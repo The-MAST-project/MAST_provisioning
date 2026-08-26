@@ -114,6 +114,12 @@ function New-Plan {
     return [pscustomobject]@{ State = ${st}; Plans = ${plans} }
 }
 
+function Format-DeviceField {
+    param([string]${Value}, [string]${Empty})
+    if (${Value}) { return ${Value} }
+    return ${Empty}
+}
+
 function Show-State {
     param(${bp})
     Write-Host ''
@@ -127,7 +133,9 @@ function Show-State {
             'skip-no-cfg'           { 'no cfg on this unit' }
             default                 { ${p}.Action }
         }
-        Write-Host ("    {0,-13} cfg='{1,-6}'  detected='{2,-6}'  {3}" -f ${p}.Target, ${p}.Cur, ${p}.Desired, ${tag})
+        ${cfgText} = Format-DeviceField -Value ${p}.Cur -Empty '[UNSET]'
+        ${detectedText} = Format-DeviceField -Value ${p}.Desired -Empty '[NONE]'
+        Write-Host ("    {0,-13} cfg='{1,-7}'  detected='{2,-6}'  {3}" -f ${p}.Target, ${cfgText}, ${detectedText}, ${tag})
         Write-Host ("                  source: {0}" -f ${p}.Source) -ForegroundColor DarkGray
     }
     Write-Host ('    Mount: PWI4 USB auto-detect (not bound here).  FCU/Standa: MAST_unit libximc auto (not bound here).') -ForegroundColor DarkGray
