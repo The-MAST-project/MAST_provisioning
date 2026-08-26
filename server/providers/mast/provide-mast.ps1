@@ -303,6 +303,10 @@ try {
     Write-MastProvisionEvent ("unit HEAD {0} -> {1} (moved={2})" -f ${headBeforeLabel}, ${headAfter}, ${unitMoved})
 
     # --- Register mast-unit as a Windows service via NSSM ------------------
+    # Registered DISABLED and never started: process start commands hardware
+    # (MAST_unit#132 -- covers open, mount homes) and there are no interlocks, so
+    # bringing the unit up is an operator's decision, not a module's. Issue #159,
+    # docs/decisions/2026-08-26-provisioning-does-not-run-the-mast-unit-service.md.
     ${nssmExe} = 'C:\Program Files\nssm\nssm.exe'
     ${unitEntryPoint} = Join-Path ${unitDir} 'src\app.py'
     if (-not (Test-Path -LiteralPath ${nssmExe})) {
@@ -322,7 +326,6 @@ try {
             # was retired in the config-file epic (#18) and config-bootstrap actively
             # removes any machine-wide leftover -- setting it here would resurrect it
             # per-service at order 2200 after order 150 had just deleted it.
-            & ${nssmExe} set ${ServiceName} Start SERVICE_AUTO_START
             & ${nssmExe} set ${ServiceName} AppDependencies mast-pwi4
             & ${nssmExe} set ${ServiceName} AppStdout (Join-Path ${svcLogDir} 'stdout.log')
             & ${nssmExe} set ${ServiceName} AppStderr (Join-Path ${svcLogDir} 'stderr.log')
@@ -336,15 +339,25 @@ try {
             } else {
                 Write-MastProvisionEvent ("Firewall rule already exists: {0}" -f ${FirewallRule})
             }
-            Start-Service -Name ${ServiceName} -ErrorAction SilentlyContinue
             Write-MastProvisionEvent ("NSSM service register DONE name={0}" -f ${ServiceName})
         } else {
             if (${unitMoved} -or ${Force}) {
-                Write-MastProvisionEvent ("Restarting {0} (unit checkout moved)" -f ${ServiceName})
-                Restart-Service -Name ${ServiceName} -Force -ErrorAction SilentlyContinue
+                Write-MastProvisionEvent ("{0} registered; moved checkout will be picked up whenever it is next started by hand" -f ${ServiceName})
             } else {
                 Write-MastProvisionEvent ("NSSM service SKIP (registered, unit unchanged) name={0}" -f ${ServiceName})
             }
+        }
+
+        # Outside the install-only branch on purpose: an already-registered
+        # service is exactly the case that needs the start mode re-stated, since
+        # a unit can arrive Auto from an earlier provisioning generation (#140).
+        # Fails the module rather than warning -- a unit left startable is the
+        # one outcome this block exists to prevent.
+        & ${nssmExe} set ${ServiceName} Start SERVICE_DISABLED
+        ${startModeNow} = (Get-CimInstance -ClassName Win32_Service -Filter ("Name='{0}'" -f ${ServiceName}) -ErrorAction SilentlyContinue).StartMode
+        Write-MastProvisionEvent ("{0} start mode: {1}" -f ${ServiceName}, ${startModeNow})
+        if (${startModeNow} -ne 'Disabled') {
+            throw ("{0} StartMode is '{1}', expected 'Disabled' -- provisioning must not leave the unit service startable" -f ${ServiceName}, ${startModeNow})
         }
     }
 

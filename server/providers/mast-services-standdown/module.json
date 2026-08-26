@@ -1,0 +1,16 @@
+{
+  "name": "mast-services-standdown",
+  "version": "1.0",
+  "description": "First operational step of a run: stop the MAST services provisioning must never leave startable (today mast-unit) and set them to Disabled, so no part of the run can command telescope hardware. A running mast-unit opens the mirror covers and homes the mount on process start, with no interlock anywhere in the stack, so a unit that arrives Running/Auto from an earlier provisioning generation is driving hardware unattended for the length of the run. Runs at order 20 -- after execution-policy (10) and bootstrap-reassert (15), before every module that installs anything. The driver stands the unit down again before the build and transfer, which is the longer window; mast-services-finalize (9500) asserts the end state. Registration and configuration of the services stays with the mast / planewave / phd2 providers: this one owns run state only. See issue #159.",
+  "order": 20,
+  "always": true,
+  "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-mast-services-standdown.ps1\"",
+  "commandfiles": [
+    "provide-mast-services-standdown.ps1",
+    "verify-mast-services-standdown.ps1"
+  ],
+  "repofiles": [
+    "tools/mast-service-names.ps1"
+  ],
+  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\verify-mast-services-standdown.ps1\""
+}

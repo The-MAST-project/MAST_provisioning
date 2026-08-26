@@ -119,6 +119,7 @@ renumbering.
 
 | Order | Module | Description |
 |------:|--------|-------------|
+|    20 | `mast-services-standdown` | Stop `mast-unit` and set it **disabled** before anything else runs, so no part of the run can command telescope hardware (process start opens the mirror covers and homes the mount) |
 |   100 | `proxy` | Soft proxy: set (on-campus) or clear (home) machine/WinHTTP/WinINet proxy settings |
 |   150 | `config-bootstrap` | Lay down `C:\WIS\config.toml` (machine identity + config-DB connection) with the `machine_role` field injected; site chosen by build `-Site` |
 |   200 | `openssh-server` | Drift check for OpenSSH Server (install/config owned by `bootstrap.ps1`) |
@@ -151,21 +152,30 @@ renumbering.
 |  2210 | `mast-shared-mount` | Map `Z:` to the operational share `\\<controller_host>\mast-share` **in the LocalSystem session** (SYSTEM at-startup task + nssm `Start/Pre` hook on `mast-unit`), where the services that use it can see it; clear stale per-user mappings |
 |  2350 | `windows-update-lockdown` | Keep auto Windows Updates disabled: daily + at-startup SYSTEM task re-asserts the policy/services (Windows self-heals, so it must be re-applied) |
 |  2400 | `windows-exporter-monitoring` | Prometheus windows_exporter service (TCP 9182) |
-|  2500 | `diagnostics` | Post-smoke runtime checks (ASCOM, app launch, PHD2 RPC, heartbeat) |
+|  2500 | `diagnostics` | Post-smoke runtime checks (ASCOM, app launch, PHD2 RPC). Nothing here touches `mast-unit` |
 |  2600 | `ds9` | SAOImage DS9 8.7 imaging / data visualization |
 |  2700 | `desktop-shortcuts` | Operator shortcuts on the Public desktop (FastAPI control, weather page, DS9, MAST logs, **instrument calibration**, **Jupyter Notebook**) |
 |  2750 | `desktop-appearance` | Every per-user desktop value: dark Windows theme, a dark background carrying the machine's identity (hostname, site spelled out, site coordinates), and the toast / content-delivery quieting that used to sit in bootstrap. Written into the autologin `mast` hive and re-asserted in that session by an AtLogon task |
 |  2900 | `mast-validation` | End-to-end plate-solve validation through production code paths |
-|  9500 | `mast-services-finalize` | Set the MAST services (`mast-unit`, `mast-pwi4`, `mast-pwshutter`, `mast-phd2`) to **manual** start and stop them, as the last step after verification |
+|  9500 | `mast-services-finalize` | Assert the end-of-run posture: every MAST service stopped, at the start mode `tools/mast-service-names.ps1` says it owes (`mast-unit` **disabled**, the three prerequisite services **manual**) |
 |  9999 | `reboot` | Detect pending-reboot state; drop a flag for the orchestrator |
 
 The MAST NSSM services are named with a `mast-` prefix for findability (`mast-unit`,
-`mast-pwi4`, `mast-pwshutter`, `mast-phd2`). They register auto-start and run **during**
-provisioning so verification exercises them live; the `mast-services-finalize` provider then
-flips them to **manual** start (and stops them) so a provisioned unit does not auto-start
-telescope services on boot -- an operator raises them by hand in the wanted order. Manual
-start is a deliberate current-development-stage measure and is expected to return to
-automatic once the services are battle-tested (see DECISIONS 2026-07-01).
+`mast-pwi4`, `mast-pwshutter`, `mast-phd2`), and `tools/mast-service-names.ps1` holds the
+start mode provisioning owes each one.
+
+**`mast-unit` is registered disabled and is never started by a run.** Process start commands
+hardware -- the mirror covers open and the mount homes (`MAST_unit#132`) -- and no interlock
+exists, so bringing a unit up is an operator's decision, not a module's. It is stood down at
+order 20 and again by the driver before the build and transfer, and nothing in a run probes
+it: provisioning delivers the environment and does not test the service. See
+`docs/decisions/2026-08-26-provisioning-does-not-run-the-mast-unit-service.md` and issue #159.
+
+The three prerequisite services (`mast-pwi4`, `mast-pwshutter`, `mast-phd2`) still register
+auto-start and run **during** provisioning so their own verifies exercise them live, and
+`mast-services-finalize` flips them to **manual** at the end. They move nothing by coming up,
+and they disappear with the supervisor topology, where they become children of `mast-monitor`
+rather than services.
 
 ---
 
@@ -772,7 +782,8 @@ check logs), follow the convention in `vm/DEBUGGING.md`: name the script
 **`always` (optional)** — `"always": true` marks a module that must run on **every**
 non-empty provisioning run, not only when it drifted. Set it on order-terminal
 cross-cutting providers: `reboot` (detect pending-reboot and drop the flag the
-orchestrator acts on), `mast-services-finalize` (the final operational step), and
+orchestrator acts on), `mast-services-standdown` (stand the unit down before anything
+else), `mast-services-finalize` (the final posture assertion), and
 `proxy` (the end-of-run posture re-assert). `build-mast.ps1` collects these into
 `build-manifest.json`'s `always_modules`, and the driver's per-module drift compare
 folds them into any non-empty target set — so a targeted update that installed

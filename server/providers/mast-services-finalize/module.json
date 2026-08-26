@@ -1,14 +1,16 @@
 ﻿{
   "name": "mast-services-finalize",
   "version": "1.0",
-  "description": "Final operational step: set the MAST NSSM services (mast-unit, mast-pwi4, mast-pwshutter, mast-phd2) to MANUAL start and stop them, so a provisioned unit does not auto-start telescope services on boot. Runs last (order 9500, after all validation and the proxy finalize, before reboot detection) so the per-provider verification steps run while the services are still alive and auto-started. NOTE: manual start is a deliberate current-development-stage measure; once the services are battle-tested this provider is expected to be removed/relaxed so they return to automatic start (a future stage, months out).",
+  "description": "Final operational step: assert that every MAST nssm service is Stopped and sits at the start mode provisioning owes it -- mast-unit Disabled (a running unit service commands hardware on process start, MAST_unit#132, with no interlock, so bringing the unit up is an operator's decision), the three prerequisite services Manual. The expected mode per service is the shared table in tools/mast-service-names.ps1, which mast-services-standdown (order 20) also reads. Runs last (order 9500, after all validation and the proxy finalize, before reboot detection) as the end-of-run posture check. The three prerequisite services join mast-unit at Disabled when the supervisor topology replaces them (#82); see issue #159.",
   "order": 9500,
   "always": true,
   "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-mast-services-finalize.ps1\"",
   "commandfiles": [
     "provide-mast-services-finalize.ps1",
-    "verify-mast-services-finalize.ps1",
-    "mast-service-names.ps1"
+    "verify-mast-services-finalize.ps1"
   ],
-  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\verify-mast-services-finalize.ps1\""
+  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\verify-mast-services-finalize.ps1\"",
+  "repofiles": [
+    "tools/mast-service-names.ps1"
+  ]
 }

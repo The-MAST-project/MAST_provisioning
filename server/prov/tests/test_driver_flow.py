@@ -41,7 +41,7 @@ class FakeSession(T.SshSession):
         pass
 
 
-def make_responder(  # noqa: C901 -- a test fake: one branch per remote command it answers, which is the unit it emulates
+def make_responder(
     *,
     pull: str = DEFAULT_PULL,
     register: str = "DETACHED_REGISTERED",
@@ -51,33 +51,33 @@ def make_responder(  # noqa: C901 -- a test fake: one branch per remote command 
     proxy: str = "PROXY {}",
     inventory: str = "",
     smbreach: str = "SMBREACH ok",
+    standdown: str = 'STANDDOWN {"mast-unit": "absent"}',
 ):
     """Build a responder(script) -> (rc, stdout) keyed on recognizable phase
     scripts. Every phase has a sane default; a test overrides one to steer a
     branch. Non-matching scripts (json writes, reads, archive-check) return ''."""
 
+    # First match wins, so order is the same contract the if-chain this replaced
+    # carried. Two entries are pre-build gates whose defaults must not fail:
+    # SMBREACH (#70, reachable) and STANDDOWN (#159, 'absent' -- the answer a
+    # first provisioning gives, since the service does not exist yet).
+    answers = (
+        ("Get-NetAdapter", inventory),
+        ("SMBREACH", smbreach),
+        ("STANDDOWN", standdown),
+        ("-Register", register),
+        ("execute-result.json", execute),
+        ("execute-lease.json", lease),
+        ("schtasks /delete", ""),
+        ("mast-pull-staging.ps1", pull),
+        ("-smoke.txt", smoke),
+        ("netsh winhttp", proxy),
+    )
+
     def responder(script: str) -> tuple[int, str]:
-        s = script
-        if "Get-NetAdapter" in s:
-            return (0, inventory)
-        # Pre-build reachability probe: can the unit open SMB to the staging
-        # address (#70). Defaults to reachable so it does not gate other tests.
-        if "SMBREACH" in s:
-            return (0, smbreach)
-        if "-Register" in s:
-            return (0, register)
-        if "execute-result.json" in s:
-            return (0, execute)
-        if "execute-lease.json" in s:
-            return (0, lease)
-        if "schtasks /delete" in s:
-            return (0, "")
-        if "mast-pull-staging.ps1" in s:
-            return (0, pull)
-        if "-smoke.txt" in s:
-            return (0, smoke)
-        if "netsh winhttp" in s:
-            return (0, proxy)
+        for needle, out in answers:
+            if needle in script:
+                return (0, out)
         return (0, "")
 
     return responder
@@ -679,3 +679,72 @@ def test_unreachable_staging_fails_before_the_build(root, monkeypatch):
     assert built["n"] == 0, "built a payload the unit cannot pull"
     assert "BUILD_START" not in log, log
     assert code == D.EXIT_UNIT_FAIL, log
+
+
+def test_stand_down_precedes_the_build(root, monkeypatch):
+    """A unit that arrives Running is stood down before anything is built.
+
+    The transfer is the long pole, so a stand-down that ran with the modules
+    would leave a unit commanding hardware for the length of it (#159).
+    """
+    drv, sess = _make_driver(root, monkeypatch, make_responder(standdown='STANDDOWN {"mast-unit": "Stopped/Disabled"}'))
+
+    code = drv.run()
+    log = drv.log.run_log_path.read_text()
+
+    assert "STANDDOWN_OK" in log, log
+    assert code == D.EXIT_OK, log
+    order = [i for i, s in enumerate(sess.scripts) if "STANDDOWN" in s]
+    assert order, "no stand-down script seen"
+    assert log.index("STANDDOWN_OK") < log.index("BUILD_OK"), log
+
+
+def test_stand_down_failure_fails_the_unit_closed(root, monkeypatch):
+    """Cannot stop the service -> the unit is not provisioned at all.
+
+    Continuing would provision a machine whose telescope may be moving, which is
+    the outcome the stand-down exists to prevent, so this fails closed.
+    """
+    built = {"n": 0}
+
+    def counting_build(self, unit, host, modules, dur):
+        built["n"] += 1
+        self._staging_dir = self.cfg.repo_top / "staging"
+        return "h", "s", {}
+
+    drv, _sess = _make_driver(
+        root,
+        monkeypatch,
+        make_responder(standdown='STANDDOWN {"mast-unit": "error: Access is denied"}'),
+    )
+    monkeypatch.setattr(D.Driver, "_build", counting_build)
+
+    code = drv.run()
+    log = drv.log.run_log_path.read_text()
+
+    assert "STANDDOWN_FAIL" in log, log
+    assert "reason=standdown_failed" in log, log
+    assert built["n"] == 0, "built a payload for a unit that is still commanding hardware"
+    assert code == D.EXIT_UNIT_FAIL, log
+
+
+def test_stand_down_unreported_service_fails_closed(root, monkeypatch):
+    """A marker that omits a service is not evidence the service is down."""
+    drv, _sess = _make_driver(root, monkeypatch, make_responder(standdown="STANDDOWN {}"))
+
+    code = drv.run()
+    log = drv.log.run_log_path.read_text()
+
+    assert "unreported" in log, log
+    assert code == D.EXIT_UNIT_FAIL, log
+
+
+def test_stand_down_absent_service_is_not_a_failure(root, monkeypatch):
+    """First provisioning: the service does not exist yet, and that is fine."""
+    drv, _sess = _make_driver(root, monkeypatch, make_responder())
+
+    code = drv.run()
+    log = drv.log.run_log_path.read_text()
+
+    assert "STANDDOWN_OK" in log, log
+    assert code == D.EXIT_OK, log
