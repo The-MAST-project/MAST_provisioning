@@ -466,26 +466,44 @@ needs `SystemParametersInfo` / `WM_SETTINGCHANGE` from **inside** the session, w
 `desktop-appearance`'s AtLogon task is for. See
 `docs/decisions/2026-08-19-per-user-desktop-state-is-written-into-the-target-hive-and-re-asserted-at-logon.md`.
 
-## MAST services: `mast-` naming + manual start (current dev stage)
+## MAST services: `mast-` naming, and `mast-unit` never runs during a run
 
 The MAST NSSM services are named with a `mast-` prefix for findability: `mast-unit`,
-`mast-pwi4`, `mast-pwshutter`, `mast-phd2`. Each is registered by its own provider
-(`mast`, `planewave`, `phd2`) as **auto-start** and started, so per-provider verification and
-the diagnostics/validation steps run against live services. The **`mast-services-finalize`
-provider (order 9500)** is the last operational step (after all validation and the 9000 proxy
-finalize, before 9999 reboot detection): it sets every present MAST service to **manual** and
-stops them, so a provisioned unit does not auto-raise telescope services on boot. The canonical
-service-name list lives once in `server/providers/mast-services-finalize/mast-service-names.ps1`
-(shared by the provider and its verify). To migrate an already-provisioned unit to the new
-names + manual policy, use `tools/rename-mast-services.ps1` (self-contained, idempotent,
-`-DryRun`-able) via `run-remote-script-winrm.py`.
+`mast-pwi4`, `mast-pwshutter`, `mast-phd2`. Each is registered by its own provider (`mast`,
+`planewave`, `phd2`). **The start mode each one owes lives once in
+`tools/mast-service-names.ps1`** (`Get-MastServiceExpectations`), staged into the two providers
+that read it by `repofiles`.
 
-**Manual start is a deliberate current-development-stage measure**, not the end state: once the
-services are battle-tested (a future stage, months out) we intend to restore automatic start,
-at which point `mast-services-finalize` is expected to be removed or relaxed. If you touch a
-service name, update it in the registering provider, the name references
-(`verify-planewave.ps1`, `diagnostics/verify-diagnostics.ps1`, `mast-unit`'s `AppDependencies`),
-`mast-service-names.ps1`, and `tools/rename-mast-services.ps1`. See DECISIONS.md 2026-07-01.
+**`mast-unit` is registered `SERVICE_DISABLED` and is never started by a provisioning run.**
+Process start commands hardware -- the mirror covers open and the mount homes
+(`MAST_unit#132`) -- and there is no interlock, so bringing a unit up is an operator's
+decision. Three enforcement points, one per part of a run:
+
+- **`mast-services-standdown` (order 20, `always`)** stops it and sets it Disabled before any
+  module installs anything, which is also what catches a unit that arrived `Running`/`Auto`
+  from an earlier provisioning generation.
+- **`Driver._stand_down` (phase 2b)** does the same over the transport before the build and
+  transfer -- the long window no module can reach -- and **fails the unit closed**
+  (`UNIT_FAIL reason=standdown_failed`). `STAND_DOWN_SERVICES` in `driver.py` duplicates the
+  PowerShell table on purpose (the driver runs before any payload reaches the unit);
+  `server/prov/tests/test_stand_down.py` fails if the two drift.
+- **`mast-services-finalize` (order 9500)** asserts the end state rather than applying one:
+  every present service stopped, at its expected start mode.
+
+**Provisioning does not test the unit service.** There is no heartbeat check and no probe of
+`:8000` anywhere -- what a run asserts is what is true with the service dead (registered,
+pointed at the mast-clone venv interpreter, firewall rule, `Z:` hook). The three prerequisite
+services still register auto-start and run during a run so their own verifies exercise them
+live; they move nothing by coming up and disappear with the supervisor topology. See
+`docs/decisions/2026-08-26-provisioning-does-not-run-the-mast-unit-service.md` and issue #159.
+
+To migrate an already-provisioned unit to the `mast-` names, use
+`tools/rename-mast-services.ps1` (self-contained, idempotent, `-DryRun`-able) via
+`run-remote-script-winrm.py`; it predates this change and still sets Manual rather than
+Disabled. If you touch a service name, update it in the registering provider, the name
+references (`verify-planewave.ps1`, `mast-unit`'s `AppDependencies`),
+`tools/mast-service-names.ps1`, `STAND_DOWN_SERVICES` in `server/prov/driver.py`, and
+`tools/rename-mast-services.ps1`.
 
 ## Adding a new client script
 

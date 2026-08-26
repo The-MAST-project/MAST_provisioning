@@ -1,24 +1,20 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-  Runtime verification: ASCOM diagnostics, app launch checks, PHD2 JSON-RPC port, MAST_unit heartbeat.
+  Runtime verification: ASCOM diagnostics, app launch checks, PHD2 JSON-RPC port.
 
 .NOTES
   - PHD2 must be registered as an NSSM service (provide-phd2.ps1) before this runs.
-  - MAST_unit must be registered as an NSSM service (provide-mast.ps1) before this runs.
-  - MAST_unit heartbeat port: set $MastUnitPort below to match the unit's HTTP listener port.
+  - Nothing here touches mast-unit. Provisioning does not run the unit service and
+    does not test it (#159): it is registered Disabled and stood down at order 20,
+    so there is no listener to probe and no health to infer. What provisioning owes
+    the service -- registration, the venv interpreter, the firewall rule, the Z:
+    hook -- is asserted by verify-mast.ps1 with the service dead.
   - ASCOM Diagnostics tool: searched recursively under C:\Program Files\ASCOM (Platform 6 and 7 supported).
 #>
 [CmdletBinding()]
 param(
-    [int]${MastUnitPort} = 8000,
-    [int]${Phd2RpcPort}  = 4400,
-    # Assert the unit API answers even while mast-unit is at rest.
-    #
-    # Rarely needed: the check decides for itself from the service's state (see
-    # section 7). This forces the assertion on a unit that is Stopped/Manual, to
-    # prove one is serving when it is meant to be.
-    [switch]${RequireUnitHeartbeat}
+    [int]${Phd2RpcPort} = 4400
 )
 
 ${ErrorActionPreference} = 'Stop'
@@ -47,15 +43,6 @@ function Add-DiagResult {
     ${line} | Out-File -FilePath ${verifyLog} -Encoding UTF8 -Append
     Write-Host ${line}
     if (-not ${Ok}) { $script:failCount++ }
-}
-
-# A check whose subject provisioning cannot own right now: logged, never counted.
-# Same [WARN] shape the PHD2 port uses, so the two read alike in the log.
-function Add-DiagWarn {
-    param([string]${Name}, [string]${Detail}, [string]${Why})
-    ${line} = ("[WARN] {0}: {1}{2}" -f ${Name}, ${Detail}, $(if (${Why}) { " -- ${Why}" } else { '' }))
-    ${line} | Out-File -FilePath ${verifyLog} -Encoding UTF8 -Append
-    Write-Host ${line}
 }
 
 ${null} = Set-Content -Path ${verifyLog} -Value ("[{0}] diagnostics verify-diagnostics.ps1 started." -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')) -Encoding UTF8
@@ -250,64 +237,6 @@ try {
     }
 } catch {
     Add-DiagResult -Name 'PHD2-rpc-port' -Ok $false -Detail ("exception: {0}" -f $_.Exception.Message)
-}
-
-# --- 7. mast-unit HTTP heartbeat ---
-# Checked while the service is up; inert while it is at rest.
-#
-# Every unit HAS these services -- mast-services-finalize registers all four and
-# leaves them Stopped/Manual, which is the fleet's resting state -- so presence
-# says nothing. What matters is whether this one is EXPECTED to be serving: running
-# now, or set to start itself. Either way an unanswered API is provisioning's
-# failure. Stopped and Manual is inert by design, and asserting a heartbeat there
-# would fail every healthy unit (the shape of #67/#68/#69).
-#
-# Deliberately does NOT start the service to test it: that would fight the resting
-# state finalize just established, and a heartbeat this check manufactured proves
-# nothing about how the unit comes up. When the Supervision epic (#82) changes the
-# topology so units are expected to come back serving, this begins asserting on its
-# own with no edit here.
-try {
-    ${mastSvc} = Get-Service -Name 'mast-unit' -ErrorAction SilentlyContinue
-    ${svcStatus} = 'absent'
-    ${svcStart} = 'absent'
-    if ($null -ne ${mastSvc}) {
-        ${svcStatus} = [string]${mastSvc}.Status
-        ${cim} = Get-CimInstance Win32_Service -Filter "Name='mast-unit'" -ErrorAction SilentlyContinue
-        if ($null -ne ${cim}) { ${svcStart} = [string]${cim}.StartMode }
-    }
-    ${svcExpectedUp} = (${svcStatus} -eq 'Running') -or (${svcStart} -eq 'Auto')
-    ${heartbeatUrl} = ("http://127.0.0.1:{0}/mast/api/v1/unit/status" -f ${MastUnitPort})
-    ${resp} = $null
-    # Poll up to 60s to allow for service startup after a recent restart.
-    ${deadline} = (Get-Date).AddSeconds(60)
-    while ($null -eq ${resp} -and (Get-Date) -lt ${deadline}) {
-        try {
-            ${resp} = Invoke-WebRequest -Uri ${heartbeatUrl} -UseBasicParsing -TimeoutSec 5 -ErrorAction Stop
-        } catch {
-            Start-Sleep -Seconds 3
-        }
-    }
-    ${hbOk} = $null -ne ${resp} -and ${resp}.StatusCode -ge 200 -and ${resp}.StatusCode -lt 300
-    ${hbDetail} = ("url={0} status={1} service={2}/{3}" -f ${heartbeatUrl}, $(if ($null -ne ${resp}) { ${resp}.StatusCode } else { 'no-response' }), ${svcStatus}, ${svcStart})
-    if (${hbOk} -or ${svcExpectedUp} -or ${RequireUnitHeartbeat}) {
-        # Answering always passes. A service that is up, or set to bring itself up,
-        # and still will not answer is provisioning's failure to report.
-        Add-DiagResult -Name 'mast-unit-heartbeat' -Ok ${hbOk} -Detail ${hbDetail}
-    }
-    else {
-        # Stopped and Manual: at rest by design, started by hand for a session.
-        Add-DiagWarn -Name 'mast-unit-heartbeat' -Detail ${hbDetail} `
-            -Why 'inert: mast-unit is Stopped/Manual, the fleet resting state, so it owes no heartbeat. Asserted automatically once it is Running or set to Auto; -RequireUnitHeartbeat forces it now.'
-    }
-} catch {
-    if (${RequireUnitHeartbeat}) {
-        Add-DiagResult -Name 'mast-unit-heartbeat' -Ok $false -Detail ("exception: {0}" -f $_.Exception.Message)
-    }
-    else {
-        Add-DiagWarn -Name 'mast-unit-heartbeat' -Detail ("exception: {0}" -f $_.Exception.Message) `
-            -Why 'reported, not asserted (see -RequireUnitHeartbeat)'
-    }
 }
 
 # --- Summary ---

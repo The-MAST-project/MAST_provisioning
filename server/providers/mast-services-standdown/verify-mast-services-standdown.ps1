@@ -12,22 +12,19 @@ ${namesDot} = Join-Path ${PSScriptRoot} 'mast-service-names.ps1'
 if (-not (Test-Path ${namesDot})) { throw "mast-service-names.ps1 not found beside verify script." }
 . ${namesDot}
 
-${verifyLog} = Get-MastVerifyLog -Module 'mast-services-finalize'
+${verifyLog} = Get-MastVerifyLog -Module 'mast-services-standdown'
 ${issues} = New-Object 'System.Collections.Generic.List[string]'
 ${lines}  = New-Object 'System.Collections.Generic.List[string]'
 
-${expectations} = Get-MastServiceExpectations
-
-foreach (${svcName} in ${expectations}.Keys) {
-    ${expected} = ${expectations}[${svcName}]
+foreach (${svcName} in (Get-MastStandDownServiceNames)) {
     ${svc} = Get-Service -Name ${svcName} -ErrorAction SilentlyContinue
     if ($null -eq ${svc}) {
         [void]${lines}.Add(("SKIP {0}: not registered" -f ${svcName}))
         continue
     }
     ${startMode} = (Get-CimInstance -ClassName Win32_Service -Filter ("Name='{0}'" -f ${svcName}) -ErrorAction SilentlyContinue).StartMode
-    if (${startMode} -ne ${expected}) {
-        [void]${issues}.Add(("{0}: StartMode='{1}' (expected {2})" -f ${svcName}, ${startMode}, ${expected}))
+    if (${startMode} -ne 'Disabled') {
+        [void]${issues}.Add(("{0}: StartMode='{1}' (expected Disabled)" -f ${svcName}, ${startMode}))
     }
     if (${svc}.Status -ne 'Stopped') {
         [void]${issues}.Add(("{0}: Status='{1}' (expected Stopped)" -f ${svcName}, ${svc}.Status))
@@ -36,11 +33,11 @@ foreach (${svcName} in ${expectations}.Keys) {
 }
 
 if (${issues}.Count -gt 0) {
-    (("mast-services-finalize FAIL: " + (${issues} -join '; ')) + "`r`n" + (${lines} -join "`r`n")) |
+    (("mast-services-standdown FAIL: " + (${issues} -join '; ')) + "`r`n" + (${lines} -join "`r`n")) |
         Out-File -FilePath ${verifyLog} -Encoding UTF8
     exit 1
 }
 
-(("mast-services-finalize OK") + "`r`n" + (${lines} -join "`r`n")) | Out-File -FilePath ${verifyLog} -Encoding UTF8
-Write-MastSmokeOk -Module 'mast-services-finalize' | Out-Null
+(("mast-services-standdown OK") + "`r`n" + (${lines} -join "`r`n")) | Out-File -FilePath ${verifyLog} -Encoding UTF8
+Write-MastSmokeOk -Module 'mast-services-standdown' | Out-Null
 exit 0

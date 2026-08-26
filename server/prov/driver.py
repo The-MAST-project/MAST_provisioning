@@ -69,6 +69,13 @@ UNIT_SHARED_BLOB = r"C:\MAST\status\shared-cred.dpapi"
 UNIT_SHARED_PLAIN = r"C:\MAST\status\shared-cred.tmp"
 UNIT_SHARED_CFG = r"C:\MAST\status\shared-cred.json"
 DETACHED_TASK = "MAST-Execute-Detached"
+
+#: Services provisioning must never leave startable, stood down before the build.
+#: Mirrors Get-MastStandDownServiceNames in tools/mast-service-names.ps1, which is
+#: the authority the unit-side providers read; test_stand_down.py fails if the two
+#: drift. A running mast-unit commands hardware on process start (MAST_unit#132)
+#: with no interlock, and the transfer window is long enough to matter (#159).
+STAND_DOWN_SERVICES = ("mast-unit",)
 EXECUTE_POLL_INTERVAL_S = 15
 
 AVAIL_TTL_S = 7200  # 2 h; matches execute-lease default
@@ -413,6 +420,16 @@ class Driver:
             try:
                 self._inventory(session, unit)  # 2a-inv (non-fatal)
                 self._reclaim_availability(session, host)  # 2a
+
+                # Phase 2b -- stand the unit down before anything else.
+                #
+                # Before the build and the transfer, not with the modules: the
+                # transfer is the long pole, and a unit that arrived Running has
+                # been commanding hardware for all of it. Fails the unit closed --
+                # provisioning a machine whose telescope may be moving is the
+                # outcome the whole change exists to prevent.
+                if not self._stand_down(session, host, dur):
+                    return
 
                 installed = _parse_json_or_none(
                     self._ps_out(
@@ -1095,6 +1112,53 @@ class Driver:
             self.log.activity(host, "FAIL", "smoke:" + "+".join(fails), dur(), payload_hash, git_sha)
             self.exit_code = EXIT_UNIT_FAIL
             return False
+        return True
+
+    def _stand_down(self, session: transport.UnitSession, host: str, dur) -> bool:
+        """Stop and disable the services provisioning must not leave startable.
+
+        The unit-side provider at order 20 does this again inside the module
+        sequence; this call closes the window the modules cannot reach -- build,
+        transfer, and the detached-execute registration ahead of them.
+        """
+        names = ", ".join(_ps_lit(n) for n in STAND_DOWN_SERVICES)
+        script = (
+            f"$o = [ordered]@{{}}; foreach ($n in @({names})) {{ "
+            "$svc = Get-Service -Name $n -EA SilentlyContinue; "
+            "if ($null -eq $svc) { $o[$n] = 'absent'; continue }; "
+            "try { if ($svc.Status -ne 'Stopped') { Stop-Service -Name $n -Force -EA Stop }; "
+            "Set-Service -Name $n -StartupType Disabled -EA Stop } "
+            "catch { $o[$n] = 'error: ' + $_.Exception.Message; continue }; "
+            "$sm = (Get-CimInstance Win32_Service -Filter (\"Name='$n'\") -EA SilentlyContinue).StartMode; "
+            "$st = (Get-Service -Name $n -EA SilentlyContinue).Status; "
+            "$o[$n] = [string]$st + '/' + [string]$sm }; "
+            "Write-Output ('STANDDOWN ' + ($o | ConvertTo-Json -Compress -Depth 4))"
+        )
+        states = _marker_json(self._ps_out(session, script, f"standdown:{host}"), "STANDDOWN ")
+        if not isinstance(states, dict):
+            self.log.event("STANDDOWN_FAIL", unit=host, reason="no_marker")
+            self.log.event("UNIT_FAIL", unit=host, reason="standdown_failed", detail="no_marker")
+            self.log.activity(host, "FAIL", "standdown_failed", dur())
+            self.exit_code = EXIT_UNIT_FAIL
+            return False
+
+        # 'absent' is a first provisioning, or a unit that legitimately lacks the
+        # service: nothing to stand down and nothing wrong.
+        bad = {n: str(v) for n, v in states.items() if str(v) not in ("absent", "Stopped/Disabled")}
+        missing = [n for n in STAND_DOWN_SERVICES if n not in states]
+        if bad or missing:
+            detail = "; ".join([f"{n}={v}" for n, v in bad.items()] + [f"{n}=unreported" for n in missing])
+            self.log.event("STANDDOWN_FAIL", unit=host, detail=detail)
+            self.log.event("UNIT_FAIL", unit=host, reason="standdown_failed", detail=detail)
+            self.log.activity(host, "FAIL", "standdown_failed", dur())
+            self.exit_code = EXIT_UNIT_FAIL
+            return False
+
+        self.log.event(
+            "STANDDOWN_OK",
+            unit=host,
+            services="; ".join(f"{n}={states[n]}" for n in STAND_DOWN_SERVICES),
+        )
         return True
 
     def _proxy_assert(self, session: transport.UnitSession, host: str, dur, payload_hash: str, git_sha: str) -> bool:

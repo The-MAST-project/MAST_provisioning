@@ -3,20 +3,21 @@
 [CmdletBinding()]
 param()
 
-# Final operational step of a provisioning run. Every MAST service is registered
-# (by the phd2 / planewave / mast providers) as SERVICE_AUTO_START and started, so
-# that each provider's own verification -- and the diagnostics / validation steps --
-# run against LIVE services. Once all of that has passed, this provider flips the
-# services to MANUAL start and stops them, so a provisioned unit ships quiescent and
-# does not auto-raise telescope services on boot (an operator brings them up by hand
-# in the wanted order).
+# Final operational step of a provisioning run: every MAST service ends Stopped, at
+# the start mode the shared table in mast-service-names.ps1 says provisioning owes
+# it. mast-unit is Disabled and was never started -- mast-services-standdown (order
+# 20) stood it down before the first module and the mast provider registers it that
+# way, because process start commands hardware (MAST_unit#132) and no interlock
+# exists to make that safe. The three prerequisite services are registered
+# auto-start and started by the phd2 / planewave providers so their own verifies run
+# against a live service, and are flipped to Manual here.
 #
-# TEMPORARY (current development stage): manual start is deliberate for now. Once the
-# services are battle-tested we intend to restore automatic start -- expect this
-# provider to be removed or relaxed in a future stage (months out, at least).
+# So this provider owns run state, not registration, and its job at 9500 is to leave
+# the posture asserted rather than merely applied: a unit ships quiescent, and the
+# one service that can move a telescope cannot be started by accident.
 #
 # Runs at order 9500: after all validation (2900/3000) and the proxy finalize (9000),
-# before reboot detection (9999). Nothing after it needs the services running.
+# before reboot detection (9999). Nothing after it needs any service running.
 
 # --- Import shared helpers ---
 try {
@@ -36,17 +37,19 @@ catch {
     throw "Failed to import provisioning.psm1: $($_.Exception.Message)"
 }
 
-# Canonical service list (shared with the verify script).
+# Canonical service list + per-service expected start mode (shared with the verify
+# script and with mast-services-standdown).
 ${namesDot} = Join-Path ${PSScriptRoot} 'mast-service-names.ps1'
 if (-not (Test-Path ${namesDot})) { throw "mast-service-names.ps1 not found beside provide script." }
 . ${namesDot}
 
 ${null} = Start-ProvisionLog -Component 'mast-services-finalize'
 try {
-    ${services} = Get-MastServiceNames
+    ${expectations} = Get-MastServiceExpectations
     ${failures} = New-Object 'System.Collections.Generic.List[string]'
 
-    foreach (${svcName} in ${services}) {
+    foreach (${svcName} in ${expectations}.Keys) {
+        ${expected} = ${expectations}[${svcName}]
         ${svc} = Get-Service -Name ${svcName} -ErrorAction SilentlyContinue
         if ($null -eq ${svc}) {
             # A unit may legitimately lack a service (e.g. no PWShutter). Not an error.
@@ -55,7 +58,7 @@ try {
         }
 
         try {
-            Set-Service -Name ${svcName} -StartupType Manual -ErrorAction Stop
+            Set-Service -Name ${svcName} -StartupType ${expected} -ErrorAction Stop
             if (${svc}.Status -ne 'Stopped') {
                 Stop-Service -Name ${svcName} -Force -ErrorAction Stop
             }
@@ -70,14 +73,14 @@ try {
         ${startMode} = (Get-CimInstance -ClassName Win32_Service -Filter ("Name='{0}'" -f ${svcName}) -ErrorAction SilentlyContinue).StartMode
         ${after} = Get-Service -Name ${svcName} -ErrorAction SilentlyContinue
         ${statusNow} = if ($null -ne ${after}) { ${after}.Status } else { 'unknown' }
-        if (${startMode} -ne 'Manual') {
-            [void]${failures}.Add(("{0}: StartMode is '{1}', expected 'Manual'." -f ${svcName}, ${startMode}))
+        if (${startMode} -ne ${expected}) {
+            [void]${failures}.Add(("{0}: StartMode is '{1}', expected '{2}'." -f ${svcName}, ${startMode}, ${expected}))
         }
         elseif (${statusNow} -ne 'Stopped') {
             [void]${failures}.Add(("{0}: Status is '{1}', expected 'Stopped'." -f ${svcName}, ${statusNow}))
         }
         else {
-            Write-Host ("OK {0}: StartMode=Manual Status=Stopped." -f ${svcName})
+            Write-Host ("OK {0}: StartMode={1} Status=Stopped." -f ${svcName}, ${startMode})
         }
     }
 
@@ -86,7 +89,7 @@ try {
         exit 1
     }
 
-    Write-Host "mast-services-finalize: all present MAST services set to Manual and stopped."
+    Write-Host "mast-services-finalize: all present MAST services stopped, at their expected start modes."
     exit 0
 }
 finally {

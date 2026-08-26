@@ -173,17 +173,15 @@ if (Test-Path -LiteralPath ${venvPython}) {
 # The service must be REGISTERED and pointed at this layout's interpreter. Its
 # run state deliberately is NOT checked here.
 #
-# mast-services-finalize (order 9500) sets every MAST service to Manual and
-# STOPS it -- a deliberate current-development-stage measure so a provisioned
-# unit does not auto-start telescope services on boot. The mast provider
-# registers auto-start and starts the service so the per-provider verify steps
-# run while it is alive; finalize then flips it. So on a fully-provisioned unit
-# at rest mast-unit is Stopped BY DESIGN, and asserting 'Running' here would
-# fail every correct unit -- and would put two providers in charge of one fact.
-# finalize owns run state and has its own verify for Manual+Stopped.
+# mast-unit is registered Disabled and is never started by a provisioning run:
+# process start commands hardware (MAST_unit#132) and no interlock exists, so
+# whether the unit is up is an operator's decision (#159). Run state is owned by
+# mast-services-standdown (order 20) and asserted by mast-services-finalize
+# (9500), each with its own verify -- one fact, one owner.
 #
 # What IS this module's business is the interpreter the service runs, since that
-# is exactly what the move to the mast-clone layout changes.
+# is exactly what the move to the mast-clone layout changes, and it is checkable
+# with the service dead.
 ${svc} = Get-Service -Name 'mast-unit' -ErrorAction SilentlyContinue
 if ($null -eq ${svc}) {
     [void]${issues}.Add('mast-unit service not registered')

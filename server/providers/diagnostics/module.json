@@ -1,7 +1,7 @@
 ﻿{
   "name": "diagnostics",
   "version": "builtin",
-  "description": "Post-smoke runtime checks: ASCOM diagnostics, app launch tests, PHD2 JSON-RPC port, MAST_unit heartbeat.",
+  "description": "Post-smoke runtime checks: ASCOM diagnostics, app launch tests, PHD2 JSON-RPC port. Nothing here touches mast-unit -- provisioning neither runs the unit service nor tests it (#159).",
   "order": 2500,
   "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -Command \"$smokeDir = Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\smoke'; $null = New-Item -ItemType Directory -Path $smokeDir -Force -ErrorAction SilentlyContinue; Set-Content -Path (Join-Path $smokeDir 'diagnostics-smoke.txt') -Value 'diagnostics_installed'\"",
   "commandfiles": [
@@ -9,4 +9,3 @@
   ],
   "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\verify-diagnostics.ps1\""
 }
-
