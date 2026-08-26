@@ -11,7 +11,7 @@
 # Binds only:
 #   - EFA focuser  -> EFA.Controller_1.cfg : SerialPort  (the lone generic,
 #                     non-PlaneWave USB-serial adapter; brand varies FTDI/Prolific)
-#   - PWBus OTA     -> PWBus.StandardOTA.Controller.cfg : SerialPort (VID_1CBE&PID_0002)
+#   - Covers (PWBus OTA) -> PWBus.StandardOTA.Controller.cfg : SerialPort (VID_1CBE&PID_0002)
 # Leaves alone: the Elmo mount (PWI4 usb auto-detect) and the FCU/Standa stage
 # (MAST_unit libximc auto). NEVER touches focuser calibration, the pointing
 # model, or mount-firmware tuning.
@@ -109,7 +109,7 @@ function New-Plan {
     ${st} = Resolve-State
     ${plans} = @(
         (Get-TargetPlan -Name 'EFA focuser' -CfgFile 'EFA.Controller_1.cfg' -DesiredCom ${st}.EfaCom -Source ${st}.EfaSrc -DoForce ${DoForce} -Present ${st}.Present),
-        (Get-TargetPlan -Name 'PWBus OTA' -CfgFile 'PWBus.StandardOTA.Controller.cfg' -DesiredCom ${st}.PwbusCom -Source ${st}.PwbusSrc -DoForce ${DoForce} -Present ${st}.Present)
+        (Get-TargetPlan -Name 'Covers (PWBus OTA)' -CfgFile 'PWBus.StandardOTA.Controller.cfg' -DesiredCom ${st}.PwbusCom -Source ${st}.PwbusSrc -DoForce ${DoForce} -Present ${st}.Present)
     )
     return [pscustomobject]@{ State = ${st}; Plans = ${plans} }
 }
@@ -135,8 +135,8 @@ function Show-State {
         }
         ${cfgText} = Format-DeviceField -Value ${p}.Cur -Empty '[UNSET]'
         ${detectedText} = Format-DeviceField -Value ${p}.Desired -Empty '[NONE]'
-        Write-Host ("    {0,-13} cfg='{1,-7}'  detected='{2,-6}'  {3}" -f ${p}.Target, ${cfgText}, ${detectedText}, ${tag})
-        Write-Host ("                  source: {0}" -f ${p}.Source) -ForegroundColor DarkGray
+        Write-Host ("    {0,-18} cfg='{1,-7}'  detected='{2,-6}'  {3}" -f ${p}.Target, ${cfgText}, ${detectedText}, ${tag})
+        Write-Host ("                       source: {0}" -f ${p}.Source) -ForegroundColor DarkGray
     }
     Write-Host ('    Mount: PWI4 USB auto-detect (not bound here).  FCU/Standa: MAST_unit libximc auto (not bound here).') -ForegroundColor DarkGray
     if (${bp}.State.Pwi4Running) { Write-Host '    PWI4: RUNNING -- close it before applying changes.' -ForegroundColor Yellow }
