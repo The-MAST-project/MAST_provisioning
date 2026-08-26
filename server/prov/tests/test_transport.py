@@ -122,6 +122,7 @@ def test_pull_staging_args_match_the_script():
                 smb_pass="pw",
                 unit_stage=r"C:\mast-staging\run-1",
                 src_unc=r"\\192.0.2.34\mast-staging\mastw\01-provisioning",
+                payload_bytes=14_523_011_072,
             ),
         )
     )
@@ -141,6 +142,7 @@ def test_pull_staging_args_quote_every_value():
         smb_pass="pa'ss",
         unit_stage="C:\\s",
         src_unc="\\\\h\\s",
+        payload_bytes=14_523_011_072,
     )
     assert "-SmbPass 'pa''ss'" in args
     assert args.count("'") % 2 == 0
@@ -466,3 +468,21 @@ def test_missing_pywinrm_raises_importerror_not_systemexit():
         else:
             sys.modules.pop("winrm", None)
         importlib.reload(T)  # rebuild cleanly so downstream tests see a good module
+
+
+def test_pull_staging_args_carry_the_caller_measured_payload_size():
+    # The unit no longer measures the payload: Get-ChildItem -Recurse does not
+    # descend the staging junctions, so a unit-side scan reported 3.8 GB for a
+    # 13.9 GB payload and understated the disk guard by ~10 GB (issue 7, item 6).
+    # The size therefore has to survive the trip, and it is quoted like every
+    # other value so the flag stays visible to the drift guard above.
+    args = T.pull_staging_args(
+        prov_address="192.0.2.34",
+        unit_hostname="mastw",
+        smb_user="mast-transfer",
+        smb_pass="pw",
+        unit_stage=r"C:\mast-staging\run-1",
+        src_unc=r"\\192.0.2.34\mast-staging\mastw\01-provisioning",
+        payload_bytes=14_523_011_072,
+    )
+    assert "-PayloadBytes '14523011072'" in args

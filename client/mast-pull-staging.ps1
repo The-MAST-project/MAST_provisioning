@@ -36,6 +36,15 @@
 
 .PARAMETER SrcUNC
   Full UNC source path, e.g. \\provserver\mast-staging\mast01\01-provisioning.
+
+.PARAMETER PayloadBytes
+  True size of the payload, measured by the CALLER (prov.staging_size). This
+  script does not measure for itself: Get-ChildItem -Recurse does not descend
+  directory junctions, but robocopy /E copies through them, so a local scan
+  reported 3.8 GB for a 13.9 GB payload and the disk guard below understated
+  what it needed by ~10 GB (MAST_provisioning#7 item 6). A missing value is
+  refused rather than guessed -- falling back to a local scan would restore
+  exactly the silent under-measurement this parameter removes.
 #>
 # CmdletBinding makes an unrecognized -Flag a parameter-binding ERROR. Without it
 # this is a simple function: PowerShell swallows extra named arguments into $args,
@@ -50,7 +59,8 @@ param(
     [string]$SmbUser,
     [string]$SmbPass,
     [string]$UnitStage,
-    [string]$SrcUNC
+    [string]$SrcUNC,
+    [long]$PayloadBytes = -1
 )
 
 $smbRoot = "\\$ProvAddress\mast-staging"
@@ -81,6 +91,13 @@ function Get-RobocopyOutcome {
     # unit-tested in server/tests/mast-pull-staging.Tests.ps1.
     param([int]$ExitCode)
     if ($ExitCode -ge 8) { 'ROBOCOPY_ERROR' } else { 'OK' }
+}
+
+function Test-MastPayloadBytesUsable {
+    # A caller-supplied size is usable only if it is non-negative. -1 is the
+    # unset default, which means the caller did not pass -PayloadBytes at all.
+    param([long]$PayloadBytes)
+    return ($PayloadBytes -ge 0)
 }
 
 function Get-MastRobocopyLogPath {
@@ -141,12 +158,18 @@ try {
     }
 
     # --- Disk-space validation (unit) ---
-    # Measure the source payload (metadata only -- fast over SMB) and require it
-    # to fit with a 2 GB margin. Fail fast with a clear signal rather than letting
-    # robocopy partially copy and return rc>=8 on a full disk.
-    $srcBytes = (Get-ChildItem -LiteralPath $SrcUNC -Recurse -File -ErrorAction SilentlyContinue |
-        Measure-Object -Property Length -Sum).Sum
-    if (-not $srcBytes) { $srcBytes = 0 }
+    # Require the payload to fit with a 2 GB margin. Fail fast with a clear signal
+    # rather than letting robocopy partially copy and return rc>=8 on a full disk.
+    # The size is the caller's (see -PayloadBytes); this script no longer measures.
+    if (-not (Test-MastPayloadBytesUsable -PayloadBytes $PayloadBytes)) {
+        Write-Host "PAYLOAD_BYTES_MISSING value=$PayloadBytes"
+        return [pscustomobject]@{
+            outcome = 'PAYLOAD_BYTES_MISSING'
+            rc      = -3
+            detail  = "caller passed no -PayloadBytes (got $PayloadBytes); refusing rather than measuring locally, which does not descend staging junctions"
+        }
+    }
+    $srcBytes = $PayloadBytes
     $destQual = Split-Path $UnitStage -Qualifier
     $drive = Get-PSDrive -Name ($destQual.TrimEnd(':')) -ErrorAction SilentlyContinue
     if ($drive) {

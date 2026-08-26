@@ -138,6 +138,8 @@ from vm_lib import (
     wait_for_ssh,
 )
 
+from prov.staging_size import staging_payload_size
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -572,8 +574,11 @@ def phase_transfer(
         staging_dir = REPO_ROOT / "staging" / hostname / "01-provisioning"
         if not staging_dir.exists():
             raise RuntimeError(f"Staging directory not found: {staging_dir}")
-        files = [f for f in staging_dir.iterdir() if f.is_file()]
-        total_bytes = sum(f.stat().st_size for f in files)
+        # One authoritative measurement, shared with the driver. The old inline sum
+        # was iterdir() + is_file(): not recursive at all, so it missed sites/, sxs/
+        # and wheels/ as well as both staging junctions, and reported 160 files /
+        # 3,637.7 MB for a payload robocopy then moved at 381 files / 13,902 MB.
+        size = staging_payload_size(staging_dir)
         unit_stage = f"C:\\mast-staging\\{run_id}"
         # An ADDRESS on the unit's route, not this machine's name (#70, and the
         # 2026-08-11 address-not-name record). For a host-only dev VM that is the
@@ -588,7 +593,7 @@ def phase_transfer(
         prov_address = local_address_for(resolved) or PROV_SERVER
         src_unc = f"\\\\{prov_address}\\mast-staging\\{hostname}\\01-provisioning"
 
-        log(f"{len(files)} files, {total_bytes / 1_048_576:.1f} MB  via SMB pull from {src_unc}")
+        log(f"{size.files} files, {size.bytes / 1_048_576:.1f} MB  via SMB pull from {src_unc}")
 
         pull_script = REPO_ROOT / "client" / "mast-pull-staging.ps1"
         # Dispatch the pull script by FILE, not inline. Once it carries the
@@ -644,6 +649,7 @@ def phase_transfer(
             smb_pass=smb_pass,
             unit_stage=unit_stage,
             src_unc=src_unc,
+            payload_bytes=size.bytes,
         )
         ps = (
             f"$sb = [scriptblock]::Create((Get-Content -LiteralPath '{remote_ps}' -Raw))\n"
