@@ -39,7 +39,6 @@ from typing import Any
 from prov import drift, registry, transport
 from prov import logevents as L
 from prov.maintenance_window import in_maintenance_window
-from prov.proxy_assert import ProxyPosture, get_proxy_dirty_surfaces
 from prov.retention import run_retention
 from prov.staging_size import staging_payload_size
 from prov.unit_paths import (
@@ -623,10 +622,6 @@ class Driver:
                 if not self._smoke(session, host, executed, dur, payload_hash, git_sha):
                     return  # UNIT_FAIL already logged
 
-                # Phase 9b -- proxy-posture assertion.
-                if not self._proxy_assert(session, host, dur, payload_hash, git_sha):
-                    return  # UNIT_FAIL already logged
-
                 # Phase 10 -- mark available again.
                 self._set_available(session, host)
                 lease_held = False
@@ -1159,49 +1154,6 @@ class Driver:
             unit=host,
             services="; ".join(f"{n}={states[n]}" for n in STAND_DOWN_SERVICES),
         )
-        return True
-
-    def _proxy_assert(self, session: transport.UnitSession, host: str, dur, payload_hash: str, git_sha: str) -> bool:
-        script = (
-            "$r = [ordered]@{ "
-            "http_proxy=[Environment]::GetEnvironmentVariable('http_proxy','Machine'); "
-            "https_proxy=[Environment]::GetEnvironmentVariable('https_proxy','Machine'); "
-            "wininet_enable=0; wininet_server=''; winhttp='' }; "
-            "try { $p = Get-ItemProperty 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings' -EA Stop; "
-            "if ($null -ne $p.ProxyEnable) { $r.wininet_enable=[int]$p.ProxyEnable }; "
-            "if ($null -ne $p.ProxyServer) { $r.wininet_server=[string]$p.ProxyServer } } catch {}; "
-            "try { $r.winhttp = (netsh winhttp show proxy 2>$null | Out-String) } catch {}; "
-            "Write-Output ('PROXY ' + ($r | ConvertTo-Json -Compress -Depth 4))"
-        )
-        p = _marker_json(self._ps_out(session, script, f"proxy:{host}"), "PROXY ") or {}
-        posture = ProxyPosture(
-            http_proxy=p.get("http_proxy") or None,
-            https_proxy=p.get("https_proxy") or None,
-            wininet_enable=int(p.get("wininet_enable") or 0),
-            wininet_server=p.get("wininet_server") or None,
-            winhttp=p.get("winhttp") or None,
-        )
-        dirty = get_proxy_dirty_surfaces(posture)
-        if self.cfg.proxy_mode == "direct":
-            if dirty.advisory:
-                self.log.event("PROXY_ASSERT_WARN", unit=host, mode="direct", advisory="; ".join(dirty.advisory))
-            if dirty.critical:
-                self.log.event("PROXY_ASSERT_FAIL", unit=host, mode="direct", dirty="; ".join(dirty.critical))
-                self.log.event("UNIT_FAIL", unit=host, reason="proxy_dirty_on_direct", dirty="; ".join(dirty.critical))
-                self.log.activity(host, "FAIL", "proxy_dirty_on_direct", dur(), payload_hash, git_sha)
-                self.exit_code = EXIT_UNIT_FAIL
-                return False
-            self.log.event("PROXY_ASSERT_OK", unit=host, mode="direct")
-        else:
-            if not dirty.critical and not dirty.advisory:
-                self.log.event(
-                    "PROXY_ASSERT_WARN",
-                    unit=host,
-                    mode="weizmann",
-                    note="no proxy surface set; unit should end on Weizmann proxy",
-                )
-            else:
-                self.log.event("PROXY_ASSERT_OK", unit=host, mode="weizmann")
         return True
 
     def _set_available(self, session: transport.UnitSession, host: str) -> None:
