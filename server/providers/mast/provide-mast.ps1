@@ -1,7 +1,7 @@
 #requires -RunAsAdministrator
 <#
 .SYNOPSIS
-  Lay down the MAST source tree for the 'unit' role and register the mast-unit service.
+  Lay down the MAST source tree for the 'unit' role.
 
 .DESCRIPTION
   Cloning, branch pinning, venv creation and dependency installation are NOT done
@@ -12,9 +12,11 @@
 
   What stays here is the part mast-clone does not do:
     - ensure Git for Windows is present (mast-clone requires git on PATH);
-    - register the mast-unit NSSM service against the resulting layout;
-    - open the unit API firewall port;
-    - restart the service when the unit checkout actually moved.
+    - open the unit API firewall port.
+
+  It registers no Windows service. Nothing starts the unit but an operator, and a
+  registered service is a competing path into the same processes; mast-services-standdown
+  (order 20) removes any that a unit still carries. See issue #159.
 
   Layout produced by mast-clone -Role unit under -Top:
 
@@ -30,12 +32,11 @@
 
 .PARAMETER Top
   Root of the MAST source tree. Default C:\MAST\src -- a sibling of the C:\MAST
-  state tree (logs, manifests, smoke markers), and the path baked into the
-  mast-unit service definition.
+  state tree (logs, manifests, smoke markers).
 
 .PARAMETER Force
-  Remove <Top> entirely and rebuild from scratch (stopping mast-unit first).
-  Without it an existing tree is fetched and fast-forwarded in place.
+  Remove <Top> entirely and rebuild from scratch. Without it an existing tree is
+  fetched and fast-forwarded in place.
 #>
 [CmdletBinding()]
 param(
@@ -88,7 +89,6 @@ if (-not (Test-Path -LiteralPath ${MastCloneScript})) {
 # tools/mast-repos.tsv, the single source of truth for which repos and branches a
 # role gets -- this script deliberately holds no repo list of its own.
 ${MastRole}     = 'unit'
-${ServiceName}  = 'mast-unit'
 ${UnitDirName}  = 'unit'
 ${FirewallRule} = 'MAST - Unit API (TCP 8000)'
 ${UnitApiPort}  = 8000
@@ -188,11 +188,6 @@ try {
 
     # --- Force: rebuild the tree from scratch ------------------------------
     if (${Force} -and (Test-Path -LiteralPath ${Top})) {
-        ${svcForce} = Get-Service -Name ${ServiceName} -ErrorAction SilentlyContinue
-        if (${svcForce} -and ${svcForce}.Status -eq 'Running') {
-            Write-MastProvisionEvent ("Force: stopping {0} before removing {1}" -f ${ServiceName}, ${Top})
-            Stop-Service -Name ${ServiceName} -Force -ErrorAction SilentlyContinue
-        }
         Write-MastProvisionEvent ("Force: removing {0}" -f ${Top})
         Remove-Item -LiteralPath ${Top} -Recurse -Force -ErrorAction SilentlyContinue
     }
@@ -302,64 +297,19 @@ try {
     ${headBeforeLabel} = if (${headBefore}) { ${headBefore} } else { 'none' }
     Write-MastProvisionEvent ("unit HEAD {0} -> {1} (moved={2})" -f ${headBeforeLabel}, ${headAfter}, ${unitMoved})
 
-    # --- Register mast-unit as a Windows service via NSSM ------------------
-    # Registered DISABLED and never started: process start commands hardware
-    # (MAST_unit#132 -- covers open, mount homes) and there are no interlocks, so
-    # bringing the unit up is an operator's decision, not a module's. Issue #159,
-    # docs/decisions/2026-08-26-provisioning-does-not-run-the-mast-unit-service.md.
-    ${nssmExe} = 'C:\Program Files\nssm\nssm.exe'
-    ${unitEntryPoint} = Join-Path ${unitDir} 'src\app.py'
-    if (-not (Test-Path -LiteralPath ${nssmExe})) {
-        Write-Warning "NSSM not found at ${nssmExe}; skipping mast-unit service registration."
-    } elseif (-not (Test-Path -LiteralPath ${unitEntryPoint})) {
-        Write-Warning ("mast-unit entry point not found at {0}; skipping service registration." -f ${unitEntryPoint})
+    # --- Firewall: the unit API port ---------------------------------------
+    # The unit binds TCP 8000 whenever it is started -- by hand under the VS Code
+    # debugger today, by a supervisor later (#82). Provisioning owes the open port
+    # regardless of what raises the process, which is why this outlives the service
+    # registration that used to sit here (#159).
+    if (-not (Get-NetFirewallRule -DisplayName ${FirewallRule} -ErrorAction SilentlyContinue)) {
+        New-NetFirewallRule -DisplayName ${FirewallRule} -Direction Inbound -Action Allow `
+            -Protocol TCP -LocalPort ${UnitApiPort} -Profile Any | Out-Null
+        Write-MastProvisionEvent ("Firewall rule created: {0}" -f ${FirewallRule})
     } else {
-        ${existingSvc} = Get-Service -Name ${ServiceName} -ErrorAction SilentlyContinue
-        if ($null -eq ${existingSvc}) {
-            Write-MastProvisionEvent ("NSSM service register BEGIN name={0}" -f ${ServiceName})
-            ${svcLogDir} = 'C:\MAST\logs\mast-unit'
-            Confirm-Dir ${svcLogDir}
-            & ${nssmExe} install ${ServiceName} ${venvPython} ${unitEntryPoint}
-            & ${nssmExe} set ${ServiceName} AppDirectory ${unitDir}
-            # No role env var: the service reads its role from C:\WIS\config.toml
-            # (machine_role), laid down by config-bootstrap (order 150). MAST_PROJECT
-            # was retired in the config-file epic (#18) and config-bootstrap actively
-            # removes any machine-wide leftover -- setting it here would resurrect it
-            # per-service at order 2200 after order 150 had just deleted it.
-            & ${nssmExe} set ${ServiceName} AppDependencies mast-pwi4
-            & ${nssmExe} set ${ServiceName} AppStdout (Join-Path ${svcLogDir} 'stdout.log')
-            & ${nssmExe} set ${ServiceName} AppStderr (Join-Path ${svcLogDir} 'stderr.log')
-            & ${nssmExe} set ${ServiceName} AppRotateFiles 1
-            & ${nssmExe} set ${ServiceName} AppRotateOnline 1
-            & ${nssmExe} set ${ServiceName} AppRotateBytes 10485760
-            if (-not (Get-NetFirewallRule -DisplayName ${FirewallRule} -ErrorAction SilentlyContinue)) {
-                New-NetFirewallRule -DisplayName ${FirewallRule} -Direction Inbound -Action Allow `
-                    -Protocol TCP -LocalPort ${UnitApiPort} -Profile Any | Out-Null
-                Write-MastProvisionEvent ("Firewall rule created: {0}" -f ${FirewallRule})
-            } else {
-                Write-MastProvisionEvent ("Firewall rule already exists: {0}" -f ${FirewallRule})
-            }
-            Write-MastProvisionEvent ("NSSM service register DONE name={0}" -f ${ServiceName})
-        } else {
-            if (${unitMoved} -or ${Force}) {
-                Write-MastProvisionEvent ("{0} registered; moved checkout will be picked up whenever it is next started by hand" -f ${ServiceName})
-            } else {
-                Write-MastProvisionEvent ("NSSM service SKIP (registered, unit unchanged) name={0}" -f ${ServiceName})
-            }
-        }
-
-        # Outside the install-only branch on purpose: an already-registered
-        # service is exactly the case that needs the start mode re-stated, since
-        # a unit can arrive Auto from an earlier provisioning generation (#140).
-        # Fails the module rather than warning -- a unit left startable is the
-        # one outcome this block exists to prevent.
-        & ${nssmExe} set ${ServiceName} Start SERVICE_DISABLED
-        ${startModeNow} = (Get-CimInstance -ClassName Win32_Service -Filter ("Name='{0}'" -f ${ServiceName}) -ErrorAction SilentlyContinue).StartMode
-        Write-MastProvisionEvent ("{0} start mode: {1}" -f ${ServiceName}, ${startModeNow})
-        if (${startModeNow} -ne 'Disabled') {
-            throw ("{0} StartMode is '{1}', expected 'Disabled' -- provisioning must not leave the unit service startable" -f ${ServiceName}, ${startModeNow})
-        }
+        Write-MastProvisionEvent ("Firewall rule already exists: {0}" -f ${FirewallRule})
     }
+
 
     Write-MastProvisionEvent ("MAST source tree ready at {0}" -f ${Top})
 }

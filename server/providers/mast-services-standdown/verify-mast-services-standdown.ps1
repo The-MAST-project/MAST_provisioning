@@ -13,31 +13,14 @@ if (-not (Test-Path ${namesDot})) { throw "mast-service-names.ps1 not found besi
 . ${namesDot}
 
 ${verifyLog} = Get-MastVerifyLog -Module 'mast-services-standdown'
-${issues} = New-Object 'System.Collections.Generic.List[string]'
-${lines}  = New-Object 'System.Collections.Generic.List[string]'
+${remaining} = Get-MastRegisteredServiceNames
 
-foreach (${svcName} in (Get-MastStandDownServiceNames)) {
-    ${svc} = Get-Service -Name ${svcName} -ErrorAction SilentlyContinue
-    if ($null -eq ${svc}) {
-        [void]${lines}.Add(("SKIP {0}: not registered" -f ${svcName}))
-        continue
-    }
-    ${startMode} = (Get-CimInstance -ClassName Win32_Service -Filter ("Name='{0}'" -f ${svcName}) -ErrorAction SilentlyContinue).StartMode
-    if (${startMode} -ne 'Disabled') {
-        [void]${issues}.Add(("{0}: StartMode='{1}' (expected Disabled)" -f ${svcName}, ${startMode}))
-    }
-    if (${svc}.Status -ne 'Stopped') {
-        [void]${issues}.Add(("{0}: Status='{1}' (expected Stopped)" -f ${svcName}, ${svc}.Status))
-    }
-    [void]${lines}.Add(("{0}: StartMode={1} Status={2}" -f ${svcName}, ${startMode}, ${svc}.Status))
-}
-
-if (${issues}.Count -gt 0) {
-    (("mast-services-standdown FAIL: " + (${issues} -join '; ')) + "`r`n" + (${lines} -join "`r`n")) |
+if (${remaining}.Count -gt 0) {
+    ("mast-services-standdown FAIL: still registered: " + (${remaining} -join ', ')) |
         Out-File -FilePath ${verifyLog} -Encoding UTF8
     exit 1
 }
 
-(("mast-services-standdown OK") + "`r`n" + (${lines} -join "`r`n")) | Out-File -FilePath ${verifyLog} -Encoding UTF8
+"mast-services-standdown OK: no MAST service is registered" | Out-File -FilePath ${verifyLog} -Encoding UTF8
 Write-MastSmokeOk -Module 'mast-services-standdown' | Out-Null
 exit 0

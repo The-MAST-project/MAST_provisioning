@@ -13,34 +13,14 @@ if (-not (Test-Path ${namesDot})) { throw "mast-service-names.ps1 not found besi
 . ${namesDot}
 
 ${verifyLog} = Get-MastVerifyLog -Module 'mast-services-finalize'
-${issues} = New-Object 'System.Collections.Generic.List[string]'
-${lines}  = New-Object 'System.Collections.Generic.List[string]'
+${remaining} = Get-MastRegisteredServiceNames
 
-${expectations} = Get-MastServiceExpectations
-
-foreach (${svcName} in ${expectations}.Keys) {
-    ${expected} = ${expectations}[${svcName}]
-    ${svc} = Get-Service -Name ${svcName} -ErrorAction SilentlyContinue
-    if ($null -eq ${svc}) {
-        [void]${lines}.Add(("SKIP {0}: not registered" -f ${svcName}))
-        continue
-    }
-    ${startMode} = (Get-CimInstance -ClassName Win32_Service -Filter ("Name='{0}'" -f ${svcName}) -ErrorAction SilentlyContinue).StartMode
-    if (${startMode} -ne ${expected}) {
-        [void]${issues}.Add(("{0}: StartMode='{1}' (expected {2})" -f ${svcName}, ${startMode}, ${expected}))
-    }
-    if (${svc}.Status -ne 'Stopped') {
-        [void]${issues}.Add(("{0}: Status='{1}' (expected Stopped)" -f ${svcName}, ${svc}.Status))
-    }
-    [void]${lines}.Add(("{0}: StartMode={1} Status={2}" -f ${svcName}, ${startMode}, ${svc}.Status))
-}
-
-if (${issues}.Count -gt 0) {
-    (("mast-services-finalize FAIL: " + (${issues} -join '; ')) + "`r`n" + (${lines} -join "`r`n")) |
+if (${remaining}.Count -gt 0) {
+    ("mast-services-finalize FAIL: still registered at end of run: " + (${remaining} -join ', ')) |
         Out-File -FilePath ${verifyLog} -Encoding UTF8
     exit 1
 }
 
-(("mast-services-finalize OK") + "`r`n" + (${lines} -join "`r`n")) | Out-File -FilePath ${verifyLog} -Encoding UTF8
+"mast-services-finalize OK: no MAST service is registered" | Out-File -FilePath ${verifyLog} -Encoding UTF8
 Write-MastSmokeOk -Module 'mast-services-finalize' | Out-Null
 exit 0

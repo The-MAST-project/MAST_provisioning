@@ -69,12 +69,20 @@ UNIT_SHARED_PLAIN = r"C:\MAST\status\shared-cred.tmp"
 UNIT_SHARED_CFG = r"C:\MAST\status\shared-cred.json"
 DETACHED_TASK = "MAST-Execute-Detached"
 
-#: Services provisioning must never leave startable, stood down before the build.
-#: Mirrors Get-MastStandDownServiceNames in tools/mast-service-names.ps1, which is
-#: the authority the unit-side providers read; test_stand_down.py fails if the two
-#: drift. A running mast-unit commands hardware on process start (MAST_unit#132)
-#: with no interlock, and the transfer window is long enough to matter (#159).
-STAND_DOWN_SERVICES = ("mast-unit",)
+#: The MAST services provisioning removes, stood down before the build. Mirrors
+#: Get-MastServiceNames in tools/mast-service-names.ps1, which is the authority the
+#: unit-side providers read; test_stand_down.py fails if the two drift. The driver
+#: cannot read that table -- it runs before any payload has reached the unit -- so it
+#: carries its own copy. A running mast-unit commands hardware on process start
+#: (MAST_unit#132) with no interlock, and the transfer window is long enough to
+#: matter (#159).
+STAND_DOWN_SERVICES = ("mast-unit", "mast-pwi4", "mast-pwshutter", "mast-phd2")
+
+#: The names an earlier provisioning generation registered, before the mast-* prefix.
+#: Removed only when nssm-hosted, which is what proves the registration is ours and
+#: not a service someone else installed under the same name. Mirrors
+#: Get-MastLegacyServiceNames.
+STAND_DOWN_LEGACY_SERVICES = ("PWI4", "PWShutter", "PHD2")
 EXECUTE_POLL_INTERVAL_S = 15
 
 AVAIL_TTL_S = 7200  # 2 h; matches execute-lease default
@@ -1110,23 +1118,34 @@ class Driver:
         return True
 
     def _stand_down(self, session: transport.UnitSession, host: str, dur) -> bool:
-        """Stop and disable the services provisioning must not leave startable.
+        """Remove the MAST services, so nothing on the unit can command hardware.
 
         The unit-side provider at order 20 does this again inside the module
         sequence; this call closes the window the modules cannot reach -- build,
         transfer, and the detached-execute registration ahead of them.
+
+        sc.exe rather than Remove-Service: the fleet runs PowerShell 5.1. It reports
+        success for a delete it has only MARKED, so the registration is read back
+        rather than the exit code trusted.
         """
         names = ", ".join(_ps_lit(n) for n in STAND_DOWN_SERVICES)
+        legacy = ", ".join(_ps_lit(n) for n in STAND_DOWN_LEGACY_SERVICES)
         script = (
-            f"$o = [ordered]@{{}}; foreach ($n in @({names})) {{ "
+            "function Remove-One { param($n) "
             "$svc = Get-Service -Name $n -EA SilentlyContinue; "
-            "if ($null -eq $svc) { $o[$n] = 'absent'; continue }; "
-            "try { if ($svc.Status -ne 'Stopped') { Stop-Service -Name $n -Force -EA Stop }; "
-            "Set-Service -Name $n -StartupType Disabled -EA Stop } "
-            "catch { $o[$n] = 'error: ' + $_.Exception.Message; continue }; "
-            "$sm = (Get-CimInstance Win32_Service -Filter (\"Name='$n'\") -EA SilentlyContinue).StartMode; "
-            "$st = (Get-Service -Name $n -EA SilentlyContinue).Status; "
-            "$o[$n] = [string]$st + '/' + [string]$sm }; "
+            "if ($null -eq $svc) { return 'absent' }; "
+            "try { if ($svc.Status -ne 'Stopped') { Stop-Service -Name $n -Force -EA Stop } } "
+            "catch { return 'error: ' + $_.Exception.Message }; "
+            "$null = & sc.exe delete $n 2>&1; "
+            "if ($LASTEXITCODE -ne 0) { return 'error: sc delete exit ' + $LASTEXITCODE }; "
+            "if ($null -ne (Get-Service -Name $n -EA SilentlyContinue)) { return 'pending-delete' }; "
+            "return 'removed' }; "
+            f"$o = [ordered]@{{}}; foreach ($n in @({names})) {{ $o[$n] = Remove-One $n }}; "
+            f"foreach ($n in @({legacy})) {{ "
+            "if ($null -eq (Get-Service -Name $n -EA SilentlyContinue)) { $o[$n] = 'absent'; continue }; "
+            "$img = (Get-CimInstance Win32_Service -Filter (\"Name='$n'\") -EA SilentlyContinue).PathName; "
+            "if ($img -notmatch 'nssm\\.exe') { $o[$n] = 'not-ours'; continue }; "
+            "$o[$n] = Remove-One $n }; "
             "Write-Output ('STANDDOWN ' + ($o | ConvertTo-Json -Compress -Depth 4))"
         )
         states = _marker_json(self._ps_out(session, script, f"standdown:{host}"), "STANDDOWN ")
@@ -1138,9 +1157,11 @@ class Driver:
             return False
 
         # 'absent' is a first provisioning, or a unit that legitimately lacks the
-        # service: nothing to stand down and nothing wrong.
-        bad = {n: str(v) for n, v in states.items() if str(v) not in ("absent", "Stopped/Disabled")}
-        missing = [n for n in STAND_DOWN_SERVICES if n not in states]
+        # service; 'not-ours' is a legacy name registered by something other than
+        # nssm. Neither is a problem -- both mean nothing here can command hardware.
+        bad = {n: str(v) for n, v in states.items() if str(v) not in ("absent", "removed", "not-ours")}
+        expected = STAND_DOWN_SERVICES + STAND_DOWN_LEGACY_SERVICES
+        missing = [n for n in expected if n not in states]
         if bad or missing:
             detail = "; ".join([f"{n}={v}" for n, v in bad.items()] + [f"{n}=unreported" for n in missing])
             self.log.event("STANDDOWN_FAIL", unit=host, detail=detail)
@@ -1152,7 +1173,7 @@ class Driver:
         self.log.event(
             "STANDDOWN_OK",
             unit=host,
-            services="; ".join(f"{n}={states[n]}" for n in STAND_DOWN_SERVICES),
+            services="; ".join(f"{n}={states[n]}" for n in expected),
         )
         return True
 

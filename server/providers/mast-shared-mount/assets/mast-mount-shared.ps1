@@ -2,15 +2,17 @@
 Maps the unit's operational shared drive Z: -> \\<controller_host>\<share> in the
 LOCAL SYSTEM logon session, and records the outcome as JSON.
 
-WHY SYSTEM: the MAST services (mast-unit, mast-phd2, mast-pwi4, mast-pwshutter)
-are installed by nssm with no ObjectName, so they run as LocalSystem. Windows
-drive letters are per-logon-session, and every LocalSystem process shares one
-session -- so a mapping made by an interactive user (or by provisioning, which
-runs as the autologon 'mast' user) is INVISIBLE to the services. MAST_common's
-Filer probes is_windows_drive_mapped('Z:') from inside mast-unit and silently
-falls back to C:\MAST when the probe fails; that fallback is what made the
-2026-07-14 exposures look lost. This script therefore runs from a SYSTEM
-scheduled task at boot -- see MAST_provisioning issue #25.
+WHY SYSTEM: Windows drive letters are per-logon-session, and every LocalSystem
+process shares one session -- so a mapping made by an interactive user (or by
+provisioning, which runs as the autologon 'mast' user) is INVISIBLE to a
+LocalSystem process. This script therefore runs from a SYSTEM scheduled task at
+boot -- see MAST_provisioning issue #25. MAST_common's Filer probes
+is_windows_drive_mapped('Z:') and silently falls back to C:\MAST when the probe
+fails; that fallback is what made the 2026-07-14 exposures look lost.
+
+The mapping is SYSTEM-session only, and that is its limit: a process started in an
+interactive session does not see it. No MAST service is registered any more
+(MAST_provisioning#159), so nothing the unit runs today is a LocalSystem process.
 
 Also ensures the per-host directory Filer roots on (Z:\MAST\<hostname>\) exists:
 Filer's accessible_shared_root() tests that exact directory, so an empty share

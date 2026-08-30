@@ -1,7 +1,7 @@
 ﻿{
   "name": "mast-services-finalize",
   "version": "1.0",
-  "description": "Final operational step: assert that every MAST nssm service is Stopped and sits at the start mode provisioning owes it -- mast-unit Disabled (a running unit service commands hardware on process start, MAST_unit#132, with no interlock, so bringing the unit up is an operator's decision), the three prerequisite services Manual. The expected mode per service is the shared table in tools/mast-service-names.ps1, which mast-services-standdown (order 20) also reads. Runs last (order 9500, after all validation and the proxy finalize, before reboot detection) as the end-of-run posture check. The three prerequisite services join mast-unit at Disabled when the supervisor topology replaces them (#82); see issue #159.",
+  "description": "Final operational step: assert that no MAST nssm service is registered -- neither the four mast-* names nor an nssm-hosted service under a pre-rename name. mast-services-standdown (order 20) removed them before any module installed anything and the driver did the same before the build, and nothing in a run registers one, so this asserts that the posture held rather than acting as a second remover: a provider that quietly re-registered a service mid-run is exactly what it exists to surface. Runs last (order 9500, after all validation and the proxy finalize, before reboot detection). The shared name list and the nssm gate live in tools/mast-service-names.ps1, which mast-services-standdown also reads. See issue #159.",
   "order": 9500,
   "always": true,
   "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-mast-services-finalize.ps1\"",

@@ -4,12 +4,12 @@
   Runtime verification: ASCOM diagnostics, app launch checks, PHD2 JSON-RPC port.
 
 .NOTES
-  - PHD2 must be registered as an NSSM service (provide-phd2.ps1) before this runs.
-  - Nothing here touches mast-unit. Provisioning does not run the unit service and
-    does not test it (#159): it is registered Disabled and stood down at order 20,
-    so there is no listener to probe and no health to infer. What provisioning owes
-    the service -- registration, the venv interpreter, the firewall rule, the Z:
-    hook -- is asserted by verify-mast.ps1 with the service dead.
+  - The PHD2 port probe is report-only. PHD2 binds 4400 only after connecting to a
+    camera, so an unbound port is the normal state of a unit at rest (#69).
+  - Nothing here touches the MAST services. Provisioning registers none of them and
+    does not test the unit (#159): they are removed at order 20, so there is no
+    listener to probe and no health to infer. What provisioning owes the unit -- the
+    clone, the venv interpreter, the firewall rule -- is asserted by verify-mast.ps1.
   - ASCOM Diagnostics tool: searched recursively under C:\Program Files\ASCOM (Platform 6 and 7 supported).
 #>
 [CmdletBinding()]
@@ -194,11 +194,6 @@ try {
 
 # --- 6. PHD2 JSON-RPC server alive (TCP port 4400) ---
 try {
-    ${phd2Svc} = Get-Service -Name 'mast-phd2' -ErrorAction SilentlyContinue
-    if ($null -ne ${phd2Svc} -and ${phd2Svc}.Status -ne 'Running') {
-        Start-Service -Name 'mast-phd2' -ErrorAction SilentlyContinue
-        Start-Sleep -Seconds 5
-    }
     ${tcpOk} = $false
     ${tcpClient} = New-Object System.Net.Sockets.TcpClient
     try {

@@ -3,18 +3,19 @@
 [CmdletBinding()]
 param()
 
-# Stand the unit down before the run touches anything: stop every service in the
-# stand-down set and set it Disabled. Nothing in a provisioning run is entitled
-# to have telescope hardware moving, and a running mast-unit moves it on process
-# start (MAST_unit#132). Disabled rather than Manual so a stray Start-Service, a
-# reboot, or a dependency chain cannot raise it either; an operator who means to
-# bring the unit up enables it deliberately.
+# Stand the unit down before the run touches anything: remove every MAST nssm
+# service. Nothing in a provisioning run is entitled to have telescope hardware
+# moving, and a running mast-unit moves it on process start (MAST_unit#132). Removal
+# rather than a start mode because nothing starts these services in the first place
+# -- the unit raises PWI4, ps3cli and PHD2 itself, and a leftover registration is a
+# competing path into the same processes (issue #159, and the header of
+# mast-service-names.ps1).
 #
-# Set-Service, not nssm: nssm arrives at order 1200 and this runs at 20.
+# Set-Service and sc.exe, not nssm: nssm arrives at order 1200 and this runs at 20.
 #
-# Failing here fails the module. A unit whose service cannot be stopped is the
-# one case this exists to catch, and continuing would provision a machine that
-# is commanding hardware the whole time.
+# Failing here fails the module. A unit whose services cannot be removed is the one
+# case this exists to catch, and continuing would provision a machine that can still
+# command hardware.
 
 # --- Import shared helpers ---
 try {
@@ -34,8 +35,8 @@ catch {
     throw "Failed to import provisioning.psm1: $($_.Exception.Message)"
 }
 
-# Canonical service list + per-service expected start mode (shared with the
-# verify script and with mast-services-finalize).
+# Canonical service names, the nssm gate for the legacy ones, and Remove-MastService
+# (shared with the verify script and with mast-services-finalize).
 ${namesDot} = Join-Path ${PSScriptRoot} 'mast-service-names.ps1'
 if (-not (Test-Path ${namesDot})) { throw "mast-service-names.ps1 not found beside provide script." }
 . ${namesDot}
@@ -45,43 +46,31 @@ try {
 
     ${failures} = New-Object 'System.Collections.Generic.List[string]'
 
-    foreach (${svcName} in (Get-MastStandDownServiceNames)) {
-        ${svc} = Get-Service -Name ${svcName} -ErrorAction SilentlyContinue
-        if ($null -eq ${svc}) {
-            # First provisioning of a unit, or a unit that legitimately lacks the
-            # service. There is nothing to stand down and nothing wrong.
-            Write-Host ("SKIP {0}: not registered on this unit." -f ${svcName})
+    # The mast-* names are unambiguous and are always attempted. A legacy name is
+    # attempted only when it is registered AND nssm-hosted, which is what proves the
+    # registration is one of ours rather than someone else's service of the same name.
+    ${targets} = New-Object 'System.Collections.Generic.List[string]'
+    foreach (${svcName} in (Get-MastServiceNames)) { [void]${targets}.Add(${svcName}) }
+    foreach (${svcName} in (Get-MastLegacyServiceNames)) {
+        if ($null -eq (Get-Service -Name ${svcName} -ErrorAction SilentlyContinue)) {
+            Write-Host ("{0}: absent (legacy name)" -f ${svcName})
             continue
         }
-
-        ${statusBefore} = ${svc}.Status
-        ${startBefore} = (Get-CimInstance -ClassName Win32_Service -Filter ("Name='{0}'" -f ${svcName}) -ErrorAction SilentlyContinue).StartMode
-        Write-Host ("{0}: arrived Status={1} StartMode={2}." -f ${svcName}, ${statusBefore}, ${startBefore})
-
-        try {
-            if (${statusBefore} -ne 'Stopped') {
-                Stop-Service -Name ${svcName} -Force -ErrorAction Stop
-            }
-            Set-Service -Name ${svcName} -StartupType Disabled -ErrorAction Stop
-        }
-        catch {
-            [void]${failures}.Add(("{0}: {1}" -f ${svcName}, $_.Exception.Message))
+        if (-not (Test-MastNssmService -Name ${svcName})) {
+            Write-Host ("{0}: left alone -- registered but not nssm-hosted, so not ours" -f ${svcName})
             continue
         }
+        [void]${targets}.Add(${svcName})
+    }
 
-        # Read the end state back rather than trusting the calls: the startup type
-        # lives in the registry, not on the cached service object above.
-        ${startMode} = (Get-CimInstance -ClassName Win32_Service -Filter ("Name='{0}'" -f ${svcName}) -ErrorAction SilentlyContinue).StartMode
-        ${after} = Get-Service -Name ${svcName} -ErrorAction SilentlyContinue
-        ${statusNow} = if ($null -ne ${after}) { ${after}.Status } else { 'unknown' }
-        if (${startMode} -ne 'Disabled') {
-            [void]${failures}.Add(("{0}: StartMode is '{1}', expected 'Disabled'." -f ${svcName}, ${startMode}))
+    foreach (${svcName} in ${targets}) {
+        ${state} = Remove-MastService -Name ${svcName}
+        Write-Host ("{0}: {1}" -f ${svcName}, ${state})
+        if (${state} -eq 'pending-delete') {
+            [void]${failures}.Add(("{0}: deletion is pending -- still registered, and the unit needs a reboot to finish it" -f ${svcName}))
         }
-        elseif (${statusNow} -ne 'Stopped') {
-            [void]${failures}.Add(("{0}: Status is '{1}', expected 'Stopped'." -f ${svcName}, ${statusNow}))
-        }
-        else {
-            Write-Host ("OK {0}: StartMode=Disabled Status=Stopped." -f ${svcName})
+        elseif (${state} -like 'error:*') {
+            [void]${failures}.Add(("{0}: {1}" -f ${svcName}, ${state}))
         }
     }
 
@@ -90,7 +79,7 @@ try {
         exit 1
     }
 
-    Write-Host "mast-services-standdown: the unit is stood down; no MAST service can command hardware during this run."
+    Write-Host "mast-services-standdown: no MAST service is registered on this unit."
     exit 0
 }
 finally {
