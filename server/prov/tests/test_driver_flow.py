@@ -41,6 +41,18 @@ class FakeSession(T.SshSession):
         pass
 
 
+def standdown_marker(**states: str) -> str:
+    """A STANDDOWN marker reporting every service the driver expects.
+
+    Built from the driver's own lists so a service added there does not silently
+    leave these fixtures reporting a short marker, which the driver would (rightly)
+    fail closed on. Keyword overrides steer one service; the rest read 'absent'.
+    """
+    reported = {n: "absent" for n in D.STAND_DOWN_SERVICES + D.STAND_DOWN_LEGACY_SERVICES}
+    reported.update({k.replace("_", "-"): v for k, v in states.items()})
+    return "STANDDOWN " + json.dumps(reported)
+
+
 def make_responder(
     *,
     pull: str = DEFAULT_PULL,
@@ -51,7 +63,7 @@ def make_responder(
     proxy: str = "PROXY {}",
     inventory: str = "",
     smbreach: str = "SMBREACH ok",
-    standdown: str = 'STANDDOWN {"mast-unit": "absent"}',
+    standdown: str | None = None,
 ):
     """Build a responder(script) -> (rc, stdout) keyed on recognizable phase
     scripts. Every phase has a sane default; a test overrides one to steer a
@@ -59,8 +71,9 @@ def make_responder(
 
     # First match wins, so order is the same contract the if-chain this replaced
     # carried. Two entries are pre-build gates whose defaults must not fail:
-    # SMBREACH (#70, reachable) and STANDDOWN (#159, 'absent' -- the answer a
-    # first provisioning gives, since the service does not exist yet).
+    # SMBREACH (#70, reachable) and STANDDOWN (#159, 'absent' everywhere -- the
+    # answer a first provisioning gives, since no service exists yet).
+    standdown = standdown_marker() if standdown is None else standdown
     answers = (
         ("Get-NetAdapter", inventory),
         ("SMBREACH", smbreach),
@@ -682,12 +695,12 @@ def test_unreachable_staging_fails_before_the_build(root, monkeypatch):
 
 
 def test_stand_down_precedes_the_build(root, monkeypatch):
-    """A unit that arrives Running is stood down before anything is built.
+    """A unit that arrives with the services registered is cleaned before the build.
 
     The transfer is the long pole, so a stand-down that ran with the modules
     would leave a unit commanding hardware for the length of it (#159).
     """
-    drv, sess = _make_driver(root, monkeypatch, make_responder(standdown='STANDDOWN {"mast-unit": "Stopped/Disabled"}'))
+    drv, sess = _make_driver(root, monkeypatch, make_responder(standdown=standdown_marker(mast_unit="removed")))
 
     code = drv.run()
     log = drv.log.run_log_path.read_text()
@@ -700,7 +713,7 @@ def test_stand_down_precedes_the_build(root, monkeypatch):
 
 
 def test_stand_down_failure_fails_the_unit_closed(root, monkeypatch):
-    """Cannot stop the service -> the unit is not provisioned at all.
+    """Cannot remove the service -> the unit is not provisioned at all.
 
     Continuing would provision a machine whose telescope may be moving, which is
     the outcome the stand-down exists to prevent, so this fails closed.
@@ -715,7 +728,7 @@ def test_stand_down_failure_fails_the_unit_closed(root, monkeypatch):
     drv, _sess = _make_driver(
         root,
         monkeypatch,
-        make_responder(standdown='STANDDOWN {"mast-unit": "error: Access is denied"}'),
+        make_responder(standdown=standdown_marker(mast_unit="error: Access is denied")),
     )
     monkeypatch.setattr(D.Driver, "_build", counting_build)
 
@@ -740,7 +753,7 @@ def test_stand_down_unreported_service_fails_closed(root, monkeypatch):
 
 
 def test_stand_down_absent_service_is_not_a_failure(root, monkeypatch):
-    """First provisioning: the service does not exist yet, and that is fine."""
+    """First provisioning: no service exists yet, and that is fine."""
     drv, _sess = _make_driver(root, monkeypatch, make_responder())
 
     code = drv.run()
