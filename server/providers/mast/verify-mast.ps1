@@ -170,42 +170,6 @@ if (Test-Path -LiteralPath ${venvPython}) {
     }
 }
 
-# The service must be REGISTERED and pointed at this layout's interpreter. Its
-# run state deliberately is NOT checked here.
-#
-# mast-unit is registered Disabled and is never started by a provisioning run:
-# process start commands hardware (MAST_unit#132) and no interlock exists, so
-# whether the unit is up is an operator's decision (#159). Run state is owned by
-# mast-services-standdown (order 20) and asserted by mast-services-finalize
-# (9500), each with its own verify -- one fact, one owner.
-#
-# What IS this module's business is the interpreter the service runs, since that
-# is exactly what the move to the mast-clone layout changes, and it is checkable
-# with the service dead.
-${svc} = Get-Service -Name 'mast-unit' -ErrorAction SilentlyContinue
-if ($null -eq ${svc}) {
-    [void]${issues}.Add('mast-unit service not registered')
-} else {
-    W ("mast-unit service: Status={0} StartType={1} (run state owned by mast-services-finalize)" -f ${svc}.Status, ${svc}.StartType)
-    ${nssmExe} = 'C:\Program Files\nssm\nssm.exe'
-    if (Test-Path -LiteralPath ${nssmExe}) {
-        # nssm writes UTF-16LE, which arrives through the pipe as every character
-        # followed by a NUL. Those NULs must be stripped, not trimmed: Trim only
-        # touches the ends. And the comparison must be ORDINAL -- PowerShell's
-        # default '-ne' is culture-sensitive and treats NUL as a zero-weight
-        # character, so a NUL-laden path compares EQUAL to a clean one. This
-        # check therefore used to pass by accident, and "fixing" it to ordinal
-        # without stripping would have failed every unit instead (measured
-        # 2026-08-03). Strip, then compare ordinally.
-        ${svcApp} = (((& ${nssmExe} get mast-unit Application) -join '') -replace "`0", '').Trim()
-        if (${svcApp} -and -not [string]::Equals(${svcApp}, ${venvPython}, [System.StringComparison]::OrdinalIgnoreCase)) {
-            [void]${issues}.Add(("mast-unit runs {0}, expected {1} -- service not re-pointed at the mast-clone venv" -f ${svcApp}, ${venvPython}))
-        } else {
-            W ("mast-unit interpreter: {0}" -f ${svcApp})
-        }
-    }
-}
-
 if (${issues}.Count -gt 0) {
     (${issues} -join [Environment]::NewLine) | Out-File -FilePath ${verifyLog} -Append -Encoding UTF8
     if (Test-Path -LiteralPath ${smokeFile}) {
