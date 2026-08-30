@@ -65,8 +65,8 @@ try {
     }
 
     # Idempotent re-run guard: skip the Inno installer if PWI4 is already present.
-    # Re-running it over an existing install (PWI4 is kept running by the NSSM
-    # service registered below) blocks on an "application is running / already
+    # Re-running it over an existing install (PWI4 may be running -- the unit
+    # raises it itself) blocks on an "application is running / already
     # installed" modal the silent flags do not suppress; in Session 0 there is no
     # desktop to dismiss it, and Start-Process -Wait has no timeout, so the run
     # would hang forever. pwi4.exe presence is the authoritative success criterion.
@@ -150,31 +150,6 @@ try {
         }
     }
 
-    # Register PWI4 as an NSSM service so it is running before MAST_unit starts.
-    # PWI4 is a GUI app; SERVICE_INTERACTIVE_PROCESS allows it to initialise in
-    # session 0 on headless units (same pattern used for PHD2).
-    ${nssmExe} = 'C:\Program Files\nssm\nssm.exe'
-    if (Test-Path -LiteralPath ${nssmExe}) {
-        ${pwi4SvcName} = 'mast-pwi4'
-        ${existingPwi4Svc} = Get-Service -Name ${pwi4SvcName} -ErrorAction SilentlyContinue
-        if ($null -eq ${existingPwi4Svc}) {
-            Write-MastPwLog "Registering PWI4 as NSSM service..."
-            & ${nssmExe} install ${pwi4SvcName} ${pwi4ExePath}
-            & ${nssmExe} set ${pwi4SvcName} Start SERVICE_AUTO_START
-            & ${nssmExe} set ${pwi4SvcName} Type SERVICE_INTERACTIVE_PROCESS
-            & ${nssmExe} set ${pwi4SvcName} AppStdout 'C:\MAST\logs\pwi4_stdout.log'
-            & ${nssmExe} set ${pwi4SvcName} AppStderr 'C:\MAST\logs\pwi4_stderr.log'
-            & ${nssmExe} set ${pwi4SvcName} AppRotateFiles 1
-            & ${nssmExe} set ${pwi4SvcName} AppRotateBytes 10485760
-            Start-Service -Name ${pwi4SvcName} -ErrorAction SilentlyContinue
-            Write-MastPwLog "PWI4 service registered and started."
-        } else {
-            Write-MastPwLog "PWI4 service already registered -- skipping."
-        }
-    } else {
-        Write-MastPwLog "NSSM not found; skipping PWI4 service registration."
-    }
-
     # Install PWShutter (idempotent re-run guard, same rationale as PWI4 above).
     ${pwShutterInstallerPath} = Join-Path ${AssetsRoot} "Setup_PWShutter_1.15.0.exe"
     if (-not (Test-Path ${pwShutterInstallerPath})) {
@@ -198,31 +173,6 @@ try {
         if ($null -ne ${pShutter}.ExitCode -and ${pShutter}.ExitCode -ne 0 -and -not ${pwShutterExePath}) {
             throw ("PWShutter installer exited with code {0} and PWShutter.exe is absent" -f ${pShutter}.ExitCode)
         }
-    }
-
-    # Register PWShutter.exe as an NSSM service (same pattern as PWI4).
-    # SERVICE_INTERACTIVE_PROCESS lets the GUI run in session 0 on headless units.
-    if (-not ${pwShutterExePath}) {
-        Write-Warning "PWShutter.exe not found after installation; skipping service registration."
-    } elseif (Test-Path -LiteralPath ${nssmExe}) {
-        ${pwShutterSvcName} = 'mast-pwshutter'
-        ${existingPwShutterSvc} = Get-Service -Name ${pwShutterSvcName} -ErrorAction SilentlyContinue
-        if ($null -eq ${existingPwShutterSvc}) {
-            Write-MastPwLog ("Registering PWShutter as NSSM service at {0}" -f ${pwShutterExePath})
-            & ${nssmExe} install ${pwShutterSvcName} ${pwShutterExePath}
-            & ${nssmExe} set ${pwShutterSvcName} Start SERVICE_AUTO_START
-            & ${nssmExe} set ${pwShutterSvcName} Type SERVICE_INTERACTIVE_PROCESS
-            & ${nssmExe} set ${pwShutterSvcName} AppStdout 'C:\MAST\logs\pwshutter_stdout.log'
-            & ${nssmExe} set ${pwShutterSvcName} AppStderr 'C:\MAST\logs\pwshutter_stderr.log'
-            & ${nssmExe} set ${pwShutterSvcName} AppRotateFiles 1
-            & ${nssmExe} set ${pwShutterSvcName} AppRotateBytes 10485760
-            Start-Service -Name ${pwShutterSvcName} -ErrorAction SilentlyContinue
-            Write-MastPwLog "PWShutter service registered and started."
-        } else {
-            Write-MastPwLog "PWShutter service already registered -- skipping."
-        }
-    } else {
-        Write-MastPwLog "NSSM not found; skipping PWShutter service registration."
     }
 
     # Extract PS3 CLI tools
@@ -294,8 +244,8 @@ try {
     #
     # It installs to {userdocs}\Kepler by default; we pin /DIR so the location is
     # deterministic regardless of which account runs provisioning, and point
-    # PS3CLI_CATALOG there (the mast-unit service runs as LocalSystem, so its
-    # home-based lookup would otherwise miss it).
+    # PS3CLI_CATALOG there, so discovery does not depend on whose home directory
+    # the unit process happens to have.
     ${ps3CatalogPath}      = "C:\Users\mast\Documents\Kepler"
     ${ps3CatalogInstaller} = Join-Path ${AssetsRoot} "Setup_PlateSolve3_Catalog.exe"
     ${ps3CatalogData}      = Join-Path ${AssetsRoot} "Setup_PlateSolve3_Catalog-1.bin"
@@ -357,11 +307,12 @@ try {
         throw ("PlateSolve3 catalog incomplete (UC4 zones={0} expected>={1}, Orca={2} expected>={3})." -f ${ps3Uc4Count}, ${ps3MinUc4Zones}, ${ps3OrcaCount}, ${ps3MinOrcaFiles})
     }
 
-    # The mast-unit service runs as LocalSystem (NSSM install with no ObjectName), so the
-    # app's Path.home()-based discovery resolves to the system profile, NOT C:\Users\mast,
-    # and would find neither ps3cli.exe nor the catalog. app.py checks PS3CLI_DIR and
-    # PS3CLI_CATALOG first, so set them at Machine scope (account-independent; the service
-    # picks them up on its next start / the provisioning reboot).
+    # app.py falls back to Path.home()-based discovery for ps3cli.exe and the catalog,
+    # which ties the answer to whichever account raises the unit. It checks PS3CLI_DIR and
+    # PS3CLI_CATALOG first, so set both at Machine scope: account-independent, and so the
+    # answer stays the same for the operator's interactive session today and for whatever
+    # raises the unit later (#82). A process picks them up on its next start, or at the
+    # provisioning reboot.
     [Environment]::SetEnvironmentVariable('PS3CLI_DIR', ${ps3cliDestPath}, 'Machine')
     [Environment]::SetEnvironmentVariable('PS3CLI_CATALOG', ${ps3CatalogPath}, 'Machine')
     Write-MastPwLog ("Set Machine env PS3CLI_DIR={0} PS3CLI_CATALOG={1}" -f ${ps3cliDestPath}, ${ps3CatalogPath})

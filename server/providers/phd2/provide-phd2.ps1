@@ -35,10 +35,10 @@ try {
     if (${phd2Exe}) {
         # Idempotent re-run: do NOT re-launch the Inno Setup installer over an
         # existing install. On a re-run it blocks on an "application is running /
-        # already installed" modal that /VERYSILENT does not suppress -- PHD2 is
-        # kept running by the PHD2 NSSM service registered below, and in Session 0
+        # already installed" modal that /VERYSILENT does not suppress -- PHD2 may
+        # well be running, since the unit raises phd2.exe itself -- and in Session 0
         # there is no desktop to dismiss the dialog, so the installer hangs
-        # indefinitely. Skip straight to (idempotent) service registration.
+        # indefinitely. Skip the installer entirely.
         Write-Phd2Log ("PHD2 already installed at {0}; skipping installer (idempotent re-run)." -f ${phd2Exe})
     } else {
         Write-Phd2Log ("Running PHD2 installer: {0} /VERYSILENT /SUPPRESSMSGBOXES /NORESTART" -f ${installerPath})
@@ -74,33 +74,6 @@ try {
         }
     }
     Write-Phd2Log ("Found phd2.exe at: {0}" -f ${phd2Exe})
-
-    # Register PHD2 as an NSSM service so the JSON-RPC event server (port 4400) is reachable.
-    # PHD2 is a GUI app; it requires an interactive desktop session to initialise its camera
-    # and guiding engine. NSSM with Type=16 (SERVICE_INTERACTIVE_PROCESS) allows it to draw
-    # a window in session 0 on Windows 10/11 when the policy is relaxed. For headless units
-    # this is sufficient to bring up the event server; the GUI is not needed for automation.
-    ${nssmExe} = 'C:\Program Files\nssm\nssm.exe'
-    if (Test-Path -LiteralPath ${nssmExe}) {
-        ${svcName} = 'mast-phd2'
-        ${existingSvc} = Get-Service -Name ${svcName} -ErrorAction SilentlyContinue
-        if ($null -eq ${existingSvc}) {
-            Write-Phd2Log "Registering PHD2 as NSSM service..."
-            & ${nssmExe} install ${svcName} ${phd2Exe}
-            & ${nssmExe} set ${svcName} Start SERVICE_AUTO_START
-            & ${nssmExe} set ${svcName} Type SERVICE_INTERACTIVE_PROCESS
-            & ${nssmExe} set ${svcName} AppStdout 'C:\MAST\logs\phd2_stdout.log'
-            & ${nssmExe} set ${svcName} AppStderr 'C:\MAST\logs\phd2_stderr.log'
-            & ${nssmExe} set ${svcName} AppRotateFiles 1
-            & ${nssmExe} set ${svcName} AppRotateBytes 10485760
-            Start-Service -Name ${svcName} -ErrorAction SilentlyContinue
-            Write-Phd2Log "PHD2 service registered and started."
-        } else {
-            Write-Phd2Log "PHD2 service already registered -- skipping."
-        }
-    } else {
-        Write-Phd2Log "NSSM not found; skipping PHD2 service registration."
-    }
 
     Write-Phd2Log "PHD2 installation completed successfully."
     exit 0
