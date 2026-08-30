@@ -466,44 +466,54 @@ needs `SystemParametersInfo` / `WM_SETTINGCHANGE` from **inside** the session, w
 `desktop-appearance`'s AtLogon task is for. See
 `docs/decisions/2026-08-19-per-user-desktop-state-is-written-into-the-target-hive-and-re-asserted-at-logon.md`.
 
-## MAST services: `mast-` naming, and `mast-unit` never runs during a run
+## MAST services: provisioning registers none, and removes any it finds
 
-The MAST NSSM services are named with a `mast-` prefix for findability: `mast-unit`,
-`mast-pwi4`, `mast-pwshutter`, `mast-phd2`. Each is registered by its own provider (`mast`,
-`planewave`, `phd2`). **The start mode each one owes lives once in
-`tools/mast-service-names.ps1`** (`Get-MastServiceExpectations`), staged into the two providers
-that read it by `repofiles`.
+**No provider registers a Windows service.** The four MAST nssm services (`mast-unit`,
+`mast-pwi4`, `mast-pwshutter`, `mast-phd2`) are *removed*, and the names live once in
+`tools/mast-service-names.ps1` (`Get-MastServiceNames`, `Get-MastLegacyServiceNames`,
+the `Test-MastNssmService` gate and `Remove-MastService`), staged into the two providers
+that read it by `repofiles`. `server/prov/tests/test_no_service_registration.py` fails the
+build if a registration comes back.
 
-**`mast-unit` is registered `SERVICE_DISABLED` and is never started by a provisioning run.**
-Process start commands hardware -- the mirror covers open and the mount homes
-(`MAST_unit#132`) -- and there is no interlock, so bringing a unit up is an operator's
-decision. Three enforcement points, one per part of a run:
+Why removal and not a start mode: none of the four processes is started by its service.
+The unit is run by hand and raises PWI4, ps3cli and PHD2 itself (`MAST_unit/src/app.py`,
+`MAST_unit/src/phd2/phd2.py`); PWShutter lost its consumer when the covers moved to PWI4's
+`mirrorcover` API (`MAST_unit#134`). A registered service is therefore a **competing** path,
+not a redundant one -- `ensure_process_is_running` adopts by name, so a session-0 PWI4 raised
+by `mast-pwi4` is adopted by a hand-run unit that then has one it can neither draw with nor
+see `Z:` from. And a running `mast-unit` commands hardware on process start (`MAST_unit#132`)
+with no interlock.
 
-- **`mast-services-standdown` (order 20, `always`)** stops it and sets it Disabled before any
-  module installs anything, which is also what catches a unit that arrived `Running`/`Auto`
-  from an earlier provisioning generation.
+Three enforcement points, one per part of a run:
+
+- **`mast-services-standdown` (order 20, `always`)** removes them before any module installs
+  anything. `Set-Service` and `sc.exe`, not nssm, which only arrives at order 1200. Spell it
+  `sc.exe`: bare `sc` is an alias for `Set-Content`, and `Remove-Service` is PowerShell 6+
+  while the fleet runs 5.1.
 - **`Driver._stand_down` (phase 2b)** does the same over the transport before the build and
   transfer -- the long window no module can reach -- and **fails the unit closed**
-  (`UNIT_FAIL reason=standdown_failed`). `STAND_DOWN_SERVICES` in `driver.py` duplicates the
-  PowerShell table on purpose (the driver runs before any payload reaches the unit);
-  `server/prov/tests/test_stand_down.py` fails if the two drift.
-- **`mast-services-finalize` (order 9500)** asserts the end state rather than applying one:
-  every present service stopped, at its expected start mode.
+  (`UNIT_FAIL reason=standdown_failed`). `STAND_DOWN_SERVICES` and
+  `STAND_DOWN_LEGACY_SERVICES` in `driver.py` duplicate the PowerShell lists on purpose (the
+  driver runs before any payload reaches the unit); `server/prov/tests/test_stand_down.py`
+  fails if they drift.
+- **`mast-services-finalize` (order 9500)** asserts absence rather than applying it. A second
+  remover would hide a provider that had quietly re-registered a service mid-run, which is
+  what this exists to surface.
 
-**Provisioning does not test the unit service.** There is no heartbeat check and no probe of
-`:8000` anywhere -- what a run asserts is what is true with the service dead (registered,
-pointed at the mast-clone venv interpreter, firewall rule, `Z:` hook). The three prerequisite
-services still register auto-start and run during a run so their own verifies exercise them
-live; they move nothing by coming up and disappear with the supervisor topology. See
-`docs/decisions/2026-08-26-provisioning-does-not-run-the-mast-unit-service.md` and issue #159.
+**A pending deletion is a failure.** `sc delete` against a service with an open handle
+elsewhere returns success but only *marks* it, and it stays enumerable until reboot. Both the
+provider and the driver read the registration back and report `pending-delete` rather than
+claiming a removal that has not happened.
 
-To migrate an already-provisioned unit to the `mast-` names, use
-`tools/rename-mast-services.ps1` (self-contained, idempotent, `-DryRun`-able) via
-`run-remote-script-winrm.py`; it predates this change and still sets Manual rather than
-Disabled. If you touch a service name, update it in the registering provider, the name
-references (`verify-planewave.ps1`, `mast-unit`'s `AppDependencies`),
-`tools/mast-service-names.ps1`, `STAND_DOWN_SERVICES` in `server/prov/driver.py`, and
-`tools/rename-mast-services.ps1`.
+**The pre-rename names go too, but gated.** `PWI4`, `PWShutter` and `PHD2` are ambiguous in a
+way the `mast-*` names are not, so they are removed only when `Win32_Service.PathName` points
+at `nssm.exe`. The gate only ever narrows what is deleted: a false negative leaves a service
+in place, visible on the next run.
+
+**Provisioning does not test the unit.** No heartbeat, no probe of `:8000`. What a run asserts
+is what is true with nothing running: the clone, the venv and its pins, the firewall rule, the
+`Z:` startup task. See `docs/decisions/2026-08-30-provisioning-registers-no-mast-service.md`
+and issue #159.
 
 ## Adding a new client script
 
@@ -644,14 +654,17 @@ Confirm with `Test-NetConnection <unit> -Port 5985` vs `-Port 22` from the calle
 **Do NOT "fix" this by widening the WinRM rule to the whole network** (`-RemoteAddress Any`) --
 exposing WinRM fleet-wide is the wrong security posture. The correct direction is to run the
 work over **SSH transport** instead: `vm_lib.SshSession(...).run_ps(...)`, uploading any script
-via the session's SFTP channel (`_client.open_sftp().put(...)`). This is how
-`tools/rename-mast-services.ps1` was run against mast02 when its WinRM was unreachable
+via the session's SFTP channel (`_client.open_sftp().put(...)`). This is how a one-off
+service-migration script was run against mast02 when its WinRM was unreachable
 cross-subnet. Longer term the harness is expected to move to SSH transport entirely; prefer SSH
 over opening WinRM.
 
 Gotcha when capturing `nssm get` output over any transport: nssm.exe writes **UTF-16LE** to
 stdout, so a naive PowerShell capture yields interleaved NULs (`C\0:\0\\0P\0...`). Strip them
-with `-replace "`0", ''` before using the value (see `tools/rename-mast-services.ps1`).
+with `-replace "`0", ''` before using the value, and compare **ordinally** -- PowerShell's
+default `-ne` treats NUL as zero-weight, so a NUL-laden path compares equal to a clean one.
+Nothing in the repo calls `nssm get` today (#159 removed every MAST service), but the `nssm`
+provider still installs nssm.exe for the supervisor topology (#82), so this will apply again.
 
 ## Do not write to git unless explicitly asked
 

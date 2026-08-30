@@ -119,7 +119,7 @@ renumbering.
 
 | Order | Module | Description |
 |------:|--------|-------------|
-|    20 | `mast-services-standdown` | Stop `mast-unit` and set it **disabled** before anything else runs, so no part of the run can command telescope hardware (process start opens the mirror covers and homes the mount) |
+|    20 | `mast-services-standdown` | **Remove** every MAST nssm service before anything else runs, so no part of the run can command telescope hardware and nothing is left that an accidental start could raise (a running `mast-unit` opens the mirror covers and homes the mount) |
 |   100 | `proxy` | Soft proxy: set (on-campus) or clear (home) machine/WinHTTP/WinINet proxy settings |
 |   150 | `config-bootstrap` | Lay down `C:\WIS\config.toml` (machine identity + config-DB connection) with the `machine_role` field injected; site chosen by build `-Site` |
 |   200 | `openssh-server` | Drift check for OpenSSH Server (install/config owned by `bootstrap.ps1`) |
@@ -148,34 +148,35 @@ renumbering.
 |  2000 | `sysinternals` | Sysinternals Suite |
 |  2050 | `jupyter` | Jupyter Notebook + scientific stack (astropy, numpy, scipy, matplotlib, pandas, astroquery, photutils) in a contained venv under `C:\MAST\jupyter` (state kept there; launcher + desktop shortcut) |
 |  2100 | `chrome` | Google Chrome (offline Enterprise MSI) |
-|  2200 | `mast` | Clone MAST repos, create per-repo virtualenvs, install requirements |
-|  2210 | `mast-shared-mount` | Map `Z:` to the operational share `\\<controller_host>\mast-share` **in the LocalSystem session** (SYSTEM at-startup task + nssm `Start/Pre` hook on `mast-unit`), where the services that use it can see it; clear stale per-user mappings |
+|  2200 | `mast` | Clone MAST repos, create the venv, install requirements, open the unit API port. Registers no service |
+|  2210 | `mast-shared-mount` | Map `Z:` to the operational share `\\<controller_host>\mast-share` **in the LocalSystem session** (SYSTEM at-startup task); clear stale per-user mappings |
 |  2350 | `windows-update-lockdown` | Keep auto Windows Updates disabled: daily + at-startup SYSTEM task re-asserts the policy/services (Windows self-heals, so it must be re-applied) |
 |  2400 | `windows-exporter-monitoring` | Prometheus windows_exporter service (TCP 9182) |
-|  2500 | `diagnostics` | Post-smoke runtime checks (ASCOM, app launch, PHD2 RPC). Nothing here touches `mast-unit` |
+|  2500 | `diagnostics` | Post-smoke runtime checks (ASCOM, app launch, PHD2 RPC). Nothing here touches the MAST services |
 |  2600 | `ds9` | SAOImage DS9 8.7 imaging / data visualization |
 |  2700 | `desktop-shortcuts` | Operator shortcuts on the Public desktop (FastAPI control, weather page, DS9, MAST logs, **instrument calibration**, **Jupyter Notebook**) |
 |  2750 | `desktop-appearance` | Every per-user desktop value: dark Windows theme, a dark background carrying the machine's identity (hostname, site spelled out, site coordinates), and the toast / content-delivery quieting that used to sit in bootstrap. Written into the autologin `mast` hive and re-asserted in that session by an AtLogon task |
 |  2900 | `mast-validation` | End-to-end plate-solve validation through production code paths |
-|  9500 | `mast-services-finalize` | Assert the end-of-run posture: every MAST service stopped, at the start mode `tools/mast-service-names.ps1` says it owes (`mast-unit` **disabled**, the three prerequisite services **manual**) |
+|  9500 | `mast-services-finalize` | Assert the end-of-run posture: no MAST service is registered |
 |  9999 | `reboot` | Detect pending-reboot state; drop a flag for the orchestrator |
 
-The MAST NSSM services are named with a `mast-` prefix for findability (`mast-unit`,
-`mast-pwi4`, `mast-pwshutter`, `mast-phd2`), and `tools/mast-service-names.ps1` holds the
-start mode provisioning owes each one.
+**Provisioning registers no Windows service, and removes any it finds.** The four MAST nssm
+services (`mast-unit`, `mast-pwi4`, `mast-pwshutter`, `mast-phd2`) are deleted at order 20 and
+again by the driver before the build and transfer; `tools/mast-service-names.ps1` holds the
+names, and `mast-services-finalize` asserts at 9500 that none came back.
 
-**`mast-unit` is registered disabled and is never started by a run.** Process start commands
-hardware -- the mirror covers open and the mount homes (`MAST_unit#132`) -- and no interlock
-exists, so bringing a unit up is an operator's decision, not a module's. It is stood down at
-order 20 and again by the driver before the build and transfer, and nothing in a run probes
-it: provisioning delivers the environment and does not test the service. See
-`docs/decisions/2026-08-26-provisioning-does-not-run-the-mast-unit-service.md` and issue #159.
+None of the four has a job. The unit is run by hand and raises PWI4, ps3cli and PHD2 itself,
+and PWShutter lost its consumer when the covers moved to PWI4's `mirrorcover` API
+(`MAST_unit#134`). So a registered service is a *competing* path rather than a redundant one:
+`ensure_process_is_running` adopts by name, so a session-0 PWI4 raised by `mast-pwi4` is
+adopted by a hand-run unit and the operator gets one that can neither draw nor see `Z:`. On
+top of that a running `mast-unit` commands hardware on process start -- the mirror covers open
+and the mount homes (`MAST_unit#132`) -- with no interlock anywhere in the stack.
 
-The three prerequisite services (`mast-pwi4`, `mast-pwshutter`, `mast-phd2`) still register
-auto-start and run **during** provisioning so their own verifies exercise them live, and
-`mast-services-finalize` flips them to **manual** at the end. They move nothing by coming up,
-and they disappear with the supervisor topology, where they become children of `mast-monitor`
-rather than services.
+The pre-rename names (`PWI4`, `PWShutter`, `PHD2`) are removed too, but only when nssm-hosted,
+which is what proves the registration is ours rather than a service of the same name installed
+by something else. Provisioning delivers the environment and does not test the unit. See
+`docs/decisions/2026-08-30-provisioning-registers-no-mast-service.md` and issue #159.
 
 ---
 

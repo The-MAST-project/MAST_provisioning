@@ -1,7 +1,8 @@
 ---
 decided: 2026-08-26
-status: accepted
+status: superseded
 issue: MAST_provisioning#159
+superseded_by: 2026-08-30-provisioning-registers-no-mast-service
 areas:
   - services
   - hardware startup
