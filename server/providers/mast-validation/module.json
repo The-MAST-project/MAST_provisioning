@@ -1,7 +1,7 @@
 {
   "name": "mast-validation",
   "version": "1.0",
-  "description": "End-to-end validation: invoke MAST_unit's own MastrometryDotNet solver class against C:\\MAST\\full-frame.fits using the unit's venv. Confirms the full plate-solving chain works through production code paths (venv, MAST_common imports, Filer/RAM disk, astrometry binaries, indexes). HARD FAILS (no skip) if the index image or smoke FITS are not staged/mounted -- a run without a real end-to-end solve is not valid.",
+  "description": "End-to-end validation: invoke MAST_unit's own MastrometryDotNet solver class against C:\\\\MAST\\\\full-frame.fits using the unit's venv. Confirms the full plate-solving chain works through production code paths (venv, MAST_common imports, Filer/RAM disk, astrometry binaries, indexes). HARD FAILS (no skip) if the index image or smoke FITS are not staged/mounted -- a run without a real end-to-end solve is not valid. REQUIRES THE CONFIG DB, which makes this an ON-SITE check: the harness builds the solver with no Unit, so solve() takes its Config().get_unit() fallback to read the unit's acquisition ROI geometry (the frame is cropped to that ROI before solving) -- a MongoDB read against controller_host. A unit isolated from its controller fails here with ServerSelectionTimeoutError, not with a solving fault; that is the standing bench outcome (mast06/mast07 2026-08-24, mast08 2026-08-30) and is not a defect in the unit. Contrast mast-autofocus-validation (3000), which needs no DB and does pass on a bench unit.",
   "order": 2900,
   "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-mast-validation.ps1\"",
   "commandfiles": [

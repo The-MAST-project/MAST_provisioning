@@ -156,7 +156,7 @@ renumbering.
 |  2600 | `ds9` | SAOImage DS9 8.7 imaging / data visualization |
 |  2700 | `desktop-shortcuts` | Operator shortcuts on the Public desktop (FastAPI control, weather page, DS9, MAST logs, **instrument calibration**, **Jupyter Notebook**) |
 |  2750 | `desktop-appearance` | Every per-user desktop value: dark Windows theme, a dark background carrying the machine's identity (hostname, site spelled out, site coordinates), and the toast / content-delivery quieting that used to sit in bootstrap. Written into the autologin `mast` hive and re-asserted in that session by an AtLogon task |
-|  2900 | `mast-validation` | End-to-end plate-solve validation through production code paths |
+|  2900 | `mast-validation` | End-to-end plate-solve validation through production code paths. **On-site only**: the solver reads its acquisition ROI from the config DB, so a unit that cannot reach its controller fails here |
 |  9500 | `mast-services-finalize` | Assert the end-of-run posture: no MAST service is registered |
 |  9999 | `reboot` | Detect pending-reboot state; drop a flag for the orchestrator |
 

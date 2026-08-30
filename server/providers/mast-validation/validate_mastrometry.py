@@ -1,11 +1,20 @@
 """
 End-to-end MAST_unit plate-solving validation.
 
-Drives the same MastrometryDotNet class that runs in production (under the
-mast-unit service) against C:\\MAST\\full-frame.fits, using the MAST_unit
-venv. The goal is to validate the full chain through the unit's *own* code:
-the per-repo venv, MAST_common imports, Filer/RAM disk wiring, astrometry
-binary discovery, and the on-RAM-disk index files.
+Drives the same MastrometryDotNet class that runs in production against
+C:\\MAST\\full-frame.fits, using the MAST_unit venv. The goal is to validate the
+full chain through the unit's *own* code: the per-repo venv, MAST_common
+imports, Filer/RAM disk wiring, astrometry binary discovery, and the
+on-RAM-disk index files.
+
+REQUIRES THE CONFIG DB. This harness constructs the solver with no Unit, so
+`mastrometry.solve()` takes its `Config().get_unit()` fallback to read the
+unit's acquisition ROI geometry -- a MongoDB read against controller_host. The
+ROI is not optional: the frame is cropped to it before astrometry.net sees it.
+A unit that cannot reach its controller therefore fails here with
+ServerSelectionTimeoutError rather than with a solving fault, which is the
+standing outcome for a bench unit (mast06/mast07 2026-08-24, mast08
+2026-08-30). This module is an on-site check.
 
 Preconditions are HARD requirements (exit 1), not skips: a provisioning run
 that cannot exercise a real end-to-end solve is not a valid run. The index
@@ -13,6 +22,7 @@ image and smoke FITS must be staged and mounted (imdisk provider) before this
 runs. We therefore FAIL when:
   - the smoke FITS is not present
   - the ImDisk-mounted index drive / index files are not available
+  - the config DB on controller_host is unreachable
   - import errors, missing solve-field, or the solver not converging
 """
 
