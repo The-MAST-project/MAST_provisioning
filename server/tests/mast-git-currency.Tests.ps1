@@ -59,7 +59,7 @@ Describe 'Get-MastCurrencyVerdict -- origin unreachable' {
         # A pre-#176 sidecar, or none: distinguishable from a recorded failure.
         $v = Get-MastCurrencyVerdict -Dir 'common' -HeadSha $SHA_A -RemoteSha '' -FetchOk $null
         $v.State | Should Be 'unverified'
-        $v.Message | Should Match 'nothing has ever verified it'
+        $v.Message | Should Match 'no fetch_ok in clone-manifest.json'
     }
 }
 

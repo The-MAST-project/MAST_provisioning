@@ -79,11 +79,11 @@ function Get-MastCurrencyVerdict {
 
     # fetch_ok false, or absent entirely: nothing ever confirmed this checkout
     # against the remote. That is the #175 state, and it is a failure.
-    ${why} = 'the last provisioning run could not verify it either (fetch_ok=false)'
-    if ($null -eq $FetchOk) { ${why} = 'and no fetch_ok in clone-manifest.json, so nothing has ever verified it' }
+    ${why} = 'and the last provisioning run could not verify it either (fetch_ok=false)'
+    if ($null -eq $FetchOk) { ${why} = 'and there is no fetch_ok in clone-manifest.json, so nothing has ever verified it' }
     return [pscustomobject]@{
         State   = $script:MastCurrencyUnverified
-        Message = ("{0}: cannot reach origin {1}; HEAD={2} is unverified" -f $Dir, ${why}, $HeadSha)
+        Message = ("{0}: cannot reach origin, {1}; HEAD={2} is unverified" -f $Dir, ${why}, $HeadSha)
     }
 }
 
