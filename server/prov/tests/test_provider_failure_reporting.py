@@ -311,6 +311,31 @@ def test_python_verify_is_a_script_that_can_fail() -> None:
         "verify-python.ps1 no longer exercises `python -m venv`. Asserting the outcome means "
         "creating a venv -- the capability provide-jupyter consumes -- not importing a module (#131)."
     )
-    assert "pip show virtualenv" in text, (
+    assert re.search(r"pip'?,?\s+'?show'?,?\s+'?virtualenv", text), (
         "verify-python.ps1 no longer asserts virtualenv is absent, so a unit that reinstalled it passes (#131)."
+    )
+
+
+def test_python_verify_runs_native_probes_through_the_eap_safe_helper() -> None:
+    """Every native probe must go through Invoke-Probe.
+
+    verify-python.ps1 sets $ErrorActionPreference = 'Stop' like its sibling verify
+    scripts, and under 'Stop' Windows PowerShell 5.1 raises NativeCommandError the
+    moment a native command writes to stderr -- `*>$null` does not prevent it.
+    `pip show <absent package>` does exactly that and exits 1, which is the answer
+    this script exists to get. Measured on the dev VM: with a bare `& $pythonExe
+    -m pip show virtualenv` the script died on that line, so the module's verify
+    could only ever have passed on a unit that still had virtualenv (#131).
+    """
+    text = _strip_comments(_VERIFY_PYTHON.read_text(encoding="utf-8"))
+    assert "function Invoke-Probe" in text, "verify-python.ps1 lost the EAP-safe native-probe helper (#131)."
+    # The helper's own `& $Exe` is the only permitted call-operator invocation of a
+    # native executable in this script.
+    invocations = re.findall(r"&\s+\$(\w+)", text)
+    assert invocations, "no call-operator invocations found; this guard's premise is gone"
+    outside = sorted({name for name in invocations if name != "Exe"})
+    assert not outside, (
+        f"verify-python.ps1 invokes {outside} with the call operator outside Invoke-Probe. "
+        f"Under $ErrorActionPreference = 'Stop' a native command that writes to stderr kills "
+        f"the script, so the probe must go through the helper (#131)."
     )

@@ -26,6 +26,30 @@ $verifyLog = Get-MastVerifyLog -Module 'python'
 function W { param([string]$Line) Add-Content -LiteralPath $verifyLog -Encoding UTF8 -Value ("[{0}] {1}" -f (Get-Date -Format 'HH:mm:ss'), $Line) }
 Set-Content -LiteralPath $verifyLog -Encoding UTF8 -Value ("[{0}] verify-python.ps1 started" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))
 
+function Invoke-Probe {
+    # Run a native probe and return its exit code and merged output.
+    #
+    # $ErrorActionPreference is forced to Continue for the call: under 'Stop',
+    # Windows PowerShell 5.1 raises NativeCommandError as soon as a native command
+    # writes to stderr, and `*>$null` does not prevent it. `pip show <absent
+    # package>` writes "WARNING: Package(s) not found" to stderr and exits 1 --
+    # a normal answer here, and the one this script exists to get. Measured on the
+    # dev VM: with 'Stop' in force the script died on that call, so it could only
+    # ever have passed on a unit that still had virtualenv.
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Exe,
+        [Parameter(Mandatory)][string[]]$NativeArgs
+    )
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $out = & $Exe @NativeArgs 2>&1
+        return [pscustomobject]@{ Code = $LASTEXITCODE; Output = ($out | Out-String).Trim() }
+    }
+    finally { $ErrorActionPreference = $prev }
+}
+
 $fail = @()
 $facts = @{}
 
@@ -36,26 +60,25 @@ if (-not (Test-Path -LiteralPath $pythonExe)) {
 }
 
 # --- the interpreter, and what the fleet report carries about it ---
-try {
-    $version = ([string](& $pythonExe --version 2>&1 | Select-Object -Last 1)).Trim()
-    W ("python: {0} ({1})" -f $version, $pythonExe)
-    $facts['python_version'] = $version
-}
-catch {
-    $fail += "python.exe present but did not report a version: $($_.Exception.Message)"
+$version = Invoke-Probe -Exe $pythonExe -NativeArgs @('--version')
+if ($version.Code -eq 0 -and $version.Output) {
+    W ("python: {0} ({1})" -f $version.Output, $pythonExe)
+    $facts['python_version'] = $version.Output
+} else {
+    $fail += ("python.exe present but reported no version (exit {0}): {1}" -f $version.Code, $version.Output)
 }
 
 # --- pip: provide-jupyter installs its locked wheelhouse with it (--no-index) ---
-& $pythonExe -m pip --version *>$null
-if ($LASTEXITCODE -eq 0) {
+$pip = Invoke-Probe -Exe $pythonExe -NativeArgs @('-m', 'pip', '--version')
+if ($pip.Code -eq 0) {
     W 'pip: available'
 } else {
-    $fail += "pip is not available (python -m pip --version exit $LASTEXITCODE)"
+    $fail += ("pip is not available (python -m pip --version exit {0})" -f $pip.Code)
 }
 
 # --- virtualenv must be gone, not merely unused (#131) ---
-& $pythonExe -m pip show virtualenv *>$null
-if ($LASTEXITCODE -eq 0) {
+$virtualenv = Invoke-Probe -Exe $pythonExe -NativeArgs @('-m', 'pip', 'show', 'virtualenv')
+if ($virtualenv.Code -eq 0) {
     $fail += 'virtualenv is installed; provide-python removes it and nothing should put it back'
 } else {
     W 'virtualenv: absent'
@@ -64,13 +87,12 @@ if ($LASTEXITCODE -eq 0) {
 # --- the capability itself: a venv that yields an interpreter ---
 $probe = Join-Path $env:TEMP ('mast-venv-probe-' + [guid]::NewGuid().ToString('N'))
 try {
-    & $pythonExe -m venv $probe *>$null
-    $rc = $LASTEXITCODE
+    $made = Invoke-Probe -Exe $pythonExe -NativeArgs @('-m', 'venv', $probe)
     $probePy = Join-Path $probe 'Scripts\python.exe'
-    if ($rc -eq 0 -and (Test-Path -LiteralPath $probePy)) {
+    if ($made.Code -eq 0 -and (Test-Path -LiteralPath $probePy)) {
         W ("venv: created {0} and it yielded an interpreter" -f $probe)
     } else {
-        $fail += ("python -m venv produced no interpreter (exit {0}, {1} {2})" -f $rc, $probePy, $(if (Test-Path -LiteralPath $probePy) { 'present' } else { 'missing' }))
+        $fail += ("python -m venv produced no interpreter (exit {0}, {1} {2}): {3}" -f $made.Code, $probePy, $(if (Test-Path -LiteralPath $probePy) { 'present' } else { 'missing' }), $made.Output)
     }
 }
 finally {
