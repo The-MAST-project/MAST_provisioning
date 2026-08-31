@@ -299,6 +299,19 @@ try {
                 # to answer "is the fleet current" without reprovisioning. That is
                 # where 'unverifiable' has to survive; here it must not silently
                 # become a failure.
+                #
+                # KNOWN GAP, accepted by decision and expected to be revisited: the
+                # safety above is an ORDERING argument -- provide runs before verify,
+                # so provide's own assertion has already answered the question. If the
+                # route drops BETWEEN the two, provide passes, this branch records a
+                # pass, fully_provisioned stays true, and nothing records that the
+                # check did not complete (execute never writes validation.json; see
+                # server/prov/drift.py). The manifest's claim is still true -- the
+                # fetch established it moments earlier -- so this is a silence about a
+                # known fact, not a false claim like #177 was. The closure, if it is
+                # wanted, is Write-MastModuleFacts here rather than a third value
+                # through the bool. See
+                # docs/decisions/2026-08-31-currency-comes-from-the-remote-and-unverifiable-is-a-third-state.md
                 Write-Log "SUCCESS: $($cmd.module) (exit code: ${exitCode}) -- UNVERIFIABLE: checks passed, at least one could not be run"
                 ${successCount}++
                 ${moduleOutcomes} = Add-MastModuleOutcome -Outcomes ${moduleOutcomes} `
