@@ -375,6 +375,11 @@ REPO_MISSING = "MISSING"
 #: Absent and not expected for this role. Benign, never counted as drift.
 REPO_NA = "n/a"
 REPO_UNPINNED = "UNPINNED"
+#: mast-clone could not reach origin for this repo, so its resolved_sha is whatever
+#: was already on disk rather than what the branch or tag points at (#175). Takes
+#: precedence over DIFFERS and UNPINNED: those describe where the checkout sits,
+#: this says the reading itself is not trustworthy, and it is usually their cause.
+REPO_UNVERIFIED = "UNVERIFIED"
 
 
 def expected_repo_dirs(repo_root: Path, role: str = "unit") -> set[str]:
@@ -452,7 +457,15 @@ def compare_repos(units: list[UnitRecord], reference: UnitRecord | None, expecte
             sha = row.get("resolved_sha") or None
             want_rev = row.get("rev") or ""
             head = row.get("head") or ""
-            if want_rev and head != "HEAD":
+            # `fetch_ok` absent means the manifest predates #175, NOT that the fetch
+            # failed -- the opposite of provide-mast.ps1's fail-closed reading, and
+            # deliberately so: this report also reads units provisioned months ago,
+            # and marking every one of them unverified would bury the real signal.
+            # Same treatment `any_data` gives a pre-#75 manifest.
+            if row.get("fetch_ok") is False:
+                states[u.host] = REPO_UNVERIFIED
+                drift_repos_by_host[u.host].append(d)
+            elif want_rev and head != "HEAD":
                 # A pin was requested but this checkout is on a branch: an override
                 # was used, or the clone predates the pin. Not honouring the pin at
                 # all, which is not the same as being at the wrong revision.
@@ -714,7 +727,7 @@ def _render_repo_matrix(repos: dict | None, ok_cols: list[UnitRecord]) -> list[s
             "",
             (
                 "=== Upstream repos (resolved revision; '*' = differs, '!' = pin not honoured, "
-                "MISSING = expected for this role, n/a = not) ==="
+                "'?' = not verified against origin, MISSING = expected for this role, n/a = not) ==="
             ),
         ]
         repo_w = max([len(r["dir"]) for r in repos["matrix"]] + [8])
@@ -730,6 +743,8 @@ def _render_repo_matrix(repos: dict | None, ok_cols: list[UnitRecord]) -> list[s
                     cells.append("n/a".ljust(9))
                 elif st == REPO_MISSING:
                     cells.append("MISSING".ljust(9))
+                elif st == REPO_UNVERIFIED:
+                    cells.append((sha + "?").ljust(9))
                 elif st == REPO_UNPINNED:
                     cells.append((sha + "!").ljust(9))
                 elif st == REPO_DIFFERS:
@@ -883,6 +898,12 @@ def _render_repo_warnings(repos: dict) -> list[str]:
     # means a MOVED TAG, which is a different failure from a branch drifting.
     out: list[str] = []
     for row in repos["matrix"]:
+        unverified = sorted(h for h, s in row["states"].items() if s == REPO_UNVERIFIED)
+        if unverified:
+            out.append(
+                f"  [WARN] {row['dir']}: {', '.join(unverified)} could not reach origin, so the "
+                f"revision shown is whatever was already on disk, not what the remote says (#175)."
+            )
         if row["pinned_rev"] and any(s == REPO_DIFFERS for s in row["states"].values()):
             out.append(
                 f"  [WARN] {row['dir']}: pinned at {row['pinned_rev']} but units resolved to "

@@ -278,6 +278,10 @@ if (Test-Path -LiteralPath $Top) {
 # --- clone / refresh ------------------------------------------------------
 $cloned = @()
 $provenance = @()
+# Folders whose checkout could NOT be verified against origin in this run --
+# a failed fetch, or a clone pointing at an unexpected remote. Reported in the
+# tail summary and recorded per repo in clone-manifest.json as fetch_ok=false.
+$fetchFailures = @()
 foreach ($row in $rows) {
     $wanted = $wantsAll
     if (-not $wanted) {
@@ -327,11 +331,26 @@ foreach ($row in $rows) {
         & git -C $dest remote get-url origin 2>$null | ForEach-Object { $actual = $_ }
         if ($actual -notlike "*$($row.Repo)*") {
             Write-Warn ("{0}: origin is '{1}', expected a {2} remote -- skipping" -f $row.Dir, $actual, $row.Repo)
+            # Nothing was fetched, so the SHA recorded below is whatever was on disk.
+            $fetchFailures += $row.Dir
             continue
         }
         Write-Info ("{0}: exists, fetching" -f $row.Dir)
-        $null = Invoke-Git @('-C', $dest, 'fetch', '--prune', 'origin')
-        if ($Update) {
+        # A failed fetch must not read as an up-to-date checkout. Left unchecked,
+        # the 'merge --ff-only @{u}' below compares HEAD against a remote-tracking
+        # ref the failed fetch did not move, prints 'Already up to date.' and
+        # returns success -- so an unreachable remote reported exactly what a clean
+        # run reports and the unit stayed on old code with nothing saying so (#175).
+        # Skipping the update is what removes that false signal.
+        #
+        # Recorded, not thrown: this script is also the casual dev clone tool, where
+        # refreshing an existing tree off-network is a legitimate thing to do.
+        # provide-mast.ps1 asserts fetch_ok for the fleet.
+        if (-not (Invoke-Git @('-C', $dest, 'fetch', '--prune', 'origin'))) {
+            Write-Warn ("{0}: fetch failed -- checkout NOT verified against origin, leaving it as it is" -f $row.Dir)
+            $fetchFailures += $row.Dir
+        }
+        elseif ($Update) {
             $dirty = $false
             if (-not $DryRun) {
                 $status = & git -C $dest status --porcelain
@@ -346,7 +365,14 @@ foreach ($row in $rows) {
                 # pin. --force on the tag fetch so a legitimately moved tag is
                 # picked up; the resolved SHA below records what it moved to.
                 Write-Info ("{0}: pinned, checking out {1}" -f $row.Dir, $rev)
-                $null = Invoke-Git @('-C', $dest, 'fetch', '--tags', '--force', 'origin')
+                # Same reasoning as the fetch above, one layer quieter: a tag that
+                # moved upstream but was not fetched still checks out, against the
+                # object this clone already had. The checkout succeeding is then not
+                # evidence the pin resolves to what origin says it does.
+                if (-not (Invoke-Git @('-C', $dest, 'fetch', '--tags', '--force', 'origin'))) {
+                    Write-Warn ("{0}: tag fetch failed -- '{1}' may have moved upstream, checkout NOT verified against origin" -f $row.Dir, $rev)
+                    $fetchFailures += $row.Dir
+                }
                 if (-not (Invoke-Git @('-C', $dest, 'checkout', '--detach', $rev))) {
                     throw ("{0}: cannot check out pinned rev '{1}'" -f $row.Dir, $rev)
                 }
@@ -373,7 +399,10 @@ foreach ($row in $rows) {
             # Clone the branch first rather than 'clone --branch <tag>': it leaves
             # the branch ref present, which the -Branch override and the wrong-branch
             # diagnostic below both rely on.
-            $null = Invoke-Git @('-C', $dest, 'fetch', '--tags', '--force', 'origin')
+            if (-not (Invoke-Git @('-C', $dest, 'fetch', '--tags', '--force', 'origin'))) {
+                Write-Warn ("{0}: tag fetch failed -- '{1}' may have moved upstream, checkout NOT verified against origin" -f $row.Dir, $rev)
+                $fetchFailures += $row.Dir
+            }
             if (-not (Invoke-Git @('-C', $dest, 'checkout', '--detach', $rev))) {
                 throw ("{0}: cannot check out pinned rev '{1}'" -f $row.Dir, $rev)
             }
@@ -438,6 +467,12 @@ if (-not $DryRun) {
             resolved_sha = $sha
             # 'HEAD' means detached, which is what a pinned checkout looks like.
             head         = $head
+            # Whether resolved_sha was verified against origin in THIS run, or is
+            # merely what was already on disk and could not be checked. Without it
+            # the two are indistinguishable, which is what let an unreachable remote
+            # record a stale SHA as the intended result (#175). A fresh clone counts
+            # as verified: the clone itself reached origin.
+            fetch_ok     = (-not ($fetchFailures -contains $pr.dir))
         }
     }
     $provDoc = [pscustomobject]@{
@@ -450,9 +485,12 @@ if (-not $DryRun) {
     [IO.File]::WriteAllText($provFile, ($provDoc | ConvertTo-Json -Depth 5), (New-Object Text.UTF8Encoding($false)))
     Write-Info ("wrote {0}" -f $provFile)
     foreach ($r in $repoRecords) {
-        Write-Info ("  {0}: {1} {2}{3}" -f $r.dir, $r.branch,
+        # '[UNVERIFIED]' rather than nothing: these are the lines read during triage,
+        # and it was their looking identical to a clean run's that hid #175.
+        Write-Info ("  {0}: {1} {2}{3}{4}" -f $r.dir, $r.branch,
                     $(if ($r.rev) { "pinned $($r.rev) -> " } else { '' }),
-                    $(if ($r.resolved_sha) { $r.resolved_sha.Substring(0, [Math]::Min(7, $r.resolved_sha.Length)) } else { '?' }))
+                    $(if ($r.resolved_sha) { $r.resolved_sha.Substring(0, [Math]::Min(7, $r.resolved_sha.Length)) } else { '?' }),
+                    $(if ($r.fetch_ok) { '' } else { '  [UNVERIFIED -- fetch failed]' }))
     }
 }
 
@@ -772,6 +810,12 @@ foreach ($d in $cloned) {
 
 Write-Host ''
 if ($shadowProblems) { Write-Warn 'shadowing problems detected (see above)' }
+# The per-repo lines above are what an operator actually reads, so the summary has
+# to carry this too -- the original defect was invisible precisely because the
+# summary looked identical to a clean run's (#175).
+if ($fetchFailures.Count -gt 0) {
+    Write-Warn ("NOT verified against origin: {0} -- these checkouts are whatever was already on disk" -f (($fetchFailures | Select-Object -Unique) -join ', '))
+}
 Write-Info ("done. {0} folder(s) under {1}" -f $cloned.Count, $topAbs)
 Write-Host ''
 Write-Host ("  Open {0} in VS Code, or activate the venv:" -f $ws)

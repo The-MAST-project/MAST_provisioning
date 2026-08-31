@@ -292,6 +292,42 @@ try {
         throw ("mast-clone reported success but no unit checkout at {0}" -f ${unitDir})
     }
 
+    # --- every checkout was verified against origin ------------------------
+    #
+    # mast-clone reports a failed fetch and carries on: it is also the casual dev
+    # clone tool, where refreshing an existing tree off-network is legitimate. The
+    # FLEET has no such case -- a unit that could not reach GitHub is not
+    # provisioned to a known revision, whatever is on its disk -- so the assertion
+    # belongs to the caller that has the requirement, not to the shared tool.
+    #
+    # Before this, a unit with no route to GitHub kept its previous common/unit
+    # checkout while every signal said the run succeeded: the fetch failure was
+    # discarded, 'merge --ff-only @{u}' compared against a stale remote-tracking
+    # ref and printed 'Already up to date.', and the two post-conditions above both
+    # held because the venv and the checkout did exist (#175, mast05 run-20260830).
+    #
+    # Fail-closed on a MISSING fetch_ok, not just a false one: mast-clone.ps1 ships
+    # in this payload as a 'repofiles' entry of this module, so the two are always
+    # in step and a sidecar without the key means something else is wrong.
+    ${cloneManifestPath} = Join-Path ${Top} 'clone-manifest.json'
+    if (-not (Test-Path -LiteralPath ${cloneManifestPath})) {
+        throw ("mast-clone reported success but wrote no sidecar at {0}" -f ${cloneManifestPath})
+    }
+    ${cloneManifest} = Get-Content -LiteralPath ${cloneManifestPath} -Raw | ConvertFrom-Json
+    ${unverified} = @()
+    foreach (${repoEntry} in @(${cloneManifest}.repos)) {
+        if (-not ${repoEntry}.PSObject.Properties.Match('fetch_ok').Count) {
+            ${unverified} += ("{0} (no fetch_ok in sidecar)" -f ${repoEntry}.dir)
+        }
+        elseif (-not ${repoEntry}.fetch_ok) {
+            ${unverified} += ("{0} at {1}" -f ${repoEntry}.dir, ${repoEntry}.resolved_sha)
+        }
+    }
+    if (${unverified}.Count -gt 0) {
+        throw ("mast-clone could not verify {0} checkout(s) against origin, so the unit is on whatever it already had: {1}. Check the route to github.com from this unit -- see the [mast-clone] fetch errors earlier in this log." -f ${unverified}.Count, (${unverified} -join '; '))
+    }
+    Write-MastProvisionEvent ("all {0} checkout(s) verified against origin" -f @(${cloneManifest}.repos).Count)
+
     ${headAfter} = Get-MastRepoHead -GitExe ${gitExe} -RepoDir ${unitDir}
     ${unitMoved} = (${headBefore} -ne ${headAfter})
     ${headBeforeLabel} = if (${headBefore}) { ${headBefore} } else { 'none' }
