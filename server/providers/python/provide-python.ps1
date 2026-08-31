@@ -28,6 +28,31 @@ catch {
     throw "Failed to import provisioning.psm1: $($_.Exception.Message)"
 }
 
+function Get-ProbeExitCode {
+    # Exit code of a native probe, with its output kept out of the log.
+    #
+    # $ErrorActionPreference is forced to SilentlyContinue for the call. A native
+    # command that writes to stderr produces a PowerShell error record, and
+    # `*>$null` does NOT prevent it -- it only hides the text. `pip show <absent
+    # package>` writes "WARNING: Package(s) not found" and exits 1, which is the
+    # answer these probes want, so the record was pure noise: two
+    # NativeCommandError blocks in the transcript of a passing run, indistinguishable
+    # at a glance from a real fault. Under 'Stop' the same records terminate the
+    # script, which is how verify-python.ps1 first died on the dev VM.
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]${Exe},
+        [Parameter(Mandatory)][string[]]${NativeArgs}
+    )
+    ${prev} = ${ErrorActionPreference}
+    ${ErrorActionPreference} = 'SilentlyContinue'
+    try {
+        ${null} = & ${Exe} @NativeArgs 2>&1
+        return ${LASTEXITCODE}
+    }
+    finally { ${ErrorActionPreference} = ${prev} }
+}
+
 # Idempotent skip: the end state this provider produces is Python present, the
 # stdlib venv module usable, pip available, and virtualenv NOT installed. All four
 # clauses matter, and the last one is what keeps the removal below reachable: a
@@ -37,12 +62,9 @@ catch {
 # the shape of #129, a guard weaker than what the module actually produces.
 ${pythonExeGuard} = Join-Path ${InstallDir} 'python.exe'
 if (-not ${Force} -and (Test-Path ${pythonExeGuard})) {
-    & ${pythonExeGuard} -m venv --help *>$null
-    ${venvUsable} = (${LASTEXITCODE} -eq 0)
-    & ${pythonExeGuard} -m pip --version *>$null
-    ${pipPresent} = (${LASTEXITCODE} -eq 0)
-    & ${pythonExeGuard} -m pip show virtualenv *>$null
-    ${virtualenvGone} = (${LASTEXITCODE} -ne 0)
+    ${venvUsable}     = (Get-ProbeExitCode -Exe ${pythonExeGuard} -NativeArgs @('-m', 'venv', '--help')) -eq 0
+    ${pipPresent}     = (Get-ProbeExitCode -Exe ${pythonExeGuard} -NativeArgs @('-m', 'pip', '--version')) -eq 0
+    ${virtualenvGone} = (Get-ProbeExitCode -Exe ${pythonExeGuard} -NativeArgs @('-m', 'pip', 'show', 'virtualenv')) -ne 0
     if (${venvUsable} -and ${pipPresent} -and ${virtualenvGone}) {
         Add-ToSystemPath -Dir ${InstallDir}
         Write-Host "Python + pip + stdlib venv already in place at ${InstallDir}, virtualenv absent; skipping installer. Use -Force to reinstall."
@@ -89,8 +111,7 @@ try {
     # provide-jupyter.ps1, already had a stdlib-venv path. Uninstalling needs no
     # network, so this is safe on a unit with no route to an index. Existing
     # jupyter venvs built by virtualenv are left alone; they work.
-    & ${pythonExe} -m pip show virtualenv *>$null
-    if (${LASTEXITCODE} -eq 0) {
+    if ((Get-ProbeExitCode -Exe ${pythonExe} -NativeArgs @('-m', 'pip', 'show', 'virtualenv')) -eq 0) {
         Write-Host "Removing virtualenv (superseded by the stdlib venv module) ..."
         & ${pythonExe} -m pip uninstall -y virtualenv
         if (${LASTEXITCODE} -ne 0) {
@@ -107,12 +128,11 @@ try {
         throw "${pythonExe} --version failed (exit ${LASTEXITCODE})."
     }
     Write-Host "Python version: ${verPy}"
-    & ${pythonExe} -m venv --help *>$null
-    if (${LASTEXITCODE} -ne 0) {
-        throw "the stdlib venv module is not usable (python -m venv --help exit ${LASTEXITCODE}); provide-jupyter creates its venv with it."
+    ${venvRc} = Get-ProbeExitCode -Exe ${pythonExe} -NativeArgs @('-m', 'venv', '--help')
+    if (${venvRc} -ne 0) {
+        throw "the stdlib venv module is not usable (python -m venv --help exit ${venvRc}); provide-jupyter creates its venv with it."
     }
-    & ${pythonExe} -m pip show virtualenv *>$null
-    if (${LASTEXITCODE} -eq 0) {
+    if ((Get-ProbeExitCode -Exe ${pythonExe} -NativeArgs @('-m', 'pip', 'show', 'virtualenv')) -eq 0) {
         throw "virtualenv is still installed after the removal above."
     }
     Write-Host "stdlib venv usable, virtualenv absent."

@@ -229,36 +229,48 @@ _PYTHON_DIR = REPO_ROOT / "server" / "providers" / "python"
 _PROVIDE_PYTHON = _PYTHON_DIR / "provide-python.ps1"
 _VERIFY_PYTHON = _PYTHON_DIR / "verify-python.ps1"
 
-# `& <exe> ... *>$null` -- every stream discarded. Legitimate for a probe whose
-# exit code is then read, which is why the assertion below pairs each one with a
-# $LASTEXITCODE read rather than banning the redirect.
+# A call-operator invocation of a native exe: `& $exe ...`. Every one of these must
+# have its result read, whether it is silenced or not -- the install that started #131
+# discarded all three streams AND the exit code.
+_NATIVE_CALL = re.compile(r"&\s+\$\{?\w+\}?")
+# `*>$null` hides a native command's stderr text but does NOT stop PowerShell from
+# raising an error record for it, so it is not a way to silence a probe. Two of them
+# put NativeCommandError blocks into the transcript of a passing run on the dev VM.
 _ALL_STREAMS_DISCARDED = re.compile(r"\*>\s*\$null")
 
 
-def test_provide_python_reads_every_discarded_native_call() -> None:
-    """A `*>$null` call must be followed by a $LASTEXITCODE read before the next one.
-
-    That is the difference between a silenced probe and a swallowed result: the
-    install that started #131 discarded all three streams AND the exit code.
-    """
+def test_provide_python_reads_every_native_call_result() -> None:
+    """No native call may reach the next one with its result unread."""
     text = _strip_comments(_PROVIDE_PYTHON.read_text(encoding="utf-8"))
-    silenced = [m.end() for m in _ALL_STREAMS_DISCARDED.finditer(text)]
+    calls = [m.start() for m in _NATIVE_CALL.finditer(text)]
+    assert calls, "no native calls found in provide-python.ps1; this guard's premise is gone"
     reads = [m.start() for m in _LASTEXITCODE.finditer(text)]
-    for pos in silenced:
+    for i, pos in enumerate(calls):
         line = text[:pos].count("\n") + 1
-        following = [r for r in reads if r > pos]
-        assert following, (
-            f"provide-python.ps1:{line} discards every stream of a native call and "
-            f"nothing reads $LASTEXITCODE afterwards -- the shape that let a failed "
+        limit = calls[i + 1] if i + 1 < len(calls) else len(text)
+        assert any(pos < r < limit for r in reads), (
+            f"provide-python.ps1:{line} invokes a native command and reaches the next "
+            f"invocation without reading $LASTEXITCODE -- the shape that let a failed "
             f"install report success (#131)."
         )
-        # Nothing else silenced in between, or the pair is ambiguous.
-        next_silenced = [s for s in silenced if s > pos]
-        if next_silenced:
-            assert following[0] < next_silenced[0], (
-                f"provide-python.ps1:{line} discards every stream and the next thing "
-                f"in the script is another silenced call, not a $LASTEXITCODE read (#131)."
-            )
+
+
+def test_provide_python_does_not_silence_probes_with_a_stream_redirect() -> None:
+    """`*>$null` is not silence -- PowerShell still raises an error record.
+
+    Measured on the dev VM: a passing run wrote two NativeCommandError blocks into
+    the operator-facing transcript, from the two `pip show virtualenv` probes, and
+    the same records terminate the script if the preference is ever 'Stop'. The
+    probes go through Get-ProbeExitCode instead, which forces the preference for
+    the call.
+    """
+    text = _strip_comments(_PROVIDE_PYTHON.read_text(encoding="utf-8"))
+    hits = [text[: m.start()].count("\n") + 1 for m in _ALL_STREAMS_DISCARDED.finditer(text)]
+    assert not hits, (
+        f"provide-python.ps1 silences a native call with '*>$null' at line(s) {hits}. That "
+        f"hides the text and still emits a NativeCommandError record -- use Get-ProbeExitCode (#131)."
+    )
+    assert "function Get-ProbeExitCode" in text, "provide-python.ps1 lost the EAP-safe probe helper (#131)."
 
 
 def test_provide_python_does_not_install_virtualenv() -> None:
@@ -285,7 +297,7 @@ def test_provide_python_guard_does_not_skip_the_virtualenv_cleanup() -> None:
     guard_end = text.find("exit 0")
     assert guard_end > 0, "provide-python.ps1 has no early exit; this guard's premise is gone"
     guard = text[:guard_end]
-    assert re.search(r"pip\s+show[^\n]*\bvirtualenv\b", guard, re.IGNORECASE), (
+    assert re.search(r"pip'?,?\s+'?show'?,?\s+'?virtualenv", guard, re.IGNORECASE), (
         "provide-python.ps1's idempotency guard does not check whether virtualenv is still "
         "installed, so it exits 0 before reaching the removal on every unit that has it (#131)."
     )
