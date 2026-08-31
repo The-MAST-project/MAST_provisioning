@@ -86,18 +86,15 @@ try {
         New-Item -ItemType Directory -Path (Join-Path ${JupyterRoot} ${d}) -Force | Out-Null
     }
 
-    # 1) Dedicated venv (mirrors the mast provider: virtualenv, fallback to stdlib venv).
+    # 1) Dedicated venv, created with the stdlib venv module: no install, no PyPI
+    #    fetch, nothing vendored (#131).
     if (${Force} -and (Test-Path -LiteralPath ${venv})) {
         Write-JupyterLog "Force: removing existing venv."
         Remove-Item -LiteralPath ${venv} -Recurse -Force -ErrorAction SilentlyContinue
     }
     if (-not (Test-Path -LiteralPath ${venvPy})) {
         Write-JupyterLog ("Creating venv at {0}" -f ${venv})
-        Invoke-Native -Exe ${PythonExe} -NativeArgs @('-m', 'virtualenv', ${venv}) -Tag 'venv-create' -TimeoutMs (5 * 60 * 1000)
-        if (-not (Test-Path -LiteralPath ${venvPy})) {
-            Write-JupyterLog "virtualenv did not yield python.exe; falling back to stdlib venv."
-            Invoke-Native -Exe ${PythonExe} -NativeArgs @('-m', 'venv', ${venv}) -Tag 'venv-create-fallback' -TimeoutMs (5 * 60 * 1000)
-        }
+        Invoke-Native -Exe ${PythonExe} -NativeArgs @('-m', 'venv', ${venv}) -Tag 'venv-create' -TimeoutMs (5 * 60 * 1000)
         if (-not (Test-Path -LiteralPath ${venvPy})) { throw ("Failed to create venv at {0}" -f ${venv}) }
     } else {
         Write-JupyterLog "venv already present; skipping creation."

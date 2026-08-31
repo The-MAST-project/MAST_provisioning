@@ -22,6 +22,7 @@ is visible in a run's output, which is why they are asserted rather than reviewe
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -33,7 +34,9 @@ PROVIDER_SCRIPTS = sorted(
     p for p in (REPO_ROOT / "server" / "providers").glob("*/*.ps1") if p.name.startswith(("provide-", "verify-"))
 )
 
-_LASTEXITCODE = re.compile(r"\$LASTEXITCODE", re.IGNORECASE)
+# Both spellings: the providers mix `$LASTEXITCODE` and `${LASTEXITCODE}` freely, and a
+# pattern matching only the bare form reads as a check while covering half the code.
+_LASTEXITCODE = re.compile(r"\$\{?LASTEXITCODE\}?", re.IGNORECASE)
 _FINALLY = re.compile(r"\bfinally\s*\{", re.IGNORECASE)
 _EXIT_ZERO = re.compile(r"\bexit\s+0\b", re.IGNORECASE)
 
@@ -207,3 +210,107 @@ def test_the_three_verify_states_are_all_reachable() -> None:
     lib = _CURRENCY_LIB.read_text(encoding="utf-8")
     for state in ("current", "stale", "unverifiable", "unverified"):
         assert f"'{state}'" in lib, f"verdict state {state!r} no longer defined"
+
+
+# --- the python provider checks its pip calls and verifies with a script (#131) ---
+#
+# provide-python.ps1 ran `pip install virtualenv` with `*>$null` and never read
+# $LASTEXITCODE, and its module.json verify ran `python -m virtualenv --version`
+# and wrote the smoke marker regardless of the answer. mast06 reported the module
+# green in two consecutive runs with virtualenv absent; the absence surfaced two
+# modules later as a jupyter failure. virtualenv is now dropped for the stdlib
+# venv module, so there is no PyPI fetch left here to check -- what is guarded is
+# that it does not come back, and that the verify stayed a script.
+#
+# Scoped to this provider deliberately: the same audit across all ~22 providers is
+# #62 axis 2 and deserves its own pass.
+
+_PYTHON_DIR = REPO_ROOT / "server" / "providers" / "python"
+_PROVIDE_PYTHON = _PYTHON_DIR / "provide-python.ps1"
+_VERIFY_PYTHON = _PYTHON_DIR / "verify-python.ps1"
+
+# `& <exe> ... *>$null` -- every stream discarded. Legitimate for a probe whose
+# exit code is then read, which is why the assertion below pairs each one with a
+# $LASTEXITCODE read rather than banning the redirect.
+_ALL_STREAMS_DISCARDED = re.compile(r"\*>\s*\$null")
+
+
+def test_provide_python_reads_every_discarded_native_call() -> None:
+    """A `*>$null` call must be followed by a $LASTEXITCODE read before the next one.
+
+    That is the difference between a silenced probe and a swallowed result: the
+    install that started #131 discarded all three streams AND the exit code.
+    """
+    text = _strip_comments(_PROVIDE_PYTHON.read_text(encoding="utf-8"))
+    silenced = [m.end() for m in _ALL_STREAMS_DISCARDED.finditer(text)]
+    reads = [m.start() for m in _LASTEXITCODE.finditer(text)]
+    for pos in silenced:
+        line = text[:pos].count("\n") + 1
+        following = [r for r in reads if r > pos]
+        assert following, (
+            f"provide-python.ps1:{line} discards every stream of a native call and "
+            f"nothing reads $LASTEXITCODE afterwards -- the shape that let a failed "
+            f"install report success (#131)."
+        )
+        # Nothing else silenced in between, or the pair is ambiguous.
+        next_silenced = [s for s in silenced if s > pos]
+        if next_silenced:
+            assert following[0] < next_silenced[0], (
+                f"provide-python.ps1:{line} discards every stream and the next thing "
+                f"in the script is another silenced call, not a $LASTEXITCODE read (#131)."
+            )
+
+
+def test_provide_python_does_not_install_virtualenv() -> None:
+    text = _strip_comments(_PROVIDE_PYTHON.read_text(encoding="utf-8"))
+    assert not re.search(r"pip\s+install[^\n]*\bvirtualenv\b", text, re.IGNORECASE), (
+        "provide-python.ps1 installs virtualenv again. It was dropped for the stdlib venv "
+        "module because it was the last PyPI fetch in a provisioning run, and a bench unit "
+        "with no route to an index cannot satisfy it (#131)."
+    )
+    assert re.search(r"pip\s+uninstall[^\n]*\bvirtualenv\b", text, re.IGNORECASE), (
+        "provide-python.ps1 no longer removes virtualenv. Every unit provisioned before #131 "
+        "has it, and the idempotency guard is what decides whether the cleanup is reached."
+    )
+
+
+def test_provide_python_guard_does_not_skip_the_virtualenv_cleanup() -> None:
+    """The early exit must test virtualenv's ABSENCE, not just python + venv.
+
+    A guard weaker than what the module produces (#129) would exit 0 on exactly the
+    units that still carry virtualenv, so the package would survive forever on the
+    machines the cleanup exists for.
+    """
+    text = _strip_comments(_PROVIDE_PYTHON.read_text(encoding="utf-8"))
+    guard_end = text.find("exit 0")
+    assert guard_end > 0, "provide-python.ps1 has no early exit; this guard's premise is gone"
+    guard = text[:guard_end]
+    assert re.search(r"pip\s+show[^\n]*\bvirtualenv\b", guard, re.IGNORECASE), (
+        "provide-python.ps1's idempotency guard does not check whether virtualenv is still "
+        "installed, so it exits 0 before reaching the removal on every unit that has it (#131)."
+    )
+
+
+def test_python_verify_is_a_script_that_can_fail() -> None:
+    assert _VERIFY_PYTHON.is_file(), (
+        "verify-python.ps1 is gone. The python module's verify was an inline module.json "
+        "one-liner that wrote 'python_ok' whatever its checks returned (#131)."
+    )
+    module_json = json.loads((_PYTHON_DIR / "module.json").read_text(encoding="utf-8-sig"))
+    assert "verify-python.ps1" in module_json["verify"], "python/module.json's verify no longer runs verify-python.ps1."
+    assert "-Command" not in module_json["verify"], (
+        "python/module.json's verify is an inline -Command one-liner again (#131)."
+    )
+    assert "verify-python.ps1" in module_json.get("commandfiles", []), (
+        "verify-python.ps1 is not in commandfiles, so build-mast will not stage it and the "
+        "verify will fail on the unit with a 'not found' error."
+    )
+
+    text = _VERIFY_PYTHON.read_text(encoding="utf-8")
+    assert "-m', 'venv'" in text or "-m venv " in text, (
+        "verify-python.ps1 no longer exercises `python -m venv`. Asserting the outcome means "
+        "creating a venv -- the capability provide-jupyter consumes -- not importing a module (#131)."
+    )
+    assert "pip show virtualenv" in text, (
+        "verify-python.ps1 no longer asserts virtualenv is absent, so a unit that reinstalled it passes (#131)."
+    )
