@@ -300,6 +300,11 @@ powercfg /change standby-timeout-ac 0
 powercfg /change hibernate-timeout-ac 0
 powercfg /change disk-timeout-ac 0
 
+# Cover battery too: a laptop-class server whose power lead is nudged falls
+# back to the DC timers, which are separate and non-zero by default.
+powercfg /change standby-timeout-dc 0
+powercfg /change hibernate-timeout-dc 0
+
 # Stop the NIC that faces the units from entering low-power idle. Name the
 # adapter that carries the unit traffic, not the Wi-Fi one.
 Set-NetAdapterAdvancedProperty -Name 'Ethernet' -RegistryKeyword '*EEE'    -RegistryValue 0
@@ -330,6 +335,31 @@ address, so a bad address always fails loudly. On a site where the fallback
 address *is* reachable, the same defect would instead pull the payload over the
 wrong (slower) interface and report success. Do not rely on the network to
 catch it; see `MAST_provisioning#166`.
+
+### Can this server be rebooted remotely?
+
+**Check before you ever need to know.** A server that reaches the network over
+enterprise Wi-Fi may have no connectivity at all until someone logs in at the
+console, which makes a remote reboot a trip to the machine.
+
+```powershell
+# Auto-login: 1 means the box reaches a desktop (and its network) unattended.
+Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon' |
+    Select-Object AutoAdminLogon, DefaultUserName
+netsh wlan show profiles          # 'All User Profile' = machine-scoped profile
+```
+
+Note that the profile being `All User Profile` is **not** sufficient. On
+labcomp2 the `WIS_Secure` profile is machine-scoped, yet the box still had no
+network for 27 minutes after a reboot on 2026-08-26 -- WPA2-Enterprise
+authenticates with *user* credentials, which do not exist until a session
+does. Machine-scoped profile, user-scoped credentials. With
+`AutoAdminLogon=0` and no stored password, the host booted to the login screen
+and stayed unreachable until someone logged in at the console.
+
+So: on a Wi-Fi-attached server with auto-login off, treat `shutdown /r` as an
+action that requires a person on site. A wired server on a machine-authenticated
+network does not have this problem, which is one more reason to prefer one.
 
 **Known not to take:** `Set-NetAdapterPowerManagement -SelectiveSuspend Disabled`
 reports success on the Intel driver here and reads back `Enabled`. The effective
