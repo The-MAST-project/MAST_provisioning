@@ -50,6 +50,7 @@ MAST_provisioning/
 |   `-- onboard-mast-unit.ps1         # Post-bootstrap onboarder: provision + register + handoff
 |-- server/
 |   |-- lib/mast-log.ps1              # Canonical log path definitions (unit + prov server)
+|   |-- lib/mast-git-currency.ps1     # Pure verdict logic: is a clone at the revision origin reports?
 |   |-- lib/mast-firmware.ps1         # The only BIOS/UEFI reader: setup varstore + power-policy verdict
 |   |-- lib/provisioning.psm1         # Shared PS helpers
 |   |-- data/firmware-baseline.json   # Known-good BIOS setup per board + BIOS version (see Firmware baseline)
@@ -108,6 +109,10 @@ powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File .\run-ve
 ```
 
 This reads `commands.json`, runs only commands whose `module` name ends with `-verify`, and exits `1` if any step fails. Logs go under `C:\MAST\logs\sessions\<timestamp>\provisioning-verify-only.log`. It does not take the `execute.lock` used by full provisioning, so avoid running it at the same time as `execute-mast-provisioning.ps1`.
+
+A verify step has **three** outcomes, not two. Exit `0` is a pass and exit `1` a failure; **exit `2` means every check that could run passed and at least one could not** — typically the unit cannot reach `origin`, so a clone's revision cannot be compared against it. That is recorded per module in `C:\MAST\status\validation.json` as `unverifiable` and does **not** count toward this script's exit code: an operator's local run should not go red for a network condition. `fleet-drift-report.py` reports it apart from both pass and fail, and it suppresses the all-clear `RESULT` line — an unanswered currency question is not a clean bill.
+
+**`unverifiable` exists only on this surface.** `execute-mast-provisioning.ps1` counts exit `2` as a success, because its per-module outcome is binary and a provisioning run has already answered the currency question through `provide-mast`'s `fetch_ok` assertion. So an execute run never records `unverifiable`, and `validation.json` is written by `run-verify-only.ps1` alone — the two documents describe different moments (`installed_at` versus `checked_at`), and a unit provisioned cleanly last week can legitimately verify as `unverifiable` today. The one gap that leaves, and why it was accepted, is in `docs/decisions/2026-08-31-currency-comes-from-the-remote-and-unverifiable-is-a-third-state.md`.
 
 ## Module execution order
 

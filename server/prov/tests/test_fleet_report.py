@@ -127,7 +127,9 @@ def _golden_fixture(fdr):
         bootstrap_version=3,
         repos=repos,
         validated_at="2026-08-02T09:00:00Z",
-        validation={"git": "pass", "desktop-shortcuts": "fail"},
+        # 'mast': unverifiable alongside a real fail, so the golden covers a tier-2
+        # line carrying both and the RESULT line that must not read as all-clear (#177).
+        validation={"git": "pass", "desktop-shortcuts": "fail", "mast": "unverifiable"},
     )
     u2 = fdr.UnitRecord(
         host="mast02",
@@ -520,6 +522,50 @@ def test_facts_are_lifted_out_of_the_module_entries(fdr):
         },
     )
     assert rec.facts == {"mongodb-client": {"compass_version": "1.49.14"}}
+
+
+def test_tier2_reports_unverifiable_apart_from_pass_and_fail(fdr):
+    """#177: a module whose local checks passed but whose currency check could not
+    run is neither. Rolling it into 'all pass' is the false green the state exists
+    to remove."""
+    u = fdr.UnitRecord(host="mast05", status="ok", validated_at="2026-08-31T12:40:00Z")
+    u.validation = {"git": "pass", "mast": "unverifiable"}
+    out = "\n".join(fdr._render_tier2({"summaries": {}}, [u]))
+    assert "UNVERIFIABLE: mast" in out
+    assert "all pass" not in out
+
+
+def test_tier2_reports_fail_and_unverifiable_together(fdr):
+    u = fdr.UnitRecord(host="mast05", status="ok", validated_at="2026-08-31T12:40:00Z")
+    u.validation = {"astrometry": "fail", "mast": "unverifiable"}
+    out = "\n".join(fdr._render_tier2({"summaries": {}}, [u]))
+    assert "fail: astrometry" in out
+    assert "UNVERIFIABLE: mast" in out
+
+
+def test_an_unverifiable_unit_is_not_reported_as_all_in_sync(fdr):
+    """The load-bearing assertion. Everything else about the unit is clean, so
+    without this the report prints 'all units in sync and bootstrap current' over a
+    currency check that never completed -- the same false green on the fleet surface
+    that #175 was on the unit."""
+    u = fdr.UnitRecord(host="mast05", status="ok", validated_at="2026-08-31T12:40:00Z")
+    u.validation = {"mast": "unverifiable"}
+    cmp = {"verdicts": {"mast05": "IN SYNC"}}
+    boot = {"by_host": {"mast05": {"state": "current"}}}
+    out = "\n".join(fdr._render_result([u], cmp, boot, None))
+    assert "all units in sync" not in out
+    assert "tier-2 could not verify 1 unit(s): mast05" in out
+    assert "UNKNOWN" in out
+
+
+def test_a_clean_fleet_still_reports_all_in_sync(fdr):
+    """The guard above must not fire on a fleet with no unverifiable modules."""
+    u = fdr.UnitRecord(host="mast05", status="ok", validated_at="2026-08-31T12:40:00Z")
+    u.validation = {"mast": "pass"}
+    cmp = {"verdicts": {"mast05": "IN SYNC"}}
+    boot = {"by_host": {"mast05": {"state": "current"}}}
+    out = "\n".join(fdr._render_result([u], cmp, boot, None))
+    assert "all units in sync and bootstrap current" in out
 
 
 def test_a_manifest_without_facts_reports_none(fdr):

@@ -380,6 +380,11 @@ REPO_UNPINNED = "UNPINNED"
 #: precedence over DIFFERS and UNPINNED: those describe where the checkout sits,
 #: this says the reading itself is not trustworthy, and it is usually their cause.
 REPO_UNVERIFIED = "UNVERIFIED"
+#: Tier-2 per-module state from status\validation.json: the module's own checks
+#: passed and at least one could not be RUN (verify child exit 2, #177). Distinct
+#: from pass and from fail in the report for the same reason it is distinct on the
+#: unit -- a network condition is not unit drift, and it is not health either.
+VALIDATION_UNVERIFIABLE = "unverifiable"
 
 
 def expected_repo_dirs(repo_root: Path, role: str = "unit") -> set[str]:
@@ -702,8 +707,21 @@ def _render_tier2(cmp: dict, ok_cols: list[UnitRecord]) -> list[str]:
     for u in ok_cols:
         if u.validated_at:
             fails = sorted(m for m, v in u.validation.items() if str(v).lower() == "fail")
-            detail = ("fail: " + ", ".join(fails)) if fails else "all pass"
-            out.append(f"  {u.host}: checked {u.validated_at} -- {detail}")
+            # 'unverifiable' is reported separately from both pass and fail (#177):
+            # the module's local checks passed and at least one check could not be
+            # run, almost always because the unit could not reach origin. Rolling it
+            # into "all pass" is exactly the false green this state was added to
+            # remove -- and this line is where the fleet-wide "is everything
+            # current?" question actually gets answered, so it has to show here.
+            unverifiable = sorted(m for m, v in u.validation.items() if str(v).lower() == VALIDATION_UNVERIFIABLE)
+            parts = []
+            if fails:
+                parts.append("fail: " + ", ".join(fails))
+            if unverifiable:
+                parts.append("UNVERIFIABLE: " + ", ".join(unverifiable))
+            if not parts:
+                parts.append("all pass")
+            out.append(f"  {u.host}: checked {u.validated_at} -- {'; '.join(parts)}")
         else:
             # Not a failure: run-verify-only.ps1 is operator-run, so "never"
             # is the normal state on a unit nobody has validated yet.
@@ -998,7 +1016,15 @@ def _render_result(units: list[UnitRecord], cmp: dict, boot: dict, repos: dict |
     module_problems = [u.host for u in units if cmp["verdicts"].get(u.host) != "IN SYNC"]
     boot_problems = [u.host for u in units if boot["by_host"].get(u.host, {}).get("state") != "current"]
     repo_problems = sorted(repos["divergent_dirs"]) if (repos and repos.get("any_data")) else []
-    if not (module_problems or boot_problems or repo_problems):
+    # A unit whose tier-2 pass could not complete a check has an UNANSWERED
+    # question, not a clean bill (#177). It has to reach the RESULT block, and in
+    # particular it has to suppress the all-clear below: "all units in sync" printed
+    # over an unverifiable currency check is the same false green on the fleet
+    # surface that #175 was on the unit surface.
+    tier2_unknown = sorted(
+        u.host for u in units if any(str(v).lower() == VALIDATION_UNVERIFIABLE for v in u.validation.values())
+    )
+    if not (module_problems or boot_problems or repo_problems or tier2_unknown):
         return ["", "RESULT: all units in sync and bootstrap current"]
     out = [""]
     if module_problems:
@@ -1016,6 +1042,12 @@ def _render_result(units: list[UnitRecord], cmp: dict, boot: dict, repos: dict |
     # precisely the 08-11 state, and the old RESULT line called it in sync.
     if repo_problems:
         out.append(f"RESULT: upstream repo divergence on {len(repo_problems)} repo(s): {', '.join(repo_problems)}")
+    if tier2_unknown:
+        out.append(
+            f"RESULT: tier-2 could not verify {len(tier2_unknown)} unit(s): {', '.join(tier2_unknown)} "
+            f"-- checks passed but at least one could not be run (usually no route to origin); "
+            f"currency is UNKNOWN on these, not confirmed"
+        )
     return out
 
 

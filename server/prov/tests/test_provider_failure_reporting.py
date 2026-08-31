@@ -149,3 +149,61 @@ def test_provide_mast_asserts_fetch_ok() -> None:
     assert "Properties.Match('fetch_ok')" in text, (
         "provide-mast.ps1 must treat a MISSING fetch_ok as unverified, not as a pass (#175)."
     )
+
+
+# --- verify-mast establishes currency against the REMOTE, not a local mirror (#177) ---
+#
+# It used to compare HEAD against '@{u}', the remote-tracking ref -- a purely local
+# pointer nothing updates but a fetch. After a failed fetch it still holds the commit
+# HEAD is on, so the two matched and a stale clone was reported current. On the #176
+# VM run this logged "mast verify ok: 3 clone(s) current" on three clones that had
+# fetched nothing, in the same run where the provider had just failed them.
+#
+# Static, for the same reason as the shapes above: the regression is a one-line revert
+# to a form that looks more idiomatic than the correct one.
+
+_VERIFY_MAST = REPO_ROOT / "server" / "providers" / "mast" / "verify-mast.ps1"
+_CURRENCY_LIB = REPO_ROOT / "server" / "lib" / "mast-git-currency.ps1"
+
+# '@{u}' is still legitimate for *discovering the branch name*; what must not come
+# back is resolving it to a SHA, which is the comparison that cannot work.
+_REVPARSE_UPSTREAM_SHA = re.compile(r"rev-parse\s+(?!--abbrev-ref)[^\n]*'@\{u\}'")
+
+
+def test_verify_mast_does_not_resolve_upstream_to_a_sha() -> None:
+    text = _strip_comments(_VERIFY_MAST.read_text(encoding="utf-8"))
+    hits = [m.group(0) for m in _REVPARSE_UPSTREAM_SHA.finditer(text)]
+    assert not hits, (
+        "verify-mast.ps1 resolves '@{u}' to a SHA again. That is the remote-tracking ref, "
+        "which a failed fetch leaves pointing at the commit HEAD is already on -- so a stale "
+        "clone reports as current (#177). Ask the remote with ls-remote instead.\n" + "\n".join(hits)
+    )
+
+
+def test_verify_mast_asks_the_remote() -> None:
+    text = _VERIFY_MAST.read_text(encoding="utf-8")
+    assert "ls-remote" in text, "verify-mast.ps1 no longer queries origin, so it cannot establish currency (#177)."
+    assert "fetch_ok" in text, (
+        "verify-mast.ps1 no longer reads fetch_ok, so an unreachable origin has no fallback evidence "
+        "and cannot be distinguished from a never-verified checkout (#177)."
+    )
+
+
+def test_verify_mast_does_not_fetch() -> None:
+    """ls-remote, not fetch: a verify must not update local refs, or one pass changes
+    what the next pass would compare against."""
+    text = _strip_comments(_VERIFY_MAST.read_text(encoding="utf-8"))
+    assert not re.search(r"\bgit\b[^\n]*\bfetch\b", text, re.IGNORECASE), (
+        "verify-mast.ps1 runs a git fetch. Use ls-remote so the check stays read-only (#177)."
+    )
+
+
+def test_the_three_verify_states_are_all_reachable() -> None:
+    """0 / 1 / 2 must all be live exits. A 2 nothing can produce is a state that
+    exists only in the report format."""
+    text = _VERIFY_MAST.read_text(encoding="utf-8")
+    assert "Get-MastVerifyExitCode" in text
+    assert _CURRENCY_LIB.exists(), "the pure verdict lib is gone; the decision table is untested"
+    lib = _CURRENCY_LIB.read_text(encoding="utf-8")
+    for state in ("current", "stale", "unverifiable", "unverified"):
+        assert f"'{state}'" in lib, f"verdict state {state!r} no longer defined"

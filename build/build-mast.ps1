@@ -498,6 +498,11 @@ Copy-Item -Force ${mastLogLib} (Join-Path ${staging} 'mast-log.ps1')
 ${mastNetLib} = Join-Path (Split-Path -Parent ${serverLib}) 'mast-net.ps1'
 if (-not (Test-Path ${mastNetLib})) { throw "Missing mast-net.ps1 at ${mastNetLib}" }
 Copy-Item -Force ${mastNetLib} (Join-Path ${staging} 'mast-net.ps1')
+# Unconditional, not a commandfile of the mast module: verify-mast.ps1 dot-sources
+# it, and a verify-only rerun can be built from any module subset (#177).
+${mastCurrencyLib} = Join-Path (Split-Path -Parent ${serverLib}) 'mast-git-currency.ps1'
+if (-not (Test-Path ${mastCurrencyLib})) { throw "Missing mast-git-currency.ps1 at ${mastCurrencyLib}" }
+Copy-Item -Force ${mastCurrencyLib} (Join-Path ${staging} 'mast-git-currency.ps1')
 
 # Copy client execution script into staging
 ${executeScript} = Join-Path ${clientRoot} 'execute-mast-provisioning.ps1'
