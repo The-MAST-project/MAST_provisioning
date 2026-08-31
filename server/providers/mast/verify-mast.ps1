@@ -31,6 +31,10 @@ param(
 ${mastLogDot} = Join-Path ${PSScriptRoot} 'mast-log.ps1'
 if (-not (Test-Path ${mastLogDot})) { ${mastLogDot} = Join-Path ${PSScriptRoot} '..\..\lib\mast-log.ps1' }
 . ${mastLogDot}
+${currencyDot} = Join-Path ${PSScriptRoot} 'mast-git-currency.ps1'
+if (-not (Test-Path ${currencyDot})) { ${currencyDot} = Join-Path ${PSScriptRoot} '..\..\lib\mast-git-currency.ps1' }
+if (-not (Test-Path ${currencyDot})) { throw "mast-git-currency.ps1 not found at ${currencyDot}" }
+. ${currencyDot}
 Set-StrictMode -Off  # mast-log.ps1 enables StrictMode; verify scripts probe optional state
 ${verifyLog} = Get-MastVerifyLog -Module 'mast'
 ${smokeFile} = Get-MastSmokeMarker -Module 'mast'
@@ -43,7 +47,38 @@ Set-Content -LiteralPath ${verifyLog} -Encoding UTF8 `
     -Value ("[{0}] verify-mast.ps1 started (top={1})" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), ${Top})
 
 ${issues} = New-Object 'System.Collections.Generic.List[string]'
+# Checks that could not be RUN, as opposed to checks that failed. Kept apart all
+# the way to the exit code: folding them into ${issues} would report a network
+# condition as unit drift, and folding them into silence is what #177 was.
+${unverifiable} = New-Object 'System.Collections.Generic.List[string]'
 ${expected} = @(${Expect}.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+
+# clone-manifest.json is the fallback evidence when origin cannot be reached: it
+# records, per repo, whether mast-clone verified that SHA against origin and when
+# (#176). Read once, before the loop, so an unreadable sidecar degrades every
+# repo's fallback identically instead of throwing mid-check.
+${cloneRepos} = @{}
+${cloneRevs} = @{}
+${cloneWrittenAt} = ''
+${cloneManifestPath} = Join-Path ${Top} 'clone-manifest.json'
+if (Test-Path -LiteralPath ${cloneManifestPath}) {
+    try {
+        ${cm} = Get-Content -LiteralPath ${cloneManifestPath} -Raw | ConvertFrom-Json
+        if (${cm}.PSObject.Properties.Match('written_at').Count) { ${cloneWrittenAt} = [string]${cm}.written_at }
+        foreach (${r} in @(${cm}.repos)) {
+            # $null, not $false, when the key is absent -- 'never recorded' and
+            # 'recorded as unverified' are different findings and the verdict
+            # table words them differently.
+            ${ok} = $null
+            if (${r}.PSObject.Properties.Match('fetch_ok').Count) { ${ok} = [bool]${r}.fetch_ok }
+            ${cloneRepos}[[string]${r}.dir] = ${ok}
+            ${cloneRevs}[[string]${r}.dir] = [string]${r}.rev
+        }
+    }
+    catch {
+        W ("clone-manifest.json unreadable, no fallback evidence: {0}" -f $_.Exception.Message)
+    }
+}
 
 function Resolve-GitExe {
     foreach (${c} in @('C:\Program Files\Git\cmd\git.exe', 'C:\Program Files\Git\bin\git.exe')) {
@@ -98,15 +133,62 @@ foreach (${d} in ${expected}) {
         [void]${issues}.Add(("working tree dirty, updates are being skipped: {0}" -f ${repoDir}))
     }
 
-    # Current? Compare HEAD against the tracked upstream ref.
+    # Current? ASK THE REMOTE. Deliberately not 'rev-parse @{u}', which reads the
+    # remote-TRACKING ref -- a local pointer only a fetch updates, so after a failed
+    # fetch it holds the commit HEAD is already on and a stale clone reads as
+    # current (#177, and the run in #176 where this logged 'current' on three
+    # clones that had fetched nothing).
+    #
+    # ls-remote, not fetch: it queries origin and updates NO local ref, so this
+    # stays a read-only check and one verify pass cannot change what the next one
+    # would compare against.
+    #
+    # No proxy is configured here on purpose. A provisioned unit carries the
+    # machine-scope http_proxy/https_proxy the proxy provider sets at order 100,
+    # which this process inherits -- that is the unit's own posture, and imposing
+    # a different one would test a route the unit does not use. (Measured on the
+    # dev VM: ls-remote returns in ~1s with nothing configured at all.)
     ${head} = (& ${gitExe} -C ${repoDir} rev-parse HEAD 2>$null | Select-Object -First 1)
-    ${upstream} = (& ${gitExe} -C ${repoDir} rev-parse '@{u}' 2>$null | Select-Object -First 1)
-    if (-not ${upstream}) {
-        W ("no upstream ref for {0} (never fetched?); HEAD={1}" -f ${d}, ${head})
-    } elseif (${head} -ne ${upstream}) {
-        [void]${issues}.Add(("{0} differs from its branch: HEAD={1} upstream={2}" -f ${d}, ${head}, ${upstream}))
-    } else {
-        W ("{0}: current at {1}" -f ${d}, ${head})
+
+    # What to ask origin FOR. A branch checkout carries its upstream name; a
+    # pinned checkout is detached and has none, so the sidecar's rev is used.
+    # Without this the pinned case got no comparison at all -- dormant today
+    # (no row in mast-repos.tsv pins a rev) and live the moment #75 lands one.
+    ${remoteSha} = ''
+    ${upstreamName} = (& ${gitExe} -C ${repoDir} rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>$null | Select-Object -First 1)
+    ${lsArgs} = $null
+    if (${upstreamName} -and ${upstreamName} -match '^[^/]+/(.+)$') {
+        ${lsArgs} = @('ls-remote', '--heads', 'origin', ('refs/heads/{0}' -f ${Matches}[1]))
+    }
+    elseif (${cloneRevs}.ContainsKey(${d}) -and ${cloneRevs}[${d}]) {
+        ${lsArgs} = @('ls-remote', '--tags', 'origin', ('refs/tags/{0}' -f ${cloneRevs}[${d}]))
+    }
+    if (${lsArgs}) {
+        # Collect, THEN read $LASTEXITCODE. 'Select-Object -First 1' in the same
+        # pipeline stops the upstream command early, which leaves $LASTEXITCODE
+        # reflecting that termination rather than git's own result.
+        ${lsOut} = @(& ${gitExe} -C ${repoDir} @lsArgs 2>$null)
+        ${lsCode} = $LASTEXITCODE
+        if (${lsCode} -eq 0 -and ${lsOut}.Count -gt 0 -and ${lsOut}[0]) {
+            ${remoteSha} = ([string]${lsOut}[0]).Split(@("`t", ' '), [StringSplitOptions]::RemoveEmptyEntries)[0]
+        } else {
+            W ("{0}: ls-remote could not reach origin (exit {1})" -f ${d}, ${lsCode})
+        }
+    }
+    else {
+        W ("{0}: no upstream branch and no pinned rev -- nothing to ask origin for" -f ${d})
+    }
+
+    ${fetchOk} = $null
+    if (${cloneRepos}.ContainsKey(${d})) { ${fetchOk} = ${cloneRepos}[${d}] }
+    ${verdict} = Get-MastCurrencyVerdict -Dir ${d} -HeadSha ${head} -RemoteSha ${remoteSha} `
+                    -FetchOk ${fetchOk} -VerifiedAt ${cloneWrittenAt}
+    W ${verdict}.Message
+    if (${verdict}.State -eq ${MastCurrencyUnverifiable}) {
+        [void]${unverifiable}.Add(${verdict}.Message)
+    }
+    elseif (${verdict}.State -ne ${MastCurrencyCurrent}) {
+        [void]${issues}.Add(${verdict}.Message)
     }
 }
 
@@ -177,6 +259,22 @@ if (${issues}.Count -gt 0) {
     }
     Write-Host ("mast-verify FAILED: {0}" -f (${issues} -join '; '))
     exit 1
+}
+
+# Exit 2: every check that could run passed, and at least one could not run. A
+# THIRD state, not a severity between 0 and 1 -- run-verify-only.ps1 records it as
+# 'unverifiable' rather than folding it into pass or fail, and the fleet report
+# renders it as its own thing. Reporting it as a pass is what #177 was; reporting
+# it as a failure would put a unit in the red for a network condition.
+#
+# The smoke marker is still written: the local checks did pass, and the marker's
+# meaning ('this module's verify ran and found nothing wrong') is unchanged.
+if (${unverifiable}.Count -gt 0) {
+    (${unverifiable} -join [Environment]::NewLine) | Out-File -FilePath ${verifyLog} -Append -Encoding UTF8
+    Set-Content -Path ${smokeFile} -Value 'mast_ok' -Encoding UTF8
+    W ("mast verify UNVERIFIABLE: {0} of {1} clone(s) could not be checked against origin" -f ${unverifiable}.Count, ${expected}.Count)
+    Write-Host ("mast-verify UNVERIFIABLE: {0}" -f (${unverifiable} -join '; '))
+    exit (Get-MastVerifyExitCode -IssueCount ${issues}.Count -UnverifiableCount ${unverifiable}.Count)
 }
 
 Set-Content -Path ${smokeFile} -Value 'mast_ok' -Encoding UTF8

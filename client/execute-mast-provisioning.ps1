@@ -161,6 +161,11 @@ function Write-Log {
     Write-MastLog -Message ${Message} -LogFile ${logFile}
 }
 
+# Exit code a *-verify child uses for "clean, but at least one check could not be
+# run" (#177). Read here so the branch below is not a bare 2; run-verify-only.ps1
+# declares the same constant for the same reason.
+${MastVerifyUnverifiableExit} = 2
+
 # Hold the desired process exit code in a script-scope variable. We do NOT
 # call `exit` from inside the try/catch below, because under WinRM that path
 # regularly hangs powershell.exe at runspace teardown for many minutes
@@ -278,6 +283,26 @@ try {
                 if ([string]::IsNullOrWhiteSpace(${existingBody})) {
                     Set-Content -Path ${smokeTestFile} -Value "success" -Force
                 }
+            }
+            elseif (${exitCode} -eq ${MastVerifyUnverifiableExit}) {
+                # A verify saying "every check that could run passed, and at least
+                # one could not" (#177). Counted as a success HERE, deliberately:
+                # this run's binary per-module outcome feeds fully_provisioned, and
+                # during a provisioning run the currency question is answered by
+                # provide-mast's own fetch_ok assertion (#176), which has already
+                # failed the module if the unit could not reach origin. Failing here
+                # too would red-flag a module for a condition its provider either
+                # already caught or deliberately tolerated.
+                #
+                # The three-way distinction is carried by run-verify-only.ps1 into
+                # status\validation.json, which is the surface the fleet report reads
+                # to answer "is the fleet current" without reprovisioning. That is
+                # where 'unverifiable' has to survive; here it must not silently
+                # become a failure.
+                Write-Log "SUCCESS: $($cmd.module) (exit code: ${exitCode}) -- UNVERIFIABLE: checks passed, at least one could not be run"
+                ${successCount}++
+                ${moduleOutcomes} = Add-MastModuleOutcome -Outcomes ${moduleOutcomes} `
+                    -CommandModule ${cmd}.module -Success $true
             }
             else {
                 Write-Log "[FAIL] $($cmd.module) (exit code: ${exitCode})"

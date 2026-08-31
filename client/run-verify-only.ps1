@@ -125,8 +125,19 @@ if (-not [string]::IsNullOrWhiteSpace(${Modules})) {
 
 Write-VerifyLog ("Found {0} verify command(s)." -f ${verifyCmds}.Count)
 
+# module -> 'pass' | 'fail' | 'unverifiable'. Ordered so the report reads in
+# execution order.
+#
+# 'unverifiable' (child exit 2) is a THIRD state, not a severity between the other
+# two: every check that could run passed and at least one could not, typically
+# because the unit cannot reach origin. Folding it into 'pass' is what let a stale
+# checkout read as current (#177); folding it into 'fail' would put a unit in the
+# red for a network condition and make an operator's local run useless. It does not
+# count toward ${failCount}, so this script's own exit code is unchanged -- the
+# distinction is carried in the report, for the fleet view that needs it.
+${MastVerifyUnverifiableExit} = 2
 ${failCount} = 0
-# module -> 'pass' | 'fail'. Ordered so the report reads in execution order.
+${unverifiableCount} = 0
 ${moduleResults} = [ordered]@{}
 foreach (${cmd} in ${verifyCmds}) {
     ${moduleName} = ${cmd}.module -replace '-verify$', ''
@@ -152,6 +163,13 @@ foreach (${cmd} in ${verifyCmds}) {
             Write-VerifyLog ("SUCCESS: {0} (exit code: 0)" -f ${cmd}.module)
             if (-not ${moduleResults}.Contains(${moduleName})) { ${moduleResults}[${moduleName}] = 'pass' }
         }
+        elseif (${exitCode} -eq ${MastVerifyUnverifiableExit}) {
+            Write-VerifyLog ("UNVERIFIABLE: {0} (exit code: {1}) -- checks passed, at least one could not be run" -f ${cmd}.module, ${exitCode})
+            ${unverifiableCount}++
+            # Never over a 'fail' from another command of the same module: a
+            # concrete problem outranks an unanswered question.
+            if (${moduleResults}[${moduleName}] -ne 'fail') { ${moduleResults}[${moduleName}] = 'unverifiable' }
+        }
         else {
             Write-VerifyLog ("[FAIL] {0} (exit code: {1})" -f ${cmd}.module, ${exitCode})
             ${failCount}++
@@ -176,9 +194,10 @@ if (${ReportPath}) {
         ${reportDir} = Split-Path -Parent ${ReportPath}
         if (${reportDir}) { ${null} = New-Item -ItemType Directory -Path ${reportDir} -Force -ErrorAction SilentlyContinue }
         ${report} = [pscustomobject][ordered]@{
-            checked_at = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
-            failures   = ${failCount}
-            modules    = ${moduleResults}
+            checked_at    = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+            failures      = ${failCount}
+            unverifiable  = ${unverifiableCount}
+            modules       = ${moduleResults}
         }
         ${reportTmp} = "${ReportPath}.tmp"
         (${report} | ConvertTo-Json -Depth 4) | Out-File -FilePath ${reportTmp} -Encoding UTF8
@@ -194,7 +213,7 @@ if (${ReportPath}) {
 
 Write-VerifyLog ''
 Write-VerifyLog "=========================================="
-Write-VerifyLog "Verify-only summary: failures=${failCount}"
+Write-VerifyLog "Verify-only summary: failures=${failCount} unverifiable=${unverifiableCount}"
 Write-VerifyLog ("Log file: {0}" -f ${logFile})
 Write-VerifyLog "=========================================="
 # Hard exit to bypass PS runspace teardown under WinRM (see the matching
