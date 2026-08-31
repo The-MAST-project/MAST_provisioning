@@ -117,3 +117,35 @@ def test_no_lastexitcode_test_on_a_ps1_call(script: Path) -> None:
             f"that never fires (#38 behaviour 1). Assert the outcome instead -- does "
             f"the artifact the step was supposed to produce actually exist?"
         )
+
+
+# --- the mast provider asserts the clone was verified, not merely present (#175) ---
+#
+# provide-mast.ps1 delegates the whole source layout to tools/mast-clone.ps1, which
+# reports a failed fetch and carries on -- it is also the casual dev clone tool, where
+# refreshing an existing tree off-network is legitimate. The fleet has no such case, so
+# the assertion is the caller's. Before it existed, a unit with no route to GitHub kept
+# its previous checkout while the two post-conditions here (venv interpreter present,
+# unit checkout present) both held, and the module reported SUCCESS.
+#
+# This is the third instance of the same shape in this module: presence is not outcome.
+
+_PROVIDE_MAST = REPO_ROOT / "server" / "providers" / "mast" / "provide-mast.ps1"
+
+
+def test_provide_mast_asserts_fetch_ok() -> None:
+    text = _PROVIDE_MAST.read_text(encoding="utf-8")
+    assert "clone-manifest.json" in text, (
+        "provide-mast.ps1 no longer reads mast-clone's sidecar, so nothing checks that the "
+        "checkouts were verified against origin (#175)."
+    )
+    assert "fetch_ok" in text, (
+        "provide-mast.ps1 no longer asserts fetch_ok. mast-clone reports a failed fetch and "
+        "carries on by design; without this assertion an unreachable remote leaves the unit "
+        "on old code and the module reports SUCCESS (#175)."
+    )
+    # Fail-closed on a missing key, not just a false one: mast-clone.ps1 ships in this
+    # module's payload as a 'repofiles' entry, so a sidecar without the key is itself wrong.
+    assert "Properties.Match('fetch_ok')" in text, (
+        "provide-mast.ps1 must treat a MISSING fetch_ok as unverified, not as a pass (#175)."
+    )

@@ -93,12 +93,18 @@ def _golden_fixture(fdr):
     def entry(h, v="1.0"):
         return {"version": v, "hash": h, "provide": "pass", "verify": "pass"}
 
-    repos = {
+    # str | bool because 'fetch_ok' is a JSON boolean, as mast-clone writes it.
+    repos: dict[str, dict[str, str | bool]] = {
         "common": {"repo": "MAST_common", "branch": "master", "rev": "", "resolved_sha": "aaaaaaaaaaaa", "head": "master"},
         "unit": {"repo": "MAST_unit", "branch": "main", "rev": "v1.2", "resolved_sha": "bbbbbbbbbbbb", "head": "main"},
     }
     repos_drift = dict(repos)
     repos_drift["unit"] = {**repos["unit"], "resolved_sha": "cccccccccccc"}
+    # mast02 could not reach origin for 'common' (#175). Deliberately at the SAME sha
+    # as the rest of the fleet: that is the real case -- the revision reads correct and
+    # is simply unverified, which is exactly what the '?' exists to say. The other rows
+    # carry no fetch_ok at all, covering the pre-#175 manifest that must NOT be marked.
+    repos_drift["common"] = {**repos["common"], "fetch_ok": False}
 
     u1 = fdr.UnitRecord(
         host="mast01",
@@ -321,6 +327,61 @@ def test_the_2026_08_11_divergence_is_reported(fdr):
         assert row["states"]["mast01"] == fdr.REPO_OK
     assert out["drift_repos_by_host"]["mast03"] == ["common", "unit"]
     assert out["drift_repos_by_host"]["mast01"] == []
+
+
+def test_a_fetch_that_failed_makes_the_revision_unverified(fdr):
+    """#175: mast05's bench reprov could not resolve the proxy, so three fetches
+    failed and clone-manifest.json recorded the stale SHAs as the intended result.
+    The unit is at the SAME sha as the fleet here, which is the point -- the reading
+    is correct-looking and untrustworthy, and nothing else in this report would say
+    so."""
+    units = [
+        _unit_with_repos(fdr, "mast01", [{**_repo_row("common", _COMMON_NEW), "fetch_ok": True}]),
+        _unit_with_repos(fdr, "mast05", [{**_repo_row("common", _COMMON_NEW), "fetch_ok": False}]),
+    ]
+    out = fdr.compare_repos(units, None, expected={"common"})
+    common = next(r for r in out["matrix"] if r["dir"] == "common")
+    assert common["states"]["mast05"] == fdr.REPO_UNVERIFIED
+    assert common["states"]["mast01"] == fdr.REPO_OK
+    assert out["drift_repos_by_host"]["mast05"] == ["common"]
+    assert out["drift_repos_by_host"]["mast01"] == []
+    # Not consistent: every unit that should have it must agree AND be verified.
+    assert out["divergent_dirs"] == ["common"]
+
+
+def test_unverified_takes_precedence_over_differs_and_unpinned(fdr):
+    """An unreachable remote is usually the CAUSE of the divergence, so naming it is
+    more useful than naming the symptom. A pin not honoured is likewise downstream of
+    a tag that could not be fetched."""
+    units = [
+        _unit_with_repos(fdr, "mast01", [_repo_row("common", _COMMON_NEW), _repo_row("unit", _UNIT_NEW)]),
+        _unit_with_repos(fdr, "mast02", [_repo_row("common", _COMMON_NEW), _repo_row("unit", _UNIT_NEW)]),
+        _unit_with_repos(
+            fdr,
+            "mast05",
+            [
+                {**_repo_row("common", _COMMON_OLD), "fetch_ok": False},
+                {**_repo_row("unit", _UNIT_OLD, rev="v1.2", head="main"), "fetch_ok": False},
+            ],
+        ),
+    ]
+    out = fdr.compare_repos(units, None)
+    for row in out["matrix"]:
+        assert row["states"]["mast05"] == fdr.REPO_UNVERIFIED
+    assert out["drift_repos_by_host"]["mast05"] == ["common", "unit"]
+
+
+def test_a_manifest_without_fetch_ok_is_not_marked_unverified(fdr):
+    """The key does not exist in manifests written before #175, and this report reads
+    units provisioned months ago. Absent means unknown-and-quiet, the same treatment
+    `any_data` gives a pre-#75 manifest -- the OPPOSITE of provide-mast.ps1, which
+    fails closed because its sidecar is always in step with its own payload."""
+    units = [_unit_with_repos(fdr, h, [_repo_row("common", _COMMON_NEW)]) for h in ("mast01", "mast02")]
+    assert all("fetch_ok" not in r for u in units for r in u.repos.values())
+    out = fdr.compare_repos(units, None, expected={"common"})
+    common = next(r for r in out["matrix"] if r["dir"] == "common")
+    assert set(common["states"].values()) == {fdr.REPO_OK}
+    assert out["divergent_dirs"] == []
 
 
 def test_a_repo_the_role_never_pulls_is_na_not_drift(fdr):

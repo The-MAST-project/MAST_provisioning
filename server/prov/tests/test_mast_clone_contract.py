@@ -12,6 +12,7 @@ fleet-affecting.
 from __future__ import annotations
 
 import hashlib
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -20,6 +21,7 @@ import pytest
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _MANIFEST = _REPO_ROOT / "tools" / "mast-repos.tsv"
 _CLONE_PS1 = _REPO_ROOT / "tools" / "mast-clone.ps1"
+_CLONE_SH = _REPO_ROOT / "tools" / "mast-clone.sh"
 
 #: The rows role `unit` resolves to, as (dir, repo, branch, rev). Adding a repo to
 #: the role, retargeting one at a feature branch, or pinning a rev changes what
@@ -37,7 +39,7 @@ EXPECTED_UV_VERSION = "0.11.33"
 #: including ones no assertion below covers. Taken over LF-normalized text, not
 #: raw bytes: the CI matrix checks out on both platforms and a Windows checkout
 #: rewrites the line endings, so a byte digest would differ by platform alone.
-EXPECTED_CLONE_PS1_SHA256 = "1f6c4f1b460e10f6bd1d3c739db20ce9294faa7c03f69b451c55ad113b2c6130"
+EXPECTED_CLONE_PS1_SHA256 = "30bb68f497b74ea099ce66e7880f1eea5b3ad7979eef7ec1b41fe4cf5b4fd2fb"
 
 #: Parameters provide-mast.ps1 passes, or relies on existing.
 REQUIRED_PARAMETERS = ("Top", "Role", "Transport", "Update", "DryRun")
@@ -152,3 +154,56 @@ def test_mast_clone_ps1_is_unchanged() -> None:
         "tools/mast-clone.ps1 changed. Review the diff for fleet impact, then update "
         "EXPECTED_CLONE_PS1_SHA256 in the same commit."
     )
+
+
+# --- the fetch result is never discarded (#175) --------------------------------
+#
+# On mast05's 2026-08-30 bench reprov, three fetches failed against an unresolvable
+# proxy, the module reported SUCCESS, and clone-manifest.json recorded the stale SHAs
+# as the intended result. The cause was one call whose result was thrown away, and
+# the reason it produced no signal at all is that `merge --ff-only @{u}` then compared
+# HEAD against a remote-tracking ref the failed fetch had not moved, printed
+# `Already up to date.` and returned success.
+#
+# Asserted rather than reviewed for the same reason as the shapes in
+# test_provider_failure_reporting.py: it is a one-token regression, invisible in a
+# run's output, and the alternative to catching it here is reading a per-module log
+# on a unit.
+
+_DISCARDED_INVOKE_GIT = re.compile(r"\$null\s*=\s*Invoke-Git", re.IGNORECASE)
+
+
+def test_no_git_result_is_discarded_in_the_ps1() -> None:
+    """`Invoke-Git` documents itself as returning $true on success; assigning that to
+    $null is how #175 happened. There is no legitimate fire-and-forget git call in
+    this script -- every other call site already checks, which is what made the one
+    exception invisible."""
+    offenders = [
+        f"{i}: {line.strip()}"
+        for i, line in enumerate(_CLONE_PS1.read_text(encoding="utf-8").splitlines(), start=1)
+        if _DISCARDED_INVOKE_GIT.search(line)
+    ]
+    assert not offenders, "mast-clone.ps1 discards an Invoke-Git result; check it instead (#175):\n" + "\n".join(offenders)
+
+
+def test_every_fetch_is_guarded_in_the_sh() -> None:
+    """The shell half used to get this right only by accident: under `set -e` a bare
+    failing fetch aborted the whole script, which meant no clone-manifest.json and no
+    summary at all. Both halves now guard the fetch explicitly and carry on."""
+    unguarded = [
+        f"{i}: {line.strip()}"
+        for i, line in enumerate(_CLONE_SH.read_text(encoding="utf-8").splitlines(), start=1)
+        if re.search(r"\bgit\b.*\bfetch\b", line) and not line.strip().startswith("if !")
+    ]
+    assert not unguarded, "mast-clone.sh runs a git fetch whose failure is not handled (#175):\n" + "\n".join(unguarded)
+
+
+def test_both_halves_record_fetch_ok() -> None:
+    """The sidecar must distinguish 'this SHA is what origin says' from 'this SHA is
+    what was already on disk and could not be checked'. provide-mast.ps1 asserts on
+    the key and fleet-drift-report.py renders it, so a half that stopped writing it
+    would fail the fleet closed (.ps1) or go quiet (.sh)."""
+    # Anchored on how each half actually emits the key, not a substring search:
+    # 'fetch_ok' matches inside 'fetch_okay' and would pass a rename.
+    assert re.search(r"\bfetch_ok\s*=", _CLONE_PS1.read_text(encoding="utf-8"))
+    assert '"fetch_ok": %s' in _CLONE_SH.read_text(encoding="utf-8")

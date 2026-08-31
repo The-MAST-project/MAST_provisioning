@@ -273,6 +273,12 @@ VENV="${TOP_ABS}/.venv"
 
 CLONED=()
 PROV_DIRS=(); PROV_REPOS=(); PROV_BRANCHES=(); PROV_REVS=()
+# Folders whose checkout could NOT be verified against origin in this run -- a
+# failed fetch, or a clone pointing at an unexpected remote. Reported in the tail
+# summary and recorded per repo in clone-manifest.json as fetch_ok=false. Keyed by
+# dir so a repo marked twice counts once; read via PROV_DIRS so the order is the
+# manifest's, matching the ps1 half.
+declare -A FETCH_FAILED=()
 # 'manifest_rev' is the OPTIONAL 5th column; a 4-column manifest leaves it empty,
 # which means "track the branch". Keep this read in step with the ps1 half.
 while IFS=$'\t' read -r dir repo roles manifest_branch manifest_rev; do
@@ -303,11 +309,25 @@ while IFS=$'\t' read -r dir repo roles manifest_branch manifest_rev; do
         actual="$(git -C "$dest" remote get-url origin 2>/dev/null || echo '')"
         case "$actual" in
             *"${repo}"*) : ;;
-            *) warn "$dir: origin is '$actual', expected a ${repo} remote -- skipping" ; continue ;;
+            *) warn "$dir: origin is '$actual', expected a ${repo} remote -- skipping"
+               # Nothing was fetched, so the SHA recorded below is whatever was on disk.
+               FETCH_FAILED["$dir"]=1
+               continue ;;
         esac
         info "$dir: exists, fetching"
-        run git -C "$dest" fetch --prune origin
-        if [ "$UPDATE" -eq 1 ]; then
+        # A failed fetch must not read as an up-to-date checkout. Left unguarded,
+        # the 'merge --ff-only @{u}' below compares HEAD against a remote-tracking
+        # ref the failed fetch did not move, prints 'Already up to date.' and
+        # returns success (#175). Skipping the update removes that false signal.
+        #
+        # Guarded rather than left to `set -e`, which used to abort the whole script
+        # here -- before the submodule disarm, the sidecar and the summary, so an
+        # offline refresh produced no clone-manifest.json at all. Recording it and
+        # carrying on is what the ps1 half does, and this file is the same tool.
+        if ! run git -C "$dest" fetch --prune origin; then
+            warn "$dir: fetch failed -- checkout NOT verified against origin, leaving it as it is"
+            FETCH_FAILED["$dir"]=1
+        elif [ "$UPDATE" -eq 1 ]; then
             if [ "$DRY_RUN" -eq 0 ] && [ -n "$(git -C "$dest" status --porcelain)" ]; then
                 warn "$dir: working tree dirty -- not moving"
             elif [ -n "$rev" ]; then
@@ -316,7 +336,13 @@ while IFS=$'\t' read -r dir repo roles manifest_branch manifest_rev; do
                 # pin. --force on the tag fetch so a legitimately moved tag is picked
                 # up; the sidecar records what it moved to.
                 info "$dir: pinned, checking out $rev"
-                run git -C "$dest" fetch --tags --force origin
+                # Same reasoning as the fetch above, one layer quieter: a tag that
+                # moved upstream but was not fetched still checks out, against the
+                # object this clone already had.
+                if ! run git -C "$dest" fetch --tags --force origin; then
+                    warn "$dir: tag fetch failed -- '$rev' may have moved upstream, checkout NOT verified against origin"
+                    FETCH_FAILED["$dir"]=1
+                fi
                 run git -C "$dest" checkout --detach "$rev" \
                     || die "$dir: cannot check out pinned rev '$rev'"
             else
@@ -338,7 +364,10 @@ while IFS=$'\t' read -r dir repo roles manifest_branch manifest_rev; do
             # Clone the branch first rather than 'clone --branch <tag>': it leaves the
             # branch ref present, which --branch overrides and the wrong-branch
             # diagnostic both rely on.
-            run git -C "$dest" fetch --tags --force origin
+            if ! run git -C "$dest" fetch --tags --force origin; then
+                warn "$dir: tag fetch failed -- '$rev' may have moved upstream, checkout NOT verified against origin"
+                FETCH_FAILED["$dir"]=1
+            fi
             run git -C "$dest" checkout --detach "$rev" \
                 || die "$dir: cannot check out pinned rev '$rev'"
         fi
@@ -396,8 +425,13 @@ if [ "$DRY_RUN" -eq 0 ]; then
                 _sha="$(git -C "${TOP_ABS}/${_d}" rev-parse HEAD 2>/dev/null || echo '')"
                 _head="$(git -C "${TOP_ABS}/${_d}" rev-parse --abbrev-ref HEAD 2>/dev/null || echo '')"
             fi
-            printf '    {"dir": "%s", "repo": "%s", "branch": "%s", "rev": "%s", "resolved_sha": "%s", "head": "%s"}' \
-                "$_d" "${PROV_REPOS[$_i]}" "${PROV_BRANCHES[$_i]}" "${PROV_REVS[$_i]}" "$_sha" "$_head"
+            # Whether resolved_sha was verified against origin in THIS run, or is
+            # merely what was already on disk and could not be checked (#175). A JSON
+            # boolean, not a string -- the ps1 half writes a real one and the readers
+            # are shared.
+            if [ -n "${FETCH_FAILED[$_d]:-}" ]; then _ok=false; else _ok=true; fi
+            printf '    {"dir": "%s", "repo": "%s", "branch": "%s", "rev": "%s", "resolved_sha": "%s", "head": "%s", "fetch_ok": %s}' \
+                "$_d" "${PROV_REPOS[$_i]}" "${PROV_BRANCHES[$_i]}" "${PROV_REVS[$_i]}" "$_sha" "$_head" "$_ok"
             if [ $((_i + 1)) -lt "$_n" ]; then printf ',\n'; else printf '\n'; fi
         done
         printf '  ]\n}\n'
@@ -406,10 +440,14 @@ if [ "$DRY_RUN" -eq 0 ]; then
     for _i in "${!PROV_DIRS[@]}"; do
         _d="${PROV_DIRS[$_i]}"
         _sha="$(git -C "${TOP_ABS}/${_d}" rev-parse --short HEAD 2>/dev/null || echo '?')"
+        # '[UNVERIFIED]' rather than nothing: these are the lines read during triage,
+        # and it was their looking identical to a clean run's that hid #175.
+        _mark=""
+        if [ -n "${FETCH_FAILED[$_d]:-}" ]; then _mark="  [UNVERIFIED -- fetch failed]"; fi
         if [ -n "${PROV_REVS[$_i]}" ]; then
-            info "  ${_d}: ${PROV_BRANCHES[$_i]} pinned ${PROV_REVS[$_i]} -> ${_sha}"
+            info "  ${_d}: ${PROV_BRANCHES[$_i]} pinned ${PROV_REVS[$_i]} -> ${_sha}${_mark}"
         else
-            info "  ${_d}: ${PROV_BRANCHES[$_i]} ${_sha}"
+            info "  ${_d}: ${PROV_BRANCHES[$_i]} ${_sha}${_mark}"
         fi
     done
 fi
@@ -703,5 +741,18 @@ done
 echo
 if [ "$shadow_problems" -eq 1 ]; then
     warn "shadowing problems detected (see above)"
+fi
+# The per-repo lines above are what an operator actually reads, so the summary has
+# to carry this too -- the original defect was invisible precisely because the
+# summary looked identical to a clean run's (#175). Iterated over PROV_DIRS, not the
+# associative array's keys, so the order is the manifest's and not bash's.
+if [ "${#FETCH_FAILED[@]}" -gt 0 ]; then
+    _unverified=""
+    for _d in "${PROV_DIRS[@]}"; do
+        if [ -n "${FETCH_FAILED[$_d]:-}" ]; then
+            if [ -n "$_unverified" ]; then _unverified="${_unverified}, ${_d}"; else _unverified="$_d"; fi
+        fi
+    done
+    warn "NOT verified against origin: ${_unverified} -- these checkouts are whatever was already on disk"
 fi
 info "done. ${#CLONED[@]} folder(s) under ${TOP_ABS}"

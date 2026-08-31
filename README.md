@@ -321,10 +321,20 @@ versus `n/a` (control-only `gui` on a unit, say — benign). `--role` overrides 
 default of `unit`.
 
 Every run writes `<Top>/clone-manifest.json` recording, per repo, the branch, the
-`rev` as *requested*, and the `resolved_sha` that actually landed —
+`rev` as *requested*, the `resolved_sha` that actually landed, and `fetch_ok` —
 `Merge-MastInstalledManifest` folds it into the unit's `installed-manifest.json` as
 `repos`, so a unit can be asked what it is running. The requested/resolved pair is
 what makes a force-moved tag visible.
+
+`fetch_ok` says whether `resolved_sha` was verified against origin in that run, or is
+merely what was already on disk and could not be checked. Both clone scripts report a
+failed fetch and carry on — refreshing a tree off-network is legitimate for dev and
+control-host use — so the fleet's requirement is asserted by its caller instead:
+`provide-mast.ps1` fails the module when any repo comes back `fetch_ok: false`, and
+`fleet-drift-report.py` marks such a revision `?`. Without the field a stale checkout
+was indistinguishable from a current one, and an unreachable remote reported exactly
+what a clean run reports. See
+`docs/decisions/2026-08-31-a-failed-fetch-is-recorded-by-the-tool-and-asserted-by-the-provider.md`.
 
 Why this exists: sibling clones replaced git submodules, which pinned a commit by
 construction. Without a `rev` the fleet can silently diverge — on 2026-08-11 two

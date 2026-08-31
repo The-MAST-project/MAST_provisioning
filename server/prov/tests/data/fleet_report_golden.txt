@@ -5,7 +5,7 @@ BUILD (reference)  REFERENCE    agg123456789  gitsha123456  -       2026-08-01T0
 mast01             DRIFT        agg123456789  gitsha123456  v3      2026-08-01T10:00:00Z
 mast02             IN SYNC      agg123456789  gitsha123456  v2!     2026-08-01T11:00:00Z
 mast03             UNREACHABLE  -             -             none    -  no route to host
-upstream repos: 1 of 2 consistent (unit differ)
+upstream repos: 0 of 2 consistent (common, unit differ)
 
 === Module status vs build (ok / STALE / MISSING / extra) ===
 module              BUILD (reference)      mast01                 mast02                 
@@ -23,11 +23,12 @@ bootstrap-reassert  (absent)               -                      extra*
 === Module drift detail ===
   mast01: desktop-shortcuts
 
-=== Upstream repos (resolved revision; '*' = differs, '!' = pin not honoured, MISSING = expected for this role, n/a = not) ===
+=== Upstream repos (resolved revision; '*' = differs, '!' = pin not honoured, '?' = not verified against origin, MISSING = expected for this role, n/a = not) ===
 repo      BUILD (reference)  mast01     mast02     pin
 ------------------------------------------------------
-common    n/a        aaaaaaa    aaaaaaa    -
+common    n/a        aaaaaaa    aaaaaaa?   -
 unit      n/a        bbbbbbb!   ccccccc!   v1.2
+  [WARN] common: mast02 could not reach origin, so the revision shown is whatever was already on disk, not what the remote says (#175).
   [WARN] unit: pinned in the manifest but on a branch on mast01, mast02 -- a --branch override, or a clone from before the pin.
 
 === Module-reported facts (what each module FOUND; '*' = units disagree, '-' = not reported) ===
@@ -57,4 +58,4 @@ mongodb-client.compass_version*            -                  1.49.14  1.43.0
 RESULT: payload drift/gaps on 2 unit(s): mast01, mast03
 RESULT: bootstrap outdated/unstamped on 2 unit(s): mast02, mast03
 RESULT: needs a console visit: mast02, mast03
-RESULT: upstream repo divergence on 1 repo(s): unit
+RESULT: upstream repo divergence on 2 repo(s): common, unit
