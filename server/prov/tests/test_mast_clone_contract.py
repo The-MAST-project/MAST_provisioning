@@ -142,7 +142,7 @@ def test_consults_the_staged_uv() -> None:
 
 
 def test_writes_mast_pth() -> None:
-    """NSSM services inherit no shell env, so <Top> reaches sys.path via mast.pth."""
+    """<Top> reaches sys.path via mast.pth, not via a shell-set PYTHONPATH."""
     script = _CLONE_PS1.read_text(encoding="utf-8")
     assert "mast.pth" in script
 

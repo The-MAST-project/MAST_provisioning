@@ -107,8 +107,8 @@ if ((Test-Path -LiteralPath (Join-Path ${Top} 'common')) -and
     [void]${issues}.Add("common\__init__.py missing -- 'common' is not an importable package (wrong branch?)")
 }
 
-# mast.pth is what puts <Top> on sys.path for the NSSM services, which inherit
-# no shell environment. Without it the unit imports nothing.
+# mast.pth is what puts <Top> on sys.path for anything started outside a shell
+# that sets PYTHONPATH. Without it the unit imports nothing.
 ${pth} = Join-Path ${Top} '.venv\Lib\site-packages\mast.pth'
 if (-not (Test-Path -LiteralPath ${pth})) {
     [void]${issues}.Add("mast.pth missing at ${pth} -- <Top> will not be on sys.path")
