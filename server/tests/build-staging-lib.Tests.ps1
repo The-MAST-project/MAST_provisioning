@@ -1,6 +1,9 @@
-# Unit tests for build/build-staging-lib.ps1 -- the 'repofiles' staging key that
-# lets a module declare a file living outside its provider dir (tools/mast-clone.ps1
-# for the 'mast' module) without forking it into the provider tree.
+# Unit tests for build/build-staging-lib.ps1 -- two subjects:
+#   - the 'repofiles' staging key that lets a module declare a file living
+#     outside its provider dir (tools/mast-clone.ps1 for the 'mast' module)
+#     without forking it into the provider tree;
+#   - the wheel-tag check that keeps the jupyter wheelhouse and the interpreter
+#     the 'python' provider pins from drifting apart (#180).
 #
 # Run (Pester 3.x, Windows PowerShell 5.1):
 #   Invoke-Pester -Path server\tests\build-staging-lib.Tests.ps1
@@ -97,6 +100,71 @@ Describe 'Get-MastModuleRepoFiles' {
     It 'drops blank entries rather than passing them to the resolver' {
         $mf = '{ "name": "mast", "repofiles": ["tools/mast-clone.ps1", ""] }' | ConvertFrom-Json
         @(Get-MastModuleRepoFiles -Manifest $mf).Count | Should Be 1
+    }
+}
+
+Describe 'Get-MastWheelInterpreterMismatches' {
+    # The tree as it stands. Asserting the count is non-zero first is what stops
+    # this passing vacuously if the wheelhouse ever moves or empties.
+    It 'finds nothing wrong with the wheelhouse in the repo against the pinned 3.12.2' {
+        $wheelDir = Join-Path $here '..\..\server\providers\jupyter\assets\wheels'
+        $names = @(Get-ChildItem -LiteralPath $wheelDir -Filter '*.whl' -File | ForEach-Object { $_.Name })
+        ($names.Count -gt 0) | Should Be $true
+        @(Get-MastWheelInterpreterMismatches -PythonVersion '3.12.2' -WheelNames $names).Count | Should Be 0
+    }
+    It 'accepts a version-locked wheel built for the target interpreter' {
+        @(Get-MastWheelInterpreterMismatches -PythonVersion '3.12.2' `
+            -WheelNames @('cffi-2.1.1-cp312-cp312-win_amd64.whl')).Count | Should Be 0
+    }
+    It 'rejects a version-locked wheel when the interpreter is bumped' {
+        # The #180 scenario: the edit is in the python provider, the breakage is here.
+        $r = @(Get-MastWheelInterpreterMismatches -PythonVersion '3.13.0' `
+                 -WheelNames @('cffi-2.1.1-cp312-cp312-win_amd64.whl'))
+        $r.Count | Should Be 1
+        $r[0] | Should Match 'built for cp312, needs cp313'
+    }
+    It 'accepts a stable-ABI wheel whose minimum is older than the target' {
+        @(Get-MastWheelInterpreterMismatches -PythonVersion '3.12.2' `
+            -WheelNames @('pyerfa-2.0.1.5-cp39-abi3-win_amd64.whl')).Count | Should Be 0
+    }
+    It 'accepts a stable-ABI wheel whose minimum equals the target' {
+        @(Get-MastWheelInterpreterMismatches -PythonVersion '3.12.2' `
+            -WheelNames @('pyzmq-27.2.0-cp312-abi3-win_amd64.whl')).Count | Should Be 0
+    }
+    It 'rejects a stable-ABI wheel whose minimum is newer than the target' {
+        $r = @(Get-MastWheelInterpreterMismatches -PythonVersion '3.12.2' `
+                 -WheelNames @('something-1.0-cp313-abi3-win_amd64.whl'))
+        $r.Count | Should Be 1
+        $r[0] | Should Match 'minimum cp313 is newer than cp312'
+    }
+    It 'ignores pure-Python wheels' {
+        @(Get-MastWheelInterpreterMismatches -PythonVersion '3.13.0' `
+            -WheelNames @('anyio-4.14.2-py3-none-any.whl')).Count | Should Be 0
+    }
+    It 'ignores a non-CPython python tag' {
+        @(Get-MastWheelInterpreterMismatches -PythonVersion '3.12.2' `
+            -WheelNames @('greenlet-3.0-pp310-pypy310_pp73-win_amd64.whl')).Count | Should Be 0
+    }
+    It 'parses a name carrying an optional build tag' {
+        # PEP 427 allows name-version-BUILD-pytag-abitag-platform; the tags are
+        # read from the end for exactly this reason.
+        $r = @(Get-MastWheelInterpreterMismatches -PythonVersion '3.13.0' `
+                 -WheelNames @('foo-1.0-1-cp312-cp312-win_amd64.whl'))
+        $r.Count | Should Be 1
+    }
+    It 'ignores a file that is not a wheel' {
+        @(Get-MastWheelInterpreterMismatches -PythonVersion '3.12.2' `
+            -WheelNames @('requirements.txt')).Count | Should Be 0
+    }
+    It 'reads the tags off the leaf when handed a path' {
+        @(Get-MastWheelInterpreterMismatches -PythonVersion '3.12.2' `
+            -WheelNames @('C:\assets\wheels\cffi-2.1.1-cp312-cp312-win_amd64.whl')).Count | Should Be 0
+    }
+    It 'accepts an empty wheel list (the staging throw owns an empty wheelhouse)' {
+        @(Get-MastWheelInterpreterMismatches -PythonVersion '3.12.2' -WheelNames @()).Count | Should Be 0
+    }
+    It 'throws on a declared version it cannot read a major.minor from' {
+        { Get-MastWheelInterpreterMismatches -PythonVersion 'git' -WheelNames @() } | Should Throw
     }
 }
 

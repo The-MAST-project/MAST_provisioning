@@ -132,7 +132,7 @@ renumbering.
 |   300 | `cygwin` | Cygwin environment from a prebuilt tgz (postinstall, PATH) |
 |   400 | `astrometry-dependencies` | Cygwin packages for astrometry.net (offline, from the frozen build-host cache `C:\MAST\cygwin-pkg-cache`) + bundled `fitsio` wheel |
 |   500 | `astrometry` | Prebuilt astrometry.net 0.97 tree into `C:\cygwin64\usr\local\astrometry` |
-|   600 | `python` | Python 3.12.2 + pip; removes `virtualenv` where an earlier run installed it (the jupyter venv is built with the stdlib `venv` module) |
+|   600 | `python` | Python 3.12.2 + pip; removes `virtualenv` where an earlier run installed it (the jupyter venv is built with the stdlib `venv` module). Its `module.json` `version` is the fleet's authoritative interpreter pin -- the `jupyter` wheelhouse is checked against it at build time |
 |   700 | `git` | Git for Windows (silent) + PATH |
 |   750 | `gh` | GitHub CLI (gh) + PATH (after git) |
 |   800 | `ascom` | ASCOM Platform 7.0 RC4 + Developer tools (enables .NET 3.5 if needed) |
@@ -151,7 +151,7 @@ renumbering.
 |  1850 | `instrument-profiles` | Lay down PWI4 `.cfg` + PHD2 `.reg` **templates** (site location from `C:\WIS\config.toml`; fleet constants verbatim) and apply into the `mast` profile on first logon. Per-unit device->COM binding is the post-hardware `tools/calibrate-instruments.ps1` step, not this provider. |
 |  1900 | `vscode` | Visual Studio Code + bundled Python extensions (`ms-python.python`, `ms-python.debugpy`) installed offline from staged `.vsix` |
 |  2000 | `sysinternals` | Sysinternals Suite |
-|  2050 | `jupyter` | Jupyter Notebook + scientific stack (astropy, numpy, scipy, matplotlib, pandas, astroquery, photutils) in a contained venv under `C:\MAST\jupyter` (state kept there; launcher + desktop shortcut) |
+|  2050 | `jupyter` | Jupyter Notebook + scientific stack (astropy, numpy, scipy, matplotlib, pandas, astroquery, photutils) in a contained venv under `C:\MAST\jupyter` (state kept there; launcher + desktop shortcut). Installs the locked set from `assets/requirements.txt` out of a vendored 118-wheel wheelhouse with `--no-index`, so the wheels are bound to the interpreter the `python` provider pins; `build-mast.ps1` runs `Assert-JupyterWheelhouseInterpreterInSync` and **fails the build** when the two drift -- on either module's build |
 |  2100 | `chrome` | Google Chrome (offline Enterprise MSI) |
 |  2200 | `mast` | Clone MAST repos, create the venv, install requirements, open the unit API port. Registers no service |
 |  2210 | `mast-shared-mount` | Map `Z:` to the operational share `\\<controller_host>\mast-share` **in the LocalSystem session** (SYSTEM at-startup task); clear stale per-user mappings |

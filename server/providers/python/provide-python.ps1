@@ -82,7 +82,7 @@ try {
         if (-not (Test-Path ${exePath})) {
             throw "Python installer not found: ${exePath}"
         }
-        Write-Host "Installing Python 3.12.2 ..."
+        Write-Host "Installing Python from ${Installer} ..."
         ${installer_args} = "/quiet InstallAllUsers=1 PrependPath=1 TargetDir=`"${InstallDir}`" Include_test=0 Include_doc=0"
         Invoke-Exe -FilePath ${exePath} -Arguments ${installer_args} -Tag "python-install"
         if (-not (Test-Path ${pythonExe})) {
