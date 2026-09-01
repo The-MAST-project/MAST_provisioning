@@ -216,6 +216,63 @@ function Assert-BootstrapMemoryRequirementInSync {
   Write-Host ('[build-mast] Memory requirement in sync: {0} GB (bootstrap.ps1 matches Get-MastRequiredMemoryGB).' -f ${required})
 }
 
+# The jupyter provider's vendored wheelhouse is bound to a CPython version that
+# the 'python' provider declares, and neither module can see the other. Same
+# shape as the two bootstrap guards above -- two sources of truth that only the
+# build can compare -- and the same resolution: fail the build rather than the
+# fleet. That provider installs '--no-index', so a mismatch is not a slower
+# resolve but a failed module on every unit, with no remedy on the unit (#180).
+#
+# Runs when EITHER module is staged, not only jupyter: the edit that breaks this
+# is a version bump in the python provider, and a '--modules python' build would
+# otherwise ship a new interpreter to a unit whose jupyter venv was built from
+# the old wheels. The check reads the two declarations, not the payload, so it
+# costs nothing when jupyter is not being staged.
+function Assert-JupyterWheelhouseInterpreterInSync {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)][string]${ProvidersRoot}
+  )
+  # Read through ${ProvidersRoot} rather than via Read-ModuleManifest, which
+  # takes its root from a script-scope ${providersRoot}: PowerShell resolves that
+  # up the dynamic scope chain and case-insensitively, so from inside a function
+  # holding a ${ProvidersRoot} PARAMETER it lands on the parameter instead. Same
+  # value in a build, and a silent coupling that made this guard untestable
+  # against any root but the live one. Everything it reads is now its argument.
+  ${pythonModuleJson} = Join-Path ${ProvidersRoot} 'python\module.json'
+  if (-not (Test-Path -LiteralPath ${pythonModuleJson})) {
+    throw "Cannot verify the Jupyter wheelhouse: no python module.json at ${pythonModuleJson}."
+  }
+  ${pythonManifest} = Get-Content -LiteralPath ${pythonModuleJson} -Raw | ConvertFrom-Json
+  if (-not ${pythonManifest}.PSObject.Properties.Match('version').Count -or
+      [string]::IsNullOrWhiteSpace(${pythonManifest}.version)) {
+    throw "Cannot verify the Jupyter wheelhouse: ${pythonModuleJson} declares no 'version'."
+  }
+  ${pinned} = [string]${pythonManifest}.version
+
+  ${wheelDir} = Join-Path ${ProvidersRoot} 'jupyter\assets\wheels'
+  ${wheelNames} = @()
+  if (Test-Path -LiteralPath ${wheelDir}) {
+    ${wheelNames} = @(
+      Get-ChildItem -LiteralPath ${wheelDir} -Filter '*.whl' -File -ErrorAction SilentlyContinue |
+        ForEach-Object { $_.Name }
+    )
+  }
+  # An EMPTY wheelhouse is deliberately not this guard's business: it is already
+  # caught where it matters, by the staging throw that refuses to build a jupyter
+  # payload with no wheels. Here it is vacuously in sync.
+  if (${wheelNames}.Count -eq 0) { return }
+
+  ${mismatches} = @(Get-MastWheelInterpreterMismatches -PythonVersion ${pinned} -WheelNames ${wheelNames})
+  if (${mismatches}.Count -gt 0) {
+    ${msg} = ("Jupyter wheelhouse does not match the interpreter the 'python' provider pins ({0}): {1} of {2} wheels disagree." -f ${pinned}, ${mismatches}.Count, ${wheelNames}.Count)
+    foreach (${reason} in ${mismatches}) { ${msg} += ("`n  {0}" -f ${reason}) }
+    ${msg} += ("`nThat provider installs with --no-index and cannot fall back to PyPI, so this would fail the jupyter module on every unit. Either revert the version in server/providers/python/module.json, or regenerate both artifacts against the new interpreter: refreeze server/providers/jupyter/assets/requirements.txt and re-run 'pip download -r assets/requirements.txt -d assets/wheels --only-binary=:all:' on a Windows host running the fleet's Python. Regenerating is a deliberate act with an owner -- see the header of requirements.txt.")
+    throw ${msg}
+  }
+  Write-Host ('[build-mast] Jupyter wheelhouse in sync: {0} wheels agree with the pinned interpreter {1}.' -f ${wheelNames}.Count, ${pinned})
+}
+
 Assert-BootstrapKnownSitesInSync -ClientRoot ${clientRoot} -ProvidersRoot ${providersRoot}
 Assert-BootstrapMemoryRequirementInSync -ClientRoot ${clientRoot}
 Assert-MastBootstrapElementRegistry -ClientRoot ${clientRoot} -ProvidersRoot ${providersRoot}
@@ -229,6 +286,10 @@ Assert-MastNoNoMachineCertsInAssets -AssetsLicenseDir (Join-Path ${providersRoot
 if ($null -eq ${Modules} -or ${Modules}.Count -eq 0) {
     ${Modules} = Get-AllProviderModules -ProvidersRoot ${providersRoot}
     Write-Host ("Modules defaulted to {0} providers discovered under {1}." -f ${Modules}.Count, ${providersRoot})
+}
+
+if (${Modules} -contains 'jupyter' -or ${Modules} -contains 'python') {
+    Assert-JupyterWheelhouseInterpreterInSync -ProvidersRoot ${providersRoot}
 }
 
 # Create a junction/hardlink/symlink into staging; fallback to copy if linking not allowed
