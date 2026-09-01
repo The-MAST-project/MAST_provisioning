@@ -132,7 +132,7 @@ renumbering.
 |   300 | `cygwin` | Cygwin environment from a prebuilt tgz (postinstall, PATH) |
 |   400 | `astrometry-dependencies` | Cygwin packages for astrometry.net (offline, from the frozen build-host cache `C:\MAST\cygwin-pkg-cache`) + bundled `fitsio` wheel |
 |   500 | `astrometry` | Prebuilt astrometry.net 0.97 tree into `C:\cygwin64\usr\local\astrometry` |
-|   600 | `python` | Python 3.12.2 + virtualenv |
+|   600 | `python` | Python 3.12.2 + pip; removes `virtualenv` where an earlier run installed it (the jupyter venv is built with the stdlib `venv` module) |
 |   700 | `git` | Git for Windows (silent) + PATH |
 |   750 | `gh` | GitHub CLI (gh) + PATH (after git) |
 |   800 | `ascom` | ASCOM Platform 7.0 RC4 + Developer tools (enables .NET 3.5 if needed) |

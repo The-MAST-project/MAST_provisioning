@@ -22,6 +22,7 @@ is visible in a run's output, which is why they are asserted rather than reviewe
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -33,7 +34,9 @@ PROVIDER_SCRIPTS = sorted(
     p for p in (REPO_ROOT / "server" / "providers").glob("*/*.ps1") if p.name.startswith(("provide-", "verify-"))
 )
 
-_LASTEXITCODE = re.compile(r"\$LASTEXITCODE", re.IGNORECASE)
+# Both spellings: the providers mix `$LASTEXITCODE` and `${LASTEXITCODE}` freely, and a
+# pattern matching only the bare form reads as a check while covering half the code.
+_LASTEXITCODE = re.compile(r"\$\{?LASTEXITCODE\}?", re.IGNORECASE)
 _FINALLY = re.compile(r"\bfinally\s*\{", re.IGNORECASE)
 _EXIT_ZERO = re.compile(r"\bexit\s+0\b", re.IGNORECASE)
 
@@ -207,3 +210,144 @@ def test_the_three_verify_states_are_all_reachable() -> None:
     lib = _CURRENCY_LIB.read_text(encoding="utf-8")
     for state in ("current", "stale", "unverifiable", "unverified"):
         assert f"'{state}'" in lib, f"verdict state {state!r} no longer defined"
+
+
+# --- the python provider checks its pip calls and verifies with a script (#131) ---
+#
+# provide-python.ps1 ran `pip install virtualenv` with `*>$null` and never read
+# $LASTEXITCODE, and its module.json verify ran `python -m virtualenv --version`
+# and wrote the smoke marker regardless of the answer. mast06 reported the module
+# green in two consecutive runs with virtualenv absent; the absence surfaced two
+# modules later as a jupyter failure. virtualenv is now dropped for the stdlib
+# venv module, so there is no PyPI fetch left here to check -- what is guarded is
+# that it does not come back, and that the verify stayed a script.
+#
+# Scoped to this provider deliberately: the same audit across all ~22 providers is
+# #62 axis 2 and deserves its own pass.
+
+_PYTHON_DIR = REPO_ROOT / "server" / "providers" / "python"
+_PROVIDE_PYTHON = _PYTHON_DIR / "provide-python.ps1"
+_VERIFY_PYTHON = _PYTHON_DIR / "verify-python.ps1"
+
+# A call-operator invocation of a native exe: `& $exe ...`. Every one of these must
+# have its result read, whether it is silenced or not -- the install that started #131
+# discarded all three streams AND the exit code.
+_NATIVE_CALL = re.compile(r"&\s+\$\{?\w+\}?")
+# `*>$null` hides a native command's stderr text but does NOT stop PowerShell from
+# raising an error record for it, so it is not a way to silence a probe. Two of them
+# put NativeCommandError blocks into the transcript of a passing run on the dev VM.
+_ALL_STREAMS_DISCARDED = re.compile(r"\*>\s*\$null")
+
+
+def test_provide_python_reads_every_native_call_result() -> None:
+    """No native call may reach the next one with its result unread."""
+    text = _strip_comments(_PROVIDE_PYTHON.read_text(encoding="utf-8"))
+    calls = [m.start() for m in _NATIVE_CALL.finditer(text)]
+    assert calls, "no native calls found in provide-python.ps1; this guard's premise is gone"
+    reads = [m.start() for m in _LASTEXITCODE.finditer(text)]
+    for i, pos in enumerate(calls):
+        line = text[:pos].count("\n") + 1
+        limit = calls[i + 1] if i + 1 < len(calls) else len(text)
+        assert any(pos < r < limit for r in reads), (
+            f"provide-python.ps1:{line} invokes a native command and reaches the next "
+            f"invocation without reading $LASTEXITCODE -- the shape that let a failed "
+            f"install report success (#131)."
+        )
+
+
+def test_provide_python_does_not_silence_probes_with_a_stream_redirect() -> None:
+    """`*>$null` is not silence -- PowerShell still raises an error record.
+
+    Measured on the dev VM: a passing run wrote two NativeCommandError blocks into
+    the operator-facing transcript, from the two `pip show virtualenv` probes, and
+    the same records terminate the script if the preference is ever 'Stop'. The
+    probes go through Get-ProbeExitCode instead, which forces the preference for
+    the call.
+    """
+    text = _strip_comments(_PROVIDE_PYTHON.read_text(encoding="utf-8"))
+    hits = [text[: m.start()].count("\n") + 1 for m in _ALL_STREAMS_DISCARDED.finditer(text)]
+    assert not hits, (
+        f"provide-python.ps1 silences a native call with '*>$null' at line(s) {hits}. That "
+        f"hides the text and still emits a NativeCommandError record -- use Get-ProbeExitCode (#131)."
+    )
+    assert "function Get-ProbeExitCode" in text, "provide-python.ps1 lost the EAP-safe probe helper (#131)."
+
+
+def test_provide_python_does_not_install_virtualenv() -> None:
+    text = _strip_comments(_PROVIDE_PYTHON.read_text(encoding="utf-8"))
+    assert not re.search(r"pip\s+install[^\n]*\bvirtualenv\b", text, re.IGNORECASE), (
+        "provide-python.ps1 installs virtualenv again. It was dropped for the stdlib venv "
+        "module because it was the last PyPI fetch in a provisioning run, and a bench unit "
+        "with no route to an index cannot satisfy it (#131)."
+    )
+    assert re.search(r"pip\s+uninstall[^\n]*\bvirtualenv\b", text, re.IGNORECASE), (
+        "provide-python.ps1 no longer removes virtualenv. Every unit provisioned before #131 "
+        "has it, and the idempotency guard is what decides whether the cleanup is reached."
+    )
+
+
+def test_provide_python_guard_does_not_skip_the_virtualenv_cleanup() -> None:
+    """The early exit must test virtualenv's ABSENCE, not just python + venv.
+
+    A guard weaker than what the module produces (#129) would exit 0 on exactly the
+    units that still carry virtualenv, so the package would survive forever on the
+    machines the cleanup exists for.
+    """
+    text = _strip_comments(_PROVIDE_PYTHON.read_text(encoding="utf-8"))
+    guard_end = text.find("exit 0")
+    assert guard_end > 0, "provide-python.ps1 has no early exit; this guard's premise is gone"
+    guard = text[:guard_end]
+    assert re.search(r"pip'?,?\s+'?show'?,?\s+'?virtualenv", guard, re.IGNORECASE), (
+        "provide-python.ps1's idempotency guard does not check whether virtualenv is still "
+        "installed, so it exits 0 before reaching the removal on every unit that has it (#131)."
+    )
+
+
+def test_python_verify_is_a_script_that_can_fail() -> None:
+    assert _VERIFY_PYTHON.is_file(), (
+        "verify-python.ps1 is gone. The python module's verify was an inline module.json "
+        "one-liner that wrote 'python_ok' whatever its checks returned (#131)."
+    )
+    module_json = json.loads((_PYTHON_DIR / "module.json").read_text(encoding="utf-8-sig"))
+    assert "verify-python.ps1" in module_json["verify"], "python/module.json's verify no longer runs verify-python.ps1."
+    assert "-Command" not in module_json["verify"], (
+        "python/module.json's verify is an inline -Command one-liner again (#131)."
+    )
+    assert "verify-python.ps1" in module_json.get("commandfiles", []), (
+        "verify-python.ps1 is not in commandfiles, so build-mast will not stage it and the "
+        "verify will fail on the unit with a 'not found' error."
+    )
+
+    text = _VERIFY_PYTHON.read_text(encoding="utf-8")
+    assert "-m', 'venv'" in text or "-m venv " in text, (
+        "verify-python.ps1 no longer exercises `python -m venv`. Asserting the outcome means "
+        "creating a venv -- the capability provide-jupyter consumes -- not importing a module (#131)."
+    )
+    assert re.search(r"pip'?,?\s+'?show'?,?\s+'?virtualenv", text), (
+        "verify-python.ps1 no longer asserts virtualenv is absent, so a unit that reinstalled it passes (#131)."
+    )
+
+
+def test_python_verify_runs_native_probes_through_the_eap_safe_helper() -> None:
+    """Every native probe must go through Invoke-Probe.
+
+    verify-python.ps1 sets $ErrorActionPreference = 'Stop' like its sibling verify
+    scripts, and under 'Stop' Windows PowerShell 5.1 raises NativeCommandError the
+    moment a native command writes to stderr -- `*>$null` does not prevent it.
+    `pip show <absent package>` does exactly that and exits 1, which is the answer
+    this script exists to get. Measured on the dev VM: with a bare `& $pythonExe
+    -m pip show virtualenv` the script died on that line, so the module's verify
+    could only ever have passed on a unit that still had virtualenv (#131).
+    """
+    text = _strip_comments(_VERIFY_PYTHON.read_text(encoding="utf-8"))
+    assert "function Invoke-Probe" in text, "verify-python.ps1 lost the EAP-safe native-probe helper (#131)."
+    # The helper's own `& $Exe` is the only permitted call-operator invocation of a
+    # native executable in this script.
+    invocations = re.findall(r"&\s+\$(\w+)", text)
+    assert invocations, "no call-operator invocations found; this guard's premise is gone"
+    outside = sorted({name for name in invocations if name != "Exe"})
+    assert not outside, (
+        f"verify-python.ps1 invokes {outside} with the call operator outside Invoke-Probe. "
+        f"Under $ErrorActionPreference = 'Stop' a native command that writes to stderr kills "
+        f"the script, so the probe must go through the helper (#131)."
+    )
