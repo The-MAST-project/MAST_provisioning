@@ -233,10 +233,20 @@ function Assert-JupyterWheelhouseInterpreterInSync {
   param(
     [Parameter(Mandatory)][string]${ProvidersRoot}
   )
-  ${pythonManifest} = Read-ModuleManifest -ModuleName 'python'
+  # Read through ${ProvidersRoot} rather than via Read-ModuleManifest, which
+  # takes its root from a script-scope ${providersRoot}: PowerShell resolves that
+  # up the dynamic scope chain and case-insensitively, so from inside a function
+  # holding a ${ProvidersRoot} PARAMETER it lands on the parameter instead. Same
+  # value in a build, and a silent coupling that made this guard untestable
+  # against any root but the live one. Everything it reads is now its argument.
+  ${pythonModuleJson} = Join-Path ${ProvidersRoot} 'python\module.json'
+  if (-not (Test-Path -LiteralPath ${pythonModuleJson})) {
+    throw "Cannot verify the Jupyter wheelhouse: no python module.json at ${pythonModuleJson}."
+  }
+  ${pythonManifest} = Get-Content -LiteralPath ${pythonModuleJson} -Raw | ConvertFrom-Json
   if (-not ${pythonManifest}.PSObject.Properties.Match('version').Count -or
       [string]::IsNullOrWhiteSpace(${pythonManifest}.version)) {
-    throw "Cannot verify the Jupyter wheelhouse: server/providers/python/module.json declares no 'version'."
+    throw "Cannot verify the Jupyter wheelhouse: ${pythonModuleJson} declares no 'version'."
   }
   ${pinned} = [string]${pythonManifest}.version
 
