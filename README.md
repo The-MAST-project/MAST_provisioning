@@ -159,7 +159,7 @@ renumbering.
 |  2400 | `windows-exporter-monitoring` | Prometheus windows_exporter service (TCP 9182) |
 |  2500 | `diagnostics` | Post-smoke runtime checks (ASCOM, app launch, PHD2 RPC). Nothing here touches the MAST services |
 |  2600 | `ds9` | SAOImage DS9 8.7 imaging / data visualization |
-|  2700 | `desktop-shortcuts` | Operator shortcuts on the Public desktop (FastAPI control, weather page, DS9, MAST logs, **instrument calibration**, **Jupyter Notebook**) |
+|  2700 | `desktop-shortcuts` | Rebuilds `Desktop\MAST` on the Public desktop from scratch each run -- **MAST Unit Operation** (FastAPI contract page, weather, DS9, logs, PWI4, ASICap, NoMachine, Chrome), **Setup and Calibration** (instrument calibration, proxy tool, XILab, ASIMount, ASCOM Diagnostics), **Development** (the mast-clone VS Code workspace, VS Code, Jupyter, Compass, `C:\MAST`), **Vendor** for strays. Web shortcuts launch Chrome directly; third-party tools are created from the resolved exe, never inherited from the sweep |
 |  2750 | `desktop-appearance` | Every per-user desktop value: dark Windows theme, a dark background carrying the machine's identity (hostname, site spelled out, site coordinates), and the toast / content-delivery quieting that used to sit in bootstrap. Written into the autologin `mast` hive and re-asserted in that session by an AtLogon task |
 |  2900 | `mast-validation` | End-to-end plate-solve validation through production code paths. **On-site only**: the solver reads its acquisition ROI from the config DB, so a unit that cannot reach its controller fails here |
 |  9500 | `mast-services-finalize` | Assert the end-of-run posture: no MAST service is registered |

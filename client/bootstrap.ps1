@@ -668,12 +668,14 @@ function Write-BootstrapDesktopReport([string]$HostNm, [string]$SiteCode) {
     # shortcut to the installation directory.
     $desktop = 'C:\Users\Public\Desktop'
     if (-not (Test-Path $desktop)) { New-Item -ItemType Directory -Path $desktop -Force | Out-Null }
-    # On a provisioned machine the desktop is organized under Desktop\MAST
-    # (desktop-shortcuts provider); a bootstrap RE-run must not litter the
-    # root again -- write into Setup and Calibration when it exists.
+    # Always the desktop root. This report is for the operator standing at a
+    # bare machine BEFORE it is provisioned -- MACs for the DHCP reservations,
+    # the BIOS power checklist, the handoff steps -- and it is written once,
+    # here, by a first-touch run. Provisioning does not adopt it and does not
+    # keep it: desktop-shortcuts rebuilds Desktop\MAST from scratch on every
+    # run, so anything left in there is removed. By the time a unit is
+    # provisioned the report describes a machine state two months gone.
     $targetDir = $desktop
-    $setupDir = Join-Path $desktop 'MAST\Setup and Calibration'
-    if (Test-Path -LiteralPath $setupDir) { $targetDir = $setupDir }
     $lines = @(
         '================= MAST unit bootstrap report =================',
         ('generated : {0}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')),
