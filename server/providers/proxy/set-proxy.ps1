@@ -20,7 +20,9 @@ param(
     [string]${Action}     = '',
     [string]${HttpProxy}  = 'http://bcproxy.weizmann.ac.il:8080',
     [string]${HttpsProxy} = 'http://bcproxy.weizmann.ac.il:8080',
-    [string]${NoProxy}    = '10.23.3.0/24,10.23.4.0/24'
+    # Filled from proxy-lib.ps1 below, after the dot-source -- one bypass list
+    # for the provider and this tool both.
+    [string]${NoProxy}
 )
 
 ${ErrorActionPreference} = 'Stop'
@@ -48,6 +50,7 @@ if (-not (Test-IsAdmin)) {
 ${libPath} = Join-Path ${PSScriptRoot} 'proxy-lib.ps1'
 if (-not (Test-Path -LiteralPath ${libPath})) { throw "proxy-lib.ps1 not found next to set-proxy.ps1 at ${libPath}" }
 . ${libPath}
+if (-not $PSBoundParameters.ContainsKey('NoProxy')) { ${NoProxy} = Get-MastDefaultNoProxy }
 
 function Test-TcpReachable {
     # Best-effort TCP connect with a short timeout. Returns $true/$false.

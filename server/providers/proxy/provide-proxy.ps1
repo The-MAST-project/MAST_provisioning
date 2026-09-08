@@ -1,7 +1,10 @@
 param(
     [string]${HttpProxy}  = "http://bcproxy.weizmann.ac.il:8080",
     [string]${HttpsProxy} = "http://bcproxy.weizmann.ac.il:8080",
-    [string]${NoProxy}    = "10.23.3.0/24,10.23.4.0/24",
+    # No default here: the one bypass list lives in proxy-lib.ps1 and is filled
+    # in below, after the dot-source. A param() default cannot reach it --
+    # binding runs before the lib is loaded.
+    [string]${NoProxy},
     # Run mode -- chosen explicitly by the operator at provisioning time,
     # NOT probed at runtime. Pick based on whether THIS RUN can reach
     # bcproxy.weizmann.ac.il:8080 (i.e. unit is on the Weizmann campus
@@ -40,6 +43,7 @@ ${proxyLibDot} = Join-Path ${PSScriptRoot} 'proxy-lib.ps1'
 if (-not (Test-Path ${proxyLibDot})) { throw "proxy-lib.ps1 not found next to provide-proxy.ps1 at ${proxyLibDot}" }
 . ${proxyLibDot}
 Set-ProxyLibLogger { param(${m}) Write-ProxyLog ${m} }
+if (-not $PSBoundParameters.ContainsKey('NoProxy')) { ${NoProxy} = Get-MastDefaultNoProxy }
 
 <#
 Soft proxy provider -- now hard, by explicit operator choice.

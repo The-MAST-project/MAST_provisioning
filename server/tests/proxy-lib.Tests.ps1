@@ -29,6 +29,34 @@ Describe 'Convert-NoProxyToWildcardBypass' {
     }
 }
 
+Describe 'Get-MastDefaultNoProxy' {
+    It 'pins the fleet bypass list' {
+        Get-MastDefaultNoProxy | Should Be 'localhost,127.0.0.1,10.23.0.0/16,169.254.0.0/16'
+    }
+    It 'expands to a bypass covering the unit, PDU and link-local ranges' {
+        Convert-NoProxyToWildcardBypass (Get-MastDefaultNoProxy) | Should Be 'localhost;127.0.0.1;10.23.*;169.254.*;<local>'
+    }
+}
+
+Describe 'the bypass list has one source' {
+    # A unit provisioned by provide-proxy.ps1 and later re-toggled from the
+    # set-proxy.ps1 desktop tool must land on the same list, which is only true
+    # while neither carries a literal of its own.
+    $proxyDir = Join-Path $here '..\providers\proxy'
+    It 'is not repeated as a literal in the provider or the operator tool' {
+        foreach ($f in @('provide-proxy.ps1', 'set-proxy.ps1', 'verify-proxy.ps1')) {
+            $text = Get-Content -LiteralPath (Join-Path $proxyDir $f) -Raw
+            ($text -match '10\.23\.\d') | Should Be $false
+        }
+    }
+    It 'agrees with the value mast-clone.ps1 sets for its own runs' {
+        $clone = Get-Content -LiteralPath (Join-Path $here '..\..\tools\mast-clone.ps1') -Raw
+        $m = [regex]::Match($clone, '\$DefaultNoProxy\s*=\s*''([^'']+)''')
+        $m.Success | Should Be $true
+        $m.Groups[1].Value | Should Be (Get-MastDefaultNoProxy)
+    }
+}
+
 Describe 'Get-ProxyHostPort' {
     It 'parses host:port out of an http URL' {
         Get-ProxyHostPort -ProxyUrl 'http://bcproxy.weizmann.ac.il:8080' | Should Be 'bcproxy.weizmann.ac.il:8080'

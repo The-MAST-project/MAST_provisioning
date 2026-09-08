@@ -217,7 +217,7 @@ drifts from `sites/*.toml`. The shared enumerator is `Get-ConfiguredSites` in
 | Machine identity + config-DB connection + `[location]` | `sites/<site>.toml` -> `C:\WIS\config.toml` (`config-bootstrap`) | yes |
 | RPi NTP time peer (tier 1) | `build-mast.ps1 -Site` injects `-RpiNtp` per site | yes |
 | Instrument-profile PWI4 site location | read from deployed `C:\WIS\config.toml [location]` | yes |
-| Web proxy (Weizmann `bcproxy`) + `no_proxy` bypass | global default in the `proxy` provider | no -- both sites use the same Weizmann proxy; the per-run `weizmann`/`direct` axis is operator-chosen reachability, not site (see DECISIONS 2026-07-01) |
+| Web proxy (Weizmann `bcproxy`) + `no_proxy` bypass (`localhost,127.0.0.1,10.23.0.0/16,169.254.0.0/16`) | one default, `Get-MastDefaultNoProxy` in `providers/proxy/proxy-lib.ps1`, used by the provider and the `set-proxy.ps1` operator tool alike | no -- both sites use the same Weizmann proxy; the per-run `weizmann`/`direct` axis is operator-chosen reachability, not site (see DECISIONS 2026-07-01) |
 
 ---
 
