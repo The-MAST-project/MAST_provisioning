@@ -24,6 +24,31 @@ ${verifyLog} = Get-MastVerifyLog -Module 'desktop-shortcuts'
 function W { param([string]${Line}) Add-Content -LiteralPath ${verifyLog} -Encoding UTF8 -Value ("[{0}] {1}" -f (Get-Date -Format 'HH:mm:ss'), ${Line}) }
 Set-Content -LiteralPath ${verifyLog} -Encoding UTF8 -Value ("[{0}] verify-desktop-shortcuts.ps1 started" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))
 
+function Get-MastShortcutPath {
+    # A web shortcut is a Chrome-launching .lnk where Chrome is installed and a
+    # plain .url where it is not. Either is valid; return whichever is there.
+    param([string]${Dir}, [string]${Name})
+    foreach (${ext} in @('.lnk', '.url')) {
+        ${p} = Join-Path ${Dir} ("{0}{1}" -f ${Name}, ${ext})
+        if (Test-Path -LiteralPath ${p}) { return ${p} }
+    }
+    return ''
+}
+
+function Get-MastShortcutUrl {
+    # The URL a web shortcut carries: a .lnk holds it in Arguments (the target is
+    # chrome.exe), a .url in its INI URL= line.
+    param([string]${Path})
+    if (${Path}.EndsWith('.lnk')) {
+        ${wsh} = New-Object -ComObject WScript.Shell
+        return (${wsh}.CreateShortcut(${Path})).Arguments.Trim().Trim('"')
+    }
+    ${line} = @(Get-Content -LiteralPath ${Path} -ErrorAction SilentlyContinue |
+        Where-Object { $_ -match '^\s*URL\s*=' }) | Select-Object -First 1
+    if (${line}) { return (${line} -replace '^\s*URL\s*=', '').Trim() }
+    return ''
+}
+
 ${fail} = @()
 ${desktop}      = Join-Path ${env:PUBLIC} 'Desktop'
 ${mastRoot}     = Join-Path ${desktop} 'MAST'
@@ -59,12 +84,10 @@ foreach (${r} in ${required}) {
 
 # The FastAPI shortcut is a Chrome-launched .lnk where Chrome is installed and a
 # plain .url where it is not, so accept either -- but exactly one must be there.
-${fastApiLnk} = Join-Path ${dirOperation} 'MAST Unit (FastAPI).lnk'
-${fastApiUrlFile} = Join-Path ${dirOperation} 'MAST Unit (FastAPI).url'
-${fastApiPath} = ''
-if (Test-Path -LiteralPath ${fastApiLnk})          { ${fastApiPath} = ${fastApiLnk} }
-elseif (Test-Path -LiteralPath ${fastApiUrlFile})  { ${fastApiPath} = ${fastApiUrlFile} }
-else { ${fail} += ("FastAPI shortcut missing (looked for {0} and .url)" -f ${fastApiLnk}) }
+${fastApiPath} = Get-MastShortcutPath -Dir ${dirOperation} -Name 'MAST Unit (FastAPI)'
+if (-not ${fastApiPath}) {
+    ${fail} += ("FastAPI shortcut missing (looked for {0} and .url)" -f (Join-Path ${dirOperation} 'MAST Unit (FastAPI).lnk'))
+}
 
 # Content check, not presence check: a shortcut left pointing at a previous
 # build's URL passes every Test-Path in this file. Repointing it changes no
@@ -73,15 +96,7 @@ else { ${fail} += ("FastAPI shortcut missing (looked for {0} and .url)" -f ${fas
 # The URL lives in the .lnk's Arguments now that these launch Chrome directly;
 # reading the .url INI would silently stop verifying anything.
 if (${FastApiUrl} -and ${fastApiPath}) {
-    ${deployed} = ''
-    if (${fastApiPath}.EndsWith('.lnk')) {
-        ${wsh} = New-Object -ComObject WScript.Shell
-        ${deployed} = (${wsh}.CreateShortcut(${fastApiPath})).Arguments.Trim().Trim('"')
-    } else {
-        ${urlLine} = @(Get-Content -LiteralPath ${fastApiPath} -ErrorAction SilentlyContinue |
-            Where-Object { $_ -match '^\s*URL\s*=' }) | Select-Object -First 1
-        if (${urlLine}) { ${deployed} = (${urlLine} -replace '^\s*URL\s*=', '').Trim() }
-    }
+    ${deployed} = Get-MastShortcutUrl -Path ${fastApiPath}
     if (-not ${deployed}) {
         ${fail} += ("FastAPI shortcut carries no URL ({0})" -f ${fastApiPath})
     }
@@ -93,34 +108,22 @@ if (${FastApiUrl} -and ${fastApiPath}) {
     }
 }
 
-# The unit-metrics shortcut, and the selector inside it. The dashboard's 'server'
-# variable takes Prometheus instance labels, which are lower case; COMPUTERNAME is
-# upper case, and a shortcut built from it unchanged matches no option and lands
-# the operator on whatever host Grafana defaults to -- a wrong page that looks
-# like the right one. Assert the value, not the file.
+# The unit-metrics shortcut, checked for currency the same way and for the same
+# reason as the FastAPI one: its target lives in module.json's command args, so a
+# repointed dashboard changes no commandfile byte and a presence-only check would
+# never notice.
 if (${GrafanaUrl}) {
-    ${metricsLnk} = Join-Path ${dirOperation} 'MAST Unit Metrics (Grafana).lnk'
-    ${metricsUrlFile} = Join-Path ${dirOperation} 'MAST Unit Metrics (Grafana).url'
-    ${metricsPath} = ''
-    if (Test-Path -LiteralPath ${metricsLnk})         { ${metricsPath} = ${metricsLnk} }
-    elseif (Test-Path -LiteralPath ${metricsUrlFile}) { ${metricsPath} = ${metricsUrlFile} }
+    ${metricsPath} = Get-MastShortcutPath -Dir ${dirOperation} -Name 'MAST Unit Metrics (Grafana)'
     if (-not ${metricsPath}) {
-        ${fail} += ("unit metrics shortcut missing ({0})" -f ${metricsLnk})
+        ${fail} += ("unit metrics shortcut missing ({0})" -f (Join-Path ${dirOperation} 'MAST Unit Metrics (Grafana).lnk'))
     } else {
-        ${deployedMetrics} = ''
-        if (${metricsPath}.EndsWith('.lnk')) {
-            ${wsh2} = New-Object -ComObject WScript.Shell
-            ${deployedMetrics} = (${wsh2}.CreateShortcut(${metricsPath})).Arguments.Trim().Trim('"')
+        ${deployedMetrics} = Get-MastShortcutUrl -Path ${metricsPath}
+        if (-not ${deployedMetrics}) {
+            ${fail} += ("unit metrics shortcut carries no URL ({0})" -f ${metricsPath})
+        } elseif (${deployedMetrics}.TrimEnd('/') -ne ${GrafanaUrl}.TrimEnd('/')) {
+            ${fail} += ("unit metrics shortcut STALE: points at '{0}', build expects '{1}'" -f ${deployedMetrics}, ${GrafanaUrl})
         } else {
-            ${l} = @(Get-Content -LiteralPath ${metricsPath} -ErrorAction SilentlyContinue |
-                Where-Object { $_ -match '^\s*URL\s*=' }) | Select-Object -First 1
-            if (${l}) { ${deployedMetrics} = (${l} -replace '^\s*URL\s*=', '').Trim() }
-        }
-        ${wantSelector} = 'var-server={0}:9182' -f ${env:COMPUTERNAME}.ToLower()
-        if (${deployedMetrics} -notlike ('*' + ${wantSelector} + '*')) {
-            ${fail} += ("unit metrics shortcut does not select this host: expected '{0}' in '{1}'" -f ${wantSelector}, ${deployedMetrics})
-        } else {
-            W ("unit metrics shortcut selects this host: {0}" -f ${wantSelector})
+            W ("unit metrics shortcut target current: {0}" -f ${deployedMetrics})
         }
     }
 }

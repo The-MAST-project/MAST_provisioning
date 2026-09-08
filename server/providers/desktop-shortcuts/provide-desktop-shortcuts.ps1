@@ -125,14 +125,6 @@ function New-MastBrowserShortcut {
     return ("{0}.url" -f ${Name})
 }
 
-function Add-MastUrlQuery {
-    param([string]${Url}, [string]${Query})
-    if (-not ${Query}) { return ${Url} }
-    ${sep} = '?'
-    if (${Url} -match '\?') { ${sep} = '&' }
-    return ('{0}{1}{2}' -f ${Url}, ${sep}, ${Query})
-}
-
 function Resolve-MastAppPath {
     # First candidate that exists, or '' -- the vendor tools sit under either
     # Program Files root depending on installer bitness, and two are per-user.
@@ -234,9 +226,8 @@ Set-Content -LiteralPath (Join-Path ${dirOperation} 'README.txt') -Encoding ASCI
     '                        tier (http://localhost:8000/docs). The bare root used',
     '                        to be the target and answered 404. The unit service',
     '                        must be running.',
-    '  MAST Unit Metrics   - this unit windows_exporter metrics, on the site',
-    '    (Grafana)           controller Grafana, with the host selector already',
-    '                        pointed at this machine.',
+    '  MAST Unit Metrics   - the fleet windows_exporter dashboard on the site',
+    '    (Grafana)           controller Grafana. Pick a host in the dashboard.',
     '  Sensors and Safety  - the site weather sensors and the observatory safety',
     '    (Grafana)           view. A DIFFERENT Grafana, on the LAST observatory',
     '                        host, and not ours: it asks for its own login, which',
@@ -317,16 +308,13 @@ if (${WeatherUrl} -and (${WeatherUrl}.Trim() -ne '')) {
     Write-ShortcutLog '[WARN] Weather page URL not configured (-WeatherUrl empty); weather shortcut skipped.'
 }
 
-# This unit's own metrics. The dashboard picks a host with its 'server' template
-# variable, whose values are Prometheus instance labels: LOWERCASE hostname plus
-# the exporter port. COMPUTERNAME is upper case on Windows and would match no
-# option in that list, quietly leaving the operator on whichever host Grafana
-# defaults to -- which is the failure that looks like it worked.
+# The fleet's windows_exporter dashboard, opened with no host selected -- the
+# operator picks one from the dashboard's own selector. Nothing here derives a
+# per-unit URL.
 if (${GrafanaUrl} -and (${GrafanaUrl}.Trim() -ne '')) {
-    ${metricsUrl} = Add-MastUrlQuery -Url ${GrafanaUrl} -Query ('var-server={0}:9182' -f ${env:COMPUTERNAME}.ToLower())
-    Register-MastOwnedName (New-MastBrowserShortcut -Dir ${dirOperation} -Name 'MAST Unit Metrics (Grafana)' -Url ${metricsUrl} `
-        -Desc 'windows_exporter metrics for this unit' -IconLocation ("{0},144" -f ${imageres}))
-    Write-ShortcutLog ("Unit metrics shortcut -> {0}" -f ${metricsUrl})
+    Register-MastOwnedName (New-MastBrowserShortcut -Dir ${dirOperation} -Name 'MAST Unit Metrics (Grafana)' -Url ${GrafanaUrl} `
+        -Desc 'windows_exporter metrics for the MAST fleet' -IconLocation ("{0},144" -f ${imageres}))
+    Write-ShortcutLog ("Unit metrics shortcut -> {0}" -f ${GrafanaUrl})
 } else {
     Write-ShortcutLog '[WARN] -GrafanaUrl empty; unit metrics shortcut skipped.'
 }
