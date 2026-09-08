@@ -7,7 +7,11 @@ param(
     # cannot drift apart. This is what makes the check answer "is the shortcut
     # CURRENT?" rather than merely "does the shortcut exist?" -- see
     # docs/per-module-tracking-plan.md, resolution rule 2.
-    [string]${FastApiUrl} = ''
+    [string]${FastApiUrl} = '',
+    # Injected the same way and for the same reason. Its shortcut carries a
+    # component this provider COMPUTES -- the per-host selector -- so presence
+    # alone would not catch the one way it goes quietly wrong.
+    [string]${GrafanaUrl} = ''
 )
 
 ${ErrorActionPreference} = 'Stop'
@@ -20,46 +24,81 @@ ${verifyLog} = Get-MastVerifyLog -Module 'desktop-shortcuts'
 function W { param([string]${Line}) Add-Content -LiteralPath ${verifyLog} -Encoding UTF8 -Value ("[{0}] {1}" -f (Get-Date -Format 'HH:mm:ss'), ${Line}) }
 Set-Content -LiteralPath ${verifyLog} -Encoding UTF8 -Value ("[{0}] verify-desktop-shortcuts.ps1 started" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))
 
+function Get-MastShortcutPath {
+    # A web shortcut is a Chrome-launching .lnk where Chrome is installed and a
+    # plain .url where it is not. Either is valid; return whichever is there.
+    param([string]${Dir}, [string]${Name})
+    foreach (${ext} in @('.lnk', '.url')) {
+        ${p} = Join-Path ${Dir} ("{0}{1}" -f ${Name}, ${ext})
+        if (Test-Path -LiteralPath ${p}) { return ${p} }
+    }
+    return ''
+}
+
+function Get-MastShortcutUrl {
+    # The URL a web shortcut carries: a .lnk holds it in Arguments (the target is
+    # chrome.exe), a .url in its INI URL= line.
+    param([string]${Path})
+    if (${Path}.EndsWith('.lnk')) {
+        ${wsh} = New-Object -ComObject WScript.Shell
+        return (${wsh}.CreateShortcut(${Path})).Arguments.Trim().Trim('"')
+    }
+    ${line} = @(Get-Content -LiteralPath ${Path} -ErrorAction SilentlyContinue |
+        Where-Object { $_ -match '^\s*URL\s*=' }) | Select-Object -First 1
+    if (${line}) { return (${line} -replace '^\s*URL\s*=', '').Trim() }
+    return ''
+}
+
 ${fail} = @()
-${desktop}  = Join-Path ${env:PUBLIC} 'Desktop'
-${mastRoot} = Join-Path ${desktop} 'MAST'
-${dirOps}   = Join-Path ${mastRoot} 'Operations'
-${dirSetup} = Join-Path ${mastRoot} 'Setup and Calibration'
-${dirDev}   = Join-Path ${mastRoot} 'Development'
-${dirVendor}= Join-Path ${mastRoot} 'Vendor'
+${desktop}      = Join-Path ${env:PUBLIC} 'Desktop'
+${mastRoot}     = Join-Path ${desktop} 'MAST'
+${dirOperation} = Join-Path ${mastRoot} 'MAST Unit Operation'
+${dirSetup}     = Join-Path ${mastRoot} 'Setup and Calibration'
+${dirDev}       = Join-Path ${mastRoot} 'Development'
+${dirVendor}    = Join-Path ${mastRoot} 'Vendor'
 
 # Folder structure + per-folder READMEs.
-foreach (${d} in @(${mastRoot}, ${dirOps}, ${dirSetup}, ${dirDev}, ${dirVendor})) {
+foreach (${d} in @(${mastRoot}, ${dirOperation}, ${dirSetup}, ${dirDev}, ${dirVendor})) {
     if (-not (Test-Path -LiteralPath ${d})) { ${fail} += ("folder missing: {0}" -f ${d}); continue }
     if (-not (Test-Path -LiteralPath (Join-Path ${d} 'README.txt'))) { ${fail} += ("README missing in {0}" -f ${d}) }
 }
 
-# Required shortcuts in their class folders.
+# The provider rebuilds the tree from scratch, so a folder from an earlier
+# layout is proof the clear did not happen.
+foreach (${stale} in @('Operations')) {
+    ${p} = Join-Path ${mastRoot} ${stale}
+    if (Test-Path -LiteralPath ${p}) { ${fail} += ("folder from a previous layout still present: {0}" -f ${p}) }
+}
+
+# Shortcuts that do not depend on anything else being installed.
 ${required} = @(
-    (Join-Path ${dirOps}   'MAST Unit (FastAPI).url'),
-    (Join-Path ${dirOps}   'MAST Logs.lnk'),
-    (Join-Path ${dirOps}   'MAST Proxy.lnk'),
-    (Join-Path ${dirSetup} 'MAST Instrument Calibration.lnk'),
-    (Join-Path ${dirSetup} 'MAST Installation Directory.lnk')
+    (Join-Path ${dirOperation} 'MAST Logs.lnk'),
+    (Join-Path ${dirSetup}     'Weizmann Proxy.lnk'),
+    (Join-Path ${dirSetup}     'MAST Instrument Calibration.lnk'),
+    (Join-Path ${dirDev}       'MAST Installation Directory.lnk')
 )
 foreach (${r} in ${required}) {
     if (Test-Path -LiteralPath ${r}) { W ("present: {0}" -f ${r}) }
     else { ${fail} += ("shortcut missing ({0})" -f ${r}) }
 }
 
+# The FastAPI shortcut is a Chrome-launched .lnk where Chrome is installed and a
+# plain .url where it is not, so accept either -- but exactly one must be there.
+${fastApiPath} = Get-MastShortcutPath -Dir ${dirOperation} -Name 'MAST Unit (FastAPI)'
+if (-not ${fastApiPath}) {
+    ${fail} += ("FastAPI shortcut missing (looked for {0} and .url)" -f (Join-Path ${dirOperation} 'MAST Unit (FastAPI).lnk'))
+}
+
 # Content check, not presence check: a shortcut left pointing at a previous
-# build's URL passes every Test-Path in this file. Repointing the FastAPI
-# shortcut changes no commandfile byte -- the target lives in module.json's
-# command args -- so a stale target is invisible to both the payload hash and a
-# presence-only verify. Compare the deployed target to what this build expects.
-${fastApiLnk} = Join-Path ${dirOps} 'MAST Unit (FastAPI).url'
-if (${FastApiUrl} -and (Test-Path -LiteralPath ${fastApiLnk})) {
-    ${urlLine} = @(Get-Content -LiteralPath ${fastApiLnk} -ErrorAction SilentlyContinue |
-        Where-Object { $_ -match '^\s*URL\s*=' }) | Select-Object -First 1
-    ${deployed} = ''
-    if (${urlLine}) { ${deployed} = (${urlLine} -replace '^\s*URL\s*=', '').Trim() }
+# build's URL passes every Test-Path in this file. Repointing it changes no
+# commandfile byte -- the target lives in module.json's command args -- so a
+# stale target is invisible to both the payload hash and a presence-only verify.
+# The URL lives in the .lnk's Arguments now that these launch Chrome directly;
+# reading the .url INI would silently stop verifying anything.
+if (${FastApiUrl} -and ${fastApiPath}) {
+    ${deployed} = Get-MastShortcutUrl -Path ${fastApiPath}
     if (-not ${deployed}) {
-        ${fail} += ("FastAPI shortcut has no URL= line ({0})" -f ${fastApiLnk})
+        ${fail} += ("FastAPI shortcut carries no URL ({0})" -f ${fastApiPath})
     }
     elseif (${deployed}.TrimEnd('/') -ne ${FastApiUrl}.TrimEnd('/')) {
         ${fail} += ("FastAPI shortcut STALE: points at '{0}', build expects '{1}'" -f ${deployed}, ${FastApiUrl})
@@ -69,9 +108,35 @@ if (${FastApiUrl} -and (Test-Path -LiteralPath ${fastApiLnk})) {
     }
 }
 
-# DS9 shortcut: required only when DS9 itself is installed (ds9 provider runs
-# first in a full cycle; absent in an isolated desktop-shortcuts run).
-${ds9Path} = Join-Path ${dirOps} 'SAOImage DS9.lnk'
+# The unit-metrics shortcut, checked for currency the same way and for the same
+# reason as the FastAPI one: its target lives in module.json's command args, so a
+# repointed dashboard changes no commandfile byte and a presence-only check would
+# never notice.
+if (${GrafanaUrl}) {
+    ${metricsPath} = Get-MastShortcutPath -Dir ${dirOperation} -Name 'MAST Unit Metrics (Grafana)'
+    if (-not ${metricsPath}) {
+        ${fail} += ("unit metrics shortcut missing ({0})" -f (Join-Path ${dirOperation} 'MAST Unit Metrics (Grafana).lnk'))
+    } else {
+        ${deployedMetrics} = Get-MastShortcutUrl -Path ${metricsPath}
+        if (-not ${deployedMetrics}) {
+            ${fail} += ("unit metrics shortcut carries no URL ({0})" -f ${metricsPath})
+        } elseif (${deployedMetrics}.TrimEnd('/') -ne ${GrafanaUrl}.TrimEnd('/')) {
+            ${fail} += ("unit metrics shortcut STALE: points at '{0}', build expects '{1}'" -f ${deployedMetrics}, ${GrafanaUrl})
+        } else {
+            W ("unit metrics shortcut target current: {0}" -f ${deployedMetrics})
+        }
+    }
+}
+
+# Sensors and safety: informational. It points at the LAST observatory's Grafana,
+# whose availability is not ours to assert.
+${safetyHits} = @(Get-ChildItem -LiteralPath ${dirOperation} -Filter '*Sensors and Safety (Grafana)*' -File -ErrorAction SilentlyContinue)
+if (${safetyHits}.Count -gt 0) { W ("sensors and safety shortcut present: {0}" -f ${safetyHits}[0].Name) }
+else { W 'No sensors and safety shortcut (URL not configured?).' }
+
+# DS9: required only when DS9 itself is installed (ds9 provider runs first in a
+# full cycle; absent in an isolated desktop-shortcuts run).
+${ds9Path} = Join-Path ${dirOperation} 'SAOImage DS9.lnk'
 if (Test-Path -LiteralPath ${Ds9Exe}) {
     if (Test-Path -LiteralPath ${ds9Path}) { W ("DS9 shortcut present: {0}" -f ${ds9Path}) }
     else { ${fail} += ("DS9 shortcut missing though ds9.exe present ({0})" -f ${ds9Path}) }
@@ -80,9 +145,22 @@ if (Test-Path -LiteralPath ${Ds9Exe}) {
 }
 
 # Weather shortcut: informational -- presence depends on site config.
-${weatherHits} = @(Get-ChildItem -LiteralPath ${dirOps} -Filter '*Weather (Meteoblue).url' -File -ErrorAction SilentlyContinue)
+${weatherHits} = @(Get-ChildItem -LiteralPath ${dirOperation} -Filter '*Weather (Meteoblue)*' -File -ErrorAction SilentlyContinue)
 if (${weatherHits}.Count -gt 0) { W ("Weather shortcut present: {0}" -f ${weatherHits}[0].Name) }
 else { W 'No weather shortcut (URL not configured?).' }
+
+# Tools the provider promotes out of Vendor into a class folder. Tracks the
+# ${mappedTools} table in provide-desktop-shortcuts.ps1: a promoted name still
+# sitting in Vendor means the sweep moved the installer's copy instead of the
+# provider creating its own, which is the failure the rebuild exists to prevent.
+${promoted} = @(
+    'PlaneWave Interface 4', 'ASICap', 'NoMachine', 'Google Chrome',
+    'XILab', 'ASIMount', 'ASCOM Diagnostics', 'Visual Studio Code', 'MongoDB Compass'
+)
+foreach (${n} in ${promoted}) {
+    ${inVendor} = Join-Path ${dirVendor} ("{0}.lnk" -f ${n})
+    if (Test-Path -LiteralPath ${inVendor}) { ${fail} += ("promoted tool still in Vendor: {0}" -f ${inVendor}) }
+}
 
 # The QoL contract: NOTHING loose on the desktop roots -- everything lives
 # under Desktop\MAST. (The provider sweeps strays into MAST\Vendor.)

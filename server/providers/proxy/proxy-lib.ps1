@@ -3,7 +3,7 @@
 # Single source of truth for reading and flipping the three proxy surfaces a
 # MAST unit exposes. Consumed by:
 #   - provide-proxy.ps1  (the provisioning-time provider)
-#   - set-proxy.ps1      (the operator "MAST Proxy" desktop tool)
+#   - set-proxy.ps1      (the operator "Weizmann Proxy" desktop tool)
 # so there is ONE implementation, not a drifting second copy.
 #
 # The three surfaces (managed in lockstep):
@@ -31,6 +31,27 @@ function Write-ProxyLibLog {
     if ($null -ne $script:ProxyLibLogger) { & $script:ProxyLibLogger $Line }
     else { Write-Host $Line }
 }
+
+# ---------------------------------------------------------------------------
+# The one no_proxy default. Both callers take it from here rather than carrying
+# their own literal: a unit provisioned by provide-proxy.ps1 and later
+# re-toggled from the set-proxy.ps1 desktop tool has to end up with the same
+# bypass list, and three copies of a default are how they stop agreeing.
+#
+# /16 rather than the individual /24s: it covers the units (10.23.1.0/24) and
+# their PDUs (10.23.2.0/24) as well as 10.23.3-4, and needs no edit when MAST
+# takes another subnet. 169.254.0.0/16 is there because a link-local address is
+# by definition not routable, so relaying one to an off-site proxy can never be
+# right -- and it is how a bench unit and the provisioning server address each
+# other. tools/mast-clone.ps1 carries the same list for its own runs.
+#
+# Bypass matching on the WinINet/WinHTTP surfaces is against the host string in
+# the URL, never a resolved address, so the CIDR covers IP-addressed local
+# traffic while <local> covers the dotless names. An FQDN pointed at a MAST
+# device is neither, and is a DNS problem rather than a proxy one.
+# ---------------------------------------------------------------------------
+$script:MastDefaultNoProxy = 'localhost,127.0.0.1,10.23.0.0/16,169.254.0.0/16'
+function Get-MastDefaultNoProxy { return $script:MastDefaultNoProxy }
 
 # ---------------------------------------------------------------------------
 # Surface helpers (extracted verbatim from provide-proxy.ps1; behavior is
@@ -205,7 +226,7 @@ function Set-MastProxyState {
         [Parameter(Mandatory)][ValidateSet('use','direct')][string]$Mode,
         [string]$HttpProxy  = 'http://bcproxy.weizmann.ac.il:8080',
         [string]$HttpsProxy = 'http://bcproxy.weizmann.ac.il:8080',
-        [string]$NoProxy    = '10.23.3.0/24,10.23.4.0/24'
+        [string]$NoProxy    = (Get-MastDefaultNoProxy)
     )
 
     $pairs = @(

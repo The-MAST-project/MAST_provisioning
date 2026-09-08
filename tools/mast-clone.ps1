@@ -179,8 +179,11 @@ $env:GIT_TERMINAL_PROMPT = '0'
 # Weizmann bcproxy is used.
 $DefaultProxy   = 'http://bcproxy.weizmann.ac.il:8080'
 # Fleet-internal destinations must NOT be sent to the proxy; it cannot reach
-# 10.23.x and the request dies there rather than going direct.
-$DefaultNoProxy = 'localhost,127.0.0.1,10.23.0.0/16'
+# 10.23.x and the request dies there rather than going direct, and a link-local
+# address is not routable at all. Same list as Get-MastDefaultNoProxy in
+# providers/proxy/proxy-lib.ps1 -- a unit must not end up with two bypass lists
+# depending on which tool last touched it; a test pins the two together.
+$DefaultNoProxy = 'localhost,127.0.0.1,10.23.0.0/16,169.254.0.0/16'
 
 if ($DirectHttp) {
     # Clear, do not merely skip. An HTTPS_PROXY inherited from the caller's

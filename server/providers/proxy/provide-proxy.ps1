@@ -1,7 +1,10 @@
 param(
     [string]${HttpProxy}  = "http://bcproxy.weizmann.ac.il:8080",
     [string]${HttpsProxy} = "http://bcproxy.weizmann.ac.il:8080",
-    [string]${NoProxy}    = "10.23.3.0/24,10.23.4.0/24",
+    # No default here: the one bypass list lives in proxy-lib.ps1 and is filled
+    # in below, after the dot-source. A param() default cannot reach it --
+    # binding runs before the lib is loaded.
+    [string]${NoProxy},
     # Run mode -- chosen explicitly by the operator at provisioning time,
     # NOT probed at runtime. Pick based on whether THIS RUN can reach
     # bcproxy.weizmann.ac.il:8080 (i.e. unit is on the Weizmann campus
@@ -40,6 +43,7 @@ ${proxyLibDot} = Join-Path ${PSScriptRoot} 'proxy-lib.ps1'
 if (-not (Test-Path ${proxyLibDot})) { throw "proxy-lib.ps1 not found next to provide-proxy.ps1 at ${proxyLibDot}" }
 . ${proxyLibDot}
 Set-ProxyLibLogger { param(${m}) Write-ProxyLog ${m} }
+if (-not $PSBoundParameters.ContainsKey('NoProxy')) { ${NoProxy} = Get-MastDefaultNoProxy }
 
 <#
 Soft proxy provider -- now hard, by explicit operator choice.
@@ -80,9 +84,9 @@ function Show-ProxyBanner {
     Write-ProxyLog "==================================================================="
 }
 
-# Deploy the operator "MAST Proxy" desktop tool + the shared lib to a stable
+# Deploy the operator "Weizmann Proxy" desktop tool + the shared lib to a stable
 # on-unit path, mirroring instrument-profiles -> calibrate-instruments.ps1. The
-# desktop-shortcuts provider makes the "MAST Proxy" shortcut target this copy.
+# desktop-shortcuts provider makes the "Weizmann Proxy" shortcut target this copy.
 function Publish-ProxyTool {
     ${toolRoot} = 'C:\ProgramData\MAST\proxy'
     New-Item -ItemType Directory -Path ${toolRoot} -Force | Out-Null
@@ -92,7 +96,14 @@ function Publish-ProxyTool {
             Copy-Item -LiteralPath ${src} -Destination (Join-Path ${toolRoot} ${name}) -Force
             Write-ProxyLog ("Deployed {0} -> {1}" -f ${name}, ${toolRoot})
         } else {
-            Write-ProxyLog ("[WARN] {0} not found at {1}; operator proxy tool not deployed." -f ${name}, ${src})
+            # Not a warning. Both files are declared in module.json commandfiles,
+            # so an absent one means the payload is wrong, and the failure is
+            # invisible from the unit: the desktop shortcut still gets created,
+            # still looks right, and opens a window that closes immediately
+            # because powershell -File has nothing to run. set-proxy.ps1 was
+            # missing from commandfiles from the day the tool shipped and this
+            # branch logged it on every run of every unit for two months.
+            throw ("{0} not found at {1}; it is declared in module.json commandfiles, so the staged payload is incomplete." -f ${name}, ${src})
         }
     }
 }

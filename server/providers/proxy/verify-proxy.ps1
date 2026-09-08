@@ -10,6 +10,16 @@ ${mastLogDot} = Join-Path ${PSScriptRoot} 'mast-log.ps1'
 if (-not (Test-Path ${mastLogDot})) { ${mastLogDot} = Join-Path ${PSScriptRoot} '..\..\lib\mast-log.ps1' }
 . ${mastLogDot}
 Set-StrictMode -Off  # mast-log.ps1 enables StrictMode; verify scripts predate it and probe optional properties
+
+# The bypass list is asserted below against the same default the provider
+# writes, so the two cannot drift. Should the provider ever be given a per-run
+# -NoProxy, it has to be injected here from module.json's verify command the way
+# desktop-shortcuts injects -FastApiUrl -- an expectation read from the lib
+# would then be checking the wrong thing.
+${proxyLibDot} = Join-Path ${PSScriptRoot} 'proxy-lib.ps1'
+if (-not (Test-Path -LiteralPath ${proxyLibDot})) { throw "proxy-lib.ps1 not found next to verify-proxy.ps1 at ${proxyLibDot}" }
+. ${proxyLibDot}
+
 ${verifyLog} = Get-MastVerifyLog -Module 'proxy'
 ${smokeFile} = Get-MastSmokeMarker -Module 'proxy'
 
@@ -68,16 +78,37 @@ else {
 
 ${issues} = New-Object 'System.Collections.Generic.List[string]'
 
+${expectedNoProxy} = Get-MastDefaultNoProxy
+${expectedBypass}  = Convert-NoProxyToWildcardBypass ${expectedNoProxy}
+
 if (${mode} -eq 'use') {
     if (${envHttp}  -ne ${ExpectedHttpProxy}) { [void]${issues}.Add("env http_proxy='${envHttp}' != expected '${ExpectedHttpProxy}'") }
     if (${envHttps} -ne ${ExpectedHttpProxy}) { [void]${issues}.Add("env https_proxy='${envHttps}' != expected '${ExpectedHttpProxy}'") }
     if (${ie}.Enable -ne 1)                   { [void]${issues}.Add("WinINet ProxyEnable=$(${ie}.Enable), expected 1") }
     if ([string]::IsNullOrEmpty(${ie}.Server)){ [void]${issues}.Add("WinINet ProxyServer is empty") }
+    # The bypass list is the surface that decides whether a unit can reach its
+    # own subnet without a round trip through bcproxy, and nothing asserted it
+    # until now -- a wrong list stayed green on the whole fleet.
+    if (${envNo} -ne ${expectedNoProxy})      { [void]${issues}.Add("env no_proxy='${envNo}' != expected '${expectedNoProxy}'") }
+    if (${ie}.Override -ne ${expectedBypass}) { [void]${issues}.Add("WinINet ProxyOverride='$(${ie}.Override)' != expected '${expectedBypass}'") }
 } else {
     # direct
     if (-not [string]::IsNullOrEmpty(${envHttp}))  { [void]${issues}.Add("env http_proxy should be empty in direct mode but is '${envHttp}'") }
     if (-not [string]::IsNullOrEmpty(${envHttps})) { [void]${issues}.Add("env https_proxy should be empty in direct mode but is '${envHttps}'") }
+    if (-not [string]::IsNullOrEmpty(${envNo}))    { [void]${issues}.Add("env no_proxy should be empty in direct mode but is '${envNo}'") }
     if (${ie}.Enable -ne 0)                        { [void]${issues}.Add("WinINet ProxyEnable=$(${ie}.Enable), expected 0 in direct mode") }
+    if (-not [string]::IsNullOrEmpty(${ie}.Override)) { [void]${issues}.Add("WinINet ProxyOverride should be cleared in direct mode but is '$(${ie}.Override)'") }
+}
+
+# The operator tool is an outcome of this module, not a side effect of it. The
+# desktop shortcut launches it by absolute path, so a file that never arrived is
+# a shortcut that opens a console and closes it again -- which is exactly what
+# happened while set-proxy.ps1 was absent from module.json commandfiles. Assert
+# the artifact, not the absence of an error.
+foreach (${toolFile} in @('set-proxy.ps1', 'proxy-lib.ps1')) {
+    ${toolPath} = Join-Path 'C:\ProgramData\MAST\proxy' ${toolFile}
+    if (Test-Path -LiteralPath ${toolPath}) { Write-VLog ("operator tool present: {0}" -f ${toolPath}) }
+    else { [void]${issues}.Add("operator proxy tool missing: ${toolPath}") }
 }
 
 if (${issues}.Count -gt 0) {
