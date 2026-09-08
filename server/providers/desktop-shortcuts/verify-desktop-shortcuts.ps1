@@ -7,7 +7,11 @@ param(
     # cannot drift apart. This is what makes the check answer "is the shortcut
     # CURRENT?" rather than merely "does the shortcut exist?" -- see
     # docs/per-module-tracking-plan.md, resolution rule 2.
-    [string]${FastApiUrl} = ''
+    [string]${FastApiUrl} = '',
+    # Injected the same way and for the same reason. Its shortcut carries a
+    # component this provider COMPUTES -- the per-host selector -- so presence
+    # alone would not catch the one way it goes quietly wrong.
+    [string]${GrafanaUrl} = ''
 )
 
 ${ErrorActionPreference} = 'Stop'
@@ -88,6 +92,44 @@ if (${FastApiUrl} -and ${fastApiPath}) {
         W ("FastAPI shortcut target current: {0}" -f ${deployed})
     }
 }
+
+# The unit-metrics shortcut, and the selector inside it. The dashboard's 'server'
+# variable takes Prometheus instance labels, which are lower case; COMPUTERNAME is
+# upper case, and a shortcut built from it unchanged matches no option and lands
+# the operator on whatever host Grafana defaults to -- a wrong page that looks
+# like the right one. Assert the value, not the file.
+if (${GrafanaUrl}) {
+    ${metricsLnk} = Join-Path ${dirOperation} 'MAST Unit Metrics (Grafana).lnk'
+    ${metricsUrlFile} = Join-Path ${dirOperation} 'MAST Unit Metrics (Grafana).url'
+    ${metricsPath} = ''
+    if (Test-Path -LiteralPath ${metricsLnk})         { ${metricsPath} = ${metricsLnk} }
+    elseif (Test-Path -LiteralPath ${metricsUrlFile}) { ${metricsPath} = ${metricsUrlFile} }
+    if (-not ${metricsPath}) {
+        ${fail} += ("unit metrics shortcut missing ({0})" -f ${metricsLnk})
+    } else {
+        ${deployedMetrics} = ''
+        if (${metricsPath}.EndsWith('.lnk')) {
+            ${wsh2} = New-Object -ComObject WScript.Shell
+            ${deployedMetrics} = (${wsh2}.CreateShortcut(${metricsPath})).Arguments.Trim().Trim('"')
+        } else {
+            ${l} = @(Get-Content -LiteralPath ${metricsPath} -ErrorAction SilentlyContinue |
+                Where-Object { $_ -match '^\s*URL\s*=' }) | Select-Object -First 1
+            if (${l}) { ${deployedMetrics} = (${l} -replace '^\s*URL\s*=', '').Trim() }
+        }
+        ${wantSelector} = 'var-server={0}:9182' -f ${env:COMPUTERNAME}.ToLower()
+        if (${deployedMetrics} -notlike ('*' + ${wantSelector} + '*')) {
+            ${fail} += ("unit metrics shortcut does not select this host: expected '{0}' in '{1}'" -f ${wantSelector}, ${deployedMetrics})
+        } else {
+            W ("unit metrics shortcut selects this host: {0}" -f ${wantSelector})
+        }
+    }
+}
+
+# Sensors and safety: informational. It points at the LAST observatory's Grafana,
+# whose availability is not ours to assert.
+${safetyHits} = @(Get-ChildItem -LiteralPath ${dirOperation} -Filter '*Sensors and Safety (Grafana)*' -File -ErrorAction SilentlyContinue)
+if (${safetyHits}.Count -gt 0) { W ("sensors and safety shortcut present: {0}" -f ${safetyHits}[0].Name) }
+else { W 'No sensors and safety shortcut (URL not configured?).' }
 
 # DS9: required only when DS9 itself is installed (ds9 provider runs first in a
 # full cycle; absent in an isolated desktop-shortcuts run).

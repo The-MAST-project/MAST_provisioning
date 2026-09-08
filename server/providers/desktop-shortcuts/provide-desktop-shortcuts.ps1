@@ -8,6 +8,18 @@ param(
     # Site name shown in the weather shortcut label (consistent 'Smadar' spelling).
     [string]${WeatherSiteName} = 'Neot Smadar',
     [string]${FastApiUrl} = 'http://localhost:8000/docs',
+    # MAST's own Grafana, on the site controller. Addressed by host and port
+    # rather than through that host's nginx: its vhost redirects everything to
+    # the canonical FQDN over HTTPS, behind a certificate from a local CA a unit
+    # has no reason to trust, and none of that is worth a browser warning for a
+    # dashboard. The per-host selector is appended below.
+    [string]${GrafanaUrl} = 'http://mast-ns-control:3000/grafana/d/IV0hu1m7z/windows-exporter-dashboard',
+    # The LAST observatory's Grafana on last0, which carries the site's weather
+    # sensors and the safety view. A different host, a different Grafana, and
+    # not ours -- linked, never proxied or embedded: it sends
+    # X-Frame-Options: deny, serves no TLS, and answers 401 to anonymous, so a
+    # link in a new tab is the only form of it that works at all today.
+    [string]${SafetyUrl} = 'http://10.23.1.25:3000/grafana/d/dk8DxsWVz/neot-smadar-weather?orgId=1&refresh=10s',
     [string]${Ds9Exe}     = 'C:\Program Files\SAOImageDS9\ds9.exe',
     [string]${LogsDir}    = 'C:\MAST\logs',
     [string]${CalibToolPath} = 'C:\ProgramData\MAST\instrument-profiles\calibrate-instruments.ps1',
@@ -113,6 +125,14 @@ function New-MastBrowserShortcut {
     return ("{0}.url" -f ${Name})
 }
 
+function Add-MastUrlQuery {
+    param([string]${Url}, [string]${Query})
+    if (-not ${Query}) { return ${Url} }
+    ${sep} = '?'
+    if (${Url} -match '\?') { ${sep} = '&' }
+    return ('{0}{1}{2}' -f ${Url}, ${sep}, ${Query})
+}
+
 function Resolve-MastAppPath {
     # First candidate that exists, or '' -- the vendor tools sit under either
     # Program Files root depending on installer bitness, and two are per-user.
@@ -214,7 +234,15 @@ Set-Content -LiteralPath (Join-Path ${dirOperation} 'README.txt') -Encoding ASCI
     '                        tier (http://localhost:8000/docs). The bare root used',
     '                        to be the target and answered 404. The unit service',
     '                        must be running.',
-    '  Weather (Meteoblue) - site forecast page.',
+    '  MAST Unit Metrics   - this unit windows_exporter metrics, on the site',
+    '    (Grafana)           controller Grafana, with the host selector already',
+    '                        pointed at this machine.',
+    '  Sensors and Safety  - the site weather sensors and the observatory safety',
+    '    (Grafana)           view. A DIFFERENT Grafana, on the LAST observatory',
+    '                        host, and not ours: it asks for its own login, which',
+    '                        is theirs to grant.',
+    '  Weather (Meteoblue) - site forecast page. The public forecast, as opposed',
+    '                        to the live sensors above.',
     '  SAOImage DS9        - FITS viewer (associated with .fits files).',
     '  MAST Logs           - C:\MAST\logs (provisioning + runtime logs).',
     '  PlaneWave Interface 4 - mount, focuser and covers.',
@@ -224,7 +252,11 @@ Set-Content -LiteralPath (Join-Path ${dirOperation} 'README.txt') -Encoding ASCI
     '',
     'Web shortcuts here are .lnk files that launch Chrome directly. Nothing in',
     'provisioning sets a default browser and the unit resolves http to IE, which',
-    'cannot render the Swagger page.'
+    'cannot render the Swagger page.',
+    '',
+    'Both Grafana links reach 10.23.1.x on port 3000, so they need the proxy',
+    'bypass that covers the MAST subnets; a unit provisioned before that shipped',
+    'will see them time out rather than fail.'
 )
 Set-Content -LiteralPath (Join-Path ${dirSetup} 'README.txt') -Encoding ASCII -Value @(
     'Bring-up and calibration tools -- typically used once per unit or after',
@@ -283,6 +315,31 @@ if (${WeatherUrl} -and (${WeatherUrl}.Trim() -ne '')) {
     Write-ShortcutLog ("Weather shortcut -> {0}" -f ${WeatherUrl})
 } else {
     Write-ShortcutLog '[WARN] Weather page URL not configured (-WeatherUrl empty); weather shortcut skipped.'
+}
+
+# This unit's own metrics. The dashboard picks a host with its 'server' template
+# variable, whose values are Prometheus instance labels: LOWERCASE hostname plus
+# the exporter port. COMPUTERNAME is upper case on Windows and would match no
+# option in that list, quietly leaving the operator on whichever host Grafana
+# defaults to -- which is the failure that looks like it worked.
+if (${GrafanaUrl} -and (${GrafanaUrl}.Trim() -ne '')) {
+    ${metricsUrl} = Add-MastUrlQuery -Url ${GrafanaUrl} -Query ('var-server={0}:9182' -f ${env:COMPUTERNAME}.ToLower())
+    Register-MastOwnedName (New-MastBrowserShortcut -Dir ${dirOperation} -Name 'MAST Unit Metrics (Grafana)' -Url ${metricsUrl} `
+        -Desc 'windows_exporter metrics for this unit' -IconLocation ("{0},144" -f ${imageres}))
+    Write-ShortcutLog ("Unit metrics shortcut -> {0}" -f ${metricsUrl})
+} else {
+    Write-ShortcutLog '[WARN] -GrafanaUrl empty; unit metrics shortcut skipped.'
+}
+
+${safetyName} = 'Sensors and Safety (Grafana)'
+if (${WeatherSiteName}) { ${safetyName} = '{0} Sensors and Safety (Grafana)' -f ${WeatherSiteName} }
+if (${SafetyUrl} -and (${SafetyUrl}.Trim() -ne '')) {
+    Register-MastOwnedName (New-MastBrowserShortcut -Dir ${dirOperation} -Name ${safetyName} -Url ${SafetyUrl} `
+        -Desc 'Site weather sensors and the observatory safety view (LAST observatory Grafana)' `
+        -IconLocation ("{0},101" -f ${imageres}))
+    Write-ShortcutLog ("Sensors and safety shortcut -> {0}" -f ${SafetyUrl})
+} else {
+    Write-ShortcutLog '[WARN] -SafetyUrl empty; sensors and safety shortcut skipped.'
 }
 
 if (Test-Path -LiteralPath ${Ds9Exe}) {
