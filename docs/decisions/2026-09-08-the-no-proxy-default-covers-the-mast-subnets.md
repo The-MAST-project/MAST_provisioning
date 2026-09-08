@@ -22,7 +22,7 @@ areas:
 
 **Implications:**
 
-- The provider is `order: 100, always: true`, so the fix reaches every unit on its next run with no targeted repair. A unit not due for one can be corrected in place from the `MAST Proxy` desktop shortcut, which shares the lib and therefore the new default.
+- The provider is `order: 100, always: true`, so the fix reaches every unit on its next run with no targeted repair. A unit not due for one can be corrected in place from the `Weizmann Proxy` desktop shortcut, which shares the lib and therefore the new default.
 - **The PDU by FQDN is deliberately not fixed here.** `http://mastps01.weizmann.ac.il/` returns 404 from the proxy and still will: WinINet and WinHTTP match a bypass entry against the host string in the URL, never a resolved address, so a CIDR cannot cover a name. `<local>` already covers the dotless `mastps01`. The real cause is addressing — `mastps01` has no DNS record because the address it should hold is squatted, and `mastps02`'s record points at the wrong IP; both units reach their DLI through a workaround. A blanket `*.weizmann.ac.il` bypass would be worse than the problem, since from Neot Smadar the campus is plausibly reachable only *through* bcproxy.
 - Verify still compares against the lib default rather than a value injected from `module.json`. Nothing passes `-NoProxy` today. The moment something does, it has to be plumbed into the verify command the way `desktop-shortcuts` plumbs `-FastApiUrl`, or the assertion checks the wrong thing; the code says so at the point it would break.
 

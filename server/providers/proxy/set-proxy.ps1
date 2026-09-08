@@ -1,10 +1,14 @@
 <#
-  MAST Proxy -- operator tool to view and toggle a unit's proxy posture.
+  Weizmann Proxy -- operator tool to view and toggle a unit's proxy posture.
+
+  Named for what it selects: the Weizmann campus proxy, bcproxy. It is not a
+  MAST service and there is no MAST proxy; the earlier "MAST Proxy" label
+  implied both.
 
   Reuses the shared proxy-lib.ps1 (same directory), so this is the SAME
   implementation the provisioning-time proxy provider uses -- no drifting
   second copy. Deployed to C:\ProgramData\MAST\proxy by provide-proxy.ps1 and
-  launched from the "MAST Proxy" Public-desktop shortcut.
+  launched from the "Weizmann Proxy" Public-desktop shortcut.
 
   Lets an on-site operator, with no controller / WinRM / staging, put a unit on
   the Weizmann proxy (or direct) and confirm it took across all three surfaces
@@ -35,7 +39,7 @@ function Test-IsAdmin {
 # Self-elevate: machine env + netsh winhttp writes need admin. Relaunch the
 # same script elevated (a new console), preserving -Interactive / -Action.
 if (-not (Test-IsAdmin)) {
-    Write-Host "MAST Proxy needs administrator rights to change proxy state; requesting elevation..."
+    Write-Host "Weizmann Proxy needs administrator rights to change proxy state; requesting elevation..."
     ${argList} = @('-NoExit', '-ExecutionPolicy', 'Bypass', '-NoProfile', '-File', ('"{0}"' -f $PSCommandPath))
     if (${Interactive}) { ${argList} += '-Interactive' }
     if (${Action})      { ${argList} += @('-Action', ${Action}) }
@@ -137,20 +141,29 @@ if (-not ${Interactive}) {
 }
 
 # Interactive menu.
-while ($true) {
-    Write-Host 'MAST Proxy'
-    Write-Host '  1) Show current posture'
-    Write-Host '  2) Set WEIZMANN proxy'
-    Write-Host '  3) Set DIRECT (no proxy)'
-    Write-Host '  4) Re-verify (show again)'
-    Write-Host '  5) Quit'
-    ${choice} = Read-Host 'Choose 1-5'
+#
+# The posture is shown before the menu rather than behind a menu item: the
+# question an operator opens this with is "what is it set to right now", and
+# making that the first thing on screen answers it without a keystroke.
+# Invoke-SetMode re-shows it after every change, so the display always reflects
+# what the unit is actually doing.
+Show-Posture
+# A flag, not `break`. In PowerShell a bare `break` inside a switch exits the
+# SWITCH, not an enclosing loop, so the quit branch redrew the menu forever and
+# the only way out of this tool was closing its window.
+${running} = $true
+while (${running}) {
+    Write-Host 'Weizmann Proxy'
+    Write-Host '  1) Use the WEIZMANN proxy (bcproxy)'
+    Write-Host '  2) Go DIRECT (no proxy)'
+    Write-Host '  3) Show the current setting again'
+    Write-Host '  4) Quit'
+    ${choice} = Read-Host 'Choose 1-4'
     switch (${choice}.Trim()) {
-        '1' { Show-Posture }
-        '2' { Invoke-SetMode -Mode 'use' }
-        '3' { Invoke-SetMode -Mode 'direct' }
-        '4' { Show-Posture }
-        '5' { break }
-        default { Write-Host 'Please enter 1-5.' }
+        '1' { Invoke-SetMode -Mode 'use' }
+        '2' { Invoke-SetMode -Mode 'direct' }
+        '3' { Show-Posture }
+        '4' { ${running} = $false }
+        default { Write-Host 'Please enter 1-4.' }
     }
 }

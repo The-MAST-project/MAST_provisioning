@@ -3,7 +3,7 @@
 # Single source of truth for reading and flipping the three proxy surfaces a
 # MAST unit exposes. Consumed by:
 #   - provide-proxy.ps1  (the provisioning-time provider)
-#   - set-proxy.ps1      (the operator "MAST Proxy" desktop tool)
+#   - set-proxy.ps1      (the operator "Weizmann Proxy" desktop tool)
 # so there is ONE implementation, not a drifting second copy.
 #
 # The three surfaces (managed in lockstep):

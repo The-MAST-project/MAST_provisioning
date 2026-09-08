@@ -84,9 +84,9 @@ function Show-ProxyBanner {
     Write-ProxyLog "==================================================================="
 }
 
-# Deploy the operator "MAST Proxy" desktop tool + the shared lib to a stable
+# Deploy the operator "Weizmann Proxy" desktop tool + the shared lib to a stable
 # on-unit path, mirroring instrument-profiles -> calibrate-instruments.ps1. The
-# desktop-shortcuts provider makes the "MAST Proxy" shortcut target this copy.
+# desktop-shortcuts provider makes the "Weizmann Proxy" shortcut target this copy.
 function Publish-ProxyTool {
     ${toolRoot} = 'C:\ProgramData\MAST\proxy'
     New-Item -ItemType Directory -Path ${toolRoot} -Force | Out-Null

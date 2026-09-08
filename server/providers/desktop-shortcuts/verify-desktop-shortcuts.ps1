@@ -73,7 +73,7 @@ foreach (${stale} in @('Operations')) {
 # Shortcuts that do not depend on anything else being installed.
 ${required} = @(
     (Join-Path ${dirOperation} 'MAST Logs.lnk'),
-    (Join-Path ${dirSetup}     'MAST Proxy.lnk'),
+    (Join-Path ${dirSetup}     'Weizmann Proxy.lnk'),
     (Join-Path ${dirSetup}     'MAST Instrument Calibration.lnk'),
     (Join-Path ${dirDev}       'MAST Installation Directory.lnk')
 )

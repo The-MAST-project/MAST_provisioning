@@ -257,8 +257,11 @@ Set-Content -LiteralPath (Join-Path ${dirSetup} 'README.txt') -Encoding ASCII -V
     '                                instruments are cabled; safe to re-run',
     '                                (dry-run mode available; refuses to write',
     '                                while PWI4 is open).',
-    '  MAST Proxy                  - view and toggle the unit proxy posture',
-    '                                (Weizmann / direct) across all surfaces.',
+    '  Weizmann Proxy              - shows whether this unit reaches the internet',
+    '                                through the Weizmann proxy (bcproxy) or',
+    '                                directly, and switches it either way across',
+    '                                all three surfaces. Opens showing the current',
+    '                                setting; self-elevates to change it.',
     '  XILab, ASIMount,            - instrument vendor tools used while bringing',
     '  ASCOM Diagnostics             hardware up or diagnosing it.'
 )
@@ -357,10 +360,10 @@ if (-not (Test-Path -LiteralPath ${CalibToolPath})) {
 }
 
 ${proxyToolPath} = 'C:\ProgramData\MAST\proxy\set-proxy.ps1'
-New-MastLnkShortcut -Path (Join-Path ${dirSetup} 'MAST Proxy.lnk') -Target ${psExe} `
+New-MastLnkShortcut -Path (Join-Path ${dirSetup} 'Weizmann Proxy.lnk') -Target ${psExe} `
     -Arguments ('-NoExit -ExecutionPolicy Bypass -NoProfile -File "{0}" -Interactive' -f ${proxyToolPath}) `
-    -WorkDir 'C:\ProgramData\MAST\proxy' -Desc 'View and toggle the unit proxy (Weizmann / direct) across all surfaces'
-Register-MastOwnedName 'MAST Proxy.lnk'
+    -WorkDir 'C:\ProgramData\MAST\proxy' -Desc 'Show and switch this unit between the Weizmann proxy and direct'
+Register-MastOwnedName 'Weizmann Proxy.lnk'
 if (-not (Test-Path -LiteralPath ${proxyToolPath})) {
     Write-ShortcutLog ("[WARN] Proxy tool not yet at {0} (proxy provider not run?); shortcut created, works once it is." -f ${proxyToolPath})
 }
