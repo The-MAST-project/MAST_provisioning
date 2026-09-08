@@ -100,6 +100,17 @@ if (${mode} -eq 'use') {
     if (-not [string]::IsNullOrEmpty(${ie}.Override)) { [void]${issues}.Add("WinINet ProxyOverride should be cleared in direct mode but is '$(${ie}.Override)'") }
 }
 
+# The operator tool is an outcome of this module, not a side effect of it. The
+# desktop shortcut launches it by absolute path, so a file that never arrived is
+# a shortcut that opens a console and closes it again -- which is exactly what
+# happened while set-proxy.ps1 was absent from module.json commandfiles. Assert
+# the artifact, not the absence of an error.
+foreach (${toolFile} in @('set-proxy.ps1', 'proxy-lib.ps1')) {
+    ${toolPath} = Join-Path 'C:\ProgramData\MAST\proxy' ${toolFile}
+    if (Test-Path -LiteralPath ${toolPath}) { Write-VLog ("operator tool present: {0}" -f ${toolPath}) }
+    else { [void]${issues}.Add("operator proxy tool missing: ${toolPath}") }
+}
+
 if (${issues}.Count -gt 0) {
     foreach (${i} in ${issues}) { Write-VLog ("FAIL: {0}" -f ${i}) }
     exit 1

@@ -96,7 +96,14 @@ function Publish-ProxyTool {
             Copy-Item -LiteralPath ${src} -Destination (Join-Path ${toolRoot} ${name}) -Force
             Write-ProxyLog ("Deployed {0} -> {1}" -f ${name}, ${toolRoot})
         } else {
-            Write-ProxyLog ("[WARN] {0} not found at {1}; operator proxy tool not deployed." -f ${name}, ${src})
+            # Not a warning. Both files are declared in module.json commandfiles,
+            # so an absent one means the payload is wrong, and the failure is
+            # invisible from the unit: the desktop shortcut still gets created,
+            # still looks right, and opens a window that closes immediately
+            # because powershell -File has nothing to run. set-proxy.ps1 was
+            # missing from commandfiles from the day the tool shipped and this
+            # branch logged it on every run of every unit for two months.
+            throw ("{0} not found at {1}; it is declared in module.json commandfiles, so the staged payload is incomplete." -f ${name}, ${src})
         }
     }
 }
