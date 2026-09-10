@@ -842,6 +842,36 @@ No edit to `execute-mast-provisioning.ps1` is required. `build-mast.ps1` copies 
 
 ---
 
+## Build-host vendor inputs
+
+Five things a payload needs are **not** in this repo, and would have to be
+reconstructed by hand if the provisioning server were lost. They are declared in
+[`server/data/vendor-inputs.json`](server/data/vendor-inputs.json) with, for each
+one, why it cannot be tracked here, where it came from, and how to re-acquire it:
+
+| Input | Size | Used by |
+|---|---|---|
+| `C:\MAST\mast-indexes` | 9.9 GB | `imdisk` |
+| `C:\MAST\ps3-catalog` | 2.0 GB | `planewave` |
+| `C:\MAST\cygwin-pkg-cache` | 175 MB | `astrometry-dependencies` |
+| `C:\MAST\full-frame.fits` | 90 MB | `astrometry`, `mast-validation` |
+| `vault\nomachine-licenses` | 8 KB | `nomachine` |
+
+Everything else a payload carries **is** tracked here (162 files in git-LFS, 58
+provider assets), which is why this list is short.
+
+`C:\MAST\` on the build host also holds regenerable images and scratch. The
+distinction matters and is easy to lose, so anything deliberately excluded is
+listed in the same file under `not_vendor_inputs` with a reason.
+`server/prov/tests/test_vendor_inputs.py` fails if a `C:\MAST\` path used by
+`build/*.ps1` appears in neither list — a new vendored input cannot become
+load-bearing without being written down.
+
+Canonical copies live on `mast-ns-control` at `/Storage/mast-vendor/`; the build
+host holds a working cache, so a build never depends on the WAN. Manifests,
+provenance records and the cache-verify job are
+[#194](https://github.com/The-MAST-project/MAST_provisioning/issues/194).
+
 ## Secrets / vault
 
 `vault/` is gitignored except for `vault/README.md` and `vault/creds.json.template`.
