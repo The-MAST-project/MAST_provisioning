@@ -144,9 +144,7 @@ def _make_driver(root, monkeypatch, responder, unit=UNIT):
         return "hash123", "sha", _describable({})
 
     monkeypatch.setattr(D.Driver, "_build", fake_build)
-    monkeypatch.setattr(
-        D, "staging_payload_size", lambda d, **kw: type("S", (), {"files": 3, "bytes": 1000})()
-    )
+    monkeypatch.setattr(D, "staging_payload_size", lambda d, **kw: type("S", (), {"files": 3, "bytes": 1000})())
     return drv, sess
 
 
@@ -467,7 +465,6 @@ def test_a_targeted_run_still_includes_the_always_modules(root, monkeypatch):
     assert _detached_cfg(sess)["modules"] == "python,reboot"
 
 
-
 # --- issue #186: the transfer carries what the run will execute --------------
 
 BUILD_WITH_PAYLOAD = {
@@ -591,6 +588,7 @@ def test_the_disk_guard_is_sized_from_the_trimmed_payload(root, monkeypatch):
     assert "-PayloadBytes '400'" in _pull_invocation(sess)
     log = drv.log.run_log_path.read_text()
     assert "bytes_skipped=600" in log
+
 
 # --- issue #25: the operational-share credential -----------------------------
 def test_missing_shared_creds_is_fatal(root, monkeypatch):

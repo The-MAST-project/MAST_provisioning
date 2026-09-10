@@ -57,9 +57,15 @@ def test_force_and_targeting_every_module_transfer_the_same_set():
 def test_forced_transfer_is_the_whole_recorded_payload():
     forced = transferred(FLEET, [])
     assert forced == {
-        "ImDiskTk-x64.zip", "mast-indexes", "requirements.txt", "wheels",
-        "astrometry.tgz", "full-frame.fits",
-        "commands.json", "provisioning.psm1", "verify-jupyter.ps1",
+        "ImDiskTk-x64.zip",
+        "mast-indexes",
+        "requirements.txt",
+        "wheels",
+        "astrometry.tgz",
+        "full-frame.fits",
+        "commands.json",
+        "provisioning.psm1",
+        "verify-jupyter.ps1",
     }
 
 
