@@ -89,6 +89,45 @@ function Get-MastModuleRepoFiles {
     return @($Manifest.repofiles | ForEach-Object { [string]$_ } | Where-Object { $_ })
 }
 
+# Staging-root entries that no module claims, with their sizes.
+#
+# There must be none: prov.payload rejects a manifest it cannot fully account
+# for, so build-mast.ps1 throws on a non-empty result rather than shipping a
+# payload whose contents no rule describes. A hit means a staging block that
+# called neither Add-MastStagedPayload nor Add-MastAlwaysStagedPayload.
+#
+# Sizes descend into directories, matching what robocopy moves.
+function Get-MastUnattributedStagedEntries {
+    param(
+        [Parameter(Mandatory)][string]$StagingDir,
+        [Parameter(Mandatory)]$Map,
+        [Parameter(Mandatory)]$Always
+    )
+
+    $claimed = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    foreach ($module in $Map.Keys) {
+        foreach ($bucket in 'files', 'dirs') {
+            foreach ($name in @($Map[$module][$bucket])) { [void]$claimed.Add($name) }
+        }
+    }
+    foreach ($bucket in 'files', 'dirs') {
+        foreach ($name in @($Always[$bucket])) { [void]$claimed.Add($name) }
+    }
+
+    $out = @()
+    foreach ($entry in (Get-ChildItem -LiteralPath $StagingDir -Force -ErrorAction SilentlyContinue)) {
+        if ($claimed.Contains($entry.Name)) { continue }
+        $bytes = if ($entry.PSIsContainer) {
+            (Get-ChildItem -LiteralPath $entry.FullName -Recurse -File -ErrorAction SilentlyContinue |
+                Measure-Object -Property Length -Sum).Sum
+        } else {
+            $entry.Length
+        }
+        $out += [pscustomobject]@{ Name = $entry.Name; Bytes = [int64]($bytes | ForEach-Object { if ($null -eq $_) { 0 } else { $_ } }) }
+    }
+    return @($out)
+}
+
 # Which vendored Jupyter wheels disagree with the interpreter the 'python'
 # provider pins.
 #
@@ -162,4 +201,119 @@ function Get-MastWheelInterpreterMismatches {
         }
     }
     return @($reasons)
+}
+
+# Is a module.json 'commandfiles' entry an ASSET (as opposed to a script)?
+#
+# The distinction decides what the transfer may leave behind. build-mast.ps1
+# flattens 'assets/*' to the staging root by leaf name and keeps everything else
+# at its relative path, and only the flattened assets are recorded as a module's
+# payload (Add-MastStagedPayload) and therefore excludable when no targeted
+# module claims them (MAST_provisioning#186).
+#
+# Scripts are never excludable, and the reason is run-verify-only.ps1: it is
+# operator-run, defaults to EVERY verify command in commands.json, and writes the
+# tier-2 validation.json that per-module drift classification reads. A payload
+# missing an untargeted module's verify script would fail that module there and
+# manufacture needs-repair drift on a unit that is fine.
+function Test-MastCommandFileIsAsset {
+    param([Parameter(Mandatory)][string]$CommandFile)
+    return (($CommandFile -replace '\\', '/') -like 'assets/*')
+}
+
+# A fresh module -> staged payload map, in build order.
+function New-MastStagedPayloadMap {
+    return [ordered]@{}
+}
+
+# The staging-ROOT entry a non-asset commandfile lands under.
+#
+# Exclusions name root entries, so that is the granularity to record. A flat
+# 'provide-x.ps1' is itself the root entry; a nested 'sites/ns.toml' keeps its
+# relative path in staging, so the root entry is the DIRECTORY 'sites'. Getting
+# this wrong records a name that is not at the root and leaves the real entry
+# unaccounted -- which is how config-bootstrap's sites\ slipped through.
+function Get-MastStagingRootName {
+    param([Parameter(Mandatory)][string]$RelativePath)
+    $norm = $RelativePath -replace '\\', '/'
+    $head = $norm.Split('/')[0]
+    return [pscustomobject]@{ Name = $head; IsDir = $norm.Contains('/') }
+}
+
+# A fresh always-ship record: what every run needs whatever it targets.
+function New-MastAlwaysPayload {
+    return [ordered]@{ files = @(); dirs = @() }
+}
+
+# Record a staged root entry that belongs to no single module and must never be
+# excluded: the client scripts, each provider's provide-/verify- scripts, the
+# repofiles, commands.json, build-manifest.json.
+#
+# These are recorded rather than left to a default. An unrecorded entry used to
+# ship anyway, which meant a staging block that forgot to record cost the saving
+# in silence -- 2.1 GB of PlateSolve3 catalog did exactly that. With every entry
+# recorded the build can assert completeness, and 'what --force sends' and 'what
+# targeting every module sends' become the same set by construction rather than
+# by a catch-all (MAST_provisioning#186).
+function Add-MastAlwaysStagedPayload {
+    param(
+        [Parameter(Mandatory)]$Payload,
+        [string]$File = '',
+        [string]$Dir = ''
+    )
+
+    if (([string]::IsNullOrWhiteSpace($File)) -eq ([string]::IsNullOrWhiteSpace($Dir))) {
+        throw 'Add-MastAlwaysStagedPayload: pass exactly one of -File and -Dir'
+    }
+    $bucket = if ($File) { 'files' } else { 'dirs' }
+    $name = if ($File) { $File } else { $Dir }
+    if ($name -match '[\\/]') {
+        throw "Add-MastAlwaysStagedPayload: '${name}' must be a staging-root leaf name, not a path"
+    }
+    if (@($Payload[$bucket]) -notcontains $name) {
+        $Payload[$bucket] = @($Payload[$bucket]) + $name
+    }
+}
+
+# Record one staged root-level entry against the module that caused it to be
+# staged. Emitted as build-manifest.json's 'module_payload' and consumed by
+# prov.payload to decide what a targeted run may leave on the server.
+#
+# An entry may have SEVERAL claimants and must then survive if any one of them is
+# targeted: full-frame.fits is staged for astrometry OR mast-validation, and leaf
+# flattening lets two providers collide on one name. So this accumulates rather
+# than assigns, and the consumer inverts to entry -> {modules} and excludes only
+# on an empty intersection.
+#
+# Names are the STAGING leaf, never the source-relative path: the staging root is
+# flat and the consumer turns these into robocopy exclusions under it, so a
+# nested name would produce an exclusion that matches nothing.
+function Add-MastStagedPayload {
+    param(
+        [Parameter(Mandatory)]$Map,
+        [Parameter(Mandatory)][string]$Module,
+        [string]$File = '',
+        [string]$Dir = ''
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Module)) {
+        throw 'Add-MastStagedPayload: -Module is required'
+    }
+    if (([string]::IsNullOrWhiteSpace($File)) -eq ([string]::IsNullOrWhiteSpace($Dir))) {
+        throw "[${Module}] Add-MastStagedPayload: pass exactly one of -File and -Dir"
+    }
+
+    $bucket = if ($File) { 'files' } else { 'dirs' }
+    $name = if ($File) { $File } else { $Dir }
+
+    if ($name -match '[\\/]') {
+        throw "[${Module}] Add-MastStagedPayload: '${name}' must be a staging-root leaf name, not a path"
+    }
+
+    if (-not $Map.Contains($Module)) {
+        $Map[$Module] = [ordered]@{ files = @(); dirs = @() }
+    }
+    if (@($Map[$Module][$bucket]) -notcontains $name) {
+        $Map[$Module][$bucket] = @($Map[$Module][$bucket]) + $name
+    }
 }

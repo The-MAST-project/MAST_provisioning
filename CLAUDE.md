@@ -304,6 +304,7 @@ The WinRM/SSH transport is the canonical `server/prov/transport.py` (lifted out 
 | `local_address_for(peer_ip)` | This machine's address on the route to a unit, from the kernel. **Never send a unit this machine's name** (`COMPUTERNAME` / `gethostname()`) and never pick from the interface list — see the #70 record. |
 | `pull_staging_args(...)` | The argument list for `client/mast-pull-staging.ps1`. The only place that names its parameters; both the driver and the `vm/` harness call it. Add a parameter there and here, never at a call site. |
 | `connect_unit(host, cred)` | WinRM-preferred, SSH-fallback session to a unit. Prefer over `winrm_session` for real work. |
+| `prov.payload.exclusions(build, targets)` | The staged assets no targeted module claims, from `build-manifest.json`'s `module_payload`. An empty `targets` excludes nothing — that one rule is what covers `--force`, a first provisioning, and the `MODULE_DRIFT_NONE` fallback, so do not add a force check at a call site. |
 | `run_ps(session, script, ...)` | Run PS on a unit with heartbeat + hard timeout + resilient retry. |
 | `winrm_session(host, cred, read_timeout_s, op_timeout_s)` | Construct a `winrm.Session`. Never instantiate `winrm.Session` directly outside this factory. |
 | `load_json_object(path)` / `load_json_list(path)` | BOM-tolerant JSON read with the top-level shape asserted (`dict` / list-of-dicts), raising `TypeError` naming the path otherwise. **Prefer these over `load_json_file`**, which returns `object` and forces a narrow at every call site. |
@@ -550,6 +551,33 @@ resolve any name you did not read off the VM before using it.
 
 The same care applies to the driver: `--only-hosts` names entries in
 `server/unit-registry.json`, and every name in it is a real machine.
+
+## An asset may be left behind; a script never is
+
+The SMB pull skips whatever `prov.payload.exclusions` says no targeted module
+claims (`#186`), which makes one distinction load-bearing at build time: only
+`commandfiles` entries under `assets/*` are recorded as a module's payload
+(`Test-MastCommandFileIsAsset`), and only recorded entries can be excluded.
+
+Keep it that way when adding a provider or a staging block:
+
+- **Put anything a verify command reads outside `assets/`, or install it first.**
+  `run-verify-only.ps1` is operator-run and defaults to *every* verify in
+  `commands.json`, so a verify that reads a staged asset would fail on an
+  untargeted module and write a false `needs-repair` into `validation.json`.
+  Existing verifies read installed locations (`C:\MAST\full-frame.fits`,
+  `D:\mast-indexes`), not the staging root.
+- **Every staging block must record what it staged**, with
+  `Add-MastStagedPayload` (it belongs to a module) or
+  `Add-MastAlwaysStagedPayload` (every run needs it). The build **throws** if
+  any staging-root entry is declared by neither — there is no catch-all, and
+  `prov.payload` raises rather than guessing. Two blocks were already missing
+  when this check landed.
+- **Record the staging-ROOT entry, not the source leaf.** A nested non-asset
+  `commandfile` such as `sites/ns.toml` stages under the directory `sites\`,
+  which is what an exclusion names; `Get-MastStagingRootName` decides.
+- **Record the staging leaf name, never a source-relative path.** The name
+  becomes a robocopy exclusion rooted at the staging root.
 
 ## Do not edit the staging area
 

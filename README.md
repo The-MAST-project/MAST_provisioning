@@ -805,6 +805,23 @@ else), `mast-services-finalize` (the final posture assertion), and
 folds them into any non-empty target set — so a targeted update that installed
 anything still closes out properly. They never *cause* a run on their own.
 
+**What a module's assets cost on the wire.** `build-mast.ps1` records every
+staging-root asset it stages against the module that caused it, as
+`build-manifest.json`'s `module_payload`, and the driver excludes from the SMB
+pull anything no *targeted* module claims (`server/prov/payload.py`,
+MAST_provisioning#186). A one-module drift therefore transfers roughly that
+module's own assets instead of the whole ~14.9 GB payload. Three properties are
+worth knowing when adding a module:
+
+- **Only `assets/*` entries are recorded.** Scripts — including every
+  `verify-*.ps1` — always ship, so an operator's `run-verify-only.ps1` over the
+  full module set still works against a trimmed payload.
+- **Anything unrecorded always ships.** A new staging block that forgets to
+  record its output costs a wasted copy, never a missing file.
+- **An empty target set excludes nothing**, which is what `--force`, a first
+  provisioning, and the aggregate-differs-but-no-module-drifted fallback all
+  produce.
+
 **`repofiles` (optional)** — for a file the module runs that deliberately lives
 *outside* its provider directory, because it is shared with something else in the
 repo:

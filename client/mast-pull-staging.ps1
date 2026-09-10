@@ -37,6 +37,18 @@
 .PARAMETER SrcUNC
   Full UNC source path, e.g. \\provserver\mast-staging\mast01\01-provisioning.
 
+.PARAMETER ExcludeFiles
+  Staging-root file names this run does not need, '|'-separated (prov.payload).
+  Empty means transfer everything, which is what --force and a full run pass.
+
+.PARAMETER ExcludeDirs
+  Staging-root directory names this run does not need, same encoding.
+
+  The separator is '|' because Windows forbids it in a filename, so no asset can
+  ever contain one; a comma is legal in a filename and would eventually split a
+  name in half. -PayloadBytes must already account for these, or the disk guard
+  below asks for space the run will not use.
+
 .PARAMETER PayloadBytes
   True size of the payload, measured by the CALLER (prov.staging_size). This
   script does not measure for itself: Get-ChildItem -Recurse does not descend
@@ -60,7 +72,9 @@ param(
     [string]$SmbPass,
     [string]$UnitStage,
     [string]$SrcUNC,
-    [long]$PayloadBytes = -1
+    [long]$PayloadBytes = -1,
+    [string]$ExcludeFiles = '',
+    [string]$ExcludeDirs = ''
 )
 
 $smbRoot = "\\$ProvAddress\mast-staging"
@@ -91,6 +105,35 @@ function Get-RobocopyOutcome {
     # unit-tested in server/tests/mast-pull-staging.Tests.ps1.
     param([int]$ExitCode)
     if ($ExitCode -ge 8) { 'ROBOCOPY_ERROR' } else { 'OK' }
+}
+
+function Get-MastRobocopyExclusionArgs {
+    # robocopy's /XF and /XD arguments for the entries this run does not need.
+    # FULL SOURCE PATHS, not bare names: a bare name matches anywhere in the
+    # tree, so excluding 'requirements.txt' for an untargeted jupyter would also
+    # drop a same-named file inside a directory a targeted module does need.
+    # Rooting each one at $SrcUNC confines the match to the staging root, which
+    # is exactly what prov.staging_size measures. Pure -- unit-tested.
+    param([string]$SrcUNC, [string]$ExcludeFiles, [string]$ExcludeDirs)
+
+    $split = {
+        param([string]$Value)
+        if ([string]::IsNullOrWhiteSpace($Value)) { return @() }
+        return @($Value -split '\|' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    }
+    $dirs = & $split $ExcludeDirs
+    $files = & $split $ExcludeFiles
+
+    $out = @()
+    if ($dirs.Count -gt 0) {
+        $out += '/XD'
+        $out += @($dirs | ForEach-Object { Join-Path $SrcUNC $_ })
+    }
+    if ($files.Count -gt 0) {
+        $out += '/XF'
+        $out += @($files | ForEach-Object { Join-Path $SrcUNC $_ })
+    }
+    return @($out)
 }
 
 function Test-MastPayloadBytesUsable {
@@ -197,9 +240,14 @@ try {
     # transfer and a 2-min one produced near-identical summaries (2026-08-26).
     $rbLog = Get-MastRobocopyLogPath -UnitStage $UnitStage
     New-Item -ItemType Directory -Path (Split-Path $rbLog -Parent) -Force | Out-Null
-    Write-Host "ROBOCOPY_START src=$SrcUNC dst=$UnitStage log=$rbLog"
+    $rbExclude = Get-MastRobocopyExclusionArgs -SrcUNC $SrcUNC -ExcludeFiles $ExcludeFiles -ExcludeDirs $ExcludeDirs
+    # /LOG: is placed before the exclusions on purpose: /XD and /XF take a list
+    # that runs until the next '/' token, so anything following them would be
+    # swallowed into the exclusion list.
+    $rbArgs = @($SrcUNC, $UnitStage, '/E', '/R:3', '/W:5', '/NP', "/LOG:$rbLog") + $rbExclude
+    Write-Host "ROBOCOPY_START src=$SrcUNC dst=$UnitStage log=$rbLog excluded=$($rbExclude.Count)"
     $rbSw = [System.Diagnostics.Stopwatch]::StartNew()
-    $rbErr = & robocopy $SrcUNC $UnitStage /E /R:3 /W:5 /NP /LOG:$rbLog 2>&1
+    $rbErr = & robocopy @rbArgs 2>&1
     $rbRc  = $LASTEXITCODE
     $rbSw.Stop()
     $rbSummary = ''

@@ -141,10 +141,12 @@ def _make_driver(root, monkeypatch, responder, unit=UNIT):
     def fake_build(self, unit, host, modules, dur):  # skip subprocess/PS build
         self._staging_dir = repo / "staging"
         self.log.event("BUILD_OK", unit=host, payload_hash="hash123", git_sha="sha")
-        return "hash123", "sha", {}
+        return "hash123", "sha", _describable({})
 
     monkeypatch.setattr(D.Driver, "_build", fake_build)
-    monkeypatch.setattr(D, "staging_payload_size", lambda d: type("S", (), {"files": 3, "bytes": 1000})())
+    monkeypatch.setattr(
+        D, "staging_payload_size", lambda d, **kw: type("S", (), {"files": 3, "bytes": 1000})()
+    )
     return drv, sess
 
 
@@ -266,13 +268,23 @@ def _drift_driver(root, monkeypatch, installed: dict | None, build: dict, valida
     return drv, sess
 
 
+def _describable(build: dict) -> dict:
+    """A build-manifest prov.payload can account for.
+
+    Every real build records what it staged, and `exclusions` refuses a manifest
+    that cannot say what the payload is made of rather than guessing. A fixture
+    that omits the fields is testing something the build cannot emit.
+    """
+    return {"module_payload": {}, "payload_always": {"files": [], "dirs": []}, **build}
+
+
 def _drift_make(root, monkeypatch, responder, build: dict):
     drv, sess = _make_driver(root, monkeypatch, responder, unit={**UNIT, "modules": list(build.get("modules", []))})
 
     def fake_build(self, unit, host, modules, dur):
         self._staging_dir = root / "repo" / "staging"
         self.log.event("BUILD_OK", unit=host, payload_hash=build["payload_hash"], git_sha="sha")
-        return build["payload_hash"], "sha", build
+        return build["payload_hash"], "sha", _describable(build)
 
     monkeypatch.setattr(D.Driver, "_build", fake_build)
     return drv, sess
@@ -454,6 +466,131 @@ def test_a_targeted_run_still_includes_the_always_modules(root, monkeypatch):
     # Build order, not alphabetical: reboot is order-terminal and must come last.
     assert _detached_cfg(sess)["modules"] == "python,reboot"
 
+
+
+# --- issue #186: the transfer carries what the run will execute --------------
+
+BUILD_WITH_PAYLOAD = {
+    "payload_hash": "agg-new",
+    "modules": ["git", "python"],
+    "module_state": {"git": {"version": "1", "hash": "h-git"}, "python": {"version": "1", "hash": "h-py-NEW"}},
+    "module_payload": {
+        "git": {"files": ["Git-2.52.0-64-bit.exe"], "dirs": []},
+        "python": {"files": ["python-installer.exe"], "dirs": ["wheels"]},
+    },
+    "payload_always": {"files": ["commands.json", "verify-git.ps1"], "dirs": []},
+}
+
+
+def _pull_invocation(sess) -> str:
+    for script in reversed(sess.scripts):
+        if "mast-pull-staging.ps1" in script and "-ExcludeFiles" in script:
+            return script
+    raise AssertionError("no pull-script invocation seen")
+
+
+def test_a_targeted_run_leaves_the_untargeted_modules_assets_behind(root, monkeypatch):
+    installed = {
+        "payload_hash": "agg-old",
+        "modules": {
+            "git": {"version": "1", "hash": "h-git", "provide": "pass", "verify": "pass"},
+            "python": {"version": "1", "hash": "h-py-OLD", "provide": "pass", "verify": "pass"},
+        },
+    }
+    drv, sess = _drift_driver(root, monkeypatch, installed, BUILD_WITH_PAYLOAD)
+    assert drv.run() == D.EXIT_OK, drv.log.run_log_path.read_text()
+
+    # Only python drifted, so git's installer stays on the server and python's
+    # own assets travel.
+    pull = _pull_invocation(sess)
+    assert "-ExcludeFiles 'Git-2.52.0-64-bit.exe'" in pull
+    assert "-ExcludeDirs ''" in pull
+    assert "python-installer.exe" not in pull
+    assert "TRANSFER_TRIMMED" in drv.log.run_log_path.read_text()
+
+
+def test_a_forced_run_transfers_everything(root, monkeypatch):
+    """--force means no classification and no skips, so it must not trim either."""
+    installed = {
+        "payload_hash": "agg-old",
+        "modules": {"git": {"version": "1", "hash": "h-git", "provide": "pass", "verify": "pass"}},
+    }
+    drv, sess = _drift_driver(root, monkeypatch, installed, BUILD_WITH_PAYLOAD)
+    drv.cfg.force = True
+    assert drv.run() == D.EXIT_OK, drv.log.run_log_path.read_text()
+
+    pull = _pull_invocation(sess)
+    assert "-ExcludeFiles ''" in pull
+    assert "-ExcludeDirs ''" in pull
+    assert "TRANSFER_TRIMMED" not in drv.log.run_log_path.read_text()
+
+
+def test_a_first_provisioning_transfers_everything(root, monkeypatch):
+    """No installed manifest means every module is missing, so every module is a
+    target and nothing is excluded."""
+    drv, sess = _drift_driver(root, monkeypatch, None, BUILD_WITH_PAYLOAD)
+    assert drv.run() == D.EXIT_OK, drv.log.run_log_path.read_text()
+
+    pull = _pull_invocation(sess)
+    assert "-ExcludeFiles ''" in pull
+    assert "-ExcludeDirs ''" in pull
+
+
+def test_force_and_a_fully_targeted_run_send_the_same_thing(root, monkeypatch):
+    """The driver's two "send everything" paths must agree at the wire.
+
+    --force reaches transfer with no targets and excludes nothing by rule; a
+    first provisioning targets every module and excludes nothing by attribution.
+    A difference means something is reaching the unit unaccounted for.
+    """
+    installed = {
+        "payload_hash": "agg-old",
+        "modules": {"git": {"version": "1", "hash": "h-git", "provide": "pass", "verify": "pass"}},
+    }
+    drv_forced, sess_forced = _drift_driver(root, monkeypatch, installed, BUILD_WITH_PAYLOAD)
+    drv_forced.cfg.force = True
+    assert drv_forced.run() == D.EXIT_OK, drv_forced.log.run_log_path.read_text()
+    forced = _pull_invocation(sess_forced)
+
+    drv_full, sess_full = _drift_driver(root, monkeypatch, None, BUILD_WITH_PAYLOAD)
+    assert drv_full.run() == D.EXIT_OK, drv_full.log.run_log_path.read_text()
+    full = _pull_invocation(sess_full)
+
+    def exclusion_args(script: str) -> tuple[str, str]:
+        return (
+            script.split("-ExcludeFiles ", 1)[1].split(" -", 1)[0],
+            script.split("-ExcludeDirs ", 1)[1].split(";", 1)[0].strip(),
+        )
+
+    assert exclusion_args(forced) == exclusion_args(full) == ("''", "''")
+
+
+def test_the_disk_guard_is_sized_from_the_trimmed_payload(root, monkeypatch):
+    """-PayloadBytes must describe what is actually coming, or the unit reserves
+    space for bytes the run will not send."""
+    installed = {
+        "payload_hash": "agg-old",
+        "modules": {
+            "git": {"version": "1", "hash": "h-git", "provide": "pass", "verify": "pass"},
+            "python": {"version": "1", "hash": "h-py-OLD", "provide": "pass", "verify": "pass"},
+        },
+    }
+    drv, sess = _drift_driver(root, monkeypatch, installed, BUILD_WITH_PAYLOAD)
+
+    seen: list[dict] = []
+
+    def sized(_d, **kw):
+        seen.append(kw)
+        excluded = bool(kw.get("exclude_files") or kw.get("exclude_dirs"))
+        return type("S", (), {"files": 2 if excluded else 3, "bytes": 400 if excluded else 1000})()
+
+    monkeypatch.setattr(D, "staging_payload_size", sized)
+    assert drv.run() == D.EXIT_OK, drv.log.run_log_path.read_text()
+
+    assert any(kw.get("exclude_files") for kw in seen), "size was never measured with the exclusions"
+    assert "-PayloadBytes '400'" in _pull_invocation(sess)
+    log = drv.log.run_log_path.read_text()
+    assert "bytes_skipped=600" in log
 
 # --- issue #25: the operational-share credential -----------------------------
 def test_missing_shared_creds_is_fatal(root, monkeypatch):
