@@ -5,7 +5,7 @@
 
 .DESCRIPTION
   Runs ON THE UNIT (sent via Invoke-Command -FilePath or as an inline scriptblock).
-  Mounts \\<ProvAddress>\mast-staging with explicit SMB credentials, copies the
+  Mounts the share -SrcUNC names, with explicit SMB credentials, copies the
   payload with robocopy, then unmounts. Removes stale run dirs and validates
   free space BEFORE pulling, so a large payload cannot fill the unit disk.
 
@@ -15,8 +15,9 @@
     detail   - trimmed output for logging
 
 .PARAMETER ProvAddress
-  IP address of the provisioning server, on the route to THIS unit -- not its
-  hostname. The driver derives it per unit (prov.driver._local_address_for) so
+  IP address of the host serving the payload, on the route to THIS unit -- not
+  its hostname. Reported in the log; the share actually mounted is derived from
+  -SrcUNC, so the two cannot disagree. The driver derives it per unit (prov.driver._local_address_for) so
   the unit never has to resolve a name that exists for the server's benefit and
   that nothing maintains: three units pinned it to a dead APIPA address and
   every transfer failed with net.exe error 53 (#70). A name still works here if
@@ -77,7 +78,6 @@ param(
     [string]$ExcludeDirs = ''
 )
 
-$smbRoot = "\\$ProvAddress\mast-staging"
 
 <#
 Bounded `net use`: when the host SMB server is misconfigured (e.g. the
@@ -182,6 +182,25 @@ function Get-MastRobocopyExclusionArgs {
     return @($out)
 }
 
+function Get-MastSmbRoot {
+    # The share to mount, taken from the UNC the payload is on.
+    #
+    # This used to be "\\$ProvAddress\mast-staging" -- a hardcoded share name.
+    # It survived as long as the provisioning server was the only thing that ever
+    # served a payload. A staging host serves 'mast-provisioning' instead, and the
+    # run mounted a share that did not exist while copying from one that did:
+    # net.exe System error 1244, which reads as an authentication failure and is
+    # not one (mast07, 2026-09-14).
+    #
+    # Derived rather than passed so the mount and the copy cannot name different
+    # shares; returns '' for an empty UNC so the dot-source path stays quiet.
+    param([string]$SrcUNC)
+    if ([string]::IsNullOrWhiteSpace($SrcUNC)) { return '' }
+    $parts = ($SrcUNC -replace '^\\\\', '') -split '\\'
+    if ($parts.Count -lt 2) { throw "Cannot read a \\host\share root from -SrcUNC '$SrcUNC'" }
+    return ('\\' + $parts[0] + '\' + $parts[1])
+}
+
 function Test-MastPayloadBytesUsable {
     # A caller-supplied size is usable only if it is non-negative. -1 is the
     # unset default, which means the caller did not pass -PayloadBytes at all.
@@ -208,6 +227,8 @@ function Test-StagingFits {
 # Dot-sourced with no -SrcUNC (e.g. by the Pester test) -> only the pure
 # functions above are needed; skip the live net use / robocopy work below.
 if (-not $SrcUNC) { return }
+
+$smbRoot = Get-MastSmbRoot -SrcUNC $SrcUNC
 
 [void](Invoke-NetUseBounded -ArgsList @('use', $smbRoot, '/delete', '/yes') -TimeoutSeconds 10 -Label 'net use /delete (cleanup)')
 

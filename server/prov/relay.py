@@ -42,9 +42,17 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-#: Cygwin's rsync and ssh on the build host. Pinned rather than found on PATH for
-#: the same reason the interpreter is: that machine has more than one of each.
-CYGWIN_RSYNC = "/usr/bin/rsync"
+# Two path vocabularies are in play and they are not interchangeable.
+#
+# The driver's Python on the build host is a NATIVE Windows interpreter, so
+# anything it execs must be a Windows path: `/usr/bin/rsync` raises
+# FileNotFoundError there. But the `-e` string is handed to cygwin rsync and
+# interpreted by cygwin, so the ssh named inside it must be a CYGWIN path.
+# The same binary therefore appears under both names, deliberately.
+#: Exec'd by the driver (native Windows Python).
+RSYNC_EXE = r"C:\cygwin64\bin\rsync.exe"
+SSH_EXE = r"C:\cygwin64\bin\ssh.exe"
+#: Named inside rsync's -e string, resolved by cygwin.
 CYGWIN_SSH = "/usr/bin/ssh"
 DEFAULT_IDENTITY = "/cygdrive/c/Users/labcomp2/.ssh/id_ed25519"
 #: Directory entries the relay serves; the share points here, not at the root.
@@ -71,6 +79,21 @@ class StagingHost:
 
     def vendor_view(self) -> str:
         return f"{self.root}/vendor-view"
+
+    def payload_dir(self, payload_hash: str) -> str:
+        """The canonical tree for one build, named by its content.
+
+        Every host on the same build names the same directory, so the first sync
+        populates it and every later one hardlinks against it -- which is what
+        takes a second unit from the whole non-vendor remainder (measured
+        1,959,264,676 bytes) down to the one file that genuinely differs per host
+        (build-manifest.json, ~34 KB).
+
+        Keyed by payload_hash rather than by "the previous host's tree" so it
+        cannot go stale: a different build is a different name, so a --link-dest
+        either matches this build exactly or does not exist.
+        """
+        return f"{self.root}/payload/{payload_hash}"
 
 
 def load_staging_hosts(path: Path) -> dict[str, StagingHost]:
@@ -115,6 +138,7 @@ def rsync_argv(
     staging_dir: str | Path,
     host: str,
     relay: StagingHost,
+    dest: str | None = None,
     link_dests: Sequence[str] = (),
     identity: str = DEFAULT_IDENTITY,
 ) -> list[str]:
@@ -125,7 +149,7 @@ def rsync_argv(
     """
     src = cygwin_path(staging_dir).rstrip("/") + "/"
     argv = [
-        CYGWIN_RSYNC,
+        RSYNC_EXE,
         "-rltL",
         "--delete",
         "--no-perms",
@@ -135,7 +159,7 @@ def rsync_argv(
         "--stats",
     ]
     argv += [f"--link-dest={d}" for d in link_dests]
-    argv += ["-e", ssh_spec(identity), src, f"{relay.ssh_target}:{relay.host_dir(host)}/"]
+    argv += ["-e", ssh_spec(identity), src, f"{relay.ssh_target}:{dest or relay.host_dir(host)}/"]
     return argv
 
 
@@ -151,6 +175,7 @@ def sync(
     staging_dir: str | Path,
     host: str,
     relay: StagingHost,
+    dest: str | None = None,
     link_dests: Sequence[str] = (),
     identity: str = DEFAULT_IDENTITY,
     timeout_s: int = 7200,
@@ -162,11 +187,13 @@ def sync(
     made first -- otherwise the sync reports success having written nothing, which
     is how a relay ends up serving an empty directory.
     """
-    mkdir = [CYGWIN_SSH, *ssh_spec(identity).split()[1:], relay.ssh_target, f"mkdir -p {relay.host_dir(host)}"]
+    # SSH_EXE, not the cygwin name: this one is exec'd by Python, not by rsync.
+    target = dest or relay.host_dir(host)
+    mkdir = [SSH_EXE, *ssh_spec(identity).split()[1:], relay.ssh_target, f"mkdir -p {target}"]
     made = runner(mkdir, capture_output=True, text=True, timeout=timeout_s, check=False)
     if made.returncode != 0:
         return SyncResult(False, made.returncode, (made.stderr or made.stdout or "").strip()[:400])
-    argv = rsync_argv(staging_dir=staging_dir, host=host, relay=relay, link_dests=link_dests, identity=identity)
+    argv = rsync_argv(staging_dir=staging_dir, host=host, relay=relay, dest=target, link_dests=link_dests, identity=identity)
     done = runner(argv, capture_output=True, text=True, timeout=timeout_s, check=False)
     detail = (done.stdout or "") + (done.stderr or "")
     return SyncResult(done.returncode == 0, done.returncode, detail.strip()[-600:])

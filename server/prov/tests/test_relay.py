@@ -100,7 +100,10 @@ def test_every_link_dest_is_passed():
 
 def test_the_source_is_a_cygwin_path_and_the_destination_is_the_relay():
     a = argv()
-    assert not any("C:\\" in tok for tok in a), f"a Windows path reached the remote invocation: {a}"
+    # argv[0] is deliberately a Windows path -- the driver's Python execs it. It
+    # is the ARGUMENTS that must be cygwin's, since rsync resolves those.
+    assert a[0].lower().endswith("rsync.exe"), "the driver must exec a Windows path"
+    assert not any("C:\\" in tok for tok in a[1:]), f"a Windows path reached rsync's arguments: {a}"
     assert a[-2] == "/cygdrive/c/repo/staging/mast07/01-provisioning/"
     assert a[-1] == "mast@10.23.1.181:/Storage/mast-provisioning/hosts/mast07/01-provisioning/"
 
@@ -118,7 +121,7 @@ def test_the_ssh_transport_is_cygwins_and_carries_an_explicit_identity():
     # from /etc/passwd, not $HOME, so the key must be named.
     a = argv()
     spec = a[a.index("-e") + 1]
-    assert spec.startswith("/usr/bin/ssh")
+    assert spec.startswith("/usr/bin/ssh"), "rsync resolves -e through cygwin, so this one is a cygwin path"
     assert "-i /cygdrive/c/" in spec
     assert "UserKnownHostsFile=/dev/null" in spec
 

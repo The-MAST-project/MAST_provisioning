@@ -704,6 +704,26 @@ def test_the_unit_is_pointed_at_the_relay_not_the_orchestrator(root, monkeypatch
     assert "-ProvAddress '10.23.1.181'" in pull
 
 
+def test_the_unit_authenticates_with_the_credential_the_relay_accepts(root, monkeypatch):
+    """The account differs by who is serving. `smb` is THIS machine's read-only
+    transfer account and means nothing to a relay: offering it to mast-ns-control
+    mapped the unit to guest, and the unit refused with "security policies block
+    unauthenticated guest access" (System error 1272, mast07, 2026-09-14)."""
+    drv, sess, _ = _with_relay(root, monkeypatch, make_responder())
+    assert drv.run() == D.EXIT_OK, drv.log.run_log_path.read_text()
+    pull = _pull_invocation(sess)
+    assert "-SmbUser 'mast'" in pull, "the relay's share takes the shared account"
+    assert "prov" not in pull.split("-SmbUser")[1][:40], "not this machine's transfer account"
+
+
+def test_a_relay_whose_credential_block_is_absent_fails_closed(root, monkeypatch):
+    drv, _sess, _ = _with_relay(root, monkeypatch, make_responder())
+    creds = json.loads(drv.cfg.vault_creds.read_text())
+    del creds["shared"]
+    drv.cfg.vault_creds.write_text(json.dumps(creds))
+    assert drv.run() == D.EXIT_FATAL  # the shared block is required up front
+
+
 def test_the_reachability_probe_targets_the_relay(root, monkeypatch):
     """_unit_can_reach_staging asks the unit to open 445 to prov_address; with a
     relay that must be the relay's address, or the run is gated on a host the
@@ -717,10 +737,19 @@ def test_the_reachability_probe_targets_the_relay(root, monkeypatch):
 def test_the_payload_is_synced_before_the_transfer(root, monkeypatch):
     drv, _sess, calls = _with_relay(root, monkeypatch, make_responder())
     assert drv.run() == D.EXIT_OK, drv.log.run_log_path.read_text()
-    assert len(calls) == 1, "the relay sync ran exactly once"
-    assert calls[0]["host"] == "unit1"
-    # vendor-view is what makes the WAN cost ~2 GB instead of ~15.
-    assert "/Storage/mast-provisioning/vendor-view" in calls[0]["link_dests"]
+    # Two passes: the build's canonical tree, then this host's view of it.
+    assert len(calls) == 2, calls
+    payload_pass, host_pass = calls
+    assert payload_pass["dest"] == "/Storage/mast-provisioning/payload/hash123"
+    assert host_pass["dest"] == "/Storage/mast-provisioning/hosts/unit1/01-provisioning"
+    # vendor-view carries the 87% that is already on the relay...
+    assert "/Storage/mast-provisioning/vendor-view" in payload_pass["link_dests"]
+    # ...and the host pass links the remainder too, which is what takes a SECOND
+    # unit on the same build from 1,959,264,676 bytes down to one 34 KB file.
+    assert host_pass["link_dests"] == [
+        "/Storage/mast-provisioning/vendor-view",
+        "/Storage/mast-provisioning/payload/hash123",
+    ]
     log = drv.log.run_log_path.read_text()
     assert log.index("RELAY_SYNC_OK") < log.index("TRANSFER_START")
 
