@@ -66,9 +66,9 @@
 #!uv-version	0.11.33
 #
 # dir	repo	roles	branch	rev
-common	MAST_common	unit,control,spec	master
-unit	MAST_unit.2024-12-12	unit	main
-control	MAST_control	control	master
-gui	MAST_gui	control	main
-spec	MAST_spec	spec	master
-claude	mast-claude-config	unit,control,spec	main
+common	MAST_common	unit,control,spec	master	ce9a1197fa301e6cebbba6f07d6d5f4a8def337f
+unit	MAST_unit.2024-12-12	unit	main	03f5ee1deff5580e8da297b19fe553f2b711d519
+control	MAST_control	control	master	8f6a917169a93a360b12cedd72fe242ae3d84f81
+gui	MAST_gui	control	main	4f38d95460efcf6ef71289316d2e3e6d7f4bd8dc
+spec	MAST_spec	spec	master	7b981eca51291a89779371c6e67d60e5109c7420
+claude	mast-claude-config	unit,control,spec	main	58b37d09513ed9e5da5cec193794f3f11281fbf4

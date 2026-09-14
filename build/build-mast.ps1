@@ -948,7 +948,14 @@ foreach (${vm} in ${Modules}) {
         throw "module.json missing 'version' for module '${vm}'"
     }
     ${vstr} = [string]${vmf}.version
+    # Two sentinels. 'git' reports the PROVISIONING repo's SHA, which is right
+    # for a module whose output is this repo's own files. It is wrong for a
+    # module that deploys something else: the mast module's version moved on
+    # every commit here, so its content hash moved, so it drifted on every unit
+    # whatever the MAST repos had done -- and 'mast drifted' stopped meaning
+    # anything. 'repos' reports what the module actually deploys.
     if (${vstr} -eq 'git') { ${vstr} = ${gitSha} }
+    elseif (${vstr} -eq 'repos') { ${vstr} = Get-MastReposManifestVersion -RepoTop ${Top} }
     ${moduleVersions}[${vm}] = ${vstr}
 
     ${vmCmdFiles} = @()

@@ -319,3 +319,29 @@ Describe 'Get-MastUnattributedStagedEntries' {
         @($r).Count | Should Be 3
     }
 }
+
+Describe 'Get-MastReposManifestVersion' {
+    $top = Join-Path $env:TEMP ("mast-reposver-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    New-Item -ItemType Directory -Force -Path (Join-Path $top 'tools') | Out-Null
+    $top = (Get-Item -LiteralPath $top).FullName
+    $manifest = Join-Path $top 'tools\mast-repos.tsv'
+    Set-Content -LiteralPath $manifest -Value "common`tMAST_common`tunit`tmaster`tdeadbeef" -Encoding Ascii
+
+    It 'reports an identity derived from the manifest' {
+        (Get-MastReposManifestVersion -RepoTop $top) | Should Match '^repos-[0-9a-f]{12}$'
+    }
+    It 'is stable while the manifest is' {
+        (Get-MastReposManifestVersion -RepoTop $top) | Should Be (Get-MastReposManifestVersion -RepoTop $top)
+    }
+    It 'moves when a pin moves' {
+        # The whole point: the mast module's reported version tracks which MAST
+        # revisions a unit is meant to be on, not which commit of THIS repo built
+        # the payload.
+        $before = Get-MastReposManifestVersion -RepoTop $top
+        Set-Content -LiteralPath $manifest -Value "common`tMAST_common`tunit`tmaster`tcafebabe" -Encoding Ascii
+        (Get-MastReposManifestVersion -RepoTop $top) | Should Not Be $before
+    }
+    It 'throws when the manifest is missing rather than versioning the module as nothing' {
+        { Get-MastReposManifestVersion -RepoTop (Join-Path $top 'absent') } | Should Throw
+    }
+}
