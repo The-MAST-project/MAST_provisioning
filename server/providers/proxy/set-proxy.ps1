@@ -83,7 +83,8 @@ function Show-Posture {
     Write-Host '-- (B) WinINet (HKCU Internet Settings) --'
     Write-Host ("  ProxyEnable = {0}" -f ${p}.WinINet.Enable)
     Write-Host ("  ProxyServer = {0}" -f $(if (${p}.WinINet.Server) { ${p}.WinINet.Server } else { '(empty)' }))
-    Write-Host ("  AutoConfigURL = {0}" -f $(if (${p}.WinINet.AutoConfigUrl) { ${p}.WinINet.AutoConfigUrl } else { '(empty)' }))
+    # No AutoConfigURL line on purpose -- see Get-WinINetProxyState in
+    # proxy-lib.ps1 for why a PAC path is not part of the posture here.
     Write-Host ("  WPAD auto-detect = {0}" -f ${p}.WpadAutoDetect)
     Write-Host '-- (C) Machine WinHTTP --'
     foreach (${line} in (${p}.WinHttp -split "`r?`n")) {

@@ -204,18 +204,22 @@ function Get-WinINetAutoDetect {
 
 function Get-WinINetProxyState {
     $k = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings'
-    # AutoConfigURL is the OTHER way a PAC reaches WinINet. Forcing the flags
-    # byte to manual-only (0x02) or direct-only (0x01) already makes a stale URL
-    # inert, so this is reported rather than cleared -- but a posture that does
-    # not mention it cannot explain a machine that is following a PAC.
-    $h = @{ Enable = 0; Server = ''; Override = ''; AutoConfigUrl = '' }
+    # AutoConfigURL (the PAC-file path into WinINet) is deliberately NOT read.
+    # Nothing in the MAST estate sets one: the units and the site network hand
+    # out no PAC, and Set-WinINetConnectionFlags forces the flags byte to
+    # manual-only (0x02) or direct-only (0x01), which makes any URL that did
+    # appear inert. A field that is empty on every machine we own is a line of
+    # posture output nobody reads and a branch no test exercises -- it would rot
+    # before it was ever right. Add it back the day a MAST machine genuinely
+    # lives behind a PAC (a managed institute laptop joining the fleet, say),
+    # and give it a test when you do.
+    $h = @{ Enable = 0; Server = ''; Override = '' }
     if (-not (Test-Path $k)) { return $h }
     try {
         $p = Get-ItemProperty -Path $k -ErrorAction Stop
-        if ($null -ne $p.ProxyEnable)   { $h.Enable        = [int]$p.ProxyEnable }
-        if ($null -ne $p.ProxyServer)   { $h.Server        = [string]$p.ProxyServer }
-        if ($null -ne $p.ProxyOverride) { $h.Override      = [string]$p.ProxyOverride }
-        if ($null -ne $p.AutoConfigURL) { $h.AutoConfigUrl = [string]$p.AutoConfigURL }
+        if ($null -ne $p.ProxyEnable)   { $h.Enable   = [int]$p.ProxyEnable }
+        if ($null -ne $p.ProxyServer)   { $h.Server   = [string]$p.ProxyServer }
+        if ($null -ne $p.ProxyOverride) { $h.Override = [string]$p.ProxyOverride }
     } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
     return $h
 }
