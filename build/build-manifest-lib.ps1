@@ -2,6 +2,77 @@
 # server/tests/build-manifest-lib.Tests.ps1 can exercise them without running a
 # build; build-mast.ps1 dot-sources this file (single source of truth).
 
+# Every file under the staging tree, descending reparse points.
+#
+# THE ONE ENUMERATION. Get-ChildItem -Recurse does not descend reparse points,
+# and build-mast stages mast-indexes and cygwin-pkg-cache as junctions when the
+# build runs elevated -- so the payload hash covered 290 of 543 files, 3.84 of
+# 14.88 GB, leaving the 9.9 GB index seed outside the "anything changed" gate
+# entirely (#203). A re-seeded index moved no hash, so a unit was logged
+# already_current against a payload whose larger half had changed.
+#
+# That trap has now produced three defects here -- prov/staging_size.py and
+# Get-MastDirectorySize in mast-pull-staging.ps1 are the other two -- so this is
+# the walk everything in the build shares rather than a fourth implementation.
+#
+# Cycles are guarded by resolved path: a junction pointing at an ancestor would
+# otherwise recurse forever. Order is lexical by relative path so the rolling
+# hash is deterministic across build hosts.
+function Get-MastStagedFiles {
+    param([Parameter(Mandatory)][string]$StagingDir)
+
+    if (-not (Test-Path -LiteralPath $StagingDir)) { return @() }
+    $rootFull = (Get-Item -LiteralPath $StagingDir).FullName.TrimEnd('\')
+    $out = New-Object System.Collections.ArrayList
+    $seen = New-Object 'System.Collections.Generic.HashSet[string]'
+    $stack = New-Object System.Collections.Stack
+    [void]$stack.Push(@{ Path = $rootFull; Rel = '' })
+
+    while ($stack.Count -gt 0) {
+        $node = $stack.Pop()
+        try { $real = (Get-Item -LiteralPath $node.Path -Force).Target } catch { $real = $null }
+        if (-not $real) { $real = $node.Path }
+        if (-not $seen.Add([string]$real)) { continue }
+        foreach ($e in (Get-ChildItem -LiteralPath $node.Path -Force -ErrorAction SilentlyContinue)) {
+            $rel = if ($node.Rel) { $node.Rel + '/' + $e.Name } else { $e.Name }
+            if ($e.PSIsContainer) {
+                [void]$stack.Push(@{ Path = $e.FullName; Rel = $rel })
+            } else {
+                [void]$out.Add([pscustomobject]@{
+                    RelativePath = $rel
+                    FullName     = $e.FullName
+                    Length       = [int64]$e.Length
+                })
+            }
+        }
+    }
+    return @($out | Sort-Object RelativePath)
+}
+
+# Every staged file with its size and content hash -- the per-version manifest
+# the relay assembles a payload from (#202).
+#
+# Free: Get-PayloadHash already hashes each of these files and discards the
+# per-file value into its rolling digest. This keeps the list instead.
+#
+# Nothing is excluded. Get-PayloadHash skips build-manifest.json because it runs
+# before that file exists; this runs after, and the file is part of the payload
+# the unit installs from -- excluding it here assembled a 542-file tree against
+# a 543-file payload and failed mast07's destination check (#203).
+function Get-MastPayloadManifest {
+    param([Parameter(Mandatory)][string]$StagingDir)
+
+    ${entries} = New-Object System.Collections.ArrayList
+    foreach ($f in (Get-MastStagedFiles -StagingDir $StagingDir)) {
+        [void]${entries}.Add([ordered]@{
+            path   = $f.RelativePath
+            size   = $f.Length
+            sha256 = (Get-FileHash -LiteralPath $f.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+        })
+    }
+    return @(${entries})
+}
+
 # Rolling SHA-256 over every staged file: the whole-payload "anything changed
 # at all?" gate consumed by server/prov/driver.py.
 function Get-PayloadHash {
@@ -13,12 +84,12 @@ function Get-PayloadHash {
     # (we are generating it now).
     $sha = [System.Security.Cryptography.SHA256]::Create()
     $bytes = [System.IO.MemoryStream]::new()
-    $files = Get-ChildItem -Path $StagingDir -File -Recurse |
-                Where-Object { $_.Name -ne 'build-manifest.json' } |
-                Sort-Object FullName
+    # Get-MastStagedFiles, not Get-ChildItem -Recurse: see that function (#203).
+    $files = Get-MastStagedFiles -StagingDir $StagingDir |
+                Where-Object { $_.RelativePath -ne 'build-manifest.json' }
     foreach ($f in $files) {
-        $rel = $f.FullName.Substring($StagingDir.Length).TrimStart('\','/').Replace('\','/')
-        $fileHash = (Get-FileHash -Path $f.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+        $rel = $f.RelativePath
+        $fileHash = (Get-FileHash -LiteralPath $f.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
         $line = [System.Text.Encoding]::UTF8.GetBytes("$rel`:$fileHash`n")
         $bytes.Write($line, 0, $line.Length)
     }

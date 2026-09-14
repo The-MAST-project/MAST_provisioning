@@ -143,3 +143,77 @@ Describe 'Get-ModuleContentHash -- repofiles (shared repo-top tooling)' {
 }
 
 Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
+
+Describe 'Get-MastStagedFiles' {
+    # payload_hash covered 290 of 543 files because Get-ChildItem -Recurse does not
+    # descend reparse points, and build-mast stages mast-indexes and
+    # cygwin-pkg-cache as junctions when elevated -- 11 GB of a 14.9 GB payload,
+    # including the 9.9 GB index seed, outside the aggregate "anything changed"
+    # gate (#203). This is the one enumeration everything now shares.
+    $root = Join-Path $env:TEMP ("mast-staged-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    $outside = Join-Path $env:TEMP ("mast-outside-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    New-Item -ItemType Directory -Force -Path $root, $outside, (Join-Path $root 'real') | Out-Null
+    $root = (Get-Item -LiteralPath $root).FullName
+    $outside = (Get-Item -LiteralPath $outside).FullName
+    Set-Content -LiteralPath (Join-Path $root 'top.txt')          -Value 'aaa'  -Encoding Ascii -NoNewline
+    Set-Content -LiteralPath (Join-Path $root 'real\nested.txt')  -Value 'bbbb' -Encoding Ascii -NoNewline
+    Set-Content -LiteralPath (Join-Path $outside 'vendored.bin')  -Value 'ccccc' -Encoding Ascii -NoNewline
+    cmd /c mklink /J "$root\linked" "$outside" | Out-Null
+
+    It 'descends a junction, which Get-ChildItem -Recurse does not' {
+        $viaGci = @(Get-ChildItem -Path $root -File -Recurse -ErrorAction SilentlyContinue).Count
+        $viaWalk = @(Get-MastStagedFiles -StagingDir $root).Count
+        $viaGci  | Should Be 2
+        $viaWalk | Should Be 3
+    }
+    It 'reports paths relative to the staging root, with forward slashes' {
+        $paths = @(Get-MastStagedFiles -StagingDir $root | ForEach-Object { $_.RelativePath }) | Sort-Object
+        ($paths -join ',') | Should Be 'linked/vendored.bin,real/nested.txt,top.txt'
+    }
+    It 'reports the size of what a junction points at' {
+        $e = Get-MastStagedFiles -StagingDir $root | Where-Object { $_.RelativePath -eq 'linked/vendored.bin' }
+        $e.Length | Should Be 5
+    }
+    It 'is stable in order, so the rolling hash is deterministic' {
+        $a = (Get-MastStagedFiles -StagingDir $root | ForEach-Object { $_.RelativePath }) -join ','
+        $b = (Get-MastStagedFiles -StagingDir $root | ForEach-Object { $_.RelativePath }) -join ','
+        $a | Should Be $b
+    }
+    It 'returns nothing for a path that does not exist' {
+        @(Get-MastStagedFiles -StagingDir (Join-Path $root 'absent')).Count | Should Be 0
+    }
+}
+
+Describe 'Get-MastPayloadManifest' {
+    $root = Join-Path $env:TEMP ("mast-manifest-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    New-Item -ItemType Directory -Force -Path $root | Out-Null
+    $root = (Get-Item -LiteralPath $root).FullName
+    Set-Content -LiteralPath (Join-Path $root 'a.txt') -Value 'hello' -Encoding Ascii -NoNewline
+
+    It 'lists every file with its size and content hash' {
+        # @() around the call, not $m[0]: PowerShell unrolls a single-element
+        # array on return, so $m would be the entry itself and $m[0] a key
+        # lookup. Every caller wraps for the same reason.
+        $m = @(Get-MastPayloadManifest -StagingDir $root)
+        $m.Count     | Should Be 1
+        $m[0].path   | Should Be 'a.txt'
+        $m[0].size   | Should Be 5
+        # sha256("hello")
+        $m[0].sha256 | Should Be '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824'
+    }
+    It 'agrees with the hash input, so the two cannot describe different payloads' {
+        $files = @(Get-MastStagedFiles -StagingDir $root)
+        @(Get-MastPayloadManifest -StagingDir $root).Count | Should Be $files.Count
+    }
+    It 'lists build-manifest.json, which the hash excludes but the payload carries' {
+        # The two exclusions are not the same exclusion. Get-PayloadHash omits
+        # build-manifest.json because it is generating it; the payload manifest
+        # is written after, describes what must reach the unit, and the unit
+        # reads build-manifest.json to record what it installed. Omitting it
+        # there assembled a 542-file tree against a 543-file payload and
+        # mast07's destination check failed short_transfer (#203).
+        Set-Content -LiteralPath (Join-Path $root 'build-manifest.json') -Value '{}' -Encoding Ascii -NoNewline
+        $paths = @(Get-MastPayloadManifest -StagingDir $root) | ForEach-Object { $_.path }
+        ($paths -contains 'build-manifest.json') | Should Be $true
+    }
+}
