@@ -842,6 +842,21 @@ No edit to `execute-mast-provisioning.ps1` is required. `build-mast.ps1` copies 
 
 ---
 
+## Remote sites: the staging host
+
+A unit pulls over SMB, so it must open TCP 445 to whatever serves its payload —
+which at a site means a host on the units' own VLAN. A site may therefore declare
+a **staging host** in [`server/data/staging-hosts.json`](server/data/staging-hosts.json):
+the orchestrator builds locally, rsyncs the payload there, and hands the unit that
+host's address and share instead of its own. A site with no entry keeps pulling
+from the orchestrator, which is what the bench and the dev VM want.
+
+It is cheap because the staging host already holds the mirrored vendor inputs:
+`tools/build-vendor-view.sh` presents them under their staging-root names, rsync
+gets that as a `--link-dest`, and 87% of a host tree is hardlinked rather than
+sent. Setup and the transport gotchas are in
+[docs/provisioning-server-setup.md](docs/provisioning-server-setup.md) Step 4c.
+
 ## Build-host vendor inputs
 
 Five things a payload needs are **not** in this repo, and would have to be

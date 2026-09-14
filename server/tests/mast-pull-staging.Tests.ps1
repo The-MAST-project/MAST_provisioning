@@ -182,3 +182,24 @@ Describe 'Get-RobocopyOutcome bitmask' {
         Get-RobocopyOutcome -ExitCode 16 | Should Be 'ROBOCOPY_ERROR'
     }
 }
+
+Describe 'Get-MastSmbRoot' {
+    It 'takes the share from the UNC the payload is on' {
+        Get-MastSmbRoot -SrcUNC '\\10.23.1.181\mast-provisioning\mast07\01-provisioning' |
+            Should Be '\\10.23.1.181\mast-provisioning'
+    }
+    It 'still works for the provisioning server serving its own share' {
+        Get-MastSmbRoot -SrcUNC '\\192.0.2.34\mast-staging\mastw\01-provisioning' |
+            Should Be '\\192.0.2.34\mast-staging'
+    }
+    It 'returns empty for an empty UNC so the dot-source path stays quiet' {
+        Get-MastSmbRoot -SrcUNC '' | Should Be ''
+    }
+    It 'throws rather than mounting something wrong when the UNC has no share' {
+        # The failure this replaces was a hardcoded share name that silently
+        # disagreed with the copy source: the mount targeted a share that did not
+        # exist and net.exe reported System error 1244, which reads as an
+        # authentication failure and is not one.
+        { Get-MastSmbRoot -SrcUNC '\\10.23.1.181' } | Should Throw
+    }
+}

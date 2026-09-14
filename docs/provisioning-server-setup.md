@@ -60,10 +60,10 @@ driver and per-unit SMB client config were each separately disproven.
 
 Two consequences worth planning around:
 
-- **A remote site cannot be provisioned from off-segment as things stand.** The
-  unit pulls over SMB, so it must be able to open TCP 445 back to whichever host
-  serves `mast-staging`. A staging host on the units' VLAN is what makes that
-  work; the orchestrator does not have to be there with it (#186).
+- **A remote site is provisioned through a staging host.** The unit pulls over
+  SMB, so it must be able to open TCP 445 back to whichever host serves the
+  payload. A staging host on the units' VLAN is what makes that work; the
+  orchestrator does not have to be there with it — see *Step 4c* (#186).
 - **After moving the server, check the network profile.** It came up as
   `NetworkCategory: Public` after the 2026-09-02 move. SMB kept working, but that
   is the first thing to check if the share looks dead following a move.
@@ -296,6 +296,97 @@ Verify:
 w32tm /query /configuration | Select-String 'NtpServer','Enabled','AnnounceFlags'
 Get-NetFirewallRule -DisplayName 'MAST - NTP Server*'
 ```
+
+---
+
+## Step 4c - Staging host, for a remote site (elevated, once)
+
+Skip this for a bench or a dev VM: they pull from the orchestrator itself.
+
+A site whose units cannot reach the orchestrator over SMB is served by a
+**staging host** on the units' own VLAN. The orchestrator still builds the
+payload locally, then rsyncs it there over SSH and hands the unit that host's
+address instead of its own. Nothing else about the pull changes.
+
+Declared per site in [`server/data/staging-hosts.json`](../server/data/staging-hosts.json);
+a site with no entry keeps pulling from the orchestrator.
+
+**Why this is affordable.** The staging host also holds the mirrored vendor
+inputs (#194) — 12,918,167,762 bytes of a 14,877,432,438-byte payload.
+`vendor-view` presents them under their staging-root names and rsync gets it as a
+`--link-dest`, so those bytes are hardlinked rather than sent. The first host at a
+given build costs the ~1.96 GB remainder; each later host costs the few files that
+actually differ, measured at 199 bytes and 1.4 s for a second host tree.
+
+### On the staging host
+
+```bash
+mkdir -p /Storage/mast-provisioning/{hosts,payload}
+VENDOR=/Storage/mast-vendor ROOT=/Storage/mast-provisioning tools/build-vendor-view.sh
+```
+
+A read-only share over `hosts/`, reusing the account the operational share already
+uses so no new Samba user is needed:
+
+```ini
+[mast-provisioning]
+    comment = MAST provisioning payloads (read-only; units pull from here)
+    path = /Storage/mast-provisioning/hosts
+    read only = yes
+    valid users = mast
+```
+
+```bash
+sudo cp -a /etc/samba/smb.conf /etc/samba/smb.conf.bak-$(date +%Y%m%d)
+# ... append the stanza ...
+sudo testparm -s >/dev/null && sudo smbcontrol smbd reload-config
+```
+
+`reload-config`, not a restart, so units holding the operational share keep it;
+`testparm` gates the reload so a syntax error cannot go live.
+
+**Confirm it is genuinely read-only.** `testparm -s` will *not* echo
+`read only = yes`, because it omits parameters sitting at their default — so test
+the behaviour, not the config dump:
+
+```bash
+smbclient //127.0.0.1/mast-provisioning -U mast -c 'get somefile /tmp/x'   # succeeds
+smbclient //127.0.0.1/mast-provisioning -U mast -c 'put /tmp/x y'          # NT_STATUS_ACCESS_DENIED
+```
+
+Finally, append the orchestrator's `~/.ssh/id_ed25519.pub` to the staging
+account's `authorized_keys`.
+
+### Four things that will otherwise waste a day
+
+`server/prov/relay.py` builds the rsync invocation; these are baked into it, and
+are repeated here because each one cost a diagnosis:
+
+- **The ssh must be cygwin's** (`/usr/bin/ssh`), not Windows OpenSSH. Under Task
+  Scheduler, cygwin rsync cannot hand its pipes to a native Windows child: ssh
+  authenticates cleanly on its own and then rsync dies with `connection
+  unexpectedly closed (0 bytes received)`. Interactively the same command works,
+  which is what makes it expensive to find.
+- **Name the identity explicitly.** Cygwin ssh takes its home from `/etc/passwd`
+  (`/home/<user>`, absent on the build host), not `$HOME`, so it finds no key.
+- **`--no-perms --no-owner --no-group --chmod=`, and `-rlt` rather than `-a`.**
+  `--link-dest` hardlinks only when attributes match as well as content, and
+  Windows ACLs arriving through cygwin never match twice. Without these the sync
+  silently degrades into a full copy of every host tree, every time, with no
+  error. `-a` implies `-pgoD` and undoes them.
+- **rsync creates only the last component of a destination path**, so the parent
+  must exist — otherwise the sync reports success having written nothing.
+
+### Checking it works rather than merely runs
+
+That degradation is silent, so assert on the effect:
+
+```bash
+stat -c '%h %n' /Storage/mast-provisioning/hosts/*/01-provisioning/mast-indexes/index-5202-00.fits
+du -sh --total /Storage/mast-vendor /Storage/mast-provisioning | tail -1
+```
+
+Link counts above 1, and a total that has not grown by a payload.
 
 ---
 

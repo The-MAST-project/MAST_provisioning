@@ -36,7 +36,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from prov import drift, payload, registry, transport
+from prov import drift, payload, registry, relay, transport
 from prov import logevents as L
 from prov.maintenance_window import in_maintenance_window
 from prov.retention import run_retention
@@ -181,6 +181,9 @@ class Config:
     maint_window_start: int = -1
     maint_window_end: int = -1
     retain_runs: int = 60
+    #: Declared per-site staging hosts. A site with no entry -- the bench, the
+    #: dev VM -- keeps pulling from this machine, exactly as before (#186).
+    staging_hosts: Path | None = None
 
 
 class Driver:
@@ -204,6 +207,15 @@ class Driver:
         #: This machine's ADDRESS as seen from the unit currently being processed,
         #: set per unit by _process_unit. The staging UNC is built from this.
         self.prov_address = self.prov_identity
+        #: Per-site staging relays; empty when none are declared.
+        self.staging_hosts = relay.load_staging_hosts(
+            cfg.staging_hosts or (cfg.repo_top / "server" / "data" / "staging-hosts.json")
+        )
+        #: The relay serving the unit currently being processed, if any.
+        self.relay: relay.StagingHost | None = None
+        #: The share this run's unit pulls from -- this machine's own unless a
+        #: relay is serving it.
+        self.staging_share = "mast-staging"
 
     # -- top-level ----------------------------------------------------------
     def run(self) -> int:
@@ -245,6 +257,13 @@ class Driver:
         self.smb_pass = smb["pass"]
         self.shared_user = shared["user"]
         self.shared_pass = shared["pass"]
+        #: Every block, so a staging host can name the account ITS share accepts.
+        #: The unit authenticates to whichever host is serving, and those are not
+        #: the same account: `smb` is this machine's read-only transfer account
+        #: and means nothing to a relay, which mapped it to guest and had the
+        #: unit refuse with "security policies block unauthenticated guest
+        #: access" (System error 1272).
+        self.creds = creds
 
         self._preflight_smb()
 
@@ -394,8 +413,21 @@ class Driver:
         # nothing in this repo maintains that mapping -- three units pinned it to
         # a dead APIPA address and every transfer failed with net.exe error 53
         # (#70). Derived per unit because the answer is per route.
-        self.prov_address = transport.local_address_for(resolved)
-        if self.prov_address:
+        # A declared relay REPLACES the derived address. local_address_for gives
+        # this machine's address on the route to the unit, which is the right
+        # answer only while this machine is what serves the payload (#186).
+        self.relay = self.staging_hosts.get(unit.site)
+        self.staging_share = self.relay.share if self.relay else "mast-staging"
+        self.prov_address = self.relay.address if self.relay else transport.local_address_for(resolved)
+        if self.relay:
+            self.log.event(
+                "PROV_ADDR",
+                unit=host,
+                address=self.prov_address,
+                via_unit_ip=resolved,
+                source=f"relay:{unit.site}",
+            )
+        elif self.prov_address:
             self.log.event("PROV_ADDR", unit=host, address=self.prov_address, via_unit_ip=resolved)
         else:
             self.prov_address = self.prov_identity
@@ -597,6 +629,12 @@ class Driver:
                 # --force, MODULE_DRIFT_NONE, a plain full run -- excludes
                 # nothing; prov.payload owns that rule.
                 skip = payload.exclusions(build_manifest, target_modules)
+
+                # Phase 5c -- put the payload where the unit can reach it. Fails
+                # closed like every other phase: executing against a relay copy
+                # that is stale or half-written is the failure this phase adds.
+                if self.relay and not self._sync_to_relay(host, dur, payload_hash, git_sha):
+                    return
 
                 # Phase 6 -- mark unavailable / take lease.
                 self._set_unavailable(session, host, payload_hash)
@@ -823,6 +861,79 @@ class Driver:
         # args), and this object loops over every unit.
         return payload_hash, git_sha, bm
 
+    def _staging_credential(self, host: str, dur, payload_hash: str, git_sha: str) -> tuple[str, str] | None:
+        """The SMB account for whichever host is serving this unit's payload.
+
+        Not one account: ``smb`` is THIS machine's read-only transfer account and
+        means nothing to a relay. Offering it to mast-ns-control mapped the unit
+        to guest (``map to guest = Bad User``), and the unit refused with
+        "security policies block unauthenticated guest access" -- System error
+        1272, mast07, 2026-09-14. A relay names its own block via ``creds_key``.
+        """
+        if self.relay is None:
+            return self.smb_user, self.smb_pass
+        block = self.creds.get(self.relay.creds_key) or {}
+        user, password = block.get("user"), block.get("pass")
+        if user and password:
+            return user, password
+        self.log.event(
+            "TRANSFER_FAIL",
+            unit=host,
+            reason="creds_relay_missing",
+            creds_key=self.relay.creds_key,
+            hint=f"vault/creds.json needs {self.relay.creds_key}.user/pass for this staging host",
+        )
+        self.log.activity(host, "TRANSFER_FAIL", "creds_relay_missing", dur(), payload_hash, git_sha)
+        self.exit_code = EXIT_UNIT_FAIL
+        return None
+
+    def _sync_to_relay(self, host: str, dur, payload_hash: str, git_sha: str) -> bool:
+        """rsync this host's payload to the declared staging host.
+
+        ``vendor-view`` rides along as a --link-dest: it presents the mirrored
+        vendored inputs under their staging-root names, so rsync hardlinks the
+        ~87% of the payload already on the relay instead of sending it.
+        """
+        if self.relay is None:  # pragma: no cover -- guarded at the call site
+            return True
+        payload_dir = self.relay.payload_dir(payload_hash)
+        self.log.event("RELAY_SYNC_START", unit=host, relay=self.relay.ssh_target, dest=self.relay.host_dir(host))
+        started = time.monotonic()
+
+        # Two passes. The first fills the build's canonical tree, hardlinking the
+        # vendored 87% it already has; the second gives this host its own tree,
+        # hardlinking against BOTH -- so it transfers only what is genuinely
+        # per-host. Without the payload tree every unit re-sent the whole
+        # non-vendor remainder: 1,959,264,676 bytes, measured on mast07.
+        for dest, link_dests in (
+            (payload_dir, [self.relay.vendor_view()]),
+            (self.relay.host_dir(host), [self.relay.vendor_view(), payload_dir]),
+        ):
+            result = relay.sync(
+                staging_dir=self._staging_dir,
+                host=host,
+                relay=self.relay,
+                dest=dest,
+                link_dests=link_dests,
+            )
+            if not result.ok:
+                seconds = round(time.monotonic() - started, 1)
+                self.log.event(
+                    "RELAY_SYNC_FAIL",
+                    unit=host,
+                    dest=dest,
+                    rc=result.returncode,
+                    seconds=seconds,
+                    detail=result.detail,
+                )
+                self.log.activity(host, "RELAY_SYNC_FAIL", f"rc_{result.returncode}", dur(), payload_hash, git_sha)
+                self.exit_code = EXIT_UNIT_FAIL
+                return False
+
+        seconds = round(time.monotonic() - started, 1)
+        self.log.event("RELAY_SYNC_OK", unit=host, seconds=seconds, dest=self.relay.host_dir(host), payload=payload_dir)
+        return True
+
     def _set_unavailable(self, session: transport.UnitSession, host: str, payload_hash: str) -> None:
         since = datetime.now(UTC)
         expected = since + timedelta(seconds=AVAIL_TTL_S)
@@ -856,8 +967,12 @@ class Driver:
         git_sha: str,
         skip: payload.Exclusions,
     ) -> bool:
+        serving = self._staging_credential(host, dur, payload_hash, git_sha)
+        if serving is None:
+            return False
+        smb_user, smb_pass = serving
         unit_stage = rf"C:\mast-staging\{self.run_id}"
-        src_unc = rf"\\{self.prov_address}\mast-staging\{host}\01-provisioning"
+        src_unc = rf"\\{self.prov_address}\{self.staging_share}\{host}\01-provisioning"
         # Measured WITH the exclusions: this figure is the unit's disk guard, so
         # a full-payload number against a trimmed copy would reserve space the
         # run never uses (the #7 item 6 mismatch, in the other direction).
@@ -885,8 +1000,8 @@ class Driver:
         args = transport.pull_staging_args(
             prov_address=self.prov_address,
             unit_hostname=host,
-            smb_user=self.smb_user,
-            smb_pass=self.smb_pass,
+            smb_user=smb_user,
+            smb_pass=smb_pass,
             unit_stage=unit_stage,
             src_unc=src_unc,
             payload_bytes=size.bytes,
