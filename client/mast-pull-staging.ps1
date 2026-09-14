@@ -107,6 +107,52 @@ function Get-RobocopyOutcome {
     if ($ExitCode -ge 8) { 'ROBOCOPY_ERROR' } else { 'OK' }
 }
 
+function Test-MastRobocopyCompleted {
+    # Did robocopy run to completion, as opposed to being killed partway?
+    #
+    # The exit code cannot answer this: 1 means "files copied successfully" AND
+    # is what a taskkill'd process exits with, so an operator, a watchdog, an OOM
+    # or a session teardown all land in the success branch (#189). A run that
+    # completes always writes the Bytes:/Times:/Ended: trailer; an abnormally
+    # terminated one never does. The log is already captured and already tailed
+    # for $rbSummary, so the evidence was in hand and simply unasserted.
+    #
+    # 'Ended :' is the last line robocopy writes, so it is the honest marker --
+    # 'Bytes :' alone can appear in a tail that was cut immediately after it.
+    param([string]$LogTail)
+    if ([string]::IsNullOrWhiteSpace($LogTail)) { return $false }
+    return ($LogTail -match '(?m)^\s*Ended\s*:')
+}
+
+function Get-MastDirectorySize {
+    # Files and bytes actually under $Path, descending directory junctions the
+    # way robocopy /E copies through them. Get-ChildItem -Recurse does NOT
+    # descend reparse points, which understated a payload by ~10 GB once
+    # (MAST_provisioning#7 item 6); -Attributes !ReparsePoint + an explicit walk
+    # keeps this honest whatever lands in the destination.
+    #
+    # A missing path reads as zero rather than throwing: the driver compares this
+    # against what it expected either way, and a throw would lose the numbers
+    # that say why the transfer failed.
+    param([string]$Path)
+
+    $files = 0
+    $bytes = [int64]0
+    if (Test-Path -LiteralPath $Path) {
+        $stack = New-Object System.Collections.Stack
+        $stack.Push((Get-Item -LiteralPath $Path))
+        $seen = New-Object 'System.Collections.Generic.HashSet[string]'
+        while ($stack.Count -gt 0) {
+            $dir = $stack.Pop()
+            if (-not $seen.Add($dir.FullName)) { continue }
+            foreach ($e in (Get-ChildItem -LiteralPath $dir.FullName -Force -ErrorAction SilentlyContinue)) {
+                if ($e.PSIsContainer) { $stack.Push($e) } else { $files++; $bytes += [int64]$e.Length }
+            }
+        }
+    }
+    return [pscustomobject]@{ Files = $files; Bytes = $bytes }
+}
+
 function Get-MastRobocopyExclusionArgs {
     # robocopy's /XF and /XD arguments for the entries this run does not need.
     # FULL SOURCE PATHS, not bare names: a bare name matches anywhere in the
@@ -257,13 +303,22 @@ try {
     if (-not $rbSummary) { $rbSummary = ($rbErr | Out-String).Trim() }
 
     $outcome = Get-RobocopyOutcome -ExitCode $rbRc
+    # What actually landed, measured rather than assumed. The driver asserts this
+    # against the size it computed server-side; until #189 it reported that
+    # pre-scan as though it were a measurement, so a copy that moved 1.9% of the
+    # payload published the full byte count and the run proceeded to execute.
+    $landed = Get-MastDirectorySize -Path $UnitStage
+    $completed = Test-MastRobocopyCompleted -LogTail $rbSummary
     Write-Host ("ROBOCOPY_ELAPSED_S {0:N1}" -f $rbSw.Elapsed.TotalSeconds)
-    Write-Host "ROBOCOPY_DONE rc=$rbRc outcome=$outcome"
+    Write-Host "ROBOCOPY_DONE rc=$rbRc outcome=$outcome completed=$completed landed_files=$($landed.Files) landed_bytes=$($landed.Bytes)"
     Write-Host "ROBOCOPY_SUMMARY $rbSummary"
     return [pscustomobject]@{
-        outcome = $outcome
-        rc      = $rbRc
-        detail  = $rbSummary
+        outcome      = $outcome
+        rc           = $rbRc
+        detail       = $rbSummary
+        landed_files = $landed.Files
+        landed_bytes = $landed.Bytes
+        completed    = $completed
     }
 } finally {
     # Always unmount, even if robocopy failed.

@@ -872,7 +872,12 @@ class Driver:
                 bytes_skipped=full.bytes - size.bytes,
             )
         self.log.event(
-            "TRANSFER_START", unit=host, files=size.files, bytes=size.bytes, src_unc=src_unc, dst_local=unit_stage
+            "TRANSFER_START",
+            unit=host,
+            files=size.files,
+            expected_bytes=size.bytes,
+            src_unc=src_unc,
+            dst_local=unit_stage,
         )
         # Ship the pull script (it runs before the payload arrives), then run it.
         pull_src = (self.cfg.repo_top / "client" / "mast-pull-staging.ps1").read_text(encoding="utf-8")
@@ -935,14 +940,58 @@ class Driver:
             self.log.activity(host, "TRANSFER_FAIL", f"{reason}_rc_{rc}", dur(), payload_hash, git_sha)
             self.exit_code = EXIT_UNIT_FAIL
             return False
-        # outcome == 'OK': robocopy rc 0-7 (0 no-op, 1 copied, 2-7 info/warning).
+        # outcome == 'OK' is necessary and not sufficient. robocopy's exit code
+        # cannot say whether it finished: 1 means "files copied successfully" and
+        # is also what a killed process exits with, so an operator, a watchdog, an
+        # OOM or an SMB session teardown all land here. On 2026-09-02 that let a
+        # copy of 1.9% of the payload report TRANSFER_OK with the FULL byte count,
+        # after which execute ran and failed three modules whose files had never
+        # arrived, several phases from the real cause (#189).
+        #
+        # Two independent checks, because they catch different things: the
+        # destination measurement catches every short copy including causes
+        # nobody has thought of, and the summary block catches an abnormal
+        # termination whose size happens to match.
+        landed_bytes = (res or {}).get("landed_bytes")
+        landed_files = (res or {}).get("landed_files")
+
+        def verify_failed(reason: str, **fields: Any) -> bool:
+            self.log.event(
+                "TRANSFER_FAIL",
+                unit=host,
+                reason=reason,
+                expected_bytes=size.bytes,
+                expected_files=size.files,
+                robocopy_rc=rc,
+                duration_s=dur(),
+                **fields,
+            )
+            self.log.activity(host, "TRANSFER_FAIL", f"{reason}_rc_{rc}", dur(), payload_hash, git_sha)
+            self.exit_code = EXIT_UNIT_FAIL
+            return False
+
+        if not isinstance(landed_bytes, int) or not isinstance(landed_files, int):
+            # A unit still carrying a pull script from before #189 reports no
+            # figures at all. Fail closed for the same reason the outcome
+            # whitelist does: an unknown answer is not a pass.
+            return verify_failed("unverified_transfer", landed_bytes="absent", landed_files="absent")
+        if (res or {}).get("completed") is not True:
+            return verify_failed("robocopy_incomplete", landed_bytes=landed_bytes, landed_files=landed_files)
+        if landed_bytes != size.bytes or landed_files != size.files:
+            return verify_failed("short_transfer", landed_bytes=landed_bytes, landed_files=landed_files)
+
+        # robocopy rc 0-7 (0 no-op, 1 copied, 2-7 info/warning).
         note_by_rc: dict[Any, str] = {0: "no_changes", 1: "files_copied"}
         note = note_by_rc.get(rc, f"robocopy_warning_rc_{rc}")
-        mbps = transfer_rate_mbps(size.bytes, xfer_s)
+        # Measured, not the pre-scan: a rate derived from bytes that did not move
+        # is fiction, and the fictional mbps=12.8 on mast03 sent the diagnosis
+        # after a throughput problem that did not exist.
+        mbps = transfer_rate_mbps(landed_bytes, xfer_s)
         self.log.event(
             "TRANSFER_OK",
             unit=host,
-            bytes=size.bytes,
+            bytes=landed_bytes,
+            files=landed_files,
             robocopy_rc=rc,
             note=note,
             seconds=round(xfer_s, 1),
@@ -955,7 +1004,7 @@ class Driver:
                 mbps=mbps,
                 floor_mbps=TRANSFER_SLOW_FLOOR_MBPS,
                 seconds=round(xfer_s, 1),
-                bytes=size.bytes,
+                bytes=landed_bytes,
                 hint="robocopy.log in the unit session dir carries the per-file detail",
             )
         self._unit_stage = unit_stage

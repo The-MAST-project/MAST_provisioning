@@ -19,7 +19,7 @@ import pytest
 from prov import driver as D
 from prov import transport as T
 
-DEFAULT_PULL = 'PULLRESULT {"outcome": "OK", "rc": 1}'
+DEFAULT_PULL = 'PULLRESULT {"outcome": "OK", "rc": 1, "landed_files": 3, "landed_bytes": 1000, "completed": true}'
 
 
 class FakeSession(T.SshSession):
@@ -197,7 +197,8 @@ def test_transfer_known_failure_outcomes_still_fail(root, monkeypatch, pull):
 
 def test_transfer_ok_rc_zero_is_success(root, monkeypatch):
     # rc 0 (no changes) and rc 2-7 (robocopy info) are still OK outcomes.
-    drv, _sess = _make_driver(root, monkeypatch, make_responder(pull='PULLRESULT {"outcome": "OK", "rc": 0}'))
+    pull = 'PULLRESULT {"outcome": "OK", "rc": 0, "landed_files": 3, "landed_bytes": 1000, "completed": true}'
+    drv, _sess = _make_driver(root, monkeypatch, make_responder(pull=pull))
     code = drv.run()
     log = drv.log.run_log_path.read_text()
     assert code == D.EXIT_OK, log
@@ -242,7 +243,9 @@ def test_unreachable_unit_fails_without_session(root, monkeypatch):
 # --- per-module targeted update (issue #22 stage 3) --------------------------
 
 
-def _drift_driver(root, monkeypatch, installed: dict | None, build: dict, validation: dict | None = None):
+def _drift_driver(
+    root, monkeypatch, installed: dict | None, build: dict, validation: dict | None = None, pull: str = DEFAULT_PULL
+):
     """Driver whose unit reports ``installed`` (+ optional tier-2 ``validation``)
     and whose build yields ``build``.
 
@@ -253,7 +256,7 @@ def _drift_driver(root, monkeypatch, installed: dict | None, build: dict, valida
     unit on a missing marker and masks everything downstream.
     """
     smoke = "SMOKE " + json.dumps({m: "ok" for m in build.get("modules", [])})
-    responder = make_responder(smoke=smoke)
+    responder = make_responder(smoke=smoke, pull=pull)
 
     def with_manifests(script: str) -> tuple[int, str]:
         if "installed-manifest.json" in script:
@@ -572,7 +575,8 @@ def test_the_disk_guard_is_sized_from_the_trimmed_payload(root, monkeypatch):
             "python": {"version": "1", "hash": "h-py-OLD", "provide": "pass", "verify": "pass"},
         },
     }
-    drv, sess = _drift_driver(root, monkeypatch, installed, BUILD_WITH_PAYLOAD)
+    trimmed = 'PULLRESULT {"outcome": "OK", "rc": 1, "landed_files": 2, "landed_bytes": 400, "completed": true}'
+    drv, sess = _drift_driver(root, monkeypatch, installed, BUILD_WITH_PAYLOAD, pull=trimmed)
 
     seen: list[dict] = []
 
@@ -588,6 +592,74 @@ def test_the_disk_guard_is_sized_from_the_trimmed_payload(root, monkeypatch):
     assert "-PayloadBytes '400'" in _pull_invocation(sess)
     log = drv.log.run_log_path.read_text()
     assert "bytes_skipped=600" in log
+
+
+# --- issue #189: TRANSFER_OK must mean the payload arrived -------------------
+#
+# The stubbed staging_payload_size in _make_driver reports 3 files / 1000 bytes,
+# so a pull claiming those numbers is a complete transfer and anything else is
+# short.
+
+
+def _pull(**fields) -> str:
+    base = {"outcome": "OK", "rc": 1, "landed_files": 3, "landed_bytes": 1000, "completed": True}
+    return "PULLRESULT " + json.dumps({**base, **fields})
+
+
+def _transfer_failed(drv, reason: str) -> bool:
+    log = drv.log.run_log_path.read_text()
+    return "TRANSFER_FAIL" in log and f"reason={reason}" in log
+
+
+def test_a_short_transfer_fails_the_unit_instead_of_executing(root, monkeypatch):
+    """The reported defect: robocopy killed partway exits 1, which is also
+    'files copied', so the phase passed and the run executed against 1.9% of a
+    payload. The failure then surfaced as three unrelated smoke failures."""
+    drv, _sess = _make_driver(root, monkeypatch, make_responder(pull=_pull(landed_bytes=19, landed_files=1)))
+    assert drv.run() == D.EXIT_UNIT_FAIL
+    assert _transfer_failed(drv, "short_transfer")
+    log = drv.log.run_log_path.read_text()
+    assert "landed_bytes=19" in log and "expected_bytes=1000" in log
+    assert "EXECUTE" not in log, "execute must not run against a payload that did not arrive"
+
+
+def test_a_complete_transfer_proceeds(root, monkeypatch):
+    """The assertion is exact equality, so a normal run has to be demonstrated
+    not to trip it."""
+    drv, _sess = _make_driver(root, monkeypatch, make_responder(pull=_pull()))
+    assert drv.run() == D.EXIT_OK, drv.log.run_log_path.read_text()
+    assert "TRANSFER_OK" in drv.log.run_log_path.read_text()
+
+
+def test_a_pull_without_the_landed_fields_fails_closed(root, monkeypatch):
+    """A unit still carrying an older mast-pull-staging.ps1 reports no landed
+    figures. Treating that as success would restore the very hole this closes --
+    the same fail-closed-on-unknown rule as the outcome whitelist."""
+    drv, _sess = _make_driver(root, monkeypatch, make_responder(pull='PULLRESULT {"outcome": "OK", "rc": 1}'))
+    assert drv.run() == D.EXIT_UNIT_FAIL
+    assert _transfer_failed(drv, "unverified_transfer")
+
+
+def test_a_missing_robocopy_summary_fails_the_unit(root, monkeypatch):
+    """A run that completes always writes the Bytes:/Times:/Ended: trailer; one
+    killed partway never does. Independent of the byte comparison, and catches a
+    truncated copy whose size happens to match."""
+    drv, _sess = _make_driver(root, monkeypatch, make_responder(pull=_pull(completed=False)))
+    assert drv.run() == D.EXIT_UNIT_FAIL
+    assert _transfer_failed(drv, "robocopy_incomplete")
+
+
+def test_the_reported_rate_is_derived_from_what_landed(root, monkeypatch):
+    """mbps off the server-side pre-scan is fiction whenever the copy is short,
+    and the misleading figure on mast03 invited a throughput investigation that
+    had nothing to do with the fault."""
+    drv, _sess = _make_driver(root, monkeypatch, make_responder(pull=_pull()))
+    assert drv.run() == D.EXIT_OK, drv.log.run_log_path.read_text()
+    log = drv.log.run_log_path.read_text()
+    assert "expected_bytes=1000" in log, "TRANSFER_START states what it expects"
+    start = log.index("TRANSFER_START")
+    assert "bytes=1000" in log[log.index("TRANSFER_OK") :], "TRANSFER_OK reports the measured figure"
+    assert start < log.index("TRANSFER_OK")
 
 
 # --- issue #25: the operational-share credential -----------------------------
