@@ -985,6 +985,25 @@ ${manifest}    = [pscustomobject]@{
 }
 (${manifest} | ConvertTo-Json -Depth 6) |
     Out-File -FilePath (Join-Path ${staging} 'build-manifest.json') -Encoding UTF8
+
+# Per-file manifest: every staged path with its size and content hash, written
+# BESIDE the staging root rather than inside it. It describes the payload, so it
+# is not part of the payload -- inside, it would have to exclude itself from its
+# own hash and would then travel to every unit for no reason.
+#
+# The relay assembles a host's tree from this, hardlinking blobs it already holds
+# and asking only for the ones it lacks, so a build that changed four scripts
+# costs kilobytes rather than the 1,959,264,676 bytes measured on 2026-09-14
+# (#202).
+${payloadManifest} = [ordered]@{
+    payload_hash = ${payloadHash}
+    hostname     = ${HostName}
+    generated_at = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+    files        = @(Get-MastPayloadManifest -StagingDir ${staging})
+}
+${payloadManifestPath} = Join-Path ${stagingTop} 'payload-manifest.json'
+(${payloadManifest} | ConvertTo-Json -Depth 4) | Out-File -FilePath ${payloadManifestPath} -Encoding UTF8
+Write-Host ("Wrote payload-manifest.json ({0} files)" -f @(${payloadManifest}.files).Count)
 Write-Host "Wrote build-manifest.json (payload_hash=${payloadHash}, git_sha=${gitSha})"
 
 Write-Host "Staged ${HostName} at ${staging}"

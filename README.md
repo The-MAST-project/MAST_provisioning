@@ -851,11 +851,30 @@ the orchestrator builds locally, rsyncs the payload there, and hands the unit th
 host's address and share instead of its own. A site with no entry keeps pulling
 from the orchestrator, which is what the bench and the dev VM want.
 
-It is cheap because the staging host already holds the mirrored vendor inputs:
-`tools/build-vendor-view.sh` presents them under their staging-root names, rsync
-gets that as a `--link-dest`, and 87% of a host tree is hardlinked rather than
-sent. Setup and the transport gotchas are in
+It is cheap because the staging host keeps a **content-addressed store** and a
+host's payload is a tree of hardlinks into it. `build-mast.ps1` writes
+`payload-manifest.json` beside the staging root — every staged path with its size
+and SHA-256 — and [`tools/relay-store.py`](tools/relay-store.py), run on the relay
+over ssh, answers which digests the store lacks (`want`), takes delivery of just
+those, and builds the host tree from links (`assemble`):
+
+```
+store/<aa>/<sha256>              one copy of each distinct blob
+hosts/<host>/01-provisioning/    hardlinks into store; what SMB serves
+```
+
+Two builds share exactly the bytes they share, with no notion of a previous
+version — which matters once units sit on deliberately different stacks, where
+"the last payload" is an arbitrary neighbour and a lineage-based `--link-dest`
+would degrade silently. Measured on mast07: a build that cost 1,959,264,676 bytes
+under `--link-dest` synced in **5.5 s with one blob, 41,800 bytes**.
+
+`relay-store.py gc` drops blobs no host tree references; it is run by hand.
+Setup and the transport gotchas are in
 [docs/provisioning-server-setup.md](docs/provisioning-server-setup.md) Step 4c.
+
+**Do not edit a file in a host tree in place** — it is a hardlink, and a
+write-through lands in the blob every other tree shares. Unlink and replace.
 
 ## Build-host vendor inputs
 

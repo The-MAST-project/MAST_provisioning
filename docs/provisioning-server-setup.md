@@ -311,19 +311,30 @@ address instead of its own. Nothing else about the pull changes.
 Declared per site in [`server/data/staging-hosts.json`](../server/data/staging-hosts.json);
 a site with no entry keeps pulling from the orchestrator.
 
-**Why this is affordable.** The staging host also holds the mirrored vendor
-inputs (#194) — 12,918,167,762 bytes of a 14,877,432,438-byte payload.
-`vendor-view` presents them under their staging-root names and rsync gets it as a
-`--link-dest`, so those bytes are hardlinked rather than sent. The first host at a
-given build costs the ~1.96 GB remainder; each later host costs the few files that
-actually differ, measured at 199 bytes and 1.4 s for a second host tree.
+**Why this is affordable.** The staging host keeps a **content-addressed store**
+(#202) and a host's payload is a tree of hardlinks into it. The build writes
+`payload-manifest.json` beside the staging root; the orchestrator asks the store
+which SHA-256 digests it lacks, sends only those, and has the tree assembled from
+links. Measured on mast07: 5.5 s and one 41,800-byte blob for a 14.88 GB payload
+that cost 1,959,264,676 bytes under the `--link-dest` scheme it replaced.
 
 ### On the staging host
 
 ```bash
-mkdir -p /Storage/mast-provisioning/{hosts,payload}
-VENDOR=/Storage/mast-vendor ROOT=/Storage/mast-provisioning tools/build-vendor-view.sh
+mkdir -p /Storage/mast-provisioning/{hosts,store}
 ```
+
+Seed the store from trees the host already holds — the vendor mirror (#194) and
+any existing host tree — so the first sync is not a 14.9 GB upload. Seeding
+**adopts** each file: the store entry is a second name for the same inode, the
+source tree is left exactly as it was, and no disk is consumed:
+
+```bash
+tools/relay-store.py --root /Storage/mast-provisioning seed /Storage/mast-vendor
+```
+
+On mast-ns-control that collapsed 1,895 names into 561 distinct blobs (14.88 GB)
+with no change in `du`.
 
 A read-only share over `hosts/`, reusing the account the operational share already
 uses so no new Samba user is needed:
@@ -370,23 +381,27 @@ are repeated here because each one cost a diagnosis:
 - **Name the identity explicitly.** Cygwin ssh takes its home from `/etc/passwd`
   (`/home/<user>`, absent on the build host), not `$HOME`, so it finds no key.
 - **`--no-perms --no-owner --no-group --chmod=`, and `-rlt` rather than `-a`.**
-  `--link-dest` hardlinks only when attributes match as well as content, and
-  Windows ACLs arriving through cygwin never match twice. Without these the sync
-  silently degrades into a full copy of every host tree, every time, with no
-  error. `-a` implies `-pgoD` and undoes them.
+  Windows ACLs arriving through cygwin never reproduce, so with attributes
+  preserved rsync rewrites blobs it should have left alone — and a blob is
+  hardlinked into every host tree that names it. `-a` implies `-pgoD` and undoes
+  them.
 - **rsync creates only the last component of a destination path**, so the parent
   must exist — otherwise the sync reports success having written nothing.
 
 ### Checking it works rather than merely runs
 
-That degradation is silent, so assert on the effect:
+Sharing is invisible in a directory listing, so assert on the effect:
 
 ```bash
 stat -c '%h %n' /Storage/mast-provisioning/hosts/*/01-provisioning/mast-indexes/index-5202-00.fits
 du -sh --total /Storage/mast-vendor /Storage/mast-provisioning | tail -1
 ```
 
-Link counts above 1, and a total that has not grown by a payload.
+Link counts above 1, and a total that has not grown by a payload. The run's own
+`RELAY_SYNC_OK` line carries `blobs_sent=`, which is the same fact per sync.
+
+`tools/relay-store.py gc` drops blobs no host tree references. It is manual; run
+it after retiring a unit, not on a schedule.
 
 ---
 

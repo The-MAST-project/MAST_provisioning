@@ -16,7 +16,8 @@
     "mast-share, so 'shared' is the default.",
     "",
     "Setup for a new relay is in docs/provisioning-server-setup.md; the layout it",
-    "expects under 'root' is hosts/ (served), payload/ and vendor-view/."
+    "expects under 'root' is hosts/ (served, one hardlink tree per unit) and",
+    "store/ (blobs named by their own SHA-256). Both must be on one filesystem."
   ],
   "sites": {
     "ns": {
