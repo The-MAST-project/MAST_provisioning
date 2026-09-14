@@ -36,7 +36,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from prov import drift, registry, transport
+from prov import drift, payload, registry, transport
 from prov import logevents as L
 from prov.maintenance_window import in_maintenance_window
 from prov.retention import run_retention
@@ -591,12 +591,19 @@ class Driver:
                     )
                     return
 
+                # What this run does not have to carry. Computed here, after
+                # --modules has narrowed the targets, so the transfer matches
+                # what execute will actually run (#186). An empty target set --
+                # --force, MODULE_DRIFT_NONE, a plain full run -- excludes
+                # nothing; prov.payload owns that rule.
+                skip = payload.exclusions(build_manifest, target_modules)
+
                 # Phase 6 -- mark unavailable / take lease.
                 self._set_unavailable(session, host, payload_hash)
                 lease_held = True
 
                 # Phase 7 -- transfer (SMB pull).
-                if not self._transfer(session, host, dur, payload_hash, git_sha):
+                if not self._transfer(session, host, dur, payload_hash, git_sha, skip):
                     return  # TRANSFER_FAIL already logged
 
                 # Phase 8 -- execute (detached; may reconnect and replace session).
@@ -840,10 +847,30 @@ class Driver:
             lease_owner=self.run_id,
         )
 
-    def _transfer(self, session: transport.UnitSession, host: str, dur, payload_hash: str, git_sha: str) -> bool:
+    def _transfer(
+        self,
+        session: transport.UnitSession,
+        host: str,
+        dur,
+        payload_hash: str,
+        git_sha: str,
+        skip: payload.Exclusions,
+    ) -> bool:
         unit_stage = rf"C:\mast-staging\{self.run_id}"
         src_unc = rf"\\{self.prov_address}\mast-staging\{host}\01-provisioning"
-        size = staging_payload_size(self._staging_dir)
+        # Measured WITH the exclusions: this figure is the unit's disk guard, so
+        # a full-payload number against a trimmed copy would reserve space the
+        # run never uses (the #7 item 6 mismatch, in the other direction).
+        size = staging_payload_size(self._staging_dir, exclude_files=skip.files, exclude_dirs=skip.dirs)
+        if skip:
+            full = staging_payload_size(self._staging_dir)
+            self.log.event(
+                "TRANSFER_TRIMMED",
+                unit=host,
+                excluded=skip.summary(),
+                files_skipped=full.files - size.files,
+                bytes_skipped=full.bytes - size.bytes,
+            )
         self.log.event(
             "TRANSFER_START", unit=host, files=size.files, bytes=size.bytes, src_unc=src_unc, dst_local=unit_stage
         )
@@ -858,6 +885,8 @@ class Driver:
             unit_stage=unit_stage,
             src_unc=src_unc,
             payload_bytes=size.bytes,
+            exclude_files=skip.files,
+            exclude_dirs=skip.dirs,
         )
         script = (
             f"$r = & {_ps_lit(UNIT_PULL_SCRIPT)} {args}; "

@@ -805,6 +805,23 @@ else), `mast-services-finalize` (the final posture assertion), and
 folds them into any non-empty target set — so a targeted update that installed
 anything still closes out properly. They never *cause* a run on their own.
 
+**What a module's assets cost on the wire.** `build-mast.ps1` records every
+staging-root asset it stages against the module that caused it, as
+`build-manifest.json`'s `module_payload`, and the driver excludes from the SMB
+pull anything no *targeted* module claims (`server/prov/payload.py`,
+MAST_provisioning#186). A one-module drift therefore transfers roughly that
+module's own assets instead of the whole ~14.9 GB payload. Three properties are
+worth knowing when adding a module:
+
+- **Only `assets/*` entries are recorded.** Scripts — including every
+  `verify-*.ps1` — always ship, so an operator's `run-verify-only.ps1` over the
+  full module set still works against a trimmed payload.
+- **Anything unrecorded always ships.** A new staging block that forgets to
+  record its output costs a wasted copy, never a missing file.
+- **An empty target set excludes nothing**, which is what `--force`, a first
+  provisioning, and the aggregate-differs-but-no-module-drifted fallback all
+  produce.
+
 **`repofiles` (optional)** — for a file the module runs that deliberately lives
 *outside* its provider directory, because it is shared with something else in the
 repo:
@@ -824,6 +841,36 @@ build errors — see `build/build-staging-lib.ps1`.
 No edit to `execute-mast-provisioning.ps1` is required. `build-mast.ps1` copies `client/run-verify-only.ps1` into each staged `01-provisioning` folder for verify-only reruns.
 
 ---
+
+## Build-host vendor inputs
+
+Five things a payload needs are **not** in this repo, and would have to be
+reconstructed by hand if the provisioning server were lost. They are declared in
+[`server/data/vendor-inputs.json`](server/data/vendor-inputs.json) with, for each
+one, why it cannot be tracked here, where it came from, and how to re-acquire it:
+
+| Input | Size | Used by |
+|---|---|---|
+| `C:\MAST\mast-indexes` | 9.9 GB | `imdisk` |
+| `C:\MAST\ps3-catalog` | 2.0 GB | `planewave` |
+| `C:\MAST\cygwin-pkg-cache` | 175 MB | `astrometry-dependencies` |
+| `C:\MAST\full-frame.fits` | 90 MB | `astrometry`, `mast-validation` |
+| `vault\nomachine-licenses` | 8 KB | `nomachine` |
+
+Everything else a payload carries **is** tracked here (162 files in git-LFS, 58
+provider assets), which is why this list is short.
+
+`C:\MAST\` on the build host also holds regenerable images and scratch. The
+distinction matters and is easy to lose, so anything deliberately excluded is
+listed in the same file under `not_vendor_inputs` with a reason.
+`server/prov/tests/test_vendor_inputs.py` fails if a `C:\MAST\` path used by
+`build/*.ps1` appears in neither list — a new vendored input cannot become
+load-bearing without being written down.
+
+Canonical copies live on `mast-ns-control` at `/Storage/mast-vendor/`; the build
+host holds a working cache, so a build never depends on the WAN. Manifests,
+provenance records and the cache-verify job are
+[#194](https://github.com/The-MAST-project/MAST_provisioning/issues/194).
 
 ## Secrets / vault
 

@@ -77,3 +77,35 @@ Describe 'Test-StagingFits with a junction-inclusive payload' {
         Test-StagingFits -FreeBytes 6GB -PayloadBytes 13.855GB | Should Be $false
     }
 }
+
+Describe 'Get-MastRobocopyExclusionArgs' {
+    $src = '\\192.0.2.34\mast-staging\mast01\01-provisioning'
+
+    It 'emits nothing when nothing is excluded' {
+        # --force and a full run both arrive here with empty strings, and must
+        # produce the argument list the payload had before #186.
+        @(Get-MastRobocopyExclusionArgs -SrcUNC $src -ExcludeFiles '' -ExcludeDirs '').Count | Should Be 0
+    }
+    It 'roots each directory at the source UNC' {
+        $a = Get-MastRobocopyExclusionArgs -SrcUNC $src -ExcludeFiles '' -ExcludeDirs 'mast-indexes|wheels'
+        ($a -join ' ') | Should Be "/XD $src\mast-indexes $src\wheels"
+    }
+    It 'roots each file at the source UNC' {
+        $a = Get-MastRobocopyExclusionArgs -SrcUNC $src -ExcludeFiles 'astrometry.tgz' -ExcludeDirs ''
+        ($a -join ' ') | Should Be "/XF $src\astrometry.tgz"
+    }
+    It 'puts directories before files so each list is terminated by the next switch' {
+        $a = Get-MastRobocopyExclusionArgs -SrcUNC $src -ExcludeFiles 'a.exe' -ExcludeDirs 'sxs'
+        $a[0] | Should Be '/XD'
+        $a[2] | Should Be '/XF'
+    }
+    It 'keeps a name containing spaces intact' {
+        $a = Get-MastRobocopyExclusionArgs -SrcUNC $src -ExcludeFiles 'SAOImageDS9 8.7 Install.exe' -ExcludeDirs ''
+        $a[1] | Should Be "$src\SAOImageDS9 8.7 Install.exe"
+        @($a).Count | Should Be 2
+    }
+    It 'ignores empty segments and surrounding whitespace' {
+        $a = Get-MastRobocopyExclusionArgs -SrcUNC $src -ExcludeFiles '' -ExcludeDirs '|wheels| |'
+        ($a -join ' ') | Should Be "/XD $src\wheels"
+    }
+}

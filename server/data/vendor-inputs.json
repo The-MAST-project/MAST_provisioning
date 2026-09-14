@@ -1,0 +1,81 @@
+{
+  "_comment": [
+    "The build-host inputs that are NOT in this repo and are hard to re-acquire.",
+    "",
+    "Everything else a payload needs is tracked here (162 files in git-LFS, 58 provider",
+    "assets), so this list is deliberately short: it is the set that would have to be",
+    "reconstructed by hand if the provisioning server were lost. C:\\MAST\\ on that machine",
+    "also holds regenerable images and scratch; those are in 'not_vendor_inputs' with the",
+    "reason, so the distinction is recorded rather than remembered.",
+    "",
+    "Kept in step with the build by server/prov/tests/test_vendor_inputs.py: a C:\\MAST\\ path",
+    "used by build/*.ps1 and declared in neither list fails the suite.",
+    "",
+    "Canonical copies live on mast-ns-control at /Storage/mast-vendor/; the provisioning",
+    "server holds a working cache so a build never depends on the WAN. Manifest, provenance",
+    "and the cache-verify job are MAST_provisioning#194."
+  ],
+  "inputs": [
+    {
+      "name": "mast-indexes",
+      "path": "C:\\MAST\\mast-indexes",
+      "kind": "directory",
+      "approx_bytes": 10575826560,
+      "used_by": ["imdisk"],
+      "build_reference": "build/build-mast.ps1",
+      "why_not_in_repo": "9.9 GB of astrometry.net index FITS; far past what git-LFS should carry, and 71% of every payload.",
+      "origin": "Extracted once from the legacy 15 GB index image by build/extract-index-seed.ps1. Upstream is astrometry.net index series 5202+5203.",
+      "reacquire": "build/extract-index-seed.ps1, against the legacy .img, or re-download the series from astrometry.net."
+    },
+    {
+      "name": "full-frame.fits",
+      "path": "C:\\MAST\\full-frame.fits",
+      "kind": "file",
+      "approx_bytes": 93559680,
+      "used_by": ["astrometry", "mast-validation"],
+      "build_reference": "build/build-mast.ps1",
+      "why_not_in_repo": "90 MB of real sky data; the solve input the astrometry smoke test needs to be a real solve rather than a skipped one.",
+      "origin": "A mast00 full frame. The astrometry verify's solve arguments are tuned to this specific frame.",
+      "reacquire": "Any comparable MAST full frame, but verify-astrometry.ps1's solve parameters would need re-tuning."
+    },
+    {
+      "name": "ps3-catalog",
+      "path": "C:\\MAST\\ps3-catalog",
+      "kind": "directory",
+      "approx_bytes": 2066278429,
+      "used_by": ["planewave"],
+      "build_reference": "build/build-mast.ps1",
+      "why_not_in_repo": "2.0 GB PlaneWave vendor download (Setup_PlateSolve3_Catalog.exe plus its Inno data payload .bin). Both must stay together and keep their exact names.",
+      "origin": "Downloaded from planewave.com. Real UCAC4/Orca catalog for PlateSolve3.",
+      "reacquire": "Re-download from planewave.com; without it 'ps3cli --server' has no catalog and the planewave verify fails."
+    },
+    {
+      "name": "cygwin-pkg-cache",
+      "path": "C:\\MAST\\cygwin-pkg-cache",
+      "kind": "directory",
+      "approx_bytes": 183500800,
+      "used_by": ["astrometry-dependencies"],
+      "build_reference": "build/build-mast.ps1",
+      "why_not_in_repo": "A frozen harvest of a working unit's own cygwin package cache, not a redistributable artifact.",
+      "origin": "Harvested from a provisioned unit by build/harvest-cygwin-cache.ps1. Deliberately frozen: the itefix mirror is rolling, and moving past cygwin 3.6.9 broke the pinned fitsio wheel (#20).",
+      "reacquire": "build/harvest-cygwin-cache.ps1 against a unit still on the pinned cygwin version. Re-harvesting from a newer mirror is NOT equivalent."
+    },
+    {
+      "name": "nomachine-licenses",
+      "path": "vault\\nomachine-licenses",
+      "kind": "directory",
+      "approx_bytes": 8330,
+      "used_by": ["nomachine"],
+      "build_reference": "build/build-mast.ps1",
+      "why_not_in_repo": "Issued license certificates. Secrets: gitignored, one seat per unit, tracked in server/providers/nomachine/assets/licenses/allocated.csv.",
+      "origin": "Issued by NoMachine and originally held on mast-ns-control.",
+      "reacquire": "Re-issue through NoMachine; a lost seat is a purchase, not a download. Relative to the repo top, not under C:\\MAST\\."
+    }
+  ],
+  "not_vendor_inputs": [
+    {
+      "path": "C:\\MAST\\MAST-15GB-indexes-5202+5203.img",
+      "reason": "Superseded. The legacy index image the mast-indexes seed was extracted from once; the unit now builds its own sparse image from the seed. Kept only as the input to a re-extraction, and not worth 15 GB of mirror."
+    }
+  ]
+}

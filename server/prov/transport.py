@@ -29,7 +29,7 @@ import re
 import socket
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
@@ -180,6 +180,8 @@ def pull_staging_args(
     unit_stage: str,
     src_unc: str,
     payload_bytes: int,
+    exclude_files: Sequence[str] = (),
+    exclude_dirs: Sequence[str] = (),
 ) -> str:
     """The argument list for ``client/mast-pull-staging.ps1``, as PS literals.
 
@@ -198,6 +200,12 @@ def pull_staging_args(
     because ``Get-ChildItem -Recurse`` does not descend the staging junctions and
     understated the disk guard by ~10 GB (MAST_provisioning#7 item 6).
 
+    ``exclude_files`` / ``exclude_dirs`` come from ``prov.payload`` and are the
+    staging-root entries no targeted module claims (MAST_provisioning#186). They
+    are joined with '|', which Windows forbids in a filename, so no asset can
+    contain the separator; a comma is legal in one and would split a name.
+    ``payload_bytes`` must already be measured with the same exclusions applied.
+
     Guarded by ``test_pull_staging_args_match_the_script``.
     """
     # payload_bytes is quoted like every other argument, and deliberately so:
@@ -211,7 +219,9 @@ def pull_staging_args(
         f"-SmbPass {ps_lit(smb_pass)} "
         f"-UnitStage {ps_lit(unit_stage)} "
         f"-SrcUNC {ps_lit(src_unc)} "
-        f"-PayloadBytes {ps_lit(str(payload_bytes))}"
+        f"-PayloadBytes {ps_lit(str(payload_bytes))} "
+        f"-ExcludeFiles {ps_lit('|'.join(exclude_files))} "
+        f"-ExcludeDirs {ps_lit('|'.join(exclude_dirs))}"
     )
 
 

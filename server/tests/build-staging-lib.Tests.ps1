@@ -170,3 +170,152 @@ Describe 'Get-MastWheelInterpreterMismatches' {
 
 Remove-Item -LiteralPath $stray -Force -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
+
+Describe 'Test-MastCommandFileIsAsset' {
+    It 'calls an assets/ entry an asset' {
+        Test-MastCommandFileIsAsset -CommandFile 'assets/AscomPlatform700.rc4.4448.exe' | Should Be $true
+    }
+    It 'accepts backslash separators' {
+        Test-MastCommandFileIsAsset -CommandFile 'assets\ImDiskTk-x64.zip' | Should Be $true
+    }
+    It 'does not call a provider script an asset' {
+        # The never-exclude-scripts rule lives here. A verify script that stopped
+        # shipping would fail run-verify-only.ps1 on an untargeted module and
+        # manufacture tier-2 needs-repair drift.
+        Test-MastCommandFileIsAsset -CommandFile 'provide-ascom.ps1' | Should Be $false
+        Test-MastCommandFileIsAsset -CommandFile 'verify-jupyter.ps1' | Should Be $false
+    }
+    It 'does not treat a name merely starting with assets as one' {
+        Test-MastCommandFileIsAsset -CommandFile 'assets-readme.txt' | Should Be $false
+    }
+}
+
+Describe 'Add-MastStagedPayload' {
+    It 'records a directory against its module' {
+        $m = New-MastStagedPayloadMap
+        Add-MastStagedPayload -Map $m -Module 'imdisk' -Dir 'mast-indexes'
+        ($m['imdisk'].dirs -join ',')  | Should Be 'mast-indexes'
+        ($m['imdisk'].files -join ',') | Should Be ''
+    }
+    It 'records a file against its module' {
+        $m = New-MastStagedPayloadMap
+        Add-MastStagedPayload -Map $m -Module 'chrome' -File 'GoogleChromeStandaloneEnterprise64.msi'
+        ($m['chrome'].files -join ',') | Should Be 'GoogleChromeStandaloneEnterprise64.msi'
+    }
+    It 'records one entry against several modules' {
+        # full-frame.fits is staged for astrometry OR mast-validation, so both
+        # are claimants and either one targeted must keep it in the payload.
+        $m = New-MastStagedPayloadMap
+        Add-MastStagedPayload -Map $m -Module 'astrometry'      -File 'full-frame.fits'
+        Add-MastStagedPayload -Map $m -Module 'mast-validation' -File 'full-frame.fits'
+        ($m['astrometry'].files -join ',')      | Should Be 'full-frame.fits'
+        ($m['mast-validation'].files -join ',') | Should Be 'full-frame.fits'
+    }
+    It 'is idempotent for a repeated entry' {
+        $m = New-MastStagedPayloadMap
+        Add-MastStagedPayload -Map $m -Module 'jupyter' -Dir 'wheels'
+        Add-MastStagedPayload -Map $m -Module 'jupyter' -Dir 'wheels'
+        @($m['jupyter'].dirs).Count | Should Be 1
+    }
+    It 'keeps several entries for one module in insertion order' {
+        $m = New-MastStagedPayloadMap
+        Add-MastStagedPayload -Map $m -Module 'mast' -File 'uv-x86_64-pc-windows-msvc.zip'
+        Add-MastStagedPayload -Map $m -Module 'mast' -File 'uv-x86_64-pc-windows-msvc.zip.sha256'
+        ($m['mast'].files -join ',') | Should Be 'uv-x86_64-pc-windows-msvc.zip,uv-x86_64-pc-windows-msvc.zip.sha256'
+    }
+    It 'rejects a nested name' {
+        # Staging is flat at the root and the driver turns these names into
+        # robocopy exclusions against the staging root, so a source-relative
+        # path here would produce an exclusion that matches nothing.
+        $m = New-MastStagedPayloadMap
+        { Add-MastStagedPayload -Map $m -Module 'ascom' -File 'assets/AscomPlatform700.rc4.4448.exe' } | Should Throw
+    }
+    It 'rejects an empty module or entry' {
+        $m = New-MastStagedPayloadMap
+        { Add-MastStagedPayload -Map $m -Module ''      -File 'x.exe' } | Should Throw
+        { Add-MastStagedPayload -Map $m -Module 'ascom' -File ''      } | Should Throw
+    }
+    It 'requires exactly one of -File and -Dir' {
+        $m = New-MastStagedPayloadMap
+        { Add-MastStagedPayload -Map $m -Module 'ascom' } | Should Throw
+        { Add-MastStagedPayload -Map $m -Module 'ascom' -File 'x.exe' -Dir 'sxs' } | Should Throw
+    }
+}
+
+Describe 'Get-MastStagingRootName' {
+    It 'calls a flat commandfile its own root entry' {
+        $r = Get-MastStagingRootName -RelativePath 'provide-ascom.ps1'
+        $r.Name | Should Be 'provide-ascom.ps1'
+        $r.IsDir | Should Be $false
+    }
+    It 'calls a nested commandfile a root DIRECTORY' {
+        # config-bootstrap declares sites/ns.toml, which stages as sites\ns.toml.
+        # Recording the leaf would name something that is not at the root and
+        # leave sites\ unaccounted -- caught by the completeness check.
+        $r = Get-MastStagingRootName -RelativePath 'sites/ns.toml'
+        $r.Name | Should Be 'sites'
+        $r.IsDir | Should Be $true
+    }
+    It 'accepts backslash separators' {
+        (Get-MastStagingRootName -RelativePath 'sites\wis.toml').Name | Should Be 'sites'
+    }
+}
+
+Describe 'Add-MastAlwaysStagedPayload' {
+    It 'records a file every run needs' {
+        $a = New-MastAlwaysPayload
+        Add-MastAlwaysStagedPayload -Payload $a -File 'commands.json'
+        ($a.files -join ',') | Should Be 'commands.json'
+    }
+    It 'is idempotent' {
+        # Two providers can declare the same verify script leaf; the flatten
+        # loop records each one it stages.
+        $a = New-MastAlwaysPayload
+        Add-MastAlwaysStagedPayload -Payload $a -File 'mast-log.ps1'
+        Add-MastAlwaysStagedPayload -Payload $a -File 'mast-log.ps1'
+        @($a.files).Count | Should Be 1
+    }
+    It 'rejects a nested name and a missing name' {
+        $a = New-MastAlwaysPayload
+        { Add-MastAlwaysStagedPayload -Payload $a -File 'assets/x.exe' } | Should Throw
+        { Add-MastAlwaysStagedPayload -Payload $a } | Should Throw
+        { Add-MastAlwaysStagedPayload -Payload $a -File 'x' -Dir 'y' } | Should Throw
+    }
+}
+
+Describe 'Get-MastUnattributedStagedEntries' {
+    $stage = Join-Path $env:TEMP ("mast-unattributed-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    New-Item -ItemType Directory -Force -Path $stage | Out-Null
+    $stage = (Get-Item -LiteralPath $stage).FullName
+    Set-Content -LiteralPath (Join-Path $stage 'claimed.exe') -Value ('x' * 100) -Encoding Ascii
+    Set-Content -LiteralPath (Join-Path $stage 'commands.json') -Value ('y' * 10) -Encoding Ascii
+    $big = Join-Path $stage 'vendor-blob'
+    New-Item -ItemType Directory -Force -Path $big | Out-Null
+    Set-Content -LiteralPath (Join-Path $big 'data.bin') -Value ('z' * 500) -Encoding Ascii
+
+    $map = New-MastStagedPayloadMap
+    Add-MastStagedPayload -Map $map -Module 'someprovider' -File 'claimed.exe'
+    $always = New-MastAlwaysPayload
+    Add-MastAlwaysStagedPayload -Payload $always -File 'commands.json'
+
+    It 'omits an entry a module claims' {
+        $r = Get-MastUnattributedStagedEntries -StagingDir $stage -Map $map -Always $always
+        @($r | Where-Object { $_.Name -eq 'claimed.exe' }).Count | Should Be 0
+    }
+    It 'omits an entry declared always-ship' {
+        $r = Get-MastUnattributedStagedEntries -StagingDir $stage -Map $map -Always $always
+        @($r | Where-Object { $_.Name -eq 'commands.json' }).Count | Should Be 0
+    }
+    It 'reports an entry declared by neither, sized by its contents' {
+        # The shape that hid 2.1 GB of PlateSolve3 catalog. The build now throws
+        # on this rather than shipping a payload it cannot describe.
+        $r = Get-MastUnattributedStagedEntries -StagingDir $stage -Map $map -Always $always
+        @($r).Count | Should Be 1
+        $r[0].Name | Should Be 'vendor-blob'
+        $r[0].Bytes | Should BeGreaterThan 400
+    }
+    It 'reports everything when nothing is declared' {
+        $r = Get-MastUnattributedStagedEntries -StagingDir $stage -Map (New-MastStagedPayloadMap) -Always (New-MastAlwaysPayload)
+        @($r).Count | Should Be 3
+    }
+}

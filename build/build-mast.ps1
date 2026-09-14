@@ -549,26 +549,37 @@ function Reset-StagingStage {
 # Actual provisioning
 ${staging} = Join-Path ${stagingTop} "01-provisioning"
 Reset-StagingStage -Path ${staging}
+# Which module caused each root-level asset to be staged. Emitted as the
+# manifest's module_payload and consumed by prov.payload, so a run that executes
+# a subset does not carry the other modules' installers over the wire (#186).
+# Scripts are deliberately never recorded -- see Test-MastCommandFileIsAsset.
+${stagedPayload} = New-MastStagedPayloadMap
+${alwaysPayload} = New-MastAlwaysPayload
 Write-Host "Populating provisioning stage ${staging} ..."
 
 # Always place provisioning.psm1 into staging
 Copy-Item -Force ${serverLib} (Join-Path ${staging} 'provisioning.psm1')
+Add-MastAlwaysStagedPayload -Payload ${alwaysPayload} -File 'provisioning.psm1'
 ${mastLogLib} = Join-Path (Split-Path -Parent ${serverLib}) 'mast-log.ps1'
 if (-not (Test-Path ${mastLogLib})) { throw "Missing mast-log.ps1 at ${mastLogLib}" }
 Copy-Item -Force ${mastLogLib} (Join-Path ${staging} 'mast-log.ps1')
+Add-MastAlwaysStagedPayload -Payload ${alwaysPayload} -File 'mast-log.ps1'
 ${mastNetLib} = Join-Path (Split-Path -Parent ${serverLib}) 'mast-net.ps1'
 if (-not (Test-Path ${mastNetLib})) { throw "Missing mast-net.ps1 at ${mastNetLib}" }
 Copy-Item -Force ${mastNetLib} (Join-Path ${staging} 'mast-net.ps1')
+Add-MastAlwaysStagedPayload -Payload ${alwaysPayload} -File 'mast-net.ps1'
 # Unconditional, not a commandfile of the mast module: verify-mast.ps1 dot-sources
 # it, and a verify-only rerun can be built from any module subset (#177).
 ${mastCurrencyLib} = Join-Path (Split-Path -Parent ${serverLib}) 'mast-git-currency.ps1'
 if (-not (Test-Path ${mastCurrencyLib})) { throw "Missing mast-git-currency.ps1 at ${mastCurrencyLib}" }
 Copy-Item -Force ${mastCurrencyLib} (Join-Path ${staging} 'mast-git-currency.ps1')
+Add-MastAlwaysStagedPayload -Payload ${alwaysPayload} -File 'mast-git-currency.ps1'
 
 # Copy client execution script into staging
 ${executeScript} = Join-Path ${clientRoot} 'execute-mast-provisioning.ps1'
 if (Test-Path ${executeScript}) {
     Copy-Item -Force ${executeScript} (Join-Path ${staging} 'execute-mast-provisioning.ps1')
+    Add-MastAlwaysStagedPayload -Payload ${alwaysPayload} -File 'execute-mast-provisioning.ps1'
     Write-Host " Staged execute-mast-provisioning.ps1"
 } else {
     Write-Warning "execute-mast-provisioning.ps1 not found at ${executeScript}"
@@ -577,6 +588,7 @@ if (Test-Path ${executeScript}) {
 ${invokeChildScript} = Join-Path ${clientRoot} 'mast-invoke-child.ps1'
 if (Test-Path ${invokeChildScript}) {
     Copy-Item -Force ${invokeChildScript} (Join-Path ${staging} 'mast-invoke-child.ps1')
+    Add-MastAlwaysStagedPayload -Payload ${alwaysPayload} -File 'mast-invoke-child.ps1'
     Write-Host " Staged mast-invoke-child.ps1"
 } else {
     Write-Warning "mast-invoke-child.ps1 not found at ${invokeChildScript}"
@@ -591,6 +603,7 @@ if (-not (Test-Path ${installedManifestScript})) {
     throw "Missing mast-installed-manifest.ps1 at ${installedManifestScript}"
 }
 Copy-Item -Force ${installedManifestScript} (Join-Path ${staging} 'mast-installed-manifest.ps1')
+Add-MastAlwaysStagedPayload -Payload ${alwaysPayload} -File 'mast-installed-manifest.ps1'
 Write-Host " Staged mast-installed-manifest.ps1"
 
 # A hard requirement for the same reason as the manifest script above: the imdisk
@@ -601,11 +614,13 @@ if (-not (Test-Path ${clientUtilScript})) {
     throw "Missing mast-client-util.ps1 at ${clientUtilScript}"
 }
 Copy-Item -Force ${clientUtilScript} (Join-Path ${staging} 'mast-client-util.ps1')
+Add-MastAlwaysStagedPayload -Payload ${alwaysPayload} -File 'mast-client-util.ps1'
 Write-Host " Staged mast-client-util.ps1"
 
 ${verifyOnlyScript} = Join-Path ${clientRoot} 'run-verify-only.ps1'
 if (Test-Path ${verifyOnlyScript}) {
     Copy-Item -Force ${verifyOnlyScript} (Join-Path ${staging} 'run-verify-only.ps1')
+    Add-MastAlwaysStagedPayload -Payload ${alwaysPayload} -File 'run-verify-only.ps1'
     Write-Host " Staged run-verify-only.ps1"
 } else {
     Write-Warning "run-verify-only.ps1 not found at ${verifyOnlyScript}"
@@ -640,10 +655,18 @@ foreach (${m} in ${Modules}) {
     }
 
     # Flatten assets/ files to staging root; keep scripts in root
-    if (${cmdfile} -like "assets/*") {
-        ${dst} = Join-Path ${staging} (Split-Path ${cmdfile} -Leaf)
+    if (Test-MastCommandFileIsAsset -CommandFile ${cmdfile}) {
+        ${leaf} = Split-Path ${cmdfile} -Leaf
+        ${dst} = Join-Path ${staging} ${leaf}
+        Add-MastStagedPayload -Map ${stagedPayload} -Module ${m} -File ${leaf}
     } else {
         ${dst} = Join-Path ${staging} ${cmdfile}
+        ${rootEntry} = Get-MastStagingRootName -RelativePath ${cmdfile}
+        if (${rootEntry}.IsDir) {
+            Add-MastAlwaysStagedPayload -Payload ${alwaysPayload} -Dir ${rootEntry}.Name
+        } else {
+            Add-MastAlwaysStagedPayload -Payload ${alwaysPayload} -File ${rootEntry}.Name
+        }
     }
 
     ${dstDir} = Split-Path ${dst} -Parent
@@ -662,6 +685,7 @@ foreach (${m} in ${Modules}) {
     ${rfDst} = Get-MastRepoFileStagingPath -StagingDir ${staging} -RelativePath ${repofile}
     Write-Host " Staging repofile " ${repofile} " ..."
     New-LinkOrCopy -Target ${rfSrc} -LinkPath ${rfDst}
+    Add-MastAlwaysStagedPayload -Payload ${alwaysPayload} -File (Split-Path ${rfDst} -Leaf)
   }
 }
 
@@ -677,6 +701,7 @@ if (${Modules} -contains 'nomachine') {
         if (Test-Path $licPath) {
             ${null} = Assert-MastNoMachineCertIsShippable -LicensePath $licPath -HostName ${HostName}
             Copy-Item -Force -Path $licPath -Destination (Join-Path ${staging} "nomachine.lic")
+            Add-MastStagedPayload -Map ${stagedPayload} -Module 'nomachine' -File 'nomachine.lic'
         } elseif (${AllowMissingNoMachineLicense}) {
             Write-Warning "NoMachine license '$licPath' missing; continuing due to -AllowMissingNoMachineLicense."
         } else {
@@ -692,6 +717,7 @@ if (${Modules} -contains 'nomachine') {
             ${allocRows} += [pscustomobject]@{ license=${free}.Name; host=${HostName} }
             # stage that single .lic
             Copy-Item -Force ${free}.FullName (Join-Path ${staging} "nomachine.lic")
+            Add-MastStagedPayload -Map ${stagedPayload} -Module 'nomachine' -File 'nomachine.lic'
         }
     }
 }
@@ -721,6 +747,7 @@ if (${Modules} -contains 'ascom') {
         ${sxsDst} = Join-Path ${staging} 'sxs'
         New-Item -ItemType Directory -Force -Path ${sxsDst} | Out-Null
         Copy-Item -Force -Recurse -Path (Join-Path ${sxsSrc} '*') -Destination ${sxsDst}
+        Add-MastStagedPayload -Map ${stagedPayload} -Module 'ascom' -Dir 'sxs'
         Write-Host (" Staged NetFx3 SxS payloads for build(s) {0} -> {1}" -f ((${sxsBuilds} | ForEach-Object { $_.Name }) -join ', '), ${sxsDst})
     } elseif (${AllowMissingNetFx3Sxs}) {
         Write-Warning "No per-build NetFx3 SxS payload under '$sxsSrc'; continuing due to -AllowMissingNetFx3Sxs (provider will fall back to online DISM)."
@@ -744,6 +771,7 @@ if (${Modules} -contains 'jupyter') {
         ${whDst} = Join-Path ${staging} 'wheels'
         New-Item -ItemType Directory -Force -Path ${whDst} | Out-Null
         Copy-Item -Force -Path (Join-Path ${whSrc} '*.whl') -Destination ${whDst}
+        Add-MastStagedPayload -Map ${stagedPayload} -Module 'jupyter' -Dir 'wheels'
         Write-Host (" Staged Jupyter wheelhouse ({0} wheels, {1:N0} MB) -> {2}" -f ${whFiles}.Count, ((${whFiles} | Measure-Object -Property Length -Sum).Sum / 1MB), ${whDst})
     } else {
         throw "Jupyter wheelhouse is empty under '${whSrc}'. The provider installs with --no-index and cannot fall back to PyPI; regenerate with 'pip download -r assets/requirements.txt -d assets/wheels --only-binary=:all:' on a Windows host running the fleet's Python."
@@ -767,6 +795,7 @@ if (${Modules} -contains 'imdisk') {
         ${seedFiles} = @(Get-ChildItem -LiteralPath ${astroIndexSeedSrc} -File -Recurse -ErrorAction SilentlyContinue)
         ${seedGb}    = ((${seedFiles} | Measure-Object Length -Sum).Sum / 1GB)
         New-LinkOrCopy -Target ${astroIndexSeedSrc} -LinkPath (Join-Path ${staging} 'mast-indexes')
+        Add-MastStagedPayload -Map ${stagedPayload} -Module 'imdisk' -Dir 'mast-indexes'
         Write-Host (" Staged astrometry index seed: mast-indexes\ ({0} files, {1:N1} GB); the unit builds the sparse 32 GB image." -f ${seedFiles}.Count, ${seedGb})
     } else {
         Write-Warning ("Astrometry index seed missing at {0}; run build/extract-index-seed.ps1 once to populate it from the legacy 15 GB image. imdisk will have nothing to seed and astrometry/mast-validation will FAIL on the unit." -f ${astroIndexSeedSrc})
@@ -775,6 +804,11 @@ if (${Modules} -contains 'imdisk') {
 if ((${Modules} -contains 'astrometry') -or (${Modules} -contains 'mast-validation')) {
     if (Test-Path -LiteralPath ${fullFrameFitsSrc}) {
         New-LinkOrCopy -Target ${fullFrameFitsSrc} -LinkPath (Join-Path ${staging} 'full-frame.fits')
+        foreach (${ffm} in @('astrometry', 'mast-validation')) {
+            if (${Modules} -contains ${ffm}) {
+                Add-MastStagedPayload -Map ${stagedPayload} -Module ${ffm} -File 'full-frame.fits'
+            }
+        }
         Write-Host (" Staged smoke FITS: full-frame.fits ({0:N1} MB)" -f ((Get-Item ${fullFrameFitsSrc}).Length / 1MB))
     } else {
         Write-Warning ("Smoke FITS missing at {0}; astrometry + mast-validation will FAIL on the unit." -f ${fullFrameFitsSrc})
@@ -796,6 +830,8 @@ if (${Modules} -contains 'planewave') {
     if ((Test-Path -LiteralPath ${ps3CatalogExeSrc}) -and (Test-Path -LiteralPath ${ps3CatalogDataSrc})) {
         New-LinkOrCopy -Target ${ps3CatalogExeSrc}  -LinkPath (Join-Path ${staging} 'Setup_PlateSolve3_Catalog.exe')
         New-LinkOrCopy -Target ${ps3CatalogDataSrc} -LinkPath (Join-Path ${staging} 'Setup_PlateSolve3_Catalog-1.bin')
+        Add-MastStagedPayload -Map ${stagedPayload} -Module 'planewave' -File 'Setup_PlateSolve3_Catalog.exe'
+        Add-MastStagedPayload -Map ${stagedPayload} -Module 'planewave' -File 'Setup_PlateSolve3_Catalog-1.bin'
         Write-Host (" Staged PlateSolve3 catalog installer + data ({0:N1} GB)." -f ((Get-Item ${ps3CatalogDataSrc}).Length / 1GB))
     } else {
         Write-Warning ("PlateSolve3 catalog vendor files missing under {0} (need Setup_PlateSolve3_Catalog.exe + Setup_PlateSolve3_Catalog-1.bin); download them from planewave.com once. 'ps3cli --server' will have no catalog and the planewave verify will FAIL on the unit." -f ${ps3CatalogSrcDir})
@@ -820,6 +856,7 @@ if (${Modules} -contains 'astrometry-dependencies') {
         ${cacheFiles} = @(Get-ChildItem -LiteralPath ${cygCacheSrc} -File -Recurse -ErrorAction SilentlyContinue)
         ${cacheMb}    = ((${cacheFiles} | Measure-Object Length -Sum).Sum / 1MB)
         New-LinkOrCopy -Target ${cygCacheSrc} -LinkPath (Join-Path ${staging} 'cygwin-pkg-cache')
+        Add-MastStagedPayload -Map ${stagedPayload} -Module 'astrometry-dependencies' -Dir 'cygwin-pkg-cache'
         Write-Host (" Staged frozen cygwin package cache: cygwin-pkg-cache\ ({0} files, {1:N0} MB); astrometry-dependencies installs offline from it." -f ${cacheFiles}.Count, ${cacheMb})
     } elseif (${TestMode}) {
         Write-Warning ("Frozen cygwin package cache missing/invalid at {0}; run build/harvest-cygwin-cache.ps1 once to populate it. astrometry-dependencies will FAIL on the unit. Continuing due to -TestMode." -f ${cygCacheSrc})
@@ -828,8 +865,24 @@ if (${Modules} -contains 'astrometry-dependencies') {
     }
 }
 
+# Unattributed staged bytes -- what no module claims and the transfer therefore
+# always carries. Silence here is not evidence: an unrecorded asset still ships,
+# so a staging block that forgets Add-MastStagedPayload costs the saving without
+# breaking anything. The PlateSolve3 catalog (2.1 GB) was exactly that for one
+# afternoon. Scripts and payload metadata are unattributed on purpose.
+${unattributed} = Get-MastUnattributedStagedEntries -StagingDir ${staging} -Map ${stagedPayload} -Always ${alwaysPayload}
+if (@(${unattributed}).Count -gt 0) {
+    ${worst} = @(${unattributed} | Sort-Object -Property Bytes -Descending | Select-Object -First 8 |
+        ForEach-Object { '{0} ({1:N1} MB)' -f $_.Name, ($_.Bytes / 1MB) }) -join ', '
+    throw ("Staged payload is not fully accounted for: {0} entr(ies) belong to no module and are not declared always-ship -- {1}. prov.payload cannot describe this payload, so the transfer cannot be trimmed safely. Record each one with Add-MastStagedPayload (it belongs to a module) or Add-MastAlwaysStagedPayload (every run needs it). See MAST_provisioning#186." -f @(${unattributed}).Count, ${worst})
+}
+
 # emit commands.json
 (${cmds} | Select-Object order,desc,cmd,module | ConvertTo-Json -Depth 6) | Out-File -FilePath (Join-Path ${staging} 'commands.json') -Encoding UTF8
+Add-MastAlwaysStagedPayload -Payload ${alwaysPayload} -File 'commands.json'
+# Recorded before it is written: the completeness check runs first, and the
+# manifest is part of the payload it describes.
+Add-MastAlwaysStagedPayload -Payload ${alwaysPayload} -File 'build-manifest.json'
 
 # ---------------------------------------------------------------------------
 # build-manifest.json - payload fingerprint for autonomous drift detection.
@@ -920,8 +973,10 @@ ${manifest}    = [pscustomobject]@{
     module_state    = ${moduleState}
     module_versions = ${moduleVersions}
     always_modules  = @(${alwaysModules})
+    module_payload  = ${stagedPayload}
+    payload_always  = ${alwaysPayload}
 }
-(${manifest} | ConvertTo-Json -Depth 4) |
+(${manifest} | ConvertTo-Json -Depth 6) |
     Out-File -FilePath (Join-Path ${staging} 'build-manifest.json') -Encoding UTF8
 Write-Host "Wrote build-manifest.json (payload_hash=${payloadHash}, git_sha=${gitSha})"
 
