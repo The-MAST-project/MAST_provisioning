@@ -438,6 +438,32 @@ try {
         Write-Log "WARNING: build-manifest.json not found in staging; skipping installed-manifest.json"
     }
 
+    # Refresh the desktop background, AFTER the manifest above.
+    #
+    # The background states when the unit was last provisioned, and it reads that
+    # from installed-manifest.json -- which is written by the block above, after
+    # every module has run. So this cannot be a module: mast-services-finalize is
+    # order 9500 and still inside the command loop, and a render from there would
+    # paint the PREVIOUS run's date, permanently one run behind (#200).
+    #
+    # Best-effort by design. The AtLogon task re-renders on the same comparison,
+    # and verify-desktop-appearance.ps1 reports a stale image as a failing check,
+    # so a missed refresh is repaired by the ordinary drift loop rather than
+    # needing this call to succeed.
+    try {
+        # Must match ${TaskName} in provide-desktop-appearance.ps1; asserted by
+        # server/prov/tests/test_desktop_refresh_contract.py.
+        ${applyTask} = 'MAST-DesktopAppearance-Apply'
+        if (Get-ScheduledTask -TaskName ${applyTask} -ErrorAction SilentlyContinue) {
+            Start-ScheduledTask -TaskName ${applyTask}
+            Write-Log ("BACKGROUND_REFRESH started {0}" -f ${applyTask})
+        } else {
+            Write-Log ("BACKGROUND_REFRESH skipped: no {0} task registered" -f ${applyTask})
+        }
+    } catch {
+        Write-Log ("BACKGROUND_REFRESH_ERROR " + $_.Exception.Message)
+    }
+
     if (${failCount} -gt 0) {
         Write-Log "[WARN] Provisioning completed with ${failCount} failures"
         $script:exitCode = 1
