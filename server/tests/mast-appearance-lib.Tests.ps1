@@ -64,3 +64,75 @@ Describe 'Get-MastAppearanceFields provisioned field' {
         $f.Keys -contains 'provisioned' | Should Be $true
     }
 }
+
+Describe 'Update-MastStaleBackground' {
+    # What makes the date on the wall true. The desktop-appearance provider renders
+    # from inside the command loop, where installed-manifest.json still holds the
+    # PREVIOUS run's date, so a single run paints a wall one run behind: mast04 was
+    # provisioned 2026-09-14 and stated 2026-09-02. mast07 hid it -- an earlier run
+    # that day had written the manifest without rendering, so the next run's render
+    # found today's date already there (#207).
+    $appearance = Join-Path $root 'desktop'
+    New-Item -ItemType Directory -Force -Path $appearance | Out-Null
+    Copy-Item -LiteralPath (Join-Path $here '..\..\server\providers\desktop-appearance\render-desktop-background.ps1') `
+              -Destination $appearance -Force
+    $toml = Join-Path $root 'config.toml'
+    Set-Content -LiteralPath $toml -Value "site = `"ns`"" -Encoding Ascii
+
+    function New-Sidecar {
+        param([string]$Name, [string]$Provisioned)
+        $dir = Join-Path $root $Name
+        New-Item -ItemType Directory -Force -Path $dir | Out-Null
+        $image = Join-Path $dir 'background.png'
+        Set-Content -LiteralPath $image -Value 'placeholder' -Encoding Ascii -NoNewline
+        $sidecar = Join-Path $dir 'background.json'
+        Set-Content -LiteralPath $sidecar -Encoding Ascii -Value (ConvertTo-Json @{
+            image         = $image
+            static_fields = @{ provisioned = $Provisioned }
+        })
+        return [pscustomobject]@{ Sidecar = $sidecar; Image = $image }
+    }
+
+    It 'replaces an image that states an older run with a real PNG' {
+        $m = New-Manifest -Name 'rerender.json' -Body '{"installed_at":"2026-09-14T11:56:25Z","modules":{}}'
+        $s = New-Sidecar -Name 'stale' -Provisioned '2026-09-02'
+        Update-MastStaleBackground -SidecarPath $s.Sidecar -AppearanceRoot $appearance `
+            -UnitToml $toml -InstalledManifest $m | Should Be $true
+        # The file is the assertion, not the return value: the failure this guards
+        # against returned from the compare correctly and then wrote nothing.
+        $bytes = [System.IO.File]::ReadAllBytes($s.Image)
+        $bytes[0] | Should Be 137
+        [System.Text.Encoding]::ASCII.GetString($bytes[1..3]) | Should Be 'PNG'
+    }
+
+    It 'records the run date in the rewritten sidecar, so the next compare agrees' {
+        $m = New-Manifest -Name 'rerender2.json' -Body '{"installed_at":"2026-09-14T11:56:25Z","modules":{}}'
+        $s = New-Sidecar -Name 'stale2' -Provisioned '2026-09-02'
+        [void](Update-MastStaleBackground -SidecarPath $s.Sidecar -AppearanceRoot $appearance `
+            -UnitToml $toml -InstalledManifest $m)
+        (Get-Content -LiteralPath $s.Sidecar -Raw | ConvertFrom-Json).static_fields.provisioned |
+            Should Be '2026-09-14'
+    }
+
+    It 'leaves a current image alone' {
+        $m = New-Manifest -Name 'current.json' -Body '{"installed_at":"2026-09-14T11:56:25Z","modules":{}}'
+        $s = New-Sidecar -Name 'fresh' -Provisioned '2026-09-14'
+        Update-MastStaleBackground -SidecarPath $s.Sidecar -AppearanceRoot $appearance `
+            -UnitToml $toml -InstalledManifest $m | Should Be $false
+        Get-Content -LiteralPath $s.Image -Raw | Should Be 'placeholder'
+    }
+
+    It 'reads the manifest given to it, which is what the ordering fix depends on' {
+        # The defect was WHEN this ran, not what it computed: called before the
+        # manifest is merged it sees the prior run and agrees with a stale image.
+        # Both manifests below are legitimate inputs; only the caller's position in
+        # the run decides which one is on disk.
+        $before = New-Manifest -Name 'before-run.json' -Body '{"installed_at":"2026-09-02T19:26:40Z","modules":{}}'
+        $after  = New-Manifest -Name 'after-run.json'  -Body '{"installed_at":"2026-09-14T11:56:25Z","modules":{}}'
+        $s = New-Sidecar -Name 'ordering' -Provisioned '2026-09-02'
+        Update-MastStaleBackground -SidecarPath $s.Sidecar -AppearanceRoot $appearance `
+            -UnitToml $toml -InstalledManifest $before | Should Be $false
+        Update-MastStaleBackground -SidecarPath $s.Sidecar -AppearanceRoot $appearance `
+            -UnitToml $toml -InstalledManifest $after | Should Be $true
+    }
+}

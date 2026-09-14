@@ -148,6 +148,40 @@ function Get-MastProvisionedDate {
     return 'unknown'
 }
 
+# Re-render the background when the image no longer states the machine's own
+# provisioning date, and report whether it did.
+#
+# The caller has to be ELEVATED and has to run after installed-manifest.json is
+# written. Both halves are load-bearing:
+#
+#   * After the manifest, because the date comes from it. The desktop-appearance
+#     provider runs inside the command loop and the manifest is merged once the
+#     loop ends, so a render from there reads the PREVIOUS run's date and the wall
+#     is permanently one run behind. mast04 was provisioned 2026-09-14 and showed
+#     "provisioned 2026-09-02"; mast07 looked correct only because an earlier run
+#     that day had stamped the manifest without rendering (#200, #207).
+#   * Elevated, because the image lives under C:\ProgramData\MAST\desktop where
+#     BUILTIN\Users is granted ReadAndExecute only.
+function Update-MastStaleBackground {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]${SidecarPath},
+        [Parameter(Mandatory)][string]${AppearanceRoot},
+        [Parameter(Mandatory)][string]${UnitToml},
+        [string]${InstalledManifest} = (Join-Path (Join-Path ${env:SystemDrive} 'MAST') 'installed-manifest.json')
+    )
+
+    ${sidecar} = Get-Content -LiteralPath ${SidecarPath} -Raw | ConvertFrom-Json
+    ${fresh}   = Get-MastAppearanceFields -UnitToml ${UnitToml} -InstalledManifest ${InstalledManifest}
+    if (${sidecar}.static_fields.provisioned -eq ${fresh}.provisioned) { return $false }
+
+    & (Join-Path ${AppearanceRoot} 'render-desktop-background.ps1') `
+        -OutputPath (${sidecar}.image) -SidecarPath ${SidecarPath} `
+        -ComputerName (${fresh}.computer_name) -SiteCode (${fresh}.site) -SiteName (${fresh}.site_name) `
+        -Coordinates (${fresh}.coordinates) -Provisioned (${fresh}.provisioned)
+    return $true
+}
+
 function Get-MastAppearanceFields {
     # Everything the background states, as the renderer wants it: presentation-ready
     # strings, so the renderer holds no opinion about where any of it came from.

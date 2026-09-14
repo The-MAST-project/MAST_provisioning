@@ -441,15 +441,37 @@ try {
     # Refresh the desktop background, AFTER the manifest above.
     #
     # The background states when the unit was last provisioned, and it reads that
-    # from installed-manifest.json -- which is written by the block above, after
-    # every module has run. So this cannot be a module: mast-services-finalize is
-    # order 9500 and still inside the command loop, and a render from there would
-    # paint the PREVIOUS run's date, permanently one run behind (#200).
+    # from installed-manifest.json -- written by the block above, after every
+    # module has run. So the render cannot be a module: desktop-appearance sits
+    # inside the command loop, reads the manifest as it stood BEFORE this run, and
+    # paints the previous run's date. mast04 was provisioned 2026-09-14 and stated
+    # 2026-09-02; mast07 looked right only because an earlier run that day had
+    # written the manifest without rendering, which is what hid it (#200, #207).
     #
-    # Best-effort by design. The AtLogon task re-renders on the same comparison,
-    # and verify-desktop-appearance.ps1 reports a stale image as a failing check,
-    # so a missed refresh is repaired by the ordinary drift loop rather than
-    # needing this call to succeed.
+    # Rendering HERE is what fixes that: the manifest is on disk, and this session
+    # is elevated, which the image's location requires. Starting the AtLogon task
+    # afterwards is still needed -- a registry write does not repaint a running
+    # desktop, so only something inside the logon session can apply and broadcast.
+    #
+    # Best-effort: verify-desktop-appearance.ps1 reports a stale image as a failing
+    # check, so a missed refresh becomes tier-2 needs-repair rather than a silent
+    # lie.
+    try {
+        ${appearanceRoot} = Join-Path ${env:ProgramData} 'MAST\desktop'
+        ${appearanceLib}  = Join-Path ${appearanceRoot} 'mast-appearance-lib.ps1'
+        if (Test-Path -LiteralPath ${appearanceLib}) {
+            . ${appearanceLib}
+            ${rerendered} = Update-MastStaleBackground `
+                -SidecarPath (Join-Path ${appearanceRoot} 'background.json') `
+                -AppearanceRoot ${appearanceRoot} -UnitToml 'C:\WIS\config.toml'
+            if (${rerendered}) { Write-Log 'BACKGROUND_RERENDERED with this run date' }
+            else { Write-Log 'BACKGROUND_CURRENT no re-render needed' }
+        } else {
+            Write-Log ("BACKGROUND_RERENDER skipped: no {0}" -f ${appearanceLib})
+        }
+    } catch {
+        Write-Log ("BACKGROUND_RERENDER_ERROR " + $_.Exception.Message)
+    }
     try {
         # Must match ${TaskName} in provide-desktop-appearance.ps1; asserted by
         # server/prov/tests/test_desktop_refresh_contract.py.
