@@ -109,3 +109,76 @@ Describe 'Get-MastRobocopyExclusionArgs' {
         ($a -join ' ') | Should Be "/XD $src\wheels"
     }
 }
+
+Describe 'Test-MastRobocopyCompleted' {
+    # A robocopy that ran to completion always writes the Bytes:/Times:/Ended:
+    # trailer; one killed partway never does. This discriminates exactly the case
+    # the exit code cannot, because a taskkill'd robocopy also exits 1 (#189).
+    It 'accepts a log ending in a real summary block' {
+        $log = @'
+   New File            123    ASIStudio_V1.16.2_x64_Setup.exe
+------------------------------------------------------------------------------
+               Total    Copied   Skipped  Mismatch    FAILED    Extras
+    Bytes :  13.855 g  13.855 g         0         0         0         0
+    Times :   0:04:42   0:04:41                       0:00:00   0:00:01
+    Speed :            52856741 Bytes/sec.
+    Ended : Wednesday, September 2, 2026 7:01:17 PM
+'@
+        Test-MastRobocopyCompleted -LogTail $log | Should Be $true
+    }
+    It 'rejects a log that stops mid-payload' {
+        # The mast03 shape: 23 lines, no summary, 1.9% of the payload on disk.
+        $log = @'
+   New File          98.2 m    ASIStudio_V1.16.2_x64_Setup.exe
+   New File          44.1 m    Git-2.52.0-64-bit.exe
+'@
+        Test-MastRobocopyCompleted -LogTail $log | Should Be $false
+    }
+    It 'rejects an empty or whitespace tail' {
+        Test-MastRobocopyCompleted -LogTail '' | Should Be $false
+        Test-MastRobocopyCompleted -LogTail "  `r`n " | Should Be $false
+    }
+    It 'requires the Ended line, not merely the word Bytes' {
+        Test-MastRobocopyCompleted -LogTail "    Bytes :  13.855 g  13.855 g" | Should Be $false
+    }
+}
+
+Describe 'Get-MastDirectorySize' {
+    $root = Join-Path $env:TEMP ("mast-dirsize-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    New-Item -ItemType Directory -Force -Path $root | Out-Null
+    $root = (Get-Item -LiteralPath $root).FullName
+    Set-Content -LiteralPath (Join-Path $root 'a.bin') -Value ('x' * 100) -Encoding Ascii -NoNewline
+    $sub = Join-Path $root 'nested'
+    New-Item -ItemType Directory -Force -Path $sub | Out-Null
+    Set-Content -LiteralPath (Join-Path $sub 'b.bin') -Value ('y' * 250) -Encoding Ascii -NoNewline
+
+    It 'counts files and bytes through nested directories' {
+        $r = Get-MastDirectorySize -Path $root
+        $r.Files | Should Be 2
+        $r.Bytes | Should Be 350
+    }
+    It 'reports zero for a path that does not exist' {
+        # A pull that never created the destination must read as 0, not throw --
+        # the driver turns the comparison into TRANSFER_FAIL either way, and a
+        # throw here would lose the numbers that say why.
+        $r = Get-MastDirectorySize -Path (Join-Path $root 'no-such-dir')
+        $r.Files | Should Be 0
+        $r.Bytes | Should Be 0
+    }
+    It 'reports zero for an empty directory' {
+        $empty = Join-Path $root 'empty'
+        New-Item -ItemType Directory -Force -Path $empty | Out-Null
+        (Get-MastDirectorySize -Path $empty).Files | Should Be 0
+    }
+}
+
+Describe 'Get-RobocopyOutcome bitmask' {
+    It 'treats 0-7 as success and 8+ as error' {
+        Get-RobocopyOutcome -ExitCode 0 | Should Be 'OK'
+        Get-RobocopyOutcome -ExitCode 1 | Should Be 'OK'
+        Get-RobocopyOutcome -ExitCode 3 | Should Be 'OK'
+        Get-RobocopyOutcome -ExitCode 7 | Should Be 'OK'
+        Get-RobocopyOutcome -ExitCode 8 | Should Be 'ROBOCOPY_ERROR'
+        Get-RobocopyOutcome -ExitCode 16 | Should Be 'ROBOCOPY_ERROR'
+    }
+}

@@ -1602,7 +1602,7 @@ Each run appends structured entries:
 [2026-05-05T14:00:45Z] UNIT_SKIP    unit=mast01 reason=already_current
 [2026-05-05T14:01:30Z] BUILD_OK     unit=mast02 duration_s=45 payload_hash=b7e2...
 [2026-05-05T14:01:30Z] HASH_CHECK   unit=mast02 installed=<none> built=b7e2... result=NEEDS_UPDATE
-[2026-05-05T14:01:31Z] TRANSFER_START  unit=mast02 files=41 bytes=1362534400
+[2026-05-05T14:01:31Z] TRANSFER_START  unit=mast02 files=41 expected_bytes=1362534400
 [2026-05-05T14:09:15Z] TRANSFER_OK     unit=mast02 duration_s=464
 [2026-05-05T14:09:16Z] EXECUTE_START   unit=mast02
 [2026-05-05T14:09:17Z] PKG_START       unit=mast02 module=python order=20 version=3.12.0
@@ -1625,7 +1625,9 @@ Key design rules:
 - `PKG_START` / `PKG_OK` / `PKG_FAIL` bracket each individual package installation.
   `PKG_FAIL` always names the failing module and its `duration_s` so a stuck or
   slow installer is immediately identifiable without parsing full transcripts.
-- `TRANSFER_START` logs the total file count and byte count so stalls are immediately visible.
+- `TRANSFER_START` logs the file count and `expected_bytes` so stalls are immediately visible;
+  `TRANSFER_OK` reports what the unit-side walk actually measured, and the driver fails the
+  unit when the two disagree (#189).
 - Each `SMOKE_RESULT` line names the module and the failure reason.
 - `UNIT_SKIP` / `UNIT_FAIL` / `UNIT_OK` give a machine-readable per-unit outcome.
 - On unexpected exceptions, an `EXCEPTION` event is written with the full stack trace.
