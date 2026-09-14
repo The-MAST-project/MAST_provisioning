@@ -21,7 +21,10 @@
 
 [CmdletBinding()]
 param(
-    [string]${AppearanceRoot} = 'C:\ProgramData\MAST\desktop'
+    [string]${AppearanceRoot} = 'C:\ProgramData\MAST\desktop',
+    #: Same default as verify-desktop-appearance.ps1; read only to re-derive the
+    #: fields when the image has gone stale.
+    [string]${UnitToml} = 'C:\WIS\config.toml'
 )
 
 ${ErrorActionPreference} = 'Stop'
@@ -72,6 +75,34 @@ public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, IntPtr wPa
         throw ("background sidecar not found at {0} (provide-desktop-appearance.ps1 has not run on this machine)" -f ${SidecarPath})
     }
     ${sidecar} = Get-Content -LiteralPath ${SidecarPath} -Raw | ConvertFrom-Json
+
+    # Re-render before applying when the image no longer describes this machine.
+    #
+    # The provisioning date is the field that goes stale on its own: it changes on
+    # every run, while this provider only re-renders on a run that TARGETED it,
+    # which per-module drift makes the exception rather than the rule. mast07
+    # displayed "provisioned 2026-09-02" for twelve days and two provisioning runs
+    # (#200). Comparing here means a reboot corrects it with no provisioning at
+    # all, and it costs a string compare on the runs where nothing has changed.
+    #
+    # Failure here is deliberately not fatal: a stale-but-present wallpaper beats
+    # no wallpaper, and verify-desktop-appearance.ps1 reports the staleness so the
+    # next run repairs it rather than leaving it to this task to keep retrying.
+    ${fresh} = Get-MastAppearanceFields -UnitToml ${UnitToml}
+    if (${sidecar}.static_fields.provisioned -ne ${fresh}.provisioned) {
+        Write-ApplyLog ("background is stale: depicts '{0}', machine reports '{1}'; re-rendering." -f `
+            ${sidecar}.static_fields.provisioned, ${fresh}.provisioned)
+        try {
+            & (Join-Path ${AppearanceRoot} 'render-desktop-background.ps1') `
+                -OutputPath ${sidecar}.image -SidecarPath ${SidecarPath} `
+                -ComputerName (${fresh}.computer_name) -SiteCode (${fresh}.site) -SiteName (${fresh}.site_name) `
+                -Coordinates (${fresh}.coordinates) -Provisioned (${fresh}.provisioned)
+            ${sidecar} = Get-Content -LiteralPath ${SidecarPath} -Raw | ConvertFrom-Json
+        } catch {
+            Write-ApplyLog ("WARNING: re-render failed, applying the existing image: " + $_.Exception.Message)
+        }
+    }
+
     ${imagePath} = ${sidecar}.image
     if (-not (Test-Path -LiteralPath ${imagePath})) {
         throw ("background image named by the sidecar is missing: {0}" -f ${imagePath})

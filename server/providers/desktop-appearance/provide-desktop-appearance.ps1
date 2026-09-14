@@ -106,7 +106,7 @@ try {
     & (Join-Path ${AppearanceRoot} 'render-desktop-background.ps1') `
         -OutputPath ${imagePath} -SidecarPath ${sidecarPath} `
         -ComputerName (${fields}.computer_name) -SiteCode (${fields}.site) -SiteName (${fields}.site_name) `
-        -Coordinates (${fields}.coordinates)
+        -Coordinates (${fields}.coordinates) -Provisioned (${fields}.provisioned)
     foreach (${artifact} in @(${imagePath}, ${sidecarPath})) {
         if (-not (Test-Path -LiteralPath ${artifact})) { throw ("render-desktop-background.ps1 produced no {0}" -f ${artifact}) }
     }

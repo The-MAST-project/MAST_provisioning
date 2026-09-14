@@ -89,6 +89,27 @@ function Get-MastModuleRepoFiles {
     return @($Manifest.repofiles | ForEach-Object { [string]$_ } | Where-Object { $_ })
 }
 
+# The identity of the repo manifest: what the mast module deploys.
+#
+# Reported as that module's version, in place of the provisioning repo's SHA.
+# The manifest is already inside the module's content hash (it is a repofile), so
+# this changes no drift decision -- it makes the reported version mean "which set
+# of MAST revisions is this unit meant to be on" rather than "which commit of
+# THIS repo happened to build the payload".
+#
+# Short hash rather than the full digest: it is a reporting field read by humans
+# in fleet-drift-report and in module_state, and 12 hex is plenty to tell two
+# manifests apart.
+function Get-MastReposManifestVersion {
+    param([Parameter(Mandatory)][string]$RepoTop)
+    $manifest = Join-Path $RepoTop 'tools\mast-repos.tsv'
+    if (-not (Test-Path -LiteralPath $manifest)) {
+        throw "Cannot version the mast module: no repo manifest at ${manifest}"
+    }
+    $sha = (Get-FileHash -LiteralPath $manifest -Algorithm SHA256).Hash.ToLowerInvariant()
+    return ('repos-' + $sha.Substring(0, 12))
+}
+
 # Staging-root entries that no module claims, with their sizes.
 #
 # There must be none: prov.payload rejects a manifest it cannot fully account

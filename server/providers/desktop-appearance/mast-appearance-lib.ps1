@@ -117,6 +117,37 @@ function Format-MastCoordinates {
         [math]::Abs(${lat}), ${northSouth}, [math]::Abs(${lon}), ${eastWest})
 }
 
+function Get-MastProvisionedDate {
+    # The date this unit was last provisioned, as the unit itself records it.
+    #
+    # NOT Get-Date. The renderer used the clock, which is the date the IMAGE was
+    # made, and printed it as the date the UNIT was provisioned. Those coincide
+    # only on a run that happened to re-render, so mast07 displayed
+    # "provisioned 2026-09-02" after being provisioned on 2026-09-14 -- a false
+    # statement about the machine it was painted on (#200).
+    #
+    # installed-manifest.json's installed_at is written by execute only after a
+    # run has got as far as merging it, so a run that failed earlier leaves no
+    # claim behind. An absent or unreadable manifest returns 'unknown' rather
+    # than a guess or a blank: a machine that has never completed a run says so,
+    # and 'unknown' cannot be mistaken for a date.
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]${InstalledManifest})
+
+    if (-not (Test-Path -LiteralPath ${InstalledManifest})) { return 'unknown' }
+    try {
+        ${installedAt} = (Get-Content -LiteralPath ${InstalledManifest} -Raw | ConvertFrom-Json).installed_at
+    } catch {
+        return 'unknown'
+    }
+    if ([string]::IsNullOrWhiteSpace(${installedAt})) { return 'unknown' }
+    # Render the date only. The manifest stores an ISO instant; a bad value is
+    # reported as unknown rather than echoed, so nothing unparsed reaches a wall.
+    ${parsed} = [datetime]::MinValue
+    if ([datetime]::TryParse(${installedAt}, [ref]${parsed})) { return ${parsed}.ToString('yyyy-MM-dd') }
+    return 'unknown'
+}
+
 function Get-MastAppearanceFields {
     # Everything the background states, as the renderer wants it: presentation-ready
     # strings, so the renderer holds no opinion about where any of it came from.
@@ -126,7 +157,10 @@ function Get-MastAppearanceFields {
     # pass after the map moved, and comparing only the code would pass after the
     # image was rendered from a name that no longer applies.
     [CmdletBinding()]
-    param([Parameter(Mandatory)][string]${UnitToml})
+    param(
+        [Parameter(Mandatory)][string]${UnitToml},
+        [string]${InstalledManifest} = (Join-Path (Join-Path ${env:SystemDrive} 'MAST') 'installed-manifest.json')
+    )
 
     ${site} = ''
     ${coordinates} = ''
@@ -144,5 +178,8 @@ function Get-MastAppearanceFields {
         site          = ${site}
         site_name     = (Get-MastSiteDisplayName -SiteCode ${site})
         coordinates   = ${coordinates}
+        # Compared by verify like every other static field, which is what makes a
+        # stale wallpaper a tier-2 needs-repair rather than a lie nobody notices.
+        provisioned   = (Get-MastProvisionedDate -InstalledManifest ${InstalledManifest})
     }
 }

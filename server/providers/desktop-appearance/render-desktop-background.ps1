@@ -29,6 +29,8 @@ param(
     [Parameter(Mandatory)][AllowEmptyString()][string]${SiteCode},
     [Parameter(Mandatory)][AllowEmptyString()][string]${SiteName},
     [AllowEmptyString()][string]${Coordinates} = '',
+    #: From Get-MastProvisionedDate -- the unit's own record, or 'unknown'.
+    [Parameter(Mandatory)][AllowEmptyString()][string]${Provisioned},
     [int]${Width}  = 1920,
     [int]${Height} = 1080
 )
@@ -103,7 +105,7 @@ ${coordFont} = New-Object System.Drawing.Font(${FontFamily}, ${CoordFontSize}, [
 
     # Role is not on the image: the footer already says 'MAST unit', so a 'role unit'
     # line said it twice.
-    ${footText} = ('MAST unit   provisioned {0}' -f (Get-Date -Format 'yyyy-MM-dd'))
+    ${footText} = ('MAST unit   provisioned {0}' -f ${Provisioned})
 
     # One entry per drawn line, so a line whose value is empty simply is not there
     # and the block closes up around it.
@@ -177,6 +179,7 @@ ${sidecar} = [ordered]@{
         site          = ${SiteCode}
         site_name     = ${SiteName}
         coordinates   = ${Coordinates}
+        provisioned   = ${Provisioned}
     }
     dynamic_fields   = @()
     rendered_at      = (Get-Date -Format 'yyyy-MM-ddTHH:mm:ss')
