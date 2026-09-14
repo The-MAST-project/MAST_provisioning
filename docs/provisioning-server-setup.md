@@ -31,6 +31,43 @@ Do not use Home editions (no SMB server capability or local group policy).
   no DNS record or `hosts` entry is needed on the units.
 - ICMP echo (ping) outbound to units for the reachability check.
 
+**Put the provisioning server on the units' own VLAN.** This is a throughput
+requirement, not a tidiness one, and there is no error message when it is
+violated — the transfer simply crawls, which reads as a hung run and cost most of
+a night to attribute (#186).
+
+Measured at Neot Smadar on 2026-09-02, serving the same payload to the same units
+with the same code and the same SMB settings, changing only the server's position:
+
+| Path | Router hop | Throughput |
+|---|---|---|
+| Same VLAN | no | 101.9–104.4 MB/s |
+| Cross VLAN, best case | yes | 48–50 MB/s |
+| Cross VLAN, collapsed | yes | 0.14–0.25 MB/s |
+
+Four of six routed transfers collapsed into the third row and burned the full
+`TRANSFER_TIMEOUT_S = 3600` before failing, so one fleet pass cost roughly four
+hours to provision two units. The two that succeeded ran at about 44% of line
+rate. Moving the server onto the units' VLAN the same night took those same units
+to line rate with no failures.
+
+The endpoints are not the problem and measuring them will not find this. During a
+collapse: zero TCP retransmits, the server's disk 99.9% idle at 0.3 ms latency,
+its CPU ~1%, ICMP under 1 ms with a full 1472-byte payload passing unfragmented,
+and a same-VLAN control read from the *same* crawling unit running at 112 MB/s.
+SMB encryption, accumulated SMB server state, Defender on the server, the NIC
+driver and per-unit SMB client config were each separately disproven.
+
+Two consequences worth planning around:
+
+- **A remote site cannot be provisioned from off-segment as things stand.** The
+  unit pulls over SMB, so it must be able to open TCP 445 back to whichever host
+  serves `mast-staging`. A staging host on the units' VLAN is what makes that
+  work; the orchestrator does not have to be there with it (#186).
+- **After moving the server, check the network profile.** It came up as
+  `NetworkCategory: Public` after the 2026-09-02 move. SMB kept working, but that
+  is the first thing to check if the share looks dead following a move.
+
 **Software on the provisioning server:**
 
 | Tool | Required for | Notes |
