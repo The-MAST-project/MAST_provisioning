@@ -176,26 +176,46 @@ function Set-WinINetConnectionFlags {
     }
 }
 
+function Test-ConnBlobAutoDetect {
+    # Pure predicate over one connection-settings blob: is the WPAD
+    # auto-detect bit (0x08) set in the flags byte at offset 8? Split out of
+    # Get-WinINetAutoDetect so the bit logic is unit-testable while the
+    # registry read stays in the "verified on a real unit" bucket.
+    param([byte[]]$Blob)
+    if (-not $Blob -or $Blob.Length -lt 9) { return $false }
+    return [bool]($Blob[8] -band 0x08)
+}
+
 function Get-WinINetAutoDetect {
-    # Returns $true if the WPAD auto-detect bit (0x08) is set in
-    # DefaultConnectionSettings, else $false.
+    # Returns $true if the WPAD auto-detect bit is set in EITHER blob.
+    # Set-WinINetConnectionFlags writes DefaultConnectionSettings AND
+    # SavedLegacySettings, so a readback of only the first can report clean
+    # while the legacy blob still carries the bit -- the asymmetry made the
+    # provider's post-write assertion weaker than the write it guards.
     $k = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings\Connections'
-    try {
-        $v = (Get-ItemProperty -Path $k -Name 'DefaultConnectionSettings' -ErrorAction Stop).DefaultConnectionSettings
-        if ($v -and $v.Length -ge 9) { return [bool]($v[8] -band 0x08) }
-    } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
+    foreach ($name in @('DefaultConnectionSettings', 'SavedLegacySettings')) {
+        try {
+            $v = (Get-ItemProperty -Path $k -Name $name -ErrorAction Stop).$name
+            if (Test-ConnBlobAutoDetect -Blob $v) { return $true }
+        } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
+    }
     return $false
 }
 
 function Get-WinINetProxyState {
     $k = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings'
-    $h = @{ Enable = 0; Server = ''; Override = '' }
+    # AutoConfigURL is the OTHER way a PAC reaches WinINet. Forcing the flags
+    # byte to manual-only (0x02) or direct-only (0x01) already makes a stale URL
+    # inert, so this is reported rather than cleared -- but a posture that does
+    # not mention it cannot explain a machine that is following a PAC.
+    $h = @{ Enable = 0; Server = ''; Override = ''; AutoConfigUrl = '' }
     if (-not (Test-Path $k)) { return $h }
     try {
         $p = Get-ItemProperty -Path $k -ErrorAction Stop
-        if ($null -ne $p.ProxyEnable)   { $h.Enable   = [int]$p.ProxyEnable }
-        if ($null -ne $p.ProxyServer)   { $h.Server   = [string]$p.ProxyServer }
-        if ($null -ne $p.ProxyOverride) { $h.Override = [string]$p.ProxyOverride }
+        if ($null -ne $p.ProxyEnable)   { $h.Enable        = [int]$p.ProxyEnable }
+        if ($null -ne $p.ProxyServer)   { $h.Server        = [string]$p.ProxyServer }
+        if ($null -ne $p.ProxyOverride) { $h.Override      = [string]$p.ProxyOverride }
+        if ($null -ne $p.AutoConfigURL) { $h.AutoConfigUrl = [string]$p.AutoConfigURL }
     } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
     return $h
 }
