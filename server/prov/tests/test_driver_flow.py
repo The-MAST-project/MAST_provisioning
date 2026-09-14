@@ -17,6 +17,7 @@ from pathlib import Path
 import pytest
 
 from prov import driver as D
+from prov import relay as R
 from prov import transport as T
 
 DEFAULT_PULL = 'PULLRESULT {"outcome": "OK", "rc": 1, "landed_files": 3, "landed_bytes": 1000, "completed": true}'
@@ -660,6 +661,90 @@ def test_the_reported_rate_is_derived_from_what_landed(root, monkeypatch):
     start = log.index("TRANSFER_START")
     assert "bytes=1000" in log[log.index("TRANSFER_OK") :], "TRANSFER_OK reports the measured figure"
     assert start < log.index("TRANSFER_OK")
+
+
+# --- issue #186 stage 2: a declared staging relay ----------------------------
+
+
+def _with_relay(root, monkeypatch, responder, sync_ok: bool = True):
+    """A driver whose unit's site declares a staging host, with the rsync stubbed."""
+    (root / "repo" / "server" / "data").mkdir(parents=True, exist_ok=True)
+    (root / "repo" / "server" / "data" / "staging-hosts.json").write_text(
+        json.dumps(
+            {
+                "sites": {
+                    "ns": {
+                        "address": "10.23.1.181",
+                        "share": "mast-provisioning",
+                        "ssh_target": "mast@10.23.1.181",
+                        "root": "/Storage/mast-provisioning",
+                    }
+                }
+            }
+        )
+    )
+    drv, sess = _make_driver(root, monkeypatch, responder)
+    calls: list = []
+
+    def fake_sync(**kw):
+        calls.append(kw)
+        return R.SyncResult(ok=sync_ok, returncode=0 if sync_ok else 23, detail="stub")
+
+    monkeypatch.setattr(D.relay, "sync", fake_sync)
+    return drv, sess, calls
+
+
+def test_the_unit_is_pointed_at_the_relay_not_the_orchestrator(root, monkeypatch):
+    """The whole point: the unit opens SMB to a host on its own VLAN, so a run can
+    be driven from somewhere the unit cannot reach."""
+    drv, sess, _ = _with_relay(root, monkeypatch, make_responder())
+    assert drv.run() == D.EXIT_OK, drv.log.run_log_path.read_text()
+    pull = _pull_invocation(sess)
+    assert "10.23.1.181\\mast-provisioning\\unit1\\01-provisioning" in pull
+    assert "-ProvAddress '10.23.1.181'" in pull
+
+
+def test_the_reachability_probe_targets_the_relay(root, monkeypatch):
+    """_unit_can_reach_staging asks the unit to open 445 to prov_address; with a
+    relay that must be the relay's address, or the run is gated on a host the
+    payload will not be served from."""
+    drv, sess, _ = _with_relay(root, monkeypatch, make_responder())
+    assert drv.run() == D.EXIT_OK, drv.log.run_log_path.read_text()
+    probe = next(s for s in sess.scripts if "SMBREACH" in s)
+    assert "10.23.1.181" in probe
+
+
+def test_the_payload_is_synced_before_the_transfer(root, monkeypatch):
+    drv, _sess, calls = _with_relay(root, monkeypatch, make_responder())
+    assert drv.run() == D.EXIT_OK, drv.log.run_log_path.read_text()
+    assert len(calls) == 1, "the relay sync ran exactly once"
+    assert calls[0]["host"] == "unit1"
+    # vendor-view is what makes the WAN cost ~2 GB instead of ~15.
+    assert "/Storage/mast-provisioning/vendor-view" in calls[0]["link_dests"]
+    log = drv.log.run_log_path.read_text()
+    assert log.index("RELAY_SYNC_OK") < log.index("TRANSFER_START")
+
+
+def test_a_failed_sync_stops_before_the_transfer(root, monkeypatch):
+    """Fails closed, like every other phase. Executing against a relay copy that
+    is stale or half-written is the failure mode this phase adds, so it must not
+    be reachable."""
+    drv, _sess, _ = _with_relay(root, monkeypatch, make_responder(), sync_ok=False)
+    assert drv.run() == D.EXIT_UNIT_FAIL
+    log = drv.log.run_log_path.read_text()
+    assert "RELAY_SYNC_FAIL" in log
+    assert "TRANSFER_START" not in log
+
+
+def test_a_site_with_no_relay_behaves_exactly_as_before(root, monkeypatch):
+    """The bench and the dev VM pull from the orchestrator itself; declaring a
+    relay for one site must not change any other."""
+    drv, sess = _make_driver(root, monkeypatch, make_responder())
+    assert drv.run() == D.EXIT_OK, drv.log.run_log_path.read_text()
+    pull = _pull_invocation(sess)
+    assert "mast-provisioning" not in pull
+    assert "mast-staging" in pull, "still the orchestrator's own share"
+    assert "RELAY_SYNC" not in drv.log.run_log_path.read_text()
 
 
 # --- issue #25: the operational-share credential -----------------------------

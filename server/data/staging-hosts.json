@@ -1,0 +1,30 @@
+{
+  "_comment": [
+    "Per-site staging hosts. A unit pulls its payload over SMB, so it must open",
+    "TCP 445 to whatever serves that payload -- and at a site, only a host on the",
+    "units' own VLAN qualifies. Declaring one here lets the orchestrator run",
+    "somewhere the units cannot reach: it builds locally, rsyncs to the relay, and",
+    "hands the unit the relay's address instead of its own.",
+    "",
+    "A site with NO entry keeps pulling from the orchestrator itself, exactly as",
+    "before -- which is what the bench and the dev VM want. A malformed entry is a",
+    "hard error rather than a silent skip, because silently falling back points the",
+    "unit at the orchestrator again and looks like config that was not picked up.",
+    "",
+    "'creds_key' selects the vault/creds.json block the unit authenticates to the",
+    "share with; the relay's share is read-only and uses the same account as",
+    "mast-share, so 'shared' is the default.",
+    "",
+    "Setup for a new relay is in docs/provisioning-server-setup.md; the layout it",
+    "expects under 'root' is hosts/ (served), payload/ and vendor-view/."
+  ],
+  "sites": {
+    "ns": {
+      "address": "10.23.1.181",
+      "share": "mast-provisioning",
+      "ssh_target": "mast@10.23.1.181",
+      "root": "/Storage/mast-provisioning",
+      "creds_key": "shared"
+    }
+  }
+}
