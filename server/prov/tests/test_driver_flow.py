@@ -684,13 +684,17 @@ def _with_relay(root, monkeypatch, responder, sync_ok: bool = True):
         )
     )
     drv, sess = _make_driver(root, monkeypatch, responder)
+    # build-mast.ps1 writes this beside the staging root; the fake build does not.
+    (root / "repo" / "payload-manifest.json").write_text(
+        json.dumps({"payload_hash": "hash123", "files": [{"path": "commands.json", "size": 4, "sha256": "ab"}]})
+    )
     calls: list = []
 
     def fake_sync(**kw):
         calls.append(kw)
-        return R.SyncResult(ok=sync_ok, returncode=0 if sync_ok else 23, detail="stub")
+        return R.SyncResult(ok=sync_ok, returncode=0 if sync_ok else 23, detail="blobs_sent=0")
 
-    monkeypatch.setattr(D.relay, "sync", fake_sync)
+    monkeypatch.setattr(D.relay, "sync_payload", fake_sync)
     return drv, sess, calls
 
 
@@ -737,21 +741,26 @@ def test_the_reachability_probe_targets_the_relay(root, monkeypatch):
 def test_the_payload_is_synced_before_the_transfer(root, monkeypatch):
     drv, _sess, calls = _with_relay(root, monkeypatch, make_responder())
     assert drv.run() == D.EXIT_OK, drv.log.run_log_path.read_text()
-    # Two passes: the build's canonical tree, then this host's view of it.
-    assert len(calls) == 2, calls
-    payload_pass, host_pass = calls
-    assert payload_pass["dest"] == "/Storage/mast-provisioning/payload/hash123"
-    assert host_pass["dest"] == "/Storage/mast-provisioning/hosts/unit1/01-provisioning"
-    # vendor-view carries the 87% that is already on the relay...
-    assert "/Storage/mast-provisioning/vendor-view" in payload_pass["link_dests"]
-    # ...and the host pass links the remainder too, which is what takes a SECOND
-    # unit on the same build from 1,959,264,676 bytes down to one 34 KB file.
-    assert host_pass["link_dests"] == [
-        "/Storage/mast-provisioning/vendor-view",
-        "/Storage/mast-provisioning/payload/hash123",
-    ]
+    # One call now: the store decides what to send from the manifest, with no
+    # second pass and no tree to link against.
+    assert len(calls) == 1, calls
+    assert calls[0]["host"] == "unit1"
+    assert calls[0]["manifest_path"].name == "payload-manifest.json"
+    assert "link_dests" not in calls[0], "content addressing replaced the lineage guess"
     log = drv.log.run_log_path.read_text()
     assert log.index("RELAY_SYNC_OK") < log.index("TRANSFER_START")
+
+
+def test_a_missing_payload_manifest_stops_the_run(root, monkeypatch):
+    """The manifest is what the relay assembles from; without it the driver
+    cannot say what the payload consists of, and guessing is how a relay ends up
+    serving a tree with holes."""
+    drv, _sess, _ = _with_relay(root, monkeypatch, make_responder())
+    (root / "repo" / "payload-manifest.json").unlink()
+    assert drv.run() == D.EXIT_UNIT_FAIL
+    log = drv.log.run_log_path.read_text()
+    assert "RELAY_SYNC_FAIL" in log and "no payload manifest" in log
+    assert "TRANSFER_START" not in log
 
 
 def test_a_failed_sync_stops_before_the_transfer(root, monkeypatch):

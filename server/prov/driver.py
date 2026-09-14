@@ -888,50 +888,49 @@ class Driver:
         return None
 
     def _sync_to_relay(self, host: str, dur, payload_hash: str, git_sha: str) -> bool:
-        """rsync this host's payload to the declared staging host.
+        """Put this host's payload on the relay, sending only unheld blobs.
 
-        ``vendor-view`` rides along as a --link-dest: it presents the mirrored
-        vendored inputs under their staging-root names, so rsync hardlinks the
-        ~87% of the payload already on the relay instead of sending it.
+        The relay stores payloads by content (#202), so a build shares bytes with
+        every other build that contains them and there is no notion of a previous
+        version -- which is what the --link-dest chain this replaced could not
+        offer once units sit on deliberately different stacks. It also removes an
+        arbitrary split: the old dedupe covered only what `vendor-view` happened
+        to name, so two vendor installers of identical shape got opposite
+        treatment and 1,959,264,676 bytes crossed the wire per build.
         """
         if self.relay is None:  # pragma: no cover -- guarded at the call site
             return True
-        payload_dir = self.relay.payload_dir(payload_hash)
-        self.log.event("RELAY_SYNC_START", unit=host, relay=self.relay.ssh_target, dest=self.relay.host_dir(host))
+
+        def failed(rc: int, detail: str, reason: str) -> bool:
+            self.log.event("RELAY_SYNC_FAIL", unit=host, rc=rc, seconds=round(time.monotonic() - started, 1), detail=detail)
+            self.log.activity(host, "RELAY_SYNC_FAIL", reason, dur(), payload_hash, git_sha)
+            self.exit_code = EXIT_UNIT_FAIL
+            return False
+
         started = time.monotonic()
+        # Written beside the staging root by build-mast.ps1: it describes the
+        # payload, so it is not part of it.
+        manifest = self._staging_dir.parent / "payload-manifest.json"
+        if not manifest.is_file():
+            return failed(-1, f"no payload manifest at {manifest}", "no_manifest")
 
-        # Two passes. The first fills the build's canonical tree, hardlinking the
-        # vendored 87% it already has; the second gives this host its own tree,
-        # hardlinking against BOTH -- so it transfers only what is genuinely
-        # per-host. Without the payload tree every unit re-sent the whole
-        # non-vendor remainder: 1,959,264,676 bytes, measured on mast07.
-        for dest, link_dests in (
-            (payload_dir, [self.relay.vendor_view()]),
-            (self.relay.host_dir(host), [self.relay.vendor_view(), payload_dir]),
-        ):
-            result = relay.sync(
-                staging_dir=self._staging_dir,
-                host=host,
-                relay=self.relay,
-                dest=dest,
-                link_dests=link_dests,
-            )
-            if not result.ok:
-                seconds = round(time.monotonic() - started, 1)
-                self.log.event(
-                    "RELAY_SYNC_FAIL",
-                    unit=host,
-                    dest=dest,
-                    rc=result.returncode,
-                    seconds=seconds,
-                    detail=result.detail,
-                )
-                self.log.activity(host, "RELAY_SYNC_FAIL", f"rc_{result.returncode}", dur(), payload_hash, git_sha)
-                self.exit_code = EXIT_UNIT_FAIL
-                return False
+        self.log.event("RELAY_SYNC_START", unit=host, relay=self.relay.ssh_target, dest=self.relay.host_dir(host))
+        result = relay.sync_payload(
+            manifest_path=manifest,
+            staging_dir=self._staging_dir,
+            host=host,
+            relay=self.relay,
+        )
+        if not result.ok:
+            return failed(result.returncode, result.detail, f"rc_{result.returncode}")
 
-        seconds = round(time.monotonic() - started, 1)
-        self.log.event("RELAY_SYNC_OK", unit=host, seconds=seconds, dest=self.relay.host_dir(host), payload=payload_dir)
+        self.log.event(
+            "RELAY_SYNC_OK",
+            unit=host,
+            seconds=round(time.monotonic() - started, 1),
+            dest=self.relay.host_dir(host),
+            detail=result.detail,
+        )
         return True
 
     def _set_unavailable(self, session: transport.UnitSession, host: str, payload_hash: str) -> None:
