@@ -176,19 +176,43 @@ function Set-WinINetConnectionFlags {
     }
 }
 
+function Test-ConnBlobAutoDetect {
+    # Pure predicate over one connection-settings blob: is the WPAD
+    # auto-detect bit (0x08) set in the flags byte at offset 8? Split out of
+    # Get-WinINetAutoDetect so the bit logic is unit-testable while the
+    # registry read stays in the "verified on a real unit" bucket.
+    param([byte[]]$Blob)
+    if (-not $Blob -or $Blob.Length -lt 9) { return $false }
+    return [bool]($Blob[8] -band 0x08)
+}
+
 function Get-WinINetAutoDetect {
-    # Returns $true if the WPAD auto-detect bit (0x08) is set in
-    # DefaultConnectionSettings, else $false.
+    # Returns $true if the WPAD auto-detect bit is set in EITHER blob.
+    # Set-WinINetConnectionFlags writes DefaultConnectionSettings AND
+    # SavedLegacySettings, so a readback of only the first can report clean
+    # while the legacy blob still carries the bit -- the asymmetry made the
+    # provider's post-write assertion weaker than the write it guards.
     $k = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings\Connections'
-    try {
-        $v = (Get-ItemProperty -Path $k -Name 'DefaultConnectionSettings' -ErrorAction Stop).DefaultConnectionSettings
-        if ($v -and $v.Length -ge 9) { return [bool]($v[8] -band 0x08) }
-    } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
+    foreach ($name in @('DefaultConnectionSettings', 'SavedLegacySettings')) {
+        try {
+            $v = (Get-ItemProperty -Path $k -Name $name -ErrorAction Stop).$name
+            if (Test-ConnBlobAutoDetect -Blob $v) { return $true }
+        } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
+    }
     return $false
 }
 
 function Get-WinINetProxyState {
     $k = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings'
+    # AutoConfigURL (the PAC-file path into WinINet) is deliberately NOT read.
+    # Nothing in the MAST estate sets one: the units and the site network hand
+    # out no PAC, and Set-WinINetConnectionFlags forces the flags byte to
+    # manual-only (0x02) or direct-only (0x01), which makes any URL that did
+    # appear inert. A field that is empty on every machine we own is a line of
+    # posture output nobody reads and a branch no test exercises -- it would rot
+    # before it was ever right. Add it back the day a MAST machine genuinely
+    # lives behind a PAC (a managed institute laptop joining the fleet, say),
+    # and give it a test when you do.
     $h = @{ Enable = 0; Server = ''; Override = '' }
     if (-not (Test-Path $k)) { return $h }
     try {

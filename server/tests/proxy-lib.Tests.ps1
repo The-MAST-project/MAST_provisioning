@@ -72,6 +72,22 @@ Describe 'Get-ProxyHostPort' {
     }
 }
 
+Describe 'Test-ConnBlobAutoDetect' {
+    It 'is false for a manual-proxy blob' {
+        Test-ConnBlobAutoDetect -Blob (New-WinINetConnBlob -Flags 0x02 -HostPort 'h:8080' -Bypass '<local>') | Should Be $false
+    }
+    It 'is false for a direct-only blob' {
+        Test-ConnBlobAutoDetect -Blob (New-WinINetConnBlob -Flags 0x01 -HostPort '' -Bypass '') | Should Be $false
+    }
+    It 'is true when the WPAD bit rides alongside the manual-proxy bit' {
+        Test-ConnBlobAutoDetect -Blob (New-WinINetConnBlob -Flags 0x0A -HostPort 'h:8080' -Bypass '<local>') | Should Be $true
+    }
+    It 'is false for a null or truncated blob rather than throwing' {
+        Test-ConnBlobAutoDetect -Blob $null | Should Be $false
+        Test-ConnBlobAutoDetect -Blob ([byte[]](1, 2, 3)) | Should Be $false
+    }
+}
+
 Describe 'New-WinINetConnBlob' {
     It 'writes the version marker and the flags byte at offset 8' {
         $b = New-WinINetConnBlob -Flags 0x01 -HostPort '' -Bypass ''

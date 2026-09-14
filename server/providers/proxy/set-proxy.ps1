@@ -83,6 +83,8 @@ function Show-Posture {
     Write-Host '-- (B) WinINet (HKCU Internet Settings) --'
     Write-Host ("  ProxyEnable = {0}" -f ${p}.WinINet.Enable)
     Write-Host ("  ProxyServer = {0}" -f $(if (${p}.WinINet.Server) { ${p}.WinINet.Server } else { '(empty)' }))
+    # No AutoConfigURL line on purpose -- see Get-WinINetProxyState in
+    # proxy-lib.ps1 for why a PAC path is not part of the posture here.
     Write-Host ("  WPAD auto-detect = {0}" -f ${p}.WpadAutoDetect)
     Write-Host '-- (C) Machine WinHTTP --'
     foreach (${line} in (${p}.WinHttp -split "`r?`n")) {
@@ -93,15 +95,30 @@ function Show-Posture {
     Write-Host '-- Reachability probes --'
     ${bc} = Test-TcpReachable -TargetHost 'bcproxy.weizmann.ac.il' -Port 8080
     ${gh} = Test-TcpReachable -TargetHost 'github.com' -Port 443
-    Write-Host ("  bcproxy.weizmann.ac.il:8080  reachable = {0}  (Weizmann campus/VPN)" -f ${bc})
+    Write-Host ("  bcproxy.weizmann.ac.il:8080  reachable = {0}  (campus, VPN, or Neot Smadar)" -f ${bc})
     Write-Host ("  github.com:443 direct        reachable = {0}  (direct internet)" -f ${gh})
+
+    # Where we are is the PAIR of probes, not either one alone. bcproxy is
+    # reachable from Neot Smadar as well as campus (measured from mast01,
+    # 2026-09-14), and direct egress works ON campus -- so "bcproxy up" does
+    # not mean campus, and "direct works" does not mean off-campus. Only the
+    # combination separates the four places, and only one of them makes a
+    # posture actually wrong rather than merely unconventional.
+    Write-Host ("  => location: {0}" -f $(
+        if (${bc} -and ${gh})           { 'inside the institute (campus or VPN) -- both routes work' }
+        elseif (${bc} -and -not ${gh})  { 'Neot Smadar, or another proxy-only segment' }
+        elseif (-not ${bc} -and ${gh})  { 'off campus -- no route to bcproxy' }
+        else                            { 'isolated segment -- no egress either way' }))
+
     ${onProxy} = (${p}.Env.http_proxy) -and (${p}.WinINet.Enable -eq 1)
     if (${onProxy} -and ${bc}) {
-        Write-Host '  => Set to WEIZMANN proxy, and the proxy is reachable. Looks correct for on-campus.'
+        Write-Host '  => Set to WEIZMANN proxy, and the proxy is reachable. Correct here.'
     } elseif (${onProxy} -and -not ${bc}) {
-        Write-Host '  => Set to WEIZMANN proxy, but bcproxy is NOT reachable -- downloads will hang/fail here.'
+        Write-Host '  => WRONG: set to WEIZMANN proxy, but bcproxy is NOT reachable -- downloads will hang.'
+    } elseif (-not ${onProxy} -and ${bc} -and -not ${gh}) {
+        Write-Host '  => WRONG: set to DIRECT on a proxy-only segment -- there is no way out without the proxy.'
     } elseif (-not ${onProxy} -and ${gh}) {
-        Write-Host '  => Set to DIRECT, and direct internet works. Looks correct for off-campus.'
+        Write-Host '  => Set to DIRECT, and direct internet works. Correct here.'
     } else {
         Write-Host '  => Set to DIRECT, but direct internet is NOT reachable -- you may need the Weizmann proxy.'
     }
