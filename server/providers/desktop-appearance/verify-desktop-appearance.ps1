@@ -29,7 +29,7 @@ foreach (${libName} in @('mast-userhive-lib.ps1', 'mast-appearance-lib.ps1')) {
 Set-StrictMode -Off  # mast-log.ps1 enables StrictMode; verify scripts probe optional state
 ${verifyLog} = Get-MastVerifyLog -Module 'desktop-appearance'
 
-${TaskName} = 'MAST-DesktopAppearance-Apply'
+${RetiredTaskName} = 'MAST-DesktopAppearance-Apply'
 
 function W { param([string]${Line}) Add-Content -LiteralPath ${verifyLog} -Encoding UTF8 -Value ("[{0}] {1}" -f (Get-Date -Format 'HH:mm:ss'), ${Line}) }
 Set-Content -LiteralPath ${verifyLog} -Encoding UTF8 -Value ("[{0}] verify-desktop-appearance.ps1 started" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))
@@ -98,32 +98,21 @@ if (${hive}) {
     W ("{0} per-user values current in the {1} hive." -f ${checked}, ${MastUser})
     Close-MastUserHive -Hive ${hive}
 } elseif (${fail}.Count -eq 0) {
-    # No profile at all: the provider legitimately deferred to the logon task, so
-    # there is nothing to read back yet. Say so rather than passing silently.
+    # No profile at all: the provider had no hive to write, so there is nothing to
+    # read back yet. Say so rather than passing silently.
     W ("[WARN] '{0}' has no profile yet; per-user values not verifiable on this machine." -f ${MastUser})
 }
 
-# --- the task that re-asserts it every logon -------------------------------
-# Presence is not enough: the task is what makes the appearance visible, and a
-# registered task that fails every logon leaves the desktop untouched while every
-# other check here passes. Its last exit code is the only trace it leaves -- which
-# is how a duplicate `using` directive in the apply script's Add-Type went unnoticed
-# on the dev VM until someone read LastTaskResult by hand (2026-08-19).
-${TaskNeverRan} = 267011  # 0x41303, SCHED_S_TASK_HAS_NOT_RUN
-if (Get-ScheduledTask -TaskName ${TaskName} -ErrorAction SilentlyContinue) {
-    W ("AtLogon task present: {0}" -f ${TaskName})
-    ${info} = Get-ScheduledTaskInfo -TaskName ${TaskName} -ErrorAction SilentlyContinue
-    if (-not ${info}) {
-        W '[WARN] task registered but its run info is unreadable; last result not checked.'
-    } elseif (${info}.LastTaskResult -eq ${TaskNeverRan}) {
-        W 'task has not run yet (no logon since it was registered); nothing to judge.'
-    } elseif (${info}.LastTaskResult -ne 0) {
-        ${fail} += ("AtLogon task last FAILED: result {0} at {1} -- the desktop is not being repainted (see {2}\apply.log)" -f ${info}.LastTaskResult, ${info}.LastRunTime, ${AppearanceRoot})
-    } else {
-        W ("task last ran clean at {0}" -f ${info}.LastRunTime)
-    }
+# --- the retired apply task ------------------------------------------------
+# It used to be required. It ran non-elevated against a machine-wide image, so its
+# re-render failed every time into a catch that reported success, and the task's
+# clean LastTaskResult said the desktop was fine (#206). The repaint moved into
+# execute-mast-provisioning.ps1, which is inside the logon session AND elevated.
+# A unit still carrying the task is a unit the provider has not re-run on.
+if (Get-ScheduledTask -TaskName ${RetiredTaskName} -ErrorAction SilentlyContinue) {
+    ${fail} += ("retired task still registered: {0} -- re-run desktop-appearance to remove it" -f ${RetiredTaskName})
 } else {
-    ${fail} += ("AtLogon task missing: {0}" -f ${TaskName})
+    W ("retired task absent: {0}" -f ${RetiredTaskName})
 }
 
 if (${fail}.Count -eq 0) {

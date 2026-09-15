@@ -449,41 +449,37 @@ try {
     # written the manifest without rendering, which is what hid it (#200, #207).
     #
     # Rendering HERE is what fixes that: the manifest is on disk, and this session
-    # is elevated, which the image's location requires. Starting the AtLogon task
-    # afterwards is still needed -- a registry write does not repaint a running
-    # desktop, so only something inside the logon session can apply and broadcast.
+    # is elevated, which the image's location requires. It is also inside mast's
+    # logon session -- the detached task runs as mast with LogonType Interactive --
+    # so the repaint that used to need an AtLogon task happens here too (#206).
+    # Re-rendering changes the file; only SystemParametersInfo makes the running
+    # desktop show it, so the two steps belong together and in this order.
     #
     # Best-effort: verify-desktop-appearance.ps1 reports a stale image as a failing
     # check, so a missed refresh becomes tier-2 needs-repair rather than a silent
-    # lie.
+    # lie -- and the per-user values are in mast's hive either way, so the next
+    # logon paints them even if this whole block was skipped.
     try {
         ${appearanceRoot} = Join-Path ${env:ProgramData} 'MAST\desktop'
         ${appearanceLib}  = Join-Path ${appearanceRoot} 'mast-appearance-lib.ps1'
+        ${sidecarPath}    = Join-Path ${appearanceRoot} 'background.json'
         if (Test-Path -LiteralPath ${appearanceLib}) {
             . ${appearanceLib}
             ${rerendered} = Update-MastStaleBackground `
-                -SidecarPath (Join-Path ${appearanceRoot} 'background.json') `
+                -SidecarPath ${sidecarPath} `
                 -AppearanceRoot ${appearanceRoot} -UnitToml 'C:\WIS\config.toml'
             if (${rerendered}) { Write-Log 'BACKGROUND_RERENDERED with this run date' }
             else { Write-Log 'BACKGROUND_CURRENT no re-render needed' }
+
+            ${sidecar}     = Get-Content -LiteralPath ${sidecarPath} -Raw | ConvertFrom-Json
+            ${applyResult} = Set-MastLiveDesktop -ImagePath ${sidecar}.image
+            if (${applyResult}.Applied) { Write-Log ("DESKTOP_APPLIED " + ${applyResult}.Detail) }
+            else { Write-Log ("DESKTOP_APPLY_SKIPPED " + ${applyResult}.Detail) }
         } else {
             Write-Log ("BACKGROUND_RERENDER skipped: no {0}" -f ${appearanceLib})
         }
     } catch {
-        Write-Log ("BACKGROUND_RERENDER_ERROR " + $_.Exception.Message)
-    }
-    try {
-        # Must match ${TaskName} in provide-desktop-appearance.ps1; asserted by
-        # server/prov/tests/test_desktop_refresh_contract.py.
-        ${applyTask} = 'MAST-DesktopAppearance-Apply'
-        if (Get-ScheduledTask -TaskName ${applyTask} -ErrorAction SilentlyContinue) {
-            Start-ScheduledTask -TaskName ${applyTask}
-            Write-Log ("BACKGROUND_REFRESH started {0}" -f ${applyTask})
-        } else {
-            Write-Log ("BACKGROUND_REFRESH skipped: no {0} task registered" -f ${applyTask})
-        }
-    } catch {
-        Write-Log ("BACKGROUND_REFRESH_ERROR " + $_.Exception.Message)
+        Write-Log ("DESKTOP_APPLY_ERROR " + $_.Exception.Message)
     }
 
     if (${failCount} -gt 0) {

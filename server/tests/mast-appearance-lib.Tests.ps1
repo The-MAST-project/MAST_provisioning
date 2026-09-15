@@ -136,3 +136,25 @@ Describe 'Update-MastStaleBackground' {
             -UnitToml $toml -InstalledManifest $after | Should Be $true
     }
 }
+
+Describe 'Set-MastLiveDesktop' {
+    # The interop half -- SystemParametersInfo and the ImmersiveColorSet broadcast --
+    # is not exercised here. It only does anything inside a logon session with a
+    # desktop, and a test that made it succeed would repaint the machine running the
+    # suite. What IS tested is the guard that decides whether to touch HKCU at all,
+    # because that is the half that can be silently wrong.
+
+    It 'refuses to write a hive belonging to another account' {
+        # It asserts the theme into the CALLING process's HKCU. Execute runs as mast
+        # under the detached task, but the WinRM fallback path does not -- and writing
+        # mast's wallpaper into an administrator's hive would succeed and be wrong.
+        $r = Set-MastLiveDesktop -ImagePath 'C:\nonexistent\background.png' -MastUser 'not-the-logged-on-user'
+        $r.Applied | Should Be $false
+        $r.Detail  | Should Match 'not-the-logged-on-user'
+    }
+
+    It 'fails loudly when it is the right user and the image is gone' {
+        { Set-MastLiveDesktop -ImagePath (Join-Path $root 'no-such-image.png') -MastUser $env:USERNAME } |
+            Should Throw
+    }
+}
