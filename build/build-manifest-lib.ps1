@@ -2,6 +2,10 @@
 # server/tests/build-manifest-lib.Tests.ps1 can exercise them without running a
 # build; build-mast.ps1 dot-sources this file (single source of truth).
 
+# The one file the two consumers disagree about, named once because the whole of
+# #203 was these two rules being conflated.
+${script:MastBuildManifestName} = 'build-manifest.json'
+
 # Every file under the staging tree, descending reparse points.
 #
 # THE ONE ENUMERATION. Get-ChildItem -Recurse does not descend reparse points,
@@ -49,17 +53,17 @@ function Get-MastStagedFiles {
     return @($out | Sort-Object RelativePath)
 }
 
-# Every staged file with its size and content hash -- the per-version manifest
-# the relay assembles a payload from (#202).
+# THE ONE HASHING PASS. Every staged file with its size and content hash.
 #
-# Free: Get-PayloadHash already hashes each of these files and discards the
-# per-file value into its rolling digest. This keeps the list instead.
+# Both consumers below read this list; neither hashes payload bytes itself. Until
+# #205 each ran its own Get-FileHash loop over the whole tree, so a build made two
+# full SHA-256 passes over 14.88 GB and the older comment here claimed the second
+# came "free" from the first -- a design that was described but never built.
 #
-# Nothing is excluded. Get-PayloadHash skips build-manifest.json because it runs
-# before that file exists; this runs after, and the file is part of the payload
-# the unit installs from -- excluding it here assembled a 542-file tree against
-# a 543-file payload and failed mast07's destination check (#203).
-function Get-MastPayloadManifest {
+# Nothing is excluded. The consumers differ about build-manifest.json and each
+# says so at its own call site, which is the lesson of #203: an exclusion buried
+# in a shared helper is how one rule silently became the other.
+function Get-MastStagedFileHashes {
     param([Parameter(Mandatory)][string]$StagingDir)
 
     ${entries} = New-Object System.Collections.ArrayList
@@ -73,24 +77,54 @@ function Get-MastPayloadManifest {
     return @(${entries})
 }
 
+# The per-version manifest the relay assembles a payload from (#202).
+#
+# Takes the single pass and completes it. build-manifest.json is written AFTER
+# the hash is taken -- it carries payload_hash, so it cannot exist yet -- which
+# means the pass either missed it or captured the previous build's copy. Either
+# way the entry here has to be re-derived from what is now on disk.
+#
+# It is not optional. Omitting it assembled a 542-file tree against a 543-file
+# payload and failed mast07's destination check with short_transfer (#203), so a
+# missing file throws rather than quietly producing a manifest one file short.
+function Get-MastPayloadManifest {
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()][object[]]${Entries},
+        [Parameter(Mandatory)][string]${StagingDir}
+    )
+
+    ${manifestPath} = Join-Path ${StagingDir} ${script:MastBuildManifestName}
+    if (-not (Test-Path -LiteralPath ${manifestPath})) {
+        throw ("{0} not found in {1}; the payload manifest must describe it -- see #203" -f ${script:MastBuildManifestName}, ${StagingDir})
+    }
+
+    ${kept} = New-Object System.Collections.ArrayList
+    foreach (${e} in ${Entries}) {
+        if (${e}.path -ne ${script:MastBuildManifestName}) { [void]${kept}.Add(${e}) }
+    }
+    [void]${kept}.Add([ordered]@{
+        path   = ${script:MastBuildManifestName}
+        size   = [int64](Get-Item -LiteralPath ${manifestPath}).Length
+        sha256 = (Get-FileHash -LiteralPath ${manifestPath} -Algorithm SHA256).Hash.ToLowerInvariant()
+    })
+    return @(${kept} | Sort-Object { $_.path })
+}
+
 # Rolling SHA-256 over every staged file: the whole-payload "anything changed
 # at all?" gate consumed by server/prov/driver.py.
 function Get-PayloadHash {
-    param([Parameter(Mandatory)][string]$StagingDir)
+    param([Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Entries)
 
-    # Hash inputs: every regular file under the staging dir, in lexical order,
-    # combining "<relative-path>:<sha256>" into a single rolling hash.
-    # commands.json is included implicitly. build-manifest.json is excluded
-    # (we are generating it now).
+    # Hash inputs: every staged file, in lexical order, combining
+    # "<relative-path>:<sha256>" into a single rolling hash. commands.json is
+    # included implicitly. build-manifest.json is excluded because this value goes
+    # INTO it -- and on a rebuild into an existing staging directory the previous
+    # build's copy is on disk, so the exclusion is load-bearing, not defensive.
     $sha = [System.Security.Cryptography.SHA256]::Create()
     $bytes = [System.IO.MemoryStream]::new()
-    # Get-MastStagedFiles, not Get-ChildItem -Recurse: see that function (#203).
-    $files = Get-MastStagedFiles -StagingDir $StagingDir |
-                Where-Object { $_.RelativePath -ne 'build-manifest.json' }
-    foreach ($f in $files) {
-        $rel = $f.RelativePath
-        $fileHash = (Get-FileHash -LiteralPath $f.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-        $line = [System.Text.Encoding]::UTF8.GetBytes("$rel`:$fileHash`n")
+    foreach ($e in $Entries) {
+        if ($e.path -eq ${script:MastBuildManifestName}) { continue }
+        $line = [System.Text.Encoding]::UTF8.GetBytes("$($e.path)`:$($e.sha256)`n")
         $bytes.Write($line, 0, $line.Length)
     }
     $bytes.Position = 0

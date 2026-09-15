@@ -912,7 +912,10 @@ function Get-GitSha {
     }
 }
 
-${payloadHash} = Get-PayloadHash -StagingDir ${staging}
+# One SHA-256 pass over the staging tree. Both payload_hash and the payload
+# manifest are derived from this list; neither re-walks it (#205).
+${stagedFiles} = Get-MastStagedFileHashes -StagingDir ${staging}
+${payloadHash} = Get-PayloadHash -Entries ${stagedFiles}
 ${gitSha}      = Get-GitSha -RepoTop ${Top}
 
 # Per-module version + content hash from each provider's module.json. The
@@ -999,7 +1002,7 @@ ${payloadManifest} = [ordered]@{
     payload_hash = ${payloadHash}
     hostname     = ${HostName}
     generated_at = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
-    files        = @(Get-MastPayloadManifest -StagingDir ${staging})
+    files        = @(Get-MastPayloadManifest -Entries ${stagedFiles} -StagingDir ${staging})
 }
 ${payloadManifestPath} = Join-Path ${stagingTop} 'payload-manifest.json'
 (${payloadManifest} | ConvertTo-Json -Depth 4) | Out-File -FilePath ${payloadManifestPath} -Encoding UTF8
