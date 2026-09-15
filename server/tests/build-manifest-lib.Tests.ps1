@@ -82,19 +82,49 @@ New-Item -ItemType Directory -Force -Path (Join-Path $stage 'sub') | Out-Null
 Set-Content -LiteralPath (Join-Path $stage 'a.txt')     -Value 'aaa' -Encoding Ascii
 Set-Content -LiteralPath (Join-Path $stage 'sub\b.txt') -Value 'bbb' -Encoding Ascii
 
+# An independent oracle for payload_hash, computed outside PowerShell.
+#
+# payload_hash is the fleet's "has anything changed at all?" gate, so a refactor
+# that silently moves it marks every unit as drifted -- which #203 already did
+# once, for 46 modules across six units. A before/after comparison inside the
+# suite cannot catch that: both sides move together. This fixture is written as
+# explicit bytes (no Set-Content newline translation) and its digest was computed
+# from the spec -- sha256 over "<relative-path>:<sha256>\n" per file, lexical by
+# relative path, build-manifest.json excluded -- so the literal below is an
+# oracle, not a snapshot of whatever the code currently does.
+$pin = Join-Path $root 'pinned'
+New-Item -ItemType Directory -Force -Path (Join-Path $pin 'sub') | Out-Null
+[System.IO.File]::WriteAllBytes((Join-Path $pin 'a.txt'),               [byte[]][char[]]'alpha')
+[System.IO.File]::WriteAllBytes((Join-Path $pin 'sub\b.bin'),           [byte[]][char[]]'beta')
+[System.IO.File]::WriteAllBytes((Join-Path $pin 'z.txt'),               [byte[]][char[]]'zeta')
+[System.IO.File]::WriteAllBytes((Join-Path $pin 'build-manifest.json'), [byte[]][char[]]'{"stale":true}')
+$pinnedDigest = 'd0d316cae32431b1fb4486adeea159822d5e16ff8fe44c2b5e91e42c50642562'
+
+Describe 'payload_hash is pinned to a value computed outside this code' {
+    It 'matches the oracle for a known tree' {
+        Get-PayloadHash -Entries (Get-MastStagedFileHashes -StagingDir $pin) | Should Be $pinnedDigest
+    }
+    It 'ignores a stale build-manifest.json left by a previous build' {
+        # Not defensive: build-mast.ps1 re-stages into an existing directory, so
+        # the PREVIOUS build's manifest is on disk when the hash is taken.
+        [System.IO.File]::WriteAllBytes((Join-Path $pin 'build-manifest.json'), [byte[]][char[]]'{"stale":false,"different":1}')
+        Get-PayloadHash -Entries (Get-MastStagedFileHashes -StagingDir $pin) | Should Be $pinnedDigest
+    }
+}
+
 Describe 'Get-PayloadHash' {
     It 'is deterministic' {
-        Get-PayloadHash -StagingDir $stage | Should Be (Get-PayloadHash -StagingDir $stage)
+        Get-PayloadHash -Entries (Get-MastStagedFileHashes -StagingDir $stage) | Should Be (Get-PayloadHash -Entries (Get-MastStagedFileHashes -StagingDir $stage))
     }
     It 'excludes build-manifest.json from the hash' {
-        $before = Get-PayloadHash -StagingDir $stage
+        $before = Get-PayloadHash -Entries (Get-MastStagedFileHashes -StagingDir $stage)
         Set-Content -LiteralPath (Join-Path $stage 'build-manifest.json') -Value '{"x":1}' -Encoding Ascii
-        Get-PayloadHash -StagingDir $stage | Should Be $before
+        Get-PayloadHash -Entries (Get-MastStagedFileHashes -StagingDir $stage) | Should Be $before
     }
     It 'changes when a staged file changes' {
-        $before = Get-PayloadHash -StagingDir $stage
+        $before = Get-PayloadHash -Entries (Get-MastStagedFileHashes -StagingDir $stage)
         Set-Content -LiteralPath (Join-Path $stage 'sub\b.txt') -Value 'BBB' -Encoding Ascii
-        Get-PayloadHash -StagingDir $stage | Should Not Be $before
+        Get-PayloadHash -Entries (Get-MastStagedFileHashes -StagingDir $stage) | Should Not Be $before
     }
 }
 
@@ -190,12 +220,16 @@ Describe 'Get-MastPayloadManifest' {
     $root = (Get-Item -LiteralPath $root).FullName
     Set-Content -LiteralPath (Join-Path $root 'a.txt') -Value 'hello' -Encoding Ascii -NoNewline
 
+    # The pass as build-mast takes it: BEFORE build-manifest.json is written.
+    function Get-Pass { Get-MastStagedFileHashes -StagingDir $root }
+
     It 'lists every file with its size and content hash' {
         # @() around the call, not $m[0]: PowerShell unrolls a single-element
         # array on return, so $m would be the entry itself and $m[0] a key
         # lookup. Every caller wraps for the same reason.
-        $m = @(Get-MastPayloadManifest -StagingDir $root)
-        $m.Count     | Should Be 1
+        Set-Content -LiteralPath (Join-Path $root 'build-manifest.json') -Value '{}' -Encoding Ascii -NoNewline
+        $m = @(Get-MastPayloadManifest -Entries (Get-Pass) -StagingDir $root)
+        $m.Count     | Should Be 2
         $m[0].path   | Should Be 'a.txt'
         $m[0].size   | Should Be 5
         # sha256("hello")
@@ -203,7 +237,7 @@ Describe 'Get-MastPayloadManifest' {
     }
     It 'agrees with the hash input, so the two cannot describe different payloads' {
         $files = @(Get-MastStagedFiles -StagingDir $root)
-        @(Get-MastPayloadManifest -StagingDir $root).Count | Should Be $files.Count
+        @(Get-MastPayloadManifest -Entries (Get-Pass) -StagingDir $root).Count | Should Be $files.Count
     }
     It 'lists build-manifest.json, which the hash excludes but the payload carries' {
         # The two exclusions are not the same exclusion. Get-PayloadHash omits
@@ -212,8 +246,43 @@ Describe 'Get-MastPayloadManifest' {
         # reads build-manifest.json to record what it installed. Omitting it
         # there assembled a 542-file tree against a 543-file payload and
         # mast07's destination check failed short_transfer (#203).
-        Set-Content -LiteralPath (Join-Path $root 'build-manifest.json') -Value '{}' -Encoding Ascii -NoNewline
-        $paths = @(Get-MastPayloadManifest -StagingDir $root) | ForEach-Object { $_.path }
+        $paths = @(Get-MastPayloadManifest -Entries (Get-Pass) -StagingDir $root) | ForEach-Object { $_.path }
         ($paths -contains 'build-manifest.json') | Should Be $true
+    }
+    It 'describes the manifest that is on disk now, not the one the pass saw' {
+        # The pass runs before build-manifest.json is written, so on a rebuild it
+        # captured the PREVIOUS build's copy. Carrying that entry through would
+        # ship a manifest whose own hash is a build out of date -- the relay would
+        # hardlink the old blob and the unit would verify against the wrong file.
+        $manifest = Join-Path $root 'build-manifest.json'
+        Set-Content -LiteralPath $manifest -Value '{"stale":1}' -Encoding Ascii -NoNewline
+        $stalePass = Get-Pass
+        Set-Content -LiteralPath $manifest -Value '{"fresh":2}' -Encoding Ascii -NoNewline
+        $entry = @(Get-MastPayloadManifest -Entries $stalePass -StagingDir $root) |
+            Where-Object { $_.path -eq 'build-manifest.json' }
+        $entry.sha256 | Should Be (Get-FileHash -LiteralPath $manifest -Algorithm SHA256).Hash.ToLowerInvariant()
+    }
+    It 'refuses to describe a payload with no build-manifest.json in it' {
+        Remove-Item -LiteralPath (Join-Path $root 'build-manifest.json') -Force
+        { Get-MastPayloadManifest -Entries (Get-Pass) -StagingDir $root } | Should Throw
+    }
+}
+
+Describe 'Get-MastStagedFileHashes' {
+    It 'hashes every file the enumeration reports, excluding nothing' {
+        @(Get-MastStagedFileHashes -StagingDir $stage).Count |
+            Should Be @(Get-MastStagedFiles -StagingDir $stage).Count
+    }
+    It 'is the only thing that reads payload bytes, so both consumers agree' {
+        # The point of #205: one pass, two readers. If they ever disagree about a
+        # file's hash the payload_hash gate and the relay's assembly describe
+        # different payloads.
+        $own = Join-Path $env:TEMP ("mast-onepass-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
+        New-Item -ItemType Directory -Force -Path $own | Out-Null
+        $file = Join-Path $own 'payload.bin'
+        [System.IO.File]::WriteAllBytes($file, [byte[]][char[]]'alpha')
+        $fromPass = (@(Get-MastStagedFileHashes -StagingDir $own) | Where-Object { $_.path -eq 'payload.bin' }).sha256
+        $fromDisk = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant()
+        $fromPass | Should Be $fromDisk
     }
 }
