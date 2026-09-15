@@ -15,9 +15,9 @@
 # THE GROWTH SEAM. Dynamic content (BGInfo-style live IP, uptime, free disk) is
 # wanted eventually. When it arrives it lands here and in the sidecar's
 # dynamic_fields list, which verify skips -- and the image moves from one
-# machine-wide copy to a per-user one regenerated at logon, which is a change to
-# apply-desktop-appearance.ps1 only, since that script already owns which path
-# the wallpaper points at. Nothing else in the provider has an opinion.
+# machine-wide copy to a per-user one, which is a change to the sidecar's image
+# path and to Set-MastLiveDesktop in mast-appearance-lib.ps1 -- both already read
+# that path rather than a constant. Nothing else in the provider has an opinion.
 
 [CmdletBinding()]
 param(

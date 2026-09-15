@@ -15,11 +15,11 @@
 #      is already mounted at HKU\<sid>, so this is a plain write; with nobody
 #      signed in the lib loads NTUSER.DAT instead. It never falls back to HKCU
 #      (see MAST_provisioning#106 for what that costs).
-#   3. Registers apply-desktop-appearance.ps1 as an AtLogon task for mast, and
-#      starts it now when mast is already signed in. That task exists for the two
-#      things a registry write cannot do -- repaint the wallpaper and make the
-#      shell re-read the theme -- and it stays registered, because appearance is
-#      standing state that every logon has to re-assert.
+#   3. Removes the retired MAST-DesktopAppearance-Apply task if this unit still
+#      carries one. Repainting the live desktop moved into
+#      client/execute-mast-provisioning.ps1, which runs as mast inside the logon
+#      session AND elevated -- the combination the task never had, and the reason
+#      it could not re-render a machine-wide image (#206).
 #
 # Order 2750: after desktop-shortcuts (2700) so the operator-desktop modules sit
 # together, and long after config-bootstrap (150) whose config.toml step 1 reads.
@@ -29,9 +29,7 @@ param(
     [string]${AppearanceRoot} = 'C:\ProgramData\MAST\desktop',
     # Bootstrap config the site and role are read from (deployed by config-bootstrap).
     [string]${UnitToml} = 'C:\WIS\config.toml',
-    [string]${MastUser} = 'mast',
-    # Skip the AtLogon task registration (render-and-write-only test runs).
-    [switch]${SkipTask}
+    [string]${MastUser} = 'mast'
 )
 
 ${ErrorActionPreference} = 'Stop'
@@ -49,10 +47,7 @@ ${logDir} = Get-MastLogSessionDir
 New-Item -ItemType Directory -Path ${logDir} -Force | Out-Null
 ${logFile} = Join-Path ${logDir} 'desktop-appearance.log'
 
-${TaskName}     = 'MAST-DesktopAppearance-Apply'
-${TaskNeverRan}     = 267011  # 0x41303, SCHED_S_TASK_HAS_NOT_RUN
-${ApplyWaitSeconds} = 60
-${ApplyPollSeconds} = 2
+${RetiredTaskName} = 'MAST-DesktopAppearance-Apply'
 
 function Write-AppearanceLog {
     param([string]${Line})
@@ -81,18 +76,16 @@ try {
     }
     Write-AppearanceLog ("Background states: site={0} ({1}) coords='{2}'" -f ${fields}.site_name, ${fields}.site, ${fields}.coordinates)
 
-    # 2) Stage the renderer and the apply script at a persistent path. The AtLogon
-    #    task runs long after the staging dir is gone, and the renderer follows it
-    #    so a re-render on a unit needs no payload.
-    # The lib travels with them: apply-desktop-appearance.ps1 dot-sources it for the
-    # value table, and it runs from this path at every logon long after the staging
-    # directory is gone.
-    foreach (${name} in @('render-desktop-background.ps1', 'apply-desktop-appearance.ps1', 'mast-appearance-lib.ps1')) {
+    # 2) Stage the renderer and the lib at a persistent path, so a re-render on a
+    #    unit needs no payload. execute-mast-provisioning.ps1 dot-sources the lib
+    #    from here at the end of every run, long after the staging directory is
+    #    gone, for Update-MastStaleBackground and Set-MastLiveDesktop.
+    foreach (${name} in @('render-desktop-background.ps1', 'mast-appearance-lib.ps1')) {
         ${src} = Join-Path ${PSScriptRoot} ${name}
         if (-not (Test-Path -LiteralPath ${src})) { throw ("{0} not found for staging" -f ${name}) }
         Copy-Item -LiteralPath ${src} -Destination (Join-Path ${AppearanceRoot} ${name}) -Force
     }
-    Write-AppearanceLog ("Staged renderer + apply script into {0}" -f ${AppearanceRoot})
+    Write-AppearanceLog ("Staged renderer + appearance lib into {0}" -f ${AppearanceRoot})
 
     # 3) Render the background and its sidecar.
     ${imagePath}   = Join-Path ${AppearanceRoot} 'background.png'
@@ -113,8 +106,8 @@ try {
     Write-AppearanceLog ("Rendered background for {0} -> {1}" -f ${env:COMPUTERNAME}, ${imagePath})
 
     # 4) Write the per-user values into mast's hive. A machine where mast has never
-    #    signed in has no profile yet: nothing to write, and the AtLogon task is
-    #    what covers it.
+    #    signed in has no profile yet: nothing to write, and the first logon reads
+    #    the defaults the profile is created with -- the next run writes the hive.
     ${hive} = Resolve-MastUserHive -UserName ${MastUser}
     if (${hive}) {
         ${userValues} = Get-MastDesktopUserValues -WallpaperPath ${imagePath}
@@ -127,62 +120,18 @@ try {
         Write-AppearanceLog ("[WARN] '{0}' has no profile yet; hive write skipped, first logon applies it." -f ${MastUser})
     }
 
-    # 5) The AtLogon task. Interactive and non-elevated: it has to run inside the
-    #    session to repaint the desktop, and needs nothing more.
-    if (-not ${SkipTask}) {
-        ${applyPath} = Join-Path ${AppearanceRoot} 'apply-desktop-appearance.ps1'
-        ${argLine} = ('-ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -File "{0}" -AppearanceRoot "{1}"' -f ${applyPath}, ${AppearanceRoot})
-        ${action}    = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ${argLine}
-        ${trigger}   = New-ScheduledTaskTrigger -AtLogOn -User ${MastUser}
-        ${principal} = New-ScheduledTaskPrincipal -UserId ${MastUser} -LogonType Interactive -RunLevel Limited
-        ${settings}  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
-        Unregister-ScheduledTask -TaskName ${TaskName} -ErrorAction SilentlyContinue -Confirm:$false
-        Register-ScheduledTask -TaskName ${TaskName} `
-            -Description 'Apply the MAST dark theme and identity background in the mast logon session (re-asserted every logon).' `
-            -Action ${action} -Trigger ${trigger} -Principal ${principal} -Settings ${settings} -ErrorAction Stop | Out-Null
-        Write-AppearanceLog ("Registered AtLogon task '{0}' for user '{1}'." -f ${TaskName}, ${MastUser})
-
-        # A mounted hive means the account has an active profile, so the task can
-        # run now and the desktop changes without waiting for a sign-in. An
-        # Interactive task cannot start with nobody logged on, so a failure here is
-        # expected on such a machine and is not the module's problem: the trigger
-        # covers it.
-        if (${hive} -and ${hive}.Source -eq 'mounted') {
-            try {
-                Start-ScheduledTask -TaskName ${TaskName} -ErrorAction Stop
-                Write-AppearanceLog 'Started the apply task in the live session.'
-            } catch {
-                Write-AppearanceLog ("[WARN] could not start the apply task now ({0}); it runs at the next logon." -f $_.Exception.Message)
-            }
-
-            # Wait for it, and fail if it failed. Starting a task and reporting success
-            # regardless would make this module's exit code meaningless: the whole
-            # visible outcome -- a repainted desktop -- happens in that task, and its
-            # exit code is the only trace it leaves. Waiting also removes a race, since
-            # the verify step reads the same LastTaskResult moments later and would
-            # otherwise catch the task mid-run.
-            ${waited} = 0
-            while (${waited} -lt ${ApplyWaitSeconds}) {
-                ${state} = (Get-ScheduledTask -TaskName ${TaskName} -ErrorAction SilentlyContinue).State
-                if (${state} -ne 'Running') { break }
-                Start-Sleep -Seconds ${ApplyPollSeconds}
-                ${waited} = ${waited} + ${ApplyPollSeconds}
-            }
-            ${applyInfo} = Get-ScheduledTaskInfo -TaskName ${TaskName} -ErrorAction SilentlyContinue
-            if (-not ${applyInfo}) {
-                Write-AppearanceLog '[WARN] apply task run info unreadable; its outcome is unknown.'
-            } elseif (${applyInfo}.LastTaskResult -eq ${TaskNeverRan}) {
-                Write-AppearanceLog ("[WARN] apply task still reports not-yet-run after {0}s; its outcome is unknown." -f ${waited})
-            } elseif (${applyInfo}.LastTaskResult -ne 0) {
-                throw ("the apply task failed (result {0}); the desktop was not repainted -- see {1}" -f ${applyInfo}.LastTaskResult, (Join-Path ${AppearanceRoot} 'apply.log'))
-            } else {
-                Write-AppearanceLog 'Apply task completed cleanly; the live desktop is updated.'
-            }
-        } else {
-            Write-AppearanceLog 'No active mast session; the apply task runs at the next logon.'
-        }
-    } else {
-        Write-AppearanceLog 'SkipTask set; AtLogon task registration skipped.'
+    # 5) Remove the retired apply task. Not registering it is not enough -- every
+    #    unit in the field has one, and a task nobody maintains that repaints the
+    #    desktop from a stale sidecar is worse than none. This module's own files
+    #    changed, so it drifts on every unit and this runs once everywhere.
+    if (Get-ScheduledTask -TaskName ${RetiredTaskName} -ErrorAction SilentlyContinue) {
+        Unregister-ScheduledTask -TaskName ${RetiredTaskName} -Confirm:$false
+        Write-AppearanceLog ("Removed the retired task '{0}'; execute repaints the desktop now." -f ${RetiredTaskName})
+    }
+    ${retiredApply} = Join-Path ${AppearanceRoot} 'apply-desktop-appearance.ps1'
+    if (Test-Path -LiteralPath ${retiredApply}) {
+        Remove-Item -LiteralPath ${retiredApply} -Force
+        Write-AppearanceLog ("Removed the retired {0}." -f ${retiredApply})
     }
 
     Write-MastSmokeOk -Module 'desktop-appearance' | Out-Null

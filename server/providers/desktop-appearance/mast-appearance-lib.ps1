@@ -38,6 +38,15 @@ ${script:MastDesktopKey}     = 'Control Panel\Desktop'
 ${script:MastPushKey}        = 'Software\Microsoft\Windows\CurrentVersion\PushNotifications'
 ${script:MastCdmKey}         = 'Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'
 
+# user32 constants for the live-session repaint in Set-MastLiveDesktop.
+${script:MastSpiSetDeskWallpaper} = 0x0014
+${script:MastSpifUpdateIniFile}   = 0x01
+${script:MastSpifSendChange}      = 0x02
+${script:MastHwndBroadcast}       = [System.IntPtr]0xffff
+${script:MastWmSettingChange}     = 0x001A
+${script:MastSmtoAbortIfHung}     = 0x0002
+${script:MastBroadcastTimeoutMs}  = 1000
+
 function Get-MastDesktopUserValues {
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]${WallpaperPath})
@@ -216,4 +225,71 @@ function Get-MastAppearanceFields {
         # stale wallpaper a tier-2 needs-repair rather than a lie nobody notices.
         provisioned   = (Get-MastProvisionedDate -InstalledManifest ${InstalledManifest})
     }
+}
+
+# Repaint the operator desktop in the session this process is running in.
+#
+# A registry write does not repaint a wallpaper and does not re-read the theme:
+# SystemParametersInfo and the WM_SETTINGCHANGE broadcast only do anything from
+# inside a logon session. That used to require an AtLogon task; it no longer does,
+# because the detached execute task runs as mast with LogonType Interactive, which
+# puts the provisioning run itself inside the session and elevated (#206).
+#
+# HKCU here is the CALLING process's hive. Execute qualifies; the WinRM fallback
+# path runs as somebody else, and writing mast's theme into an administrator's hive
+# would be silent and wrong -- hence the USERNAME check rather than a blind write.
+function Set-MastLiveDesktop {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]${ImagePath},
+        [string]${MastUser} = 'mast'
+    )
+
+    if (${env:USERNAME} -ne ${MastUser}) {
+        return [pscustomobject]@{
+            Applied = $false
+            Detail  = ("running as '{0}', not '{1}'; the next logon applies it from the hive" -f ${env:USERNAME}, ${MastUser})
+        }
+    }
+    if (-not (Test-Path -LiteralPath ${ImagePath})) {
+        throw ("background image not found: {0}" -f ${ImagePath})
+    }
+
+    # No -UsingNamespace. Add-Type -MemberDefinition emits
+    # `using System.Runtime.InteropServices;` itself, the compiler warns about the
+    # duplicate, and Add-Type treats that warning as an error -- which threw before
+    # the first log line and left the scheduled task's LastTaskResult as the only
+    # trace (dev VM, 2026-08-19).
+    if (-not ('MastProvisioning.DesktopInterop' -as [type])) {
+        Add-Type -Namespace 'MastProvisioning' -Name 'DesktopInterop' -MemberDefinition @'
+[DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+public static extern bool SystemParametersInfo(uint uiAction, uint uiParam, string pvParam, uint fWinIni);
+
+[DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, IntPtr wParam, string lParam, uint fuFlags, uint uTimeout, out IntPtr lpdwResult);
+'@
+    }
+
+    foreach (${value} in (Get-MastDesktopUserValues -WallpaperPath ${ImagePath})) {
+        ${keyPath} = Join-Path 'HKCU:' ${value}.SubKey
+        if (-not (Test-Path -LiteralPath ${keyPath})) { New-Item -Path ${keyPath} -Force | Out-Null }
+        Set-ItemProperty -LiteralPath ${keyPath} -Name ${value}.Name -Value ${value}.Value -Type ${value}.Type -Force
+    }
+
+    ${applied} = [MastProvisioning.DesktopInterop]::SystemParametersInfo(
+        ${script:MastSpiSetDeskWallpaper}, 0, ${ImagePath},
+        (${script:MastSpifUpdateIniFile} -bor ${script:MastSpifSendChange}))
+    ${detail} = if (${applied}) { 'wallpaper applied to the live session' }
+                else { ("SystemParametersInfo returned false (Win32 error {0})" -f [System.Runtime.InteropServices.Marshal]::GetLastWin32Error()) }
+
+    # Tells the shell and every running app to re-read the theme. Without it the
+    # dark switch waits for the next sign-in. A few Explorer surfaces follow only
+    # after explorer.exe restarts, which is not done here: provisioning may be
+    # running against a session somebody is watching.
+    ${result} = [System.IntPtr]::Zero
+    [void][MastProvisioning.DesktopInterop]::SendMessageTimeout(
+        ${script:MastHwndBroadcast}, ${script:MastWmSettingChange}, [System.IntPtr]::Zero, 'ImmersiveColorSet',
+        ${script:MastSmtoAbortIfHung}, ${script:MastBroadcastTimeoutMs}, [ref]${result})
+
+    return [pscustomobject]@{ Applied = ${applied}; Detail = ${detail} }
 }
