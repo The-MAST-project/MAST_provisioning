@@ -1,3 +1,17 @@
+# Line endings are decided HERE, not by whichever git happens to do the checkout.
+#
+# Two git installations sit on the provisioning server's PATH and disagree:
+# cygwin git 2.51.0 has core.autocrlf unset, Windows git 2.54.0 has it true from
+# its own system gitconfig. With no `text` rule, the tool that performed the clone
+# decided the working tree's line endings -- so two trees at the SAME commit built
+# payloads differing in 113 files, and `git status` reported both clean because
+# the stat cache short-circuits the content comparison (#216).
+#
+# Attributes override core.autocrlf, which is the whole point of putting it here.
+# This line is FIRST so the `-text` rules below win for the artifacts that must
+# stay byte-exact; the last matching rule takes precedence.
+* text=auto eol=lf
+
 server/providers/*/assets/*.zip filter=lfs diff=lfs merge=lfs -text
 server/providers/*/assets/*.exe filter=lfs diff=lfs merge=lfs -text
 server/providers/*/assets/*.tgz filter=lfs diff=lfs merge=lfs -text
@@ -28,3 +42,11 @@ client/assets/*.exe filter=lfs diff=lfs merge=lfs -text
 # preserves LF -- the first run from a real `git` checkout on the build host was
 # the first CRLF one.
 *.sh text eol=lf
+
+# Vendor artifacts that must reach a unit byte for byte. Driver INFs and catalogs
+# are consumed by Windows setup and certificates are signed blobs; none of them
+# may be rewritten by a line-ending filter, whatever git guesses about them.
+*.inf  -text
+*.sys  -text
+*.cat  -text
+*.cer  -text
