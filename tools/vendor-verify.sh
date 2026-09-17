@@ -27,6 +27,13 @@ SSH_KEY="${VENDOR_MIRROR_KEY:-/cygdrive/c/Users/labcomp2/.ssh/id_ed25519}"
 # Cygwin ssh for the same reason vendor-mirror.sh uses it; see that script.
 SSH="/usr/bin/ssh -i $SSH_KEY -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ServerAliveInterval=30 -o ServerAliveCountMax=10"
 
+# This runs as a scheduled task, where stdout goes nowhere. A verify whose drift
+# report cannot be read afterwards is the same as no verify -- the task's exit
+# code says something was wrong but never which file. Found 2026-09-17 by running
+# the registered task and finding it had left no trace.
+LOG="${VENDOR_VERIFY_LOG:-/cygdrive/c/MAST/logs/vendor-verify.log}"
+mkdir -p "$(dirname "$LOG")"
+
 # Same list, same reason, same guard as vendor-mirror.sh.
 # MIRROR_SOURCES_BEGIN
 SOURCES=(
@@ -38,7 +45,9 @@ SOURCES=(
 )
 # MIRROR_SOURCES_END
 
-say() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*"; }
+# Both, always: the log is what a scheduled run leaves behind, stdout is what a
+# person running it by hand watches.
+say() { local line="[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*"; echo "$line"; echo "$line" >>"$LOG"; }
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
@@ -95,7 +104,7 @@ fi
 drift=$(wc -l <"$WORK/missing.txt" | tr -d ' ')
 if [ "$drift" = 0 ] && [ "$missing_src" = 0 ]; then
   say "VENDOR_CACHE_OK files=$total"
-  echo "VENDOR-VERIFY-COMPLETE status=0 files=$total drift=0"
+  say "VENDOR-VERIFY-COMPLETE status=0 files=$total drift=0"
   exit 0
 fi
 
@@ -108,5 +117,5 @@ while read -r digest; do
   done
 done <"$WORK/missing.txt"
 say "re-pull from $DEST:/Storage/mast-vendor/ -- the store's copy is canonical"
-echo "VENDOR-VERIFY-COMPLETE status=1 files=$total drift=$drift"
+say "VENDOR-VERIFY-COMPLETE status=1 files=$total drift=$drift"
 exit 1

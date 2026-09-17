@@ -458,8 +458,16 @@ hold, name the files behind any that come back. It hashes 266 files / 12 GB in
 about 35 s, which is why it can run daily -- re-pulling to compare would take
 35-60 minutes at the measured 3.4-6 MB/s.
 
-Both write to `C:\MAST\logs\vendor-mirror.log`. A clean verify ends
-`VENDOR-VERIFY-COMPLETE status=0`; drift exits 1 and names each file.
+The verify writes `C:\MAST\logs\vendor-verify.log`, the mirror
+`C:\MAST\logs\vendor-mirror.log`. A clean verify ends
+`VENDOR-VERIFY-COMPLETE status=0`; drift exits **1** and names each file; an exit
+of **2** means the store could not be reached, which is an infrastructure problem
+and not corruption.
+
+Register it with `-LogonType S4U` as `labcomp2`, which is what the working task
+uses: it runs without an interactive session and without storing a password, and
+as the user who owns the SSH key the script authenticates with. `SYSTEM` does not
+work -- the task exits 126, and it would be borrowing another user's key.
 
 ## Step 5 - Firewall rules
 
