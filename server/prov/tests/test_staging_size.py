@@ -61,6 +61,56 @@ def test_transfer_rate_is_zero_when_elapsed_is_unusable():
     assert transfer_rate_mbps(1_048_576, -1.0) == 0.0
 
 
+def test_a_healthy_trimmed_pull_is_not_slow():
+    """The regression #195 introduced: the floor was calibrated on the full payload.
+
+    Per-module trimming took the normal pull from 14.9 GB to one or two orders of
+    magnitude less, at which point the transfer is dominated by session setup and
+    per-file overhead rather than by bandwidth. Judged on rate alone every healthy
+    run trips the alarm -- it fired on all six units on 2026-09-15 -- and an alarm
+    that always fires reports nothing.
+    """
+    from prov.driver import transfer_is_slow
+
+    # mast03 and mast07, 2026-09-15: desktop-appearance only.
+    assert transfer_is_slow(1_028_708, 1.8) is False
+    # mast03, 2026-09-15: five modules.
+    assert transfer_is_slow(20_007_014, 2.9) is False
+
+
+def test_a_healthy_full_payload_is_not_slow():
+    from prov.driver import transfer_is_slow
+
+    # mast07, 2026-09-15: the whole payload at line rate.
+    assert transfer_is_slow(14_877_440_807, 139.2) is False
+
+
+def test_the_routed_path_collapse_is_still_caught():
+    """What the signal exists for, and must keep catching.
+
+    2026-09-02: labcomp2 on VLAN 2 with the units on VLAN 1 put every payload byte
+    through the gateway. Four of six units fell to 0.14-0.25 MB/s and burned the
+    full 3600 s watchdog. There is no error for this -- the transfer simply crawls.
+    """
+    from prov.driver import transfer_is_slow
+
+    assert transfer_is_slow(14_877_440_807, 3600.0) is True
+    # And the merely-degraded case: the full payload at a fifth of line rate.
+    assert transfer_is_slow(14_877_440_807, 744.0) is True
+
+
+def test_a_short_transfer_is_never_slow_however_low_the_rate():
+    """Duration is the symptom, not rate.
+
+    The failure being detected is a transfer that runs long enough to threaten the
+    watchdog. A pull that finished in two seconds did not, whatever its MB/s reads.
+    """
+    from prov.driver import transfer_is_slow
+
+    assert transfer_is_slow(1_000, 0.5) is False
+    assert transfer_is_slow(0, 0.0) is False
+
+
 def test_excludes_a_root_file_and_a_root_dir(tmp_path):
     (tmp_path / "keep.bin").write_bytes(b"k" * 10)
     (tmp_path / "drop.bin").write_bytes(b"d" * 5000)
