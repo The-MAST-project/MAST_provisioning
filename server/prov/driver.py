@@ -302,7 +302,7 @@ class Driver:
         self._preflight_smb()
         self._preflight_tree()
         if self.exit_code == EXIT_FATAL:
-            return
+            return EXIT_FATAL
 
         if self.cfg.only_hosts:
             units = [u for u in units if u.hostname in self.cfg.only_hosts]
