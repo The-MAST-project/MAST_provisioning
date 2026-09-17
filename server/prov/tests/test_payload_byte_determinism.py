@@ -63,13 +63,17 @@ def test_byte_exact_vendor_artifacts_are_never_filtered():
     paths = [p for _eol, _attrs, p in ls_files_eol() if p.endswith(BYTE_EXACT_SUFFIXES)]
     assert paths, "no byte-exact vendor artifacts found; the suffix list has gone stale"
     # One --stdin call, not one process per file: this runs in CI on every push.
+    #
+    # Bytes, not text=True. On Windows the text mode translates the "\n" separators
+    # to "\r\n", git takes the trailing CR as part of each filename, matches no rule
+    # and reports `text: auto` for all of them -- a line-endings test defeated by
+    # line endings. Seen on tests (windows-latest) for this very commit.
     out = subprocess.run(
         ["git", "check-attr", "--stdin", "text"],
         cwd=T.REPO_ROOT,
-        input="\n".join(paths),
+        input="\n".join(paths).encode("utf-8"),
         capture_output=True,
-        text=True,
         check=True,
-    ).stdout
+    ).stdout.decode("utf-8")
     filtered = [line for line in out.splitlines() if "text: unset" not in line]
     assert filtered == [], f"these would be rewritten by a filter: {filtered[:5]}"
