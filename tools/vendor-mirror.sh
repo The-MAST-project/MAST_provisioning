@@ -14,6 +14,14 @@
 # It lived in an agent task folder until 2026-09-17 -- a directory the workspace
 # contract tears down with `rm -rf` -- and was registered One Time Only, so it had
 # run exactly once and had no next run. That is why it is in the repo now.
+#
+# RUN IT BY HAND, NOT ON A SCHEDULE. This pushes the build host's cache TO the
+# canonical store, so a cadence would let the cache overwrite the canonical copy
+# every time it fired -- and if a file had rotted here, that is precisely the
+# mechanism that would propagate the rot to the good copy. tools/vendor-verify.sh
+# is the one that belongs on a timer: its only job is to notice. These five inputs
+# are frozen by design, so a mirror is an occasional deliberate act -- a
+# re-harvested cygwin cache, a re-downloaded catalog, a newly issued licence seat.
 set -uo pipefail
 
 REPO_TOP="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

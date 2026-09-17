@@ -418,15 +418,33 @@ never depends on the WAN.
 times out: the site cannot initiate to the institute. A cron job on the Linux side
 is not an option, so both jobs run here and push.
 
-Register them against the **canonical clone**, never a working copy:
+**Only the verify is scheduled.** Register it against the **canonical clone**, never
+a working copy:
 
 ```cmd
-schtasks /create /tn "MAST-vendor-mirror" /sc WEEKLY /d SUN /st 02:00 /ru SYSTEM ^
-  /tr "C:\cygwin64\bin\bash.exe -lc '/cygdrive/c/Users/labcomp2/Desktop/MAST/MAST_provisioning/tools/vendor-mirror.sh'"
-
 schtasks /create /tn "MAST-vendor-verify" /sc DAILY /st 06:00 /ru SYSTEM ^
   /tr "C:\cygwin64\bin\bash.exe -lc '/cygdrive/c/Users/labcomp2/Desktop/MAST/MAST_provisioning/tools/vendor-verify.sh'"
 ```
+
+**The mirror is deliberately NOT on a schedule**, and that is the whole point of
+which copy is canonical. It pushes this machine's cache *to* the store, so running
+it on a cadence means the cache overwrites the canonical copy every week -- and if
+a file has rotted here, that is the mechanism that propagates the rot to the good
+copy. This machine already holds a file named
+`MAST-15GB-indexes-5202+5203-corrupt.img`.
+
+Run it by hand, from the canonical clone, when you have deliberately added or
+changed a vendor input -- a re-harvested cygwin cache, a re-downloaded catalog, a
+newly issued NoMachine seat:
+
+```cmd
+C:\cygwin64\bin\bash.exe -lc "/cygdrive/c/Users/labcomp2/Desktop/MAST/MAST_provisioning/tools/vendor-mirror.sh"
+```
+
+These five inputs are frozen by design, so in practice that is rare: the cygwin
+cache is pinned, the index seed is a one-time extraction, the catalog is a vendor
+download, and `full-frame.fits` is a fixed frame. Licences are the one entry that
+grows, one seat per unit.
 
 **Not into `C:\agent-worktrees\`.** The first mirror ran from a task folder there,
 which the workspace contract tears down with `rm -rf`, and it was registered
