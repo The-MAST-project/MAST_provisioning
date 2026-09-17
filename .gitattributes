@@ -17,3 +17,14 @@ client/assets/*.exe filter=lfs diff=lfs merge=lfs -text
 *.iso filter=lfs diff=lfs merge=lfs -text
 *.msi filter=lfs diff=lfs merge=lfs -text
 *.whl filter=lfs diff=lfs merge=lfs -text
+
+# Shell scripts must check out with LF even on Windows. The provisioning server is
+# a Windows host whose shell scripts run under CYGWIN bash, and cygwin bash cannot
+# execute a CRLF script: it reports `set: pipefail: invalid option name`, then
+# `$'\r': command not found` on every line, then a syntax error on the first loop.
+#
+# Caught 2026-09-17 registering the vendor-store jobs. It was invisible until then
+# because the scripts had only ever been tested after `scp` from a Mac, which
+# preserves LF -- the first run from a real `git` checkout on the build host was
+# the first CRLF one.
+*.sh text eol=lf
