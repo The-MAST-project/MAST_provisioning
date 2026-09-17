@@ -405,6 +405,62 @@ it after retiring a unit, not on a schedule.
 
 ---
 
+## Step 4d - Vendor store mirror and cache verify (elevated, once)
+
+Five build inputs are not in this repo and cannot be re-downloaded easily -- the
+astrometry index seed, the PlateSolve3 catalog, the frozen cygwin package cache,
+the full-frame solve input, and the NoMachine licences. They are declared in
+`server/data/vendor-inputs.json`; the canonical copies live on `mast-ns-control`
+at `/Storage/mast-vendor/`, and this machine holds a working cache so a build
+never depends on the WAN.
+
+**Direction is fixed and is not a preference.** `mast-ns-control -> labcomp2:22`
+times out: the site cannot initiate to the institute. A cron job on the Linux side
+is not an option, so both jobs run here and push.
+
+**Only the verify is scheduled.** Register it against the **canonical clone**, never
+a working copy:
+
+```cmd
+schtasks /create /tn "MAST-vendor-verify" /sc DAILY /st 06:00 /ru SYSTEM ^
+  /tr "C:\cygwin64\bin\bash.exe -lc '/cygdrive/c/Users/labcomp2/Desktop/MAST/MAST_provisioning/tools/vendor-verify.sh'"
+```
+
+**The mirror is deliberately NOT on a schedule**, and that is the whole point of
+which copy is canonical. It pushes this machine's cache *to* the store, so running
+it on a cadence means the cache overwrites the canonical copy every week -- and if
+a file has rotted here, that is the mechanism that propagates the rot to the good
+copy. This machine already holds a file named
+`MAST-15GB-indexes-5202+5203-corrupt.img`.
+
+Run it by hand, from the canonical clone, when you have deliberately added or
+changed a vendor input -- a re-harvested cygwin cache, a re-downloaded catalog, a
+newly issued NoMachine seat:
+
+```cmd
+C:\cygwin64\bin\bash.exe -lc "/cygdrive/c/Users/labcomp2/Desktop/MAST/MAST_provisioning/tools/vendor-mirror.sh"
+```
+
+These five inputs are frozen by design, so in practice that is rare: the cygwin
+cache is pinned, the index seed is a one-time extraction, the catalog is a vendor
+download, and `full-frame.fits` is a fixed frame. Licences are the one entry that
+grows, one seat per unit.
+
+**Not into `C:\agent-worktrees\`.** The first mirror ran from a task folder there,
+which the workspace contract tears down with `rm -rf`, and it was registered
+`One Time Only` -- so it had run exactly once and had no next run. A scheduled task
+pointing into disposable scratch is one teardown away from silently not existing.
+
+`vendor-verify.sh` needs no checksum list of its own. Every vendor byte is already
+a blob in the content-addressed store (#202) whose filename is its SHA-256, so the
+check is: hash what is local, ask the store which of those digests it does not
+hold, name the files behind any that come back. It hashes 266 files / 12 GB in
+about 35 s, which is why it can run daily -- re-pulling to compare would take
+35-60 minutes at the measured 3.4-6 MB/s.
+
+Both write to `C:\MAST\logs\vendor-mirror.log`. A clean verify ends
+`VENDOR-VERIFY-COMPLETE status=0`; drift exits 1 and names each file.
+
 ## Step 5 - Firewall rules
 
 Units connect inbound to this server on TCP 445 (SMB). If Windows Firewall is
