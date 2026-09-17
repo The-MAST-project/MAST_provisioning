@@ -108,6 +108,18 @@ EXECUTE_TIMEOUT_S = 3600
 #: whether the copy took two minutes or thirty-four.
 TRANSFER_SLOW_FLOOR_MBPS = 40.0
 
+#: ...but only once the transfer has run long enough for bandwidth to be what
+#: decided its duration. Per-module trimming (#195) took the ordinary pull from
+#: 14.9 GB to one or two orders of magnitude less, where SMB session setup and
+#: per-file overhead dominate: 1,028,708 bytes in 1.8 s reads as 0.5 MB/s and is
+#: perfectly healthy. Judged on rate alone the floor fired on all six units on
+#: 2026-09-15 -- a signal that fires on every healthy run carries nothing.
+#:
+#: Duration is the symptom the signal is actually for. The 2026-09-02 routed-path
+#: collapse mattered because four units crawled for the full TRANSFER_TIMEOUT_S; a
+#: pull that finished in two seconds has not done that, whatever its rate reads.
+TRANSFER_SLOW_MIN_SECONDS = 30.0
+
 #: Windows reports memory in bytes and talks about it in GiB; so does this log line.
 GIB = 1024**3
 
@@ -122,6 +134,23 @@ def transfer_rate_mbps(byte_count: int, seconds: float) -> float:
     if seconds <= 0:
         return 0.0
     return round((byte_count / 1_048_576) / seconds, 1)
+
+
+def transfer_is_slow(byte_count: int, seconds: float) -> bool:
+    """Whether a completed transfer ran slowly enough to be worth reporting.
+
+    Both halves are required. The rate says the link is not delivering what the
+    fleet's own baseline says it should; the elapsed time says the transfer was
+    long enough for that to be a statement about the link rather than about fixed
+    overhead. See TRANSFER_SLOW_MIN_SECONDS for why the second one had to be added.
+
+    Takes the bytes that actually landed, for the same reason TRANSFER_OK does:
+    a rate derived from bytes that did not move is fiction.
+    """
+    if seconds < TRANSFER_SLOW_MIN_SECONDS:
+        return False
+    rate = transfer_rate_mbps(byte_count, seconds)
+    return bool(rate) and rate < TRANSFER_SLOW_FLOOR_MBPS
 
 
 EXIT_OK = 0
@@ -1111,7 +1140,7 @@ class Driver:
             seconds=round(xfer_s, 1),
             mbps=mbps,
         )
-        if mbps and mbps < TRANSFER_SLOW_FLOOR_MBPS:
+        if transfer_is_slow(landed_bytes, xfer_s):
             self.log.event(
                 "TRANSFER_SLOW",
                 unit=host,
