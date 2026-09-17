@@ -405,6 +405,44 @@ it after retiring a unit, not on a schedule.
 
 ---
 
+## Step 4d - Vendor store mirror and cache verify (elevated, once)
+
+Five build inputs are not in this repo and cannot be re-downloaded easily -- the
+astrometry index seed, the PlateSolve3 catalog, the frozen cygwin package cache,
+the full-frame solve input, and the NoMachine licences. They are declared in
+`server/data/vendor-inputs.json`; the canonical copies live on `mast-ns-control`
+at `/Storage/mast-vendor/`, and this machine holds a working cache so a build
+never depends on the WAN.
+
+**Direction is fixed and is not a preference.** `mast-ns-control -> labcomp2:22`
+times out: the site cannot initiate to the institute. A cron job on the Linux side
+is not an option, so both jobs run here and push.
+
+Register them against the **canonical clone**, never a working copy:
+
+```cmd
+schtasks /create /tn "MAST-vendor-mirror" /sc WEEKLY /d SUN /st 02:00 /ru SYSTEM ^
+  /tr "C:\cygwin64\bin\bash.exe -lc '/cygdrive/c/Users/labcomp2/Desktop/MAST/MAST_provisioning/tools/vendor-mirror.sh'"
+
+schtasks /create /tn "MAST-vendor-verify" /sc DAILY /st 06:00 /ru SYSTEM ^
+  /tr "C:\cygwin64\bin\bash.exe -lc '/cygdrive/c/Users/labcomp2/Desktop/MAST/MAST_provisioning/tools/vendor-verify.sh'"
+```
+
+**Not into `C:\agent-worktrees\`.** The first mirror ran from a task folder there,
+which the workspace contract tears down with `rm -rf`, and it was registered
+`One Time Only` -- so it had run exactly once and had no next run. A scheduled task
+pointing into disposable scratch is one teardown away from silently not existing.
+
+`vendor-verify.sh` needs no checksum list of its own. Every vendor byte is already
+a blob in the content-addressed store (#202) whose filename is its SHA-256, so the
+check is: hash what is local, ask the store which of those digests it does not
+hold, name the files behind any that come back. It hashes 266 files / 12 GB in
+about 35 s, which is why it can run daily -- re-pulling to compare would take
+35-60 minutes at the measured 3.4-6 MB/s.
+
+Both write to `C:\MAST\logs\vendor-mirror.log`. A clean verify ends
+`VENDOR-VERIFY-COMPLETE status=0`; drift exits 1 and names each file.
+
 ## Step 5 - Firewall rules
 
 Units connect inbound to this server on TCP 445 (SMB). If Windows Firewall is
