@@ -161,6 +161,41 @@ def prune_to(target: Path, wanted: set[Path]) -> int:
     return removed
 
 
+def cmd_fsck(root: Path, args) -> int:
+    """Re-hash every blob and confirm it still is what its name says.
+
+    A content-addressed store's filename IS the checksum, which makes it
+    *checkable* -- but nothing ever checked it, so the property was an assumption.
+    Every other guard in this system compares something against this store: the
+    build host's vendor cache (#194), a unit's landed payload (#189). If a blob
+    rots, all of them agree with the rot.
+
+    Silent corruption is the case this exists for, so a mismatch is reported and
+    the blob is left alone: deleting it would take out every hardlink into it
+    across every host tree at once, and a bad byte is more recoverable than a
+    missing file.
+    """
+    store = root / "store"
+    checked = bad = 0
+    bad_bytes = 0
+    for shard in sorted(store.iterdir()) if store.exists() else []:
+        if not shard.is_dir():
+            continue
+        for blob in sorted(shard.iterdir()):
+            if not blob.is_file():
+                continue
+            checked += 1
+            actual = sha256_of(blob)
+            if actual != blob.name:
+                bad += 1
+                bad_bytes += blob.stat().st_size
+                print(f"CORRUPT {blob.name} hashes to {actual}", file=sys.stderr)
+                if args.names:
+                    print(blob.name)
+    print(f"FSCK checked={checked} corrupt={bad} corrupt_bytes={bad_bytes}", file=sys.stderr)
+    return 1 if bad else 0
+
+
 def cmd_gc(root: Path, _args) -> int:
     """Drop blobs nothing references.
 
@@ -202,6 +237,9 @@ def main(argv: list[str] | None = None) -> int:
     assemble.add_argument("--host", required=True)
     assemble.set_defaults(fn=cmd_assemble)
     sub.add_parser("gc").set_defaults(fn=cmd_gc)
+    fsck = sub.add_parser("fsck")
+    fsck.add_argument("--names", action="store_true", help="print corrupt blob names on stdout")
+    fsck.set_defaults(fn=cmd_fsck)
     args = p.parse_args(argv)
     (args.root / "store").mkdir(parents=True, exist_ok=True)
     return args.fn(args.root, args)

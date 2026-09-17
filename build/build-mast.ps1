@@ -365,8 +365,16 @@ function Import-AllocCsv([string]${Path}) {
 }
 
 function Save-AllocCsv([string]${Path}, [object[]]${Rows}) {
+    # LF, not Export-Csv's CRLF. This file is TRACKED, and the repository stores
+    # it with LF, so writing CRLF leaves the build host permanently diverged from
+    # its own commit -- invisibly, because git's clean filter normalises on read
+    # and `git status` then reports the tree clean (#216). Every build re-created
+    # it; the tree-integrity check found it on its first run against a clone
+    # everyone believed was clean.
     ${tmp} = "${Path}.tmp"
     ${Rows} | Export-Csv -Path ${tmp} -NoTypeInformation -Encoding UTF8 -Force -Delimiter ','
+    ${text} = (Get-Content -LiteralPath ${tmp} -Raw) -replace "`r`n", "`n"
+    [System.IO.File]::WriteAllText(${tmp}, ${text}, (New-Object System.Text.UTF8Encoding($false)))
     Move-Item -Force ${tmp} ${Path}
     Write-Host "Updated allocation file: ${Path}"
 }

@@ -36,7 +36,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from prov import drift, payload, registry, relay, transport
+from prov import drift, payload, registry, relay, transport, tree_integrity
 from prov import logevents as L
 from prov.maintenance_window import in_maintenance_window
 from prov.retention import run_retention
@@ -119,6 +119,11 @@ TRANSFER_SLOW_FLOOR_MBPS = 40.0
 #: collapse mattered because four units crawled for the full TRANSFER_TIMEOUT_S; a
 #: pull that finished in two seconds has not done that, whatever its rate reads.
 TRANSFER_SLOW_MIN_SECONDS = 30.0
+
+#: How many diverged files to name individually before the summary. Enough to see
+#: the shape of the problem -- one module, or the whole tree -- without a wall of
+#: events when a checkout went wrong everywhere at once.
+TREE_DIVERGENCE_REPORT_LIMIT = 20
 
 #: Windows reports memory in bytes and talks about it in GiB; so does this log line.
 GIB = 1024**3
@@ -295,6 +300,9 @@ class Driver:
         self.creds = creds
 
         self._preflight_smb()
+        self._preflight_tree()
+        if self.exit_code == EXIT_FATAL:
+            return EXIT_FATAL
 
         if self.cfg.only_hosts:
             units = [u for u in units if u.hostname in self.cfg.only_hosts]
@@ -334,6 +342,40 @@ class Driver:
             self.exit_code = EXIT_UNIT_FAIL
         else:
             self.log.event("PREFLIGHT_SMB_OK")
+
+    def _preflight_tree(self) -> None:
+        """Assert the working tree holds the bytes its commit says it does.
+
+        Every BUILD_OK reports a payload_hash beside a git_sha, which claims the
+        payload derives from that commit. Nothing established that: `git status`
+        skips the content comparison whenever size and mtime match the index, so
+        two trees at one commit built payloads differing in 113 files and both
+        looked clean (#216).
+
+        Once per run, not per unit -- it is a property of the repository, and every
+        unit in the run would otherwise build the same wrong payload.
+
+        Fatal. A payload whose sources do not match its recorded provenance is
+        attributable to nothing, and shipping it is worse than not shipping.
+        """
+        try:
+            diverged = tree_integrity.diverged_files(self.cfg.repo_top)
+        except Exception as e:  # noqa: BLE001
+            # Never let the guard itself stop a run: an unusable answer is not a
+            # failing one. It says so rather than passing silently.
+            self.log.event("PREFLIGHT_TREE_UNVERIFIED", error=f"{type(e).__name__}: {e}")
+            return
+        if not diverged:
+            self.log.event("PREFLIGHT_TREE_OK")
+            return
+        for d in diverged[:TREE_DIVERGENCE_REPORT_LIMIT]:
+            self.log.event("TREE_DIVERGED", path=d.path, reason=d.reason, detail=d.detail)
+        self.log.event(
+            "PREFLIGHT_TREE_FAIL",
+            diverged=len(diverged),
+            hint="tree does not match its own commit; re-checkout to repair -- see MAST_provisioning#216",
+        )
+        self.exit_code = EXIT_FATAL
 
     # -- per unit -----------------------------------------------------------
     def _module_order(self) -> dict[str, int]:
