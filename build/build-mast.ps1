@@ -373,8 +373,15 @@ function Save-AllocCsv([string]${Path}, [object[]]${Rows}) {
     # everyone believed was clean.
     ${tmp} = "${Path}.tmp"
     ${Rows} | Export-Csv -Path ${tmp} -NoTypeInformation -Encoding UTF8 -Force -Delimiter ','
+    #
+    # Keep the BOM. Export-Csv -Encoding UTF8 writes one on Windows PowerShell
+    # 5.1, the committed file has one, and it is load-bearing rather than
+    # decorative: 5.1 reads a BOM-LESS file as ANSI, so dropping it changes how
+    # Import-AllocCsv decodes this file back. Writing it without one also left the
+    # file permanently dirty against HEAD -- which the first version of this fix
+    # did, trading an invisible divergence for a visible one.
     ${text} = (Get-Content -LiteralPath ${tmp} -Raw) -replace "`r`n", "`n"
-    [System.IO.File]::WriteAllText(${tmp}, ${text}, (New-Object System.Text.UTF8Encoding($false)))
+    [System.IO.File]::WriteAllText(${tmp}, ${text}, (New-Object System.Text.UTF8Encoding($true)))
     Move-Item -Force ${tmp} ${Path}
     Write-Host "Updated allocation file: ${Path}"
 }
