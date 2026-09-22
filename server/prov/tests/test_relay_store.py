@@ -45,6 +45,15 @@ def run(root, argv: list[str], stdin: dict | None = None) -> str:
         sys.stdout, sys.stdin = out, old_in
 
 
+def run_store(root, *argv: str) -> int:
+    """Like `run`, but returns the exit code: fsck reports corruption with rc=1."""
+    out, sys.stdout = sys.stdout, io.StringIO()
+    try:
+        return rs.main(["--root", str(root), *argv])
+    finally:
+        sys.stdout = out
+
+
 _seeded = 0
 
 
@@ -212,3 +221,56 @@ def test_blob_name_is_its_own_checksum(tmp_path):
     for shard in (tmp_path / "store").iterdir():
         for blob in shard.iterdir():
             assert rs.sha256_of(blob) == blob.name
+
+
+def test_fsck_passes_a_sound_store(tmp_path):
+    """The store's filename is its checksum, which makes the claim checkable.
+
+    Nothing checked it until now, so "content-addressed" was an assumption rather
+    than a property -- and every other guard in this system compares something
+    against this store (#194, #189). If a blob rots they all agree with the rot.
+    """
+    root = tmp_path / "relay"
+    (root / "store").mkdir(parents=True)
+    body = b"an installer, notionally"
+    digest = hashlib.sha256(body).hexdigest()
+    shard = root / "store" / digest[:2]
+    shard.mkdir()
+    (shard / digest).write_bytes(body)
+
+    rc = run_store(root, "fsck")
+    assert rc == 0
+
+
+def test_fsck_catches_a_rotted_blob(tmp_path):
+    root = tmp_path / "relay"
+    (root / "store").mkdir(parents=True)
+    body = b"an installer, notionally"
+    digest = hashlib.sha256(body).hexdigest()
+    shard = root / "store" / digest[:2]
+    shard.mkdir()
+    blob = shard / digest
+    blob.write_bytes(body)
+    # One byte flips; the name still claims the original content.
+    blob.write_bytes(b"an installer, notionallY")
+
+    rc = run_store(root, "fsck")
+    assert rc == 1
+
+
+def test_fsck_leaves_the_corrupt_blob_in_place(tmp_path):
+    """Deleting it would take out every hardlink into it, across every host tree.
+
+    A bad byte is more recoverable than a missing file, so this reports and does
+    not repair.
+    """
+    root = tmp_path / "relay"
+    (root / "store").mkdir(parents=True)
+    digest = hashlib.sha256(b"original").hexdigest()
+    shard = root / "store" / digest[:2]
+    shard.mkdir()
+    blob = shard / digest
+    blob.write_bytes(b"corrupted")
+
+    run_store(root, "fsck")
+    assert blob.is_file()
