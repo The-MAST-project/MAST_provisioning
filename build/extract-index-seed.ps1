@@ -32,7 +32,7 @@
 [CmdletBinding()]
 param(
     [string]${ImagePath}   = 'C:\MAST\MAST-15GB-indexes-5202+5203.img',
-    [string]${DestDir}     = 'C:\MAST\mast-indexes',
+    [string]${DestDir}     = 'C:\MAST\provider-assets\server\providers\imdisk\assets\mast-indexes',
     [string]${IndexSubdir} = 'mast-indexes',
     [switch]${Force}
 )

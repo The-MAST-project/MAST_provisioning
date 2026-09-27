@@ -345,3 +345,161 @@ Describe 'Get-MastReposManifestVersion' {
         { Get-MastReposManifestVersion -RepoTop (Join-Path $top 'absent') } | Should Throw
     }
 }
+
+Describe 'Resolve-MastAssetSource' {
+    # Where a provider's asset comes from once the binaries leave git-LFS (#48).
+    #
+    # They cannot simply become gitignored files in the repo tree: builds run from
+    # git worktrees on the provisioning server, and a fresh worktree would hold
+    # none of them -- 2.3 GB per worktree is not a fix. So they move to one
+    # machine-wide cache, the same shape the five existing vendor inputs already
+    # use at C:\MAST\, which is what #48 asks for: one store every vendored binary
+    # goes through.
+    #
+    # The repo copy WINS while it exists. That makes landing this a no-op: nothing
+    # resolves differently until the untracking step removes the repo copies, so
+    # the risky change and the behaviour change are separated.
+
+    $root = Join-Path $env:TEMP ("mast-assetsrc-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    $repoAsset  = Join-Path $root 'providers\chrome\assets'
+    $cacheAsset = Join-Path $root 'cache\server\providers\chrome\assets'
+    New-Item -ItemType Directory -Force -Path $repoAsset, $cacheAsset | Out-Null
+    $providers = Join-Path $root 'providers'
+    $cache     = Join-Path $root 'cache'
+
+    It 'prefers the repo copy while one exists, so landing this changes nothing' {
+        Set-Content -LiteralPath (Join-Path $repoAsset 'chrome.msi')  -Value 'repo'  -Encoding Ascii
+        Set-Content -LiteralPath (Join-Path $cacheAsset 'chrome.msi') -Value 'cache' -Encoding Ascii
+        $p = Resolve-MastAssetSource -ProvidersRoot $providers -Module 'chrome' `
+                -CommandFile 'assets/chrome.msi' -AssetCacheRoot $cache
+        (Get-Content -LiteralPath $p -Raw).Trim() | Should Be 'repo'
+    }
+
+    It 'falls back to the cache once the repo copy is gone' {
+        Remove-Item -LiteralPath (Join-Path $repoAsset 'chrome.msi') -Force
+        $p = Resolve-MastAssetSource -ProvidersRoot $providers -Module 'chrome' `
+                -CommandFile 'assets/chrome.msi' -AssetCacheRoot $cache
+        (Get-Content -LiteralPath $p -Raw).Trim() | Should Be 'cache'
+    }
+
+    It 'returns the repo path when neither exists, so the caller reports the familiar location' {
+        # build-mast throws "missing CommandFile: <path>" on absence. Naming the
+        # cache there would send someone to a directory that is only a cache.
+        Remove-Item -LiteralPath (Join-Path $cacheAsset 'chrome.msi') -Force
+        $p = Resolve-MastAssetSource -ProvidersRoot $providers -Module 'chrome' `
+                -CommandFile 'assets/chrome.msi' -AssetCacheRoot $cache
+        $p | Should Be (Join-Path (Join-Path $providers 'chrome') 'assets/chrome.msi')
+    }
+
+    It 'never redirects a script, only an asset' {
+        # Scripts are the repo's own code and are never cached; only assets/ is.
+        Set-Content -LiteralPath (Join-Path (Join-Path $providers 'chrome') 'provide-chrome.ps1') -Value 'x' -Encoding Ascii
+        $p = Resolve-MastAssetSource -ProvidersRoot $providers -Module 'chrome' `
+                -CommandFile 'provide-chrome.ps1' -AssetCacheRoot $cache
+        $p | Should Be (Join-Path (Join-Path $providers 'chrome') 'provide-chrome.ps1')
+    }
+
+    It 'has no cache root configured: behaves exactly as before' {
+        $p = Resolve-MastAssetSource -ProvidersRoot $providers -Module 'chrome' `
+                -CommandFile 'assets/chrome.msi' -AssetCacheRoot ''
+        $p | Should Be (Join-Path (Join-Path $providers 'chrome') 'assets/chrome.msi')
+    }
+}
+
+Describe 'Get-MastAssetTreeEntries' {
+    # A directory-shaped asset resolves per file, not per tree, because some of
+    # these directories are mixed: assets\sxs holds three vendored .cab files
+    # beside a README and a fetch script that are ordinary tracked code. "Which
+    # root does this directory come from" has no answer; "which root does this
+    # file come from" does.
+
+    $root  = Join-Path $env:TEMP ("mast-assettree-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    $repo  = Join-Path $root 'providers\ascom\assets\sxs\19044'
+    $cache = Join-Path $root 'cache\server\providers\ascom\assets\sxs\19044'
+    New-Item -ItemType Directory -Force -Path $repo, $cache | Out-Null
+    $providers = Join-Path $root 'providers'
+    $cacheRoot = Join-Path $root 'cache'
+    Set-Content -LiteralPath (Join-Path (Join-Path $root 'providers\ascom\assets\sxs') 'README.md') -Value 'repo doc' -Encoding Ascii
+    Set-Content -LiteralPath (Join-Path $cache 'netfx3.cab') -Value 'cache cab' -Encoding Ascii
+
+    It 'merges the two roots, so a mixed directory arrives whole' {
+        $e = @(Get-MastAssetTreeEntries -ProvidersRoot $providers -Module 'ascom' `
+                  -RelativeDir 'assets\sxs' -AssetCacheRoot $cacheRoot)
+        ($e | ForEach-Object { $_.Relative } | Sort-Object) -join ',' |
+            Should Be '19044\netfx3.cab,README.md'
+    }
+
+    It 'keeps the staging-relative path, so the tree is reproduced not flattened' {
+        $e = @(Get-MastAssetTreeEntries -ProvidersRoot $providers -Module 'ascom' `
+                  -RelativeDir 'assets\sxs' -AssetCacheRoot $cacheRoot)
+        ($e | Where-Object { $_.Relative -eq '19044\netfx3.cab' }).Source |
+            Should Be (Join-Path $cache 'netfx3.cab')
+    }
+
+    It 'prefers the repo when both roots hold the same relative path' {
+        Set-Content -LiteralPath (Join-Path $cache 'both.cab') -Value 'cache' -Encoding Ascii
+        Set-Content -LiteralPath (Join-Path $repo 'both.cab')  -Value 'repo'  -Encoding Ascii
+        $e = @(Get-MastAssetTreeEntries -ProvidersRoot $providers -Module 'ascom' `
+                  -RelativeDir 'assets\sxs' -AssetCacheRoot $cacheRoot)
+        $hit = ($e | Where-Object { $_.Relative -eq '19044\both.cab' })
+        @($hit).Count | Should Be 1
+        (Get-Content -LiteralPath $hit.Source -Raw).Trim() | Should Be 'repo'
+    }
+
+    It 'resolves entirely to the cache for a tree the repo never carries' {
+        # The astrometry index seed and the frozen cygwin cache were never in git.
+        $only = Join-Path $root 'cache\server\providers\imdisk\assets\mast-indexes'
+        New-Item -ItemType Directory -Force -Path $only | Out-Null
+        Set-Content -LiteralPath (Join-Path $only 'index-5202-01.fits') -Value 'x' -Encoding Ascii
+        $e = @(Get-MastAssetTreeEntries -ProvidersRoot $providers -Module 'imdisk' `
+                  -RelativeDir 'assets\mast-indexes' -AssetCacheRoot $cacheRoot)
+        @($e).Count | Should Be 1
+        $e[0].Relative | Should Be 'index-5202-01.fits'
+    }
+
+    It 'returns nothing when neither root has the tree, so the caller reports it' {
+        $e = @(Get-MastAssetTreeEntries -ProvidersRoot $providers -Module 'nosuch' `
+                  -RelativeDir 'assets\nothing' -AssetCacheRoot $cacheRoot)
+        @($e).Count | Should Be 0
+    }
+
+    It 'ignores the cache when no cache root is configured' {
+        $e = @(Get-MastAssetTreeEntries -ProvidersRoot $providers -Module 'ascom' `
+                  -RelativeDir 'assets\sxs' -AssetCacheRoot '')
+        ($e | ForEach-Object { $_.Relative } | Sort-Object) -join ',' |
+            Should Be '19044\both.cab,README.md'
+    }
+}
+
+Describe 'Resolve-MastCachedFile' {
+    # The rule both resolvers are expressed in. It takes two formed paths and no
+    # repo layout: a provider asset is keyed off <top>\server\providers and the
+    # bootstrap media off <top>, so deriving either here would be wrong for one.
+
+    $root = Join-Path $env:TEMP ("mast-cachedfile-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    New-Item -ItemType Directory -Force -Path (Join-Path $root 'top'), (Join-Path $root 'cache') | Out-Null
+    $repoPath  = Join-Path $root 'top\npcap.exe'
+    $cachePath = Join-Path $root 'cache\npcap.exe'
+
+    It 'prefers the repo copy while one exists' {
+        Set-Content -LiteralPath $repoPath  -Value 'repo'  -Encoding Ascii
+        Set-Content -LiteralPath $cachePath -Value 'cache' -Encoding Ascii
+        (Get-Content -LiteralPath (Resolve-MastCachedFile -RepoPath $repoPath -CachePath $cachePath) -Raw).Trim() |
+            Should Be 'repo'
+    }
+
+    It 'falls through to the cache once the repo copy is gone' {
+        Remove-Item -LiteralPath $repoPath -Force
+        (Get-Content -LiteralPath (Resolve-MastCachedFile -RepoPath $repoPath -CachePath $cachePath) -Raw).Trim() |
+            Should Be 'cache'
+    }
+
+    It 'returns the repo path when neither has it, so the caller names the expected location' {
+        Remove-Item -LiteralPath $cachePath -Force
+        Resolve-MastCachedFile -RepoPath $repoPath -CachePath $cachePath | Should Be $repoPath
+    }
+
+    It 'ignores an unset cache path rather than guessing one' {
+        Resolve-MastCachedFile -RepoPath $repoPath | Should Be $repoPath
+    }
+}

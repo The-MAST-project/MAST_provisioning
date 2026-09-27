@@ -1,13 +1,14 @@
 <#
 .SYNOPSIS
     One-time: harvest the frozen Cygwin package cache from a working unit into
-    the build-host vendor path C:\MAST\cygwin-pkg-cache.
+    its slot in the machine-wide asset cache,
+    C:\MAST\provider-assets\server\providers\astrometry-dependencies\assets\cygwin-pkg-cache.
 
 .DESCRIPTION
     provide-astrometry-dependencies.ps1 installs Cygwin FULLY OFFLINE
     (setup-x86_64.exe --local-install) from a frozen package cache staged into
     the payload by build-mast.ps1. The cache is build-host-vendored (like the
-    astrometry index seed at C:\MAST\mast-indexes) -- too churn-prone and too
+    astrometry index seed) -- too churn-prone and too
     binary to keep in git -- and this script populates it once per build host.
 
     The authoritative source is a working unit's own setup download cache
@@ -37,7 +38,7 @@ param(
     [string]${UnitHost}      = 'mast01',
     # Where to copy the cache tree from. Default: the unit's admin share.
     [string]${SourcePath}    = '',
-    [string]${DestDir}       = 'C:\MAST\cygwin-pkg-cache',
+    [string]${DestDir}       = 'C:\MAST\provider-assets\server\providers\astrometry-dependencies\assets\cygwin-pkg-cache',
     # The cygwin base package release the cache must contain (the version the
     # bundled fitsio wheel is built against). Validation fails without it.
     [string]${FrozenCygwin}  = 'cygwin-3.6.9-1',
