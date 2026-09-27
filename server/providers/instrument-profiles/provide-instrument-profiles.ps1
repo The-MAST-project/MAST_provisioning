@@ -125,12 +125,15 @@ try {
 
     # 3b) Deploy the Stage-2 calibration tool to the same persistent path so the
     #     "MAST Instrument Calibration" desktop shortcut can launch it after cabling.
-    ${calibSrc} = Join-Path ${PSScriptRoot} 'calibrate-instruments.ps1'
-    if (-not (Test-Path -LiteralPath ${calibSrc})) { ${calibSrc} = Join-Path ${AssetsRoot} 'calibrate-instruments.ps1' }
-    if (Test-Path -LiteralPath ${calibSrc}) {
-        Copy-Item -LiteralPath ${calibSrc} -Destination (Join-Path ${ProfilesRoot} 'calibrate-instruments.ps1') -Force
-        Log ("Staged Stage-2 calibration tool: {0}" -f (Join-Path ${ProfilesRoot} 'calibrate-instruments.ps1'))
-    } else { Log '[WARN] calibrate-instruments.ps1 not found for staging.' }
+    #     The tool dot-sources instrument-link-lib.ps1 from its own directory.
+    foreach (${calibFile} in @('calibrate-instruments.ps1', 'instrument-link-lib.ps1')) {
+        ${calibSrc} = Join-Path ${PSScriptRoot} ${calibFile}
+        if (-not (Test-Path -LiteralPath ${calibSrc})) { ${calibSrc} = Join-Path ${AssetsRoot} ${calibFile} }
+        if (Test-Path -LiteralPath ${calibSrc}) {
+            Copy-Item -LiteralPath ${calibSrc} -Destination (Join-Path ${ProfilesRoot} ${calibFile}) -Force
+            Log ("Staged Stage-2 calibration file: {0}" -f (Join-Path ${ProfilesRoot} ${calibFile}))
+        } else { Log ("[WARN] {0} not found for staging." -f ${calibFile}) }
+    }
 
     # 4) Register the AtLogon task that applies the profiles into the mast user's
     #    profile on first sign-in (copies cfgs into Documents, imports the PHD2

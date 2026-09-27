@@ -16,6 +16,10 @@
 # (MAST_unit libximc auto). NEVER touches focuser calibration, the pointing
 # model, or mount-firmware tuning.
 #
+# Also reports (never writes) whether each ZWO camera sits on a SuperSpeed link
+# (instrument-link-lib.ps1). The remedy for a FAIL is re-cabling, so it neither
+# blocks the COM bindings nor changes the exit code.
+#
 # Safety: a real (writing) run requires PWI4 to be CLOSED (PWI4 rewrites its .cfg
 # on exit). Viewing/dry-run never write and are allowed while PWI4 runs. A write
 # happens only when the current SerialPort is empty or stale (points at an absent
@@ -34,6 +38,12 @@ ${logDir} = Join-Path ${env:SystemDrive} 'MAST\logs'
 New-Item -ItemType Directory -Path ${logDir} -Force | Out-Null
 ${logFile} = Join-Path ${logDir} 'calibrate-instruments.log'
 ${StampDir} = 'C:\ProgramData\MAST\instrument-profiles'
+${ZwoVendorPattern} = '^USB\\VID_03C3&'
+${UsbChainMaxHops} = 6
+
+${linkLib} = Join-Path ${PSScriptRoot} 'instrument-link-lib.ps1'
+if (-not (Test-Path -LiteralPath ${linkLib})) { throw "instrument-link-lib.ps1 not found next to calibrate-instruments.ps1 at ${linkLib}" }
+. ${linkLib}
 
 function Log {
     param([string]${Msg}, [string]${Lvl} = 'INFO')
@@ -65,6 +75,39 @@ function Get-CurrentSerialPort {
 
 function Test-Pwi4Running { [bool](Get-Process -Name pwi4, PWI4 -ErrorAction SilentlyContinue) }
 
+function Get-UsbParentChain {
+    param([string]${InstanceId})
+    ${chain} = @(); ${id} = ${InstanceId}
+    for (${i} = 0; ${i} -lt ${UsbChainMaxHops}; ${i}++) {
+        ${parent} = (Get-PnpDeviceProperty -InstanceId ${id} -KeyName 'DEVPKEY_Device_Parent' -ErrorAction SilentlyContinue).Data
+        if (-not ${parent} -or ${parent} -notmatch '^USB\\') { break }
+        ${desc} = (Get-PnpDeviceProperty -InstanceId ${parent} -KeyName 'DEVPKEY_Device_BusReportedDeviceDesc' -ErrorAction SilentlyContinue).Data
+        ${chain} += [pscustomobject]@{ InstanceId = ${parent}; BusReportedDeviceDesc = ${desc} }
+        ${id} = ${parent}
+    }
+    return ,${chain}
+}
+
+function Resolve-CameraLinks {
+    ${cams} = @(Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue | Where-Object { $_.InstanceId -match ${ZwoVendorPattern} })
+    if (${cams}.Count -eq 0) {
+        return @([pscustomobject]@{ Camera = '[NONE]'; ChainText = ''; Verdict = 'NO-CAMERA'; Reason = 'no ZWO camera present' })
+    }
+    return @(${cams} | ForEach-Object {
+        ${chain} = Get-UsbParentChain -InstanceId $_.InstanceId
+        ${v} = Get-MastUsbLinkVerdict -Chain ${chain}
+        [pscustomobject]@{ Camera = $_.FriendlyName; ChainText = (Format-MastUsbChain -Chain ${chain}); Verdict = ${v}.Verdict; Reason = ${v}.Reason }
+    })
+}
+
+function Write-CameraLinkLog {
+    param(${bp})
+    foreach (${c} in ${bp}.State.CameraLinks) {
+        ${lvl} = if (@('FAIL', 'UNVERIFIED') -contains ${c}.Verdict) { 'WARN' } else { 'INFO' }
+        Log ("camera link: {0} {1} -- {2}; chain: {3}" -f ${c}.Verdict, ${c}.Camera, ${c}.Reason, ${c}.ChainText) ${lvl}
+    }
+}
+
 # Resolve the detected COM per role from the present USB-serial devices.
 function Resolve-State {
     ${com} = Get-CimInstance Win32_PnPEntity -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '\(COM\d+\)' }
@@ -85,6 +128,7 @@ function Resolve-State {
         PwbusCom = $(if (${pwbusDev}) { Get-Com ${pwbusDev} } else { $null })
         PwbusSrc = $(if (${pwbusDev}) { 'VID_1CBE&PID_0002 ' + ${pwbusDev}.DeviceID } else { 'device not present' })
         Pwi4Running = (Test-Pwi4Running)
+        CameraLinks = (Resolve-CameraLinks)
     }
 }
 
@@ -139,6 +183,19 @@ function Show-State {
         Write-Host ("                       source: {0}" -f ${p}.Source) -ForegroundColor DarkGray
     }
     Write-Host ('    Mount: PWI4 USB auto-detect (not bound here).  FCU/Standa: MAST_unit libximc auto (not bound here).') -ForegroundColor DarkGray
+    Write-Host ''
+    Write-Host '  Camera USB link (report only):' -ForegroundColor Cyan
+    foreach (${c} in ${bp}.State.CameraLinks) {
+        ${color} = switch (${c}.Verdict) { 'PASS' { 'Green' } 'FAIL' { 'Red' } 'UNVERIFIED' { 'Yellow' } default { 'DarkGray' } }
+        Write-Host ("    {0,-18} {1,-9}  {2}" -f ${c}.Camera, ${c}.Verdict, ${c}.Reason) -ForegroundColor ${color}
+        if (${c}.ChainText) { Write-Host ("                       chain: {0}" -f ${c}.ChainText) -ForegroundColor DarkGray }
+        if (${c}.Verdict -eq 'FAIL') {
+            Write-Host '    The camera is on a USB 2.0 path; move it to the USB 3.0 hub or a SuperSpeed port and re-run.' -ForegroundColor Yellow
+        }
+        if (${c}.Verdict -eq 'UNVERIFIED') {
+            Write-Host '    The link speed cannot be read on a root port; move the camera to the USB 3.0 hub and re-run to verify it.' -ForegroundColor Yellow
+        }
+    }
     if (${bp}.State.Pwi4Running) { Write-Host '    PWI4: RUNNING -- close it before applying changes.' -ForegroundColor Yellow }
     else { Write-Host '    PWI4: closed.' -ForegroundColor Green }
 }
@@ -189,6 +246,7 @@ if (${Interactive}) {
     ${useForce} = $false
     while ($true) {
         ${bp} = New-Plan -DoForce ${useForce}
+        Write-CameraLinkLog -bp ${bp}
         try { Clear-Host } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
         Write-Host '==================================================' -ForegroundColor Cyan
         Write-Host '        MAST Instrument Calibration' -ForegroundColor Cyan
@@ -236,6 +294,7 @@ if (${Interactive}) {
 # ------------------------------- CLI --------------------------------------
 ${bp} = New-Plan -DoForce ([bool]${Force})
 foreach (${p} in ${bp}.Plans) { Log ("{0}: action={1} cur='{2}' desired='{3}' ({4})" -f ${p}.Target, ${p}.Action, ${p}.Cur, ${p}.Desired, ${p}.Source) }
+Write-CameraLinkLog -bp ${bp}
 Show-State -bp ${bp}
 Write-Host ''
 Show-Diff -bp ${bp}
