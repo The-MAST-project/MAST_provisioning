@@ -457,6 +457,28 @@ Describe 'Get-MastAssetTreeEntries' {
         $e[0].Relative | Should Be 'index-5202-01.fits'
     }
 
+    It 'returns a path relative to the root, whatever form the root is given in' {
+        # Deriving Relative by subtracting a Resolve-Path prefix from .FullName
+        # needs the two to agree on the form of the root, and they do not: give
+        # it the 8.3 form and Resolve-Path expands it while .FullName keeps it,
+        # so every Relative comes out cut in the wrong place and the asset stages
+        # under a corrupted name. A GitHub runner's TEMP is C:\Users\RUNNER~1\...,
+        # which is how this surfaced. (Where 8.3 generation is off, ShortPath
+        # returns the long form and this just checks the ordinary path twice.)
+        $only = Join-Path $root 'cache\server\providers\imdisk\assets\mast-indexes'
+        New-Item -ItemType Directory -Force -Path $only | Out-Null
+        Set-Content -LiteralPath (Join-Path $only 'index-5202-02.fits') -Value 'y' -Encoding Ascii
+        $short = (New-Object -ComObject Scripting.FileSystemObject).GetFolder($cacheRoot).ShortPath
+        foreach ($form in @($cacheRoot, $short)) {
+            $e = @(Get-MastAssetTreeEntries -ProvidersRoot $providers -Module 'imdisk' `
+                      -RelativeDir 'assets\mast-indexes' -AssetCacheRoot $form)
+            ($e | ForEach-Object { $_.Relative } | Sort-Object) -join ',' |
+                Should Be 'index-5202-01.fits,index-5202-02.fits'
+            foreach ($x in $e) { Test-Path -LiteralPath $x.Source | Should Be $true }
+        }
+        Remove-Item -LiteralPath (Join-Path $only 'index-5202-02.fits') -Force
+    }
+
     It 'returns nothing when neither root has the tree, so the caller reports it' {
         $e = @(Get-MastAssetTreeEntries -ProvidersRoot $providers -Module 'nosuch' `
                   -RelativeDir 'assets\nothing' -AssetCacheRoot $cacheRoot)

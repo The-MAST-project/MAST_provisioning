@@ -320,12 +320,17 @@ function Get-MastAssetTreeEntries {
     # Last wins, so the repo is appended after the cache.
     $roots += (Join-Path (Join-Path $ProvidersRoot $Module) $rel)
 
+    # -Name yields the path already relative to $root. Subtracting a prefix from
+    # .FullName instead needs the two to agree on the form of $root, and they do
+    # not: give it an 8.3 path and Resolve-Path expands it while .FullName keeps
+    # it, so the relative path comes out cut in the wrong place and the asset
+    # stages under a corrupted name. Caught on a GitHub runner, whose TEMP is
+    # C:\Users\RUNNER~1\...
     $seen = [ordered]@{}
     foreach ($root in $roots) {
         if (-not (Test-Path -LiteralPath $root -PathType Container)) { continue }
-        $prefix = (Resolve-Path -LiteralPath $root).Path.TrimEnd('\') + '\'
-        foreach ($f in Get-ChildItem -LiteralPath $root -Recurse -File -ErrorAction SilentlyContinue) {
-            $seen[$f.FullName.Substring($prefix.Length)] = $f.FullName
+        foreach ($rel in @(Get-ChildItem -LiteralPath $root -Recurse -File -Name -ErrorAction SilentlyContinue)) {
+            $seen[$rel] = (Join-Path $root $rel)
         }
     }
     foreach ($k in $seen.Keys) {
