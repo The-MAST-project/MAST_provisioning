@@ -73,7 +73,7 @@ def cmd_seed(root: Path, args) -> int:
     # truncating rather than replacing -- rewrites the blob under its old name,
     # and the store silently stops being content-addressed. Seeded trees are
     # read-only from here on; a payload is rebuilt, never edited.
-    added = linked = 0
+    added = linked = failed = 0
     for src_dir in args.dirs:
         for dirpath, _dirnames, filenames in os.walk(src_dir, followlinks=True):
             for name in filenames:
@@ -90,9 +90,14 @@ def cmd_seed(root: Path, args) -> int:
                     os.link(f, dest)
                     added += 1
                 except OSError as exc:
+                    failed += 1
                     print(f"seed: cannot link {f}: {exc}", file=sys.stderr)
-    print(f"SEEDED added={added} already_present={linked}")
-    return 0
+    print(f"SEEDED added={added} already_present={linked} failed={failed}")
+    # Non-zero when nothing could be adopted. It returned 0 regardless until
+    # 2026-09-27, when seeding from /tmp -- a different filesystem from /Storage,
+    # which hardlinks cannot cross -- adopted nothing and reported success. A
+    # caller seeding before it drops its own copy would have dropped the last one.
+    return 1 if failed else 0
 
 
 def cmd_want(root: Path, _args) -> int:
