@@ -426,6 +426,25 @@ schtasks /create /tn "MAST-vendor-verify" /sc DAILY /st 06:00 /ru SYSTEM ^
   /tr "C:\cygwin64\bin\bash.exe -lc '/cygdrive/c/Users/labcomp2/Desktop/MAST/MAST_provisioning/tools/vendor-verify.sh'"
 ```
 
+A second daily task checks the store itself:
+
+```cmd
+schtasks /create /tn "MAST-store-fsck" /sc DAILY /st 06:30 /ru labcomp2 ^
+  /tr "C:\cygwin64\bin\bash.exe -lc 'bash /cygdrive/c/Users/labcomp2/Desktop/MAST/MAST_provisioning/tools/store-fsck.sh'"
+```
+
+`vendor-verify` compares this machine's cache **against** the store; `store-fsck`
+re-hashes every blob **in** the store against its own filename. Without the second,
+the first is comparing against something nobody has checked -- and a rotted blob
+would make every other integrity check in the system agree with the rot. Measured
+2026-09-22: 581 blobs, 14 GB, **33 s**, which is why it can run daily. It writes
+`C:\MAST\logs\store-fsck.log`; exit **1** means corruption, **2** means the store
+could not be reached.
+
+A corrupt blob is reported and **not** deleted. Unlinking it would take out every
+hardlink into it across every host tree at once, and a bad byte is more
+recoverable than a missing file -- re-seed the affected blob instead.
+
 **The mirror is deliberately NOT on a schedule**, and that is the whole point of
 which copy is canonical. It pushes this machine's cache *to* the store, so running
 it on a cadence means the cache overwrites the canonical copy every week -- and if
