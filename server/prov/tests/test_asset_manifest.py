@@ -1,12 +1,14 @@
-"""The manifest that lets vendored binaries leave git-LFS.
+"""The one index of every asset a payload needs (MAST_provisioning#48).
 
-Every LFS pointer already carries the `oid sha256` and `size` of the object it
-stands for, so the manifest is *derived* from what git already holds rather than
-typed by anyone. That is the whole reason retiring LFS is mechanical: the data
-needed to replace it is the data LFS itself stores (MAST_provisioning#48).
+Two halves, and the split is the point. The LFS rows are *derived*: a pointer
+already carries the `oid sha256` and `size` of the object it stands for, so the
+data needed to replace LFS is the data LFS itself stores, which is what makes
+retiring it mechanical and keeps the two from disagreeing while both exist. The
+build-host rows are *declared* in vendor-inputs.json, because nothing in the repo
+can derive a file the repo does not contain.
 
-Deriving it also means it cannot disagree with the pointers while both exist,
-which is what makes the migration reversible until the untracking step.
+They used to be two indexes, two caches and two fetch paths. Merging them is what
+lets the build read one manifest and resolve every asset the same way.
 """
 
 from __future__ import annotations
@@ -25,12 +27,44 @@ def git(repo: Path, *args: str, stdin: bytes | None = None) -> str:
     return subprocess.run(["git", *args], cwd=repo, input=stdin, capture_output=True, check=True).stdout.decode()
 
 
+DECLARED = {
+    "inputs": [
+        {
+            "name": "big-catalog",
+            "cached": True,
+            "kind": "directory",
+            "prefix": "server/providers/planewave/assets/catalog/",
+            "used_by": ["planewave"],
+            "why_not_in_repo": "2 GB vendor download.",
+            "origin": "planewave.com",
+            "reacquire": "Download it again.",
+            "files": [
+                {"path": "server/providers/planewave/assets/catalog/a.bin", "sha256": "a" * 64, "size": 7},
+            ],
+        },
+        {
+            "name": "secrets",
+            "cached": False,
+            "kind": "directory",
+            "path": "vault\\secrets",
+            "used_by": ["nomachine"],
+            "why_not_in_repo": "Issued certificates.",
+            "origin": "The vendor.",
+            "reacquire": "Buy another seat.",
+        },
+    ],
+    "not_vendor_inputs": [],
+}
+
+
 @pytest.fixture
 def repo(tmp_path: Path) -> Path:
     """A repo with pointer-shaped blobs, so no git-lfs install is required."""
     r = tmp_path / "repo"
     (r / "server/providers/chrome/assets").mkdir(parents=True)
     (r / "client/assets").mkdir(parents=True)
+    (r / "server/data").mkdir(parents=True)
+    (r / "server/data/vendor-inputs.json").write_text(json.dumps(DECLARED), encoding="utf-8")
     git(r, "init", "-q")
     git(r, "config", "user.email", "t@t")
     git(r, "config", "user.name", "t")
@@ -50,9 +84,12 @@ def repo(tmp_path: Path) -> Path:
 LFS = {"server/providers/chrome/assets/chrome.msi", "client/assets/npcap.exe"}
 
 
+def lfs_rows(m: dict) -> set[str]:
+    return {f["path"] for f in m["files"] if f["source"] == "git-lfs"}
+
+
 def test_every_lfs_path_becomes_a_row(repo):
-    m = build_manifest(repo, lfs_paths=LFS)
-    assert {f["path"] for f in m["files"]} == LFS
+    assert lfs_rows(build_manifest(repo, lfs_paths=LFS)) == LFS
 
 
 def test_each_row_carries_what_a_fetch_needs(repo):
@@ -66,6 +103,52 @@ def test_each_row_carries_what_a_fetch_needs(repo):
 def test_a_file_that_is_not_lfs_is_not_in_the_manifest(repo):
     m = build_manifest(repo, lfs_paths=LFS)
     assert not any(f["path"] == "README.md" for f in m["files"])
+
+
+def test_a_declared_build_host_file_becomes_a_row_too(repo):
+    """The half no pointer can supply. Without it the build host inputs would
+    still need their own index, their own cache and their own fetch."""
+    m = build_manifest(repo, lfs_paths=LFS)
+    row = next(f for f in m["files"] if f["path"].endswith("catalog/a.bin"))
+    assert row["sha256"] == "a" * 64
+    assert row["size"] == 7
+    assert row["source"] == "big-catalog"
+    assert row["module"] == "planewave"
+
+
+def test_an_uncached_input_contributes_no_row(repo):
+    # It is recorded as a source so the set is still described in one place, but
+    # it must never reach the cache the fetch populates.
+    m = build_manifest(repo, lfs_paths=LFS)
+    assert "secrets" in {s["name"] for s in m["sources"]}
+    assert not any(f["source"] == "secrets" for f in m["files"])
+
+
+def test_every_source_is_named(repo):
+    m = build_manifest(repo, lfs_paths=LFS)
+    assert {s["name"] for s in m["sources"]} == {"git-lfs", "big-catalog", "secrets"}
+
+
+def test_one_path_cannot_come_from_two_sources(repo, tmp_path):
+    """A declared file that collides with an LFS path is a cache that cannot be
+    built: one path, one file, and nothing to decide which byte wins."""
+    from prov.asset_manifest import ManifestError
+
+    clash = json.loads((repo / "server/data/vendor-inputs.json").read_text())
+    clash["inputs"][0]["files"][0]["path"] = "server/providers/chrome/assets/chrome.msi"
+    (repo / "server/data/vendor-inputs.json").write_text(json.dumps(clash), encoding="utf-8")
+    with pytest.raises(ManifestError, match="claimed by both"):
+        build_manifest(repo, lfs_paths=LFS)
+
+
+def test_a_missing_declaration_is_an_error_not_an_empty_half(repo):
+    # Silently emitting only the LFS half would produce a manifest that looks
+    # complete and drops 13 GB of build-host inputs.
+    from prov.asset_manifest import ManifestError
+
+    (repo / "server/data/vendor-inputs.json").unlink()
+    with pytest.raises(ManifestError):
+        build_manifest(repo, lfs_paths=LFS)
 
 
 def test_rows_name_the_module_that_owns_them(repo):
@@ -107,7 +190,7 @@ import subprocess as _sp  # noqa: E402
 from prov import transport as _T  # noqa: E402
 from prov.asset_manifest import _pointers  # noqa: E402
 
-COMMITTED = _T.REPO_ROOT / "server" / "data" / "provider-assets.json"
+COMMITTED = _T.REPO_ROOT / "server" / "data" / "assets.json"
 POINTER = b"version https://git-lfs"
 
 
@@ -121,6 +204,12 @@ def tracked_pointer_paths() -> set[str]:
     return {p for p, b in blobs.items() if b.startswith(POINTER)}
 
 
+def committed_lfs_rows() -> dict[str, dict]:
+    """Only the derived half. The declared build-host rows have no pointer to
+    check against -- their digests come from the content store."""
+    return {f["path"]: f for f in json.loads(COMMITTED.read_text())["files"] if f["source"] == "git-lfs"}
+
+
 def test_the_committed_manifest_indexes_every_lfs_asset():
     """An asset added to LFS and not to the manifest is one the store may lack.
 
@@ -128,12 +217,11 @@ def test_the_committed_manifest_indexes_every_lfs_asset():
     missing two of 162 -- an installer no module declares and the bootstrap
     npcap -- because the store only ever saw what a payload carried.
     """
-    committed = {f["path"] for f in json.loads(COMMITTED.read_text())["files"]}
-    assert committed == tracked_pointer_paths()
+    assert committed_lfs_rows().keys() == tracked_pointer_paths()
 
 
 def test_each_committed_row_matches_the_pointer_it_came_from():
-    rows = {f["path"]: f for f in json.loads(COMMITTED.read_text())["files"]}
+    rows = committed_lfs_rows()
     blobs = _pointers(_T.REPO_ROOT, sorted(rows))
     for path, row in rows.items():
         blob = blobs[path]

@@ -242,6 +242,102 @@ function Test-MastCommandFileIsAsset {
     return (($CommandFile -replace '\\', '/') -like 'assets/*')
 }
 
+# Where a provider asset is read from, once the vendored binaries leave git-LFS.
+#
+# They cannot become gitignored files in the repo tree: builds run from git
+# worktrees on the provisioning server, and a fresh worktree would hold none of
+# them. So assets live in one machine-wide cache keyed by repo-relative path --
+# the same shape the build-host inputs already used under C:\MAST\, and what
+# MAST_provisioning#48 asks for: one store every vendored binary goes through.
+# Those inputs are rows in the same manifest now, so there is one cache, not six.
+#
+# The REPO copy wins while it exists, which is what makes this change inert:
+# nothing resolves differently until the untracking removes those copies. When
+# neither exists the repo path is returned, so build-mast's "missing CommandFile"
+# names the location a person expects rather than a cache directory.
+# The rule, and only the rule: the repo copy wins while it exists, the cache
+# answers once it does not, and the repo path comes back when neither has it so
+# a caller's "missing" message names the location a person expects.
+#
+# Both candidate paths are formed by the caller. Deriving them here would mean
+# assuming a repo layout, and the callers legitimately have different ones -- a
+# provider asset is keyed off <top>\server\providers, the bootstrap media off
+# <top> itself.
+function Resolve-MastCachedFile {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$RepoPath,
+        [string]$CachePath = ''
+    )
+    if (Test-Path -LiteralPath $RepoPath) { return $RepoPath }
+    if ($CachePath -and (Test-Path -LiteralPath $CachePath)) { return $CachePath }
+    return $RepoPath
+}
+
+function Resolve-MastAssetSource {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$ProvidersRoot,
+        [Parameter(Mandatory)][string]$Module,
+        [Parameter(Mandatory)][string]$CommandFile,
+        [string]$AssetCacheRoot = ''
+    )
+    $repoPath = Join-Path (Join-Path $ProvidersRoot $Module) $CommandFile
+    # A script is the repo's own code and is never cached; only assets/ is.
+    if (-not (Test-MastCommandFileIsAsset -CommandFile $CommandFile)) { return $repoPath }
+    # Keyed by the repo-relative path server/data/assets.json records, so the
+    # cache layout and the manifest cannot disagree about where a file goes.
+    $cachePath = if ($AssetCacheRoot) {
+        Join-Path $AssetCacheRoot (Join-Path "server/providers/$Module" $CommandFile)
+    } else { '' }
+    return Resolve-MastCachedFile -RepoPath $repoPath -CachePath $cachePath
+}
+
+# The same rule for a directory-shaped asset, per file rather than per tree.
+#
+# Some of these directories are mixed: assets/sxs/ holds three vendored .cab
+# files beside a README and a fetch script that are ordinary tracked code, so
+# "which root does this directory come from" has no single answer. Resolving per
+# file gives one: each entry comes from the repo if the repo has it, from the
+# cache otherwise, and a tree the repo does not carry at all (the astrometry
+# index seed, the frozen cygwin cache) simply resolves entirely to the cache.
+#
+# Returns the staging-relative path and the source to read it from, so the caller
+# links or copies each entry and the payload is identical either way.
+function Get-MastAssetTreeEntries {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$ProvidersRoot,
+        [Parameter(Mandatory)][string]$Module,
+        [Parameter(Mandatory)][string]$RelativeDir,
+        [string]$AssetCacheRoot = ''
+    )
+    $rel = $RelativeDir -replace '\\', '/'
+    $roots = @()
+    if ($AssetCacheRoot) {
+        $roots += (Join-Path $AssetCacheRoot (Join-Path "server/providers/$Module" $rel))
+    }
+    # Last wins, so the repo is appended after the cache.
+    $roots += (Join-Path (Join-Path $ProvidersRoot $Module) $rel)
+
+    # -Name yields the path already relative to $root. Subtracting a prefix from
+    # .FullName instead needs the two to agree on the form of $root, and they do
+    # not: give it an 8.3 path and Resolve-Path expands it while .FullName keeps
+    # it, so the relative path comes out cut in the wrong place and the asset
+    # stages under a corrupted name. Caught on a GitHub runner, whose TEMP is
+    # C:\Users\RUNNER~1\...
+    $seen = [ordered]@{}
+    foreach ($root in $roots) {
+        if (-not (Test-Path -LiteralPath $root -PathType Container)) { continue }
+        foreach ($rel in @(Get-ChildItem -LiteralPath $root -Recurse -File -Name -ErrorAction SilentlyContinue)) {
+            $seen[$rel] = (Join-Path $root $rel)
+        }
+    }
+    foreach ($k in $seen.Keys) {
+        [pscustomobject]@{ Relative = $k; Source = $seen[$k] }
+    }
+}
+
 # A fresh module -> staged payload map, in build order.
 function New-MastStagedPayloadMap {
     return [ordered]@{}

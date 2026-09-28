@@ -43,10 +43,19 @@ client/assets/*.exe filter=lfs diff=lfs merge=lfs -text
 # the first CRLF one.
 *.sh text eol=lf
 
-# Vendor artifacts that must reach a unit byte for byte. Driver INFs and catalogs
-# are consumed by Windows setup and certificates are signed blobs; none of them
-# may be rewritten by a line-ending filter, whatever git guesses about them.
+# Vendor artifacts that must reach a unit byte for byte. A .cat is a DETACHED
+# signature over the exact bytes of its package, so a single rewritten line
+# ending anywhere in that package voids it: pnputil then refuses the driver with
+# "The hash for the file is not present in the specified catalog file. The file
+# is likely corrupt or the victim of tampering." None of these may be touched by
+# a line-ending filter, whatever git guesses about them.
+#
+# .dll is here because two of them are package members (e2fmsg.dll,
+# WdfCoInstaller01009.dll). Both happen to carry NUL bytes, so git's binary
+# heuristic has been protecting them by luck -- and a signed package should not
+# depend on a guess.
 *.inf  -text
 *.sys  -text
 *.cat  -text
 *.cer  -text
+*.dll  -text

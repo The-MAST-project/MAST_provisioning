@@ -125,6 +125,9 @@ param(
     [string]   $ProductKey          = 'KBN8V-HFGQ4-MGXVD-347P6-PDQGT',
     [string]   $VolumeLabel     = 'MAST_AU',
     [string]   $FactoryComputerName = '',
+    # Machine-wide asset cache, as build-mast.ps1 takes it: the Npcap installer
+    # is read from here once the vendored binaries leave git-LFS (#48).
+    [string]   $AssetCacheRoot  = (Join-Path ${env:SystemDrive} 'MAST\provider-assets'),
     [string[]] $ExtraScripts    = @()
 )
 
@@ -191,15 +194,20 @@ if (-not (Test-Path $bootstrapVmTestCmdPath)) {
 # installs it interactively (the free Npcap edition has no working silent mode
 # under the WinRM/Session-0 pipeline -- see DECISIONS.md 2026-05-27). Newest
 # npcap-*.exe under client\assets\ wins.
+# Read from the same cache as every other asset (MAST_provisioning#48). The repo
+# copy wins while there is one, so this is inert until the untracking; a glob
+# rather than Resolve-MastCachedFile because the newest npcap-*.exe wins,
+# which is a search rather than a lookup of one known path.
 $npcapInstallerPath = $null
 $npcapAssetsDir = Join-Path $RepoRoot 'client\assets'
-if (Test-Path $npcapAssetsDir) {
-    $npcapHit = Get-ChildItem -LiteralPath $npcapAssetsDir -Filter 'npcap-*.exe' -File -ErrorAction SilentlyContinue |
-        Sort-Object Name -Descending | Select-Object -First 1
-    if ($npcapHit) { $npcapInstallerPath = $npcapHit.FullName }
-}
+$npcapCacheDir  = Join-Path $AssetCacheRoot 'client\assets'
+$npcapHit = @($npcapAssetsDir, $npcapCacheDir) |
+    Where-Object { Test-Path -LiteralPath $_ } |
+    ForEach-Object { Get-ChildItem -LiteralPath $_ -Filter 'npcap-*.exe' -File -ErrorAction SilentlyContinue } |
+    Sort-Object Name -Descending | Select-Object -First 1
+if ($npcapHit) { $npcapInstallerPath = $npcapHit.FullName }
 if (-not $npcapInstallerPath) {
-    Write-Warning "No npcap-*.exe found under $npcapAssetsDir; the ISO will not carry the Npcap installer and bootstrap will warn on the unit."
+    Write-Warning "No npcap-*.exe under $npcapAssetsDir or $npcapCacheDir; the ISO will not carry the Npcap installer and bootstrap will warn on the unit. Run tools/fetch-assets.sh to populate the cache."
 }
 
 $resolvedExtras = @()

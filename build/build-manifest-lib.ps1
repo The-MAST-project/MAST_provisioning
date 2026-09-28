@@ -2,6 +2,14 @@
 # server/tests/build-manifest-lib.Tests.ps1 can exercise them without running a
 # build; build-mast.ps1 dot-sources this file (single source of truth).
 
+# Where an asset is read from is one rule, and it lives in build-staging-lib.ps1
+# (MAST_provisioning#48). Sourced here rather than duplicated so this file stays
+# exercisable on its own -- the same shape build-nomachine-lib.ps1 uses for the
+# licence verdict it shares with the unit side.
+${_stagingDot} = Join-Path ${PSScriptRoot} 'build-staging-lib.ps1'
+if (-not (Test-Path ${_stagingDot})) { throw "build-staging-lib.ps1 not found at ${_stagingDot}" }
+. ${_stagingDot}
+
 # The one file the two consumers disagree about, named once because the whole of
 # #203 was these two rules being conflated.
 ${script:MastBuildManifestName} = 'build-manifest.json'
@@ -162,15 +170,31 @@ function Get-ModuleContentHash {
         [string[]]$Commands = @(),
         [string]$Version = '',
         [string]$RepoTop = '',
-        [string[]]$RepoFiles = @()
+        [string[]]$RepoFiles = @(),
+        # Where an asset is read from when the repo no longer carries it (#48).
+        # Resolve-MastAssetSource lives in build-staging-lib.ps1; both libraries
+        # are dot-sourced into the same scope by build-mast.ps1.
+        [string]$AssetCacheRoot = ''
     )
     $sha = [System.Security.Cryptography.SHA256]::Create()
     $bytes = [System.IO.MemoryStream]::new()
     $lines = @()
+    $providersRoot = Split-Path -Parent $ProviderDir
+    $module = Split-Path -Leaf $ProviderDir
     foreach ($cf in (@($CommandFiles) | Where-Object { $_ } | Sort-Object)) {
         $norm = ($cf -replace '\\','/')
-        $path = Join-Path $ProviderDir $cf
-        if (-not (Test-Path -LiteralPath $path)) { continue }
+        $path = Resolve-MastAssetSource -ProvidersRoot $providersRoot -Module $module `
+                    -CommandFile $cf -AssetCacheRoot $AssetCacheRoot
+        if (-not (Test-Path -LiteralPath $path)) {
+            # A commandfile CAN be legitimately absent: -TestMode and the
+            # -AllowMissing* switches skip staging a large optional asset. What
+            # must not happen is skipping the LINE -- that made a payload built
+            # without a 2 GB installer hash identically to one built with it, so
+            # a unit holding the wrong payload looked up to date. Record the
+            # absence instead, and the two hash differently.
+            $lines += "file:$norm`:absent"
+            continue
+        }
         $fileHash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
         $lines += "file:$norm`:$fileHash"
     }

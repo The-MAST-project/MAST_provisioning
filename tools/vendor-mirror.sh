@@ -18,7 +18,7 @@
 # RUN IT BY HAND, NOT ON A SCHEDULE. This pushes the build host's cache TO the
 # canonical store, so a cadence would let the cache overwrite the canonical copy
 # every time it fired -- and if a file had rotted here, that is precisely the
-# mechanism that would propagate the rot to the good copy. tools/vendor-verify.sh
+# mechanism that would propagate the rot to the good copy. tools/fetch-assets.sh
 # is the one that belongs on a timer: its only job is to notice. These five inputs
 # are frozen by design, so a mirror is an occasional deliberate act -- a
 # re-harvested cygwin cache, a re-downloaded catalog, a newly issued licence seat.
@@ -48,11 +48,15 @@ SSH="/usr/bin/ssh -i $SSH_KEY -o BatchMode=yes -o StrictHostKeyChecking=no -o Us
 # server/prov/tests/test_vendor_inputs.py. An input declared there and absent here
 # is exactly how nomachine-licenses fell out of the automated mirror and reached
 # the store by hand instead.
+# The cached inputs now live in slots of the one asset cache rather than in four
+# directories of their own (MAST_provisioning#48); the store keeps the flat names
+# because that is what a person reading a backup wants to see.
+CACHE="${MAST_ASSET_CACHE:-/cygdrive/c/MAST/provider-assets}"
 SOURCES=(
-  "mast-indexes:/cygdrive/c/MAST/mast-indexes"
-  "ps3-catalog:/cygdrive/c/MAST/ps3-catalog"
-  "cygwin-pkg-cache:/cygdrive/c/MAST/cygwin-pkg-cache"
-  "full-frame.fits:/cygdrive/c/MAST/full-frame.fits"
+  "mast-indexes:${CACHE}/server/providers/imdisk/assets/mast-indexes"
+  "ps3-catalog:${CACHE}/server/providers/planewave/assets/Setup_PlateSolve3_Catalog.exe:${CACHE}/server/providers/planewave/assets/Setup_PlateSolve3_Catalog-1.bin"
+  "cygwin-pkg-cache:${CACHE}/server/providers/astrometry-dependencies/assets/cygwin-pkg-cache"
+  "full-frame.fits:${CACHE}/server/providers/astrometry/assets/full-frame.fits"
   "nomachine-licenses:${REPO_TOP}/vault/nomachine-licenses"
 )
 # MIRROR_SOURCES_END
@@ -84,8 +88,12 @@ fi
 
 for pair in "${SOURCES[@]}"; do
   name="${pair%%:*}"
-  SRC="${pair#*:}"
-  [ -e "$SRC" ] || { say "SKIP $name (missing at $SRC)"; overall=1; continue; }
+  # An entry may name more than one source (the PlateSolve3 installer and its
+  # data payload are two files in one slot); they land in one directory upstream.
+  IFS=':' read -r -a SRCS <<< "${pair#*:}"
+  missing=0
+  for s in "${SRCS[@]}"; do [ -e "$s" ] || { say "SKIP $name (missing at $s)"; missing=1; }; done
+  [ "$missing" = 0 ] || { overall=1; continue; }
   say "--- $name: starting"
   ok=0
   for attempt in 1 2 3 4 5; do
@@ -93,9 +101,15 @@ for pair in "${SOURCES[@]}"; do
     # --no-perms/owner/group + --chmod: Windows ACLs are meaningless on Linux and
     #       would make every later comparison miss.
     # --partial: a WAN blip resumes instead of restarting a 9.9 GB file.
+    if [ "${#SRCS[@]}" -gt 1 ]; then
+      $SSH "$DEST" "mkdir -p $DESTDIR/$name" || true
+      TARGET="$DEST:$DESTDIR/$name/"
+    else
+      TARGET="$DEST:$DESTDIR/"
+    fi
     $RSYNC -rlt --partial --stats --human-readable \
            --no-perms --no-owner --no-group --chmod=D755,F644 \
-           -e "$SSH" "$SRC" "$DEST:$DESTDIR/" && { ok=1; break; }
+           -e "$SSH" "${SRCS[@]}" "$TARGET" && { ok=1; break; }
     rc=$?
     say "    attempt $attempt failed (rsync rc=$rc); retrying in 60s"
     sleep 60

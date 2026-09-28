@@ -28,6 +28,11 @@ param(
   [switch]${AllowMissingNetFx3Sxs},
   # Dev/test: allow missing large optional assets (skip with warning).
   [switch]${TestMode},
+  # Machine-wide cache the vendored binaries are read from once they leave
+  # git-LFS (#48). Keyed by repo-relative path, shared by every worktree on this
+  # host -- a git worktree holds no gitignored assets, and 2.3 GB per worktree is
+  # not a fix. Inert while the repo still carries its own copies: those win.
+  [string]${AssetCacheRoot} = (Join-Path ${env:SystemDrive} 'MAST\provider-assets'),
   # Proxy mode for this build, baked into the staged commands.json:
   #   weizmann -> proxy provider gets -ForceMode use.
   #   direct   -> proxy provider gets -ForceMode direct.
@@ -293,6 +298,24 @@ if (${Modules} -contains 'jupyter' -or ${Modules} -contains 'python') {
 }
 
 # Create a junction/hardlink/symlink into staging; fallback to copy if linking not allowed
+# Stage a directory-shaped asset from wherever its files resolved.
+#
+# One entry at a time rather than one copy of the tree: a directory the repo and
+# the cache both contribute to (assets\sxs) has to arrive merged, and the 9.9 GB
+# index seed has to arrive as links rather than bytes. New-LinkOrCopy gives both.
+function Add-MastAssetTree {
+    param([Parameter(Mandatory)][string]$Module,
+          [Parameter(Mandatory)][string]$StagedName,
+          [object[]]$Entries = @())
+
+    $dst = Join-Path ${staging} $StagedName
+    New-Item -ItemType Directory -Force -Path $dst | Out-Null
+    foreach ($e in $Entries) {
+        New-LinkOrCopy -Target $e.Source -LinkPath (Join-Path $dst $e.Relative)
+    }
+    Add-MastStagedPayload -Map ${stagedPayload} -Module $Module -Dir $StagedName
+}
+
 function New-LinkOrCopy {
     param([Parameter(Mandatory)][string]$Target,
           [Parameter(Mandatory)][string]$LinkPath)
@@ -652,7 +675,8 @@ foreach (${m} in ${Modules}) {
   }
 
   foreach (${cmdfile} in ${mf}.commandfiles) {
-    ${src} = Join-Path (Join-Path ${providersRoot} ${m}) ${cmdfile}
+    ${src} = Resolve-MastAssetSource -ProvidersRoot ${providersRoot} -Module ${m} `
+                 -CommandFile ${cmdfile} -AssetCacheRoot ${AssetCacheRoot}
     if (-not (Test-Path ${src})) {
         # Dev/test exception: some payloads are intentionally omitted (large artifacts).
         $norm = (${cmdfile} -replace '\\','/').ToLowerInvariant()
@@ -745,29 +769,24 @@ if (${Modules} -contains 'nomachine') {
 # provider's own README to populate the directory once -- this is a
 # bounded, documented fetch quest, not an open-ended hunt.
 if (${Modules} -contains 'ascom') {
-    ${sxsSrc} = Join-Path ${providersRoot} 'ascom\assets\sxs'
+    ${sxsEntries} = @(Get-MastAssetTreeEntries -ProvidersRoot ${providersRoot} -Module 'ascom' `
+                          -RelativeDir 'assets\sxs' -AssetCacheRoot ${AssetCacheRoot})
     # One directory per OS build (assets\sxs\<build>\). Counting .cab files
     # anywhere under sxs\ is what let a Windows 11 26100 payload ship to a fleet
     # of 19044 units and present as a working asset until a unit whose component
     # store lacked the NetFx3 payload finally had to use it (#124). A build
     # directory holding at least one cab is the thing worth asserting.
-    ${sxsBuilds} = @()
-    if (Test-Path -LiteralPath ${sxsSrc}) {
-        ${sxsBuilds} = @(Get-ChildItem -LiteralPath ${sxsSrc} -Directory -ErrorAction SilentlyContinue |
-            Where-Object { @(Get-ChildItem -LiteralPath $_.FullName -Filter '*.cab' -File -ErrorAction SilentlyContinue).Count -gt 0 })
-    }
+    ${sxsBuilds} = @(${sxsEntries} | Where-Object { $_.Relative -match '^[^\\]+\\[^\\]+\.cab$' } |
+        ForEach-Object { ($_.Relative -split '\\')[0] } | Sort-Object -Unique)
     if (${sxsBuilds}.Count -gt 0) {
         # Stage every build's payload; the provider selects the directory matching
         # the unit's own OS build, which is the only party that knows it for sure.
-        ${sxsDst} = Join-Path ${staging} 'sxs'
-        New-Item -ItemType Directory -Force -Path ${sxsDst} | Out-Null
-        Copy-Item -Force -Recurse -Path (Join-Path ${sxsSrc} '*') -Destination ${sxsDst}
-        Add-MastStagedPayload -Map ${stagedPayload} -Module 'ascom' -Dir 'sxs'
-        Write-Host (" Staged NetFx3 SxS payloads for build(s) {0} -> {1}" -f ((${sxsBuilds} | ForEach-Object { $_.Name }) -join ', '), ${sxsDst})
+        Add-MastAssetTree -Module 'ascom' -StagedName 'sxs' -Entries ${sxsEntries}
+        Write-Host (" Staged NetFx3 SxS payloads for build(s) {0} -> {1}" -f (${sxsBuilds} -join ', '), (Join-Path ${staging} 'sxs'))
     } elseif (${AllowMissingNetFx3Sxs}) {
-        Write-Warning "No per-build NetFx3 SxS payload under '$sxsSrc'; continuing due to -AllowMissingNetFx3Sxs (provider will fall back to online DISM)."
+        Write-Warning "No per-build NetFx3 SxS payload for ascom in the repo or under '${AssetCacheRoot}'; continuing due to -AllowMissingNetFx3Sxs (provider will fall back to online DISM)."
     } else {
-        throw "No per-build NetFx3 SxS payload under '$sxsSrc'. Expected at least one '<build>\*.cab' directory, e.g. '19044\' -- see the provider README for fetching one from a matching ISO. Pass -AllowMissingNetFx3Sxs for dev/test."
+        throw "No per-build NetFx3 SxS payload for ascom, in the repo or under '${AssetCacheRoot}'. Expected at least one '<build>\*.cab' directory, e.g. '19044\'. Run tools/fetch-assets.sh to populate the cache, or see the provider README for fetching one from a matching ISO. Pass -AllowMissingNetFx3Sxs for dev/test."
     }
 }
 
@@ -777,106 +796,102 @@ if (${Modules} -contains 'ascom') {
 # the lock -- the declaration of what gets installed -- is inside the module
 # content hash and drives drift; the wheels are its materialization (#133).
 if (${Modules} -contains 'jupyter') {
-    ${whSrc} = Join-Path ${providersRoot} 'jupyter\assets\wheels'
-    ${whFiles} = @()
-    if (Test-Path -LiteralPath ${whSrc}) {
-        ${whFiles} = @(Get-ChildItem -LiteralPath ${whSrc} -Filter '*.whl' -File -ErrorAction SilentlyContinue)
-    }
+    ${whFiles} = @(Get-MastAssetTreeEntries -ProvidersRoot ${providersRoot} -Module 'jupyter' `
+                       -RelativeDir 'assets\wheels' -AssetCacheRoot ${AssetCacheRoot} |
+                   Where-Object { $_.Relative -like '*.whl' })
     if (${whFiles}.Count -gt 0) {
-        ${whDst} = Join-Path ${staging} 'wheels'
-        New-Item -ItemType Directory -Force -Path ${whDst} | Out-Null
-        Copy-Item -Force -Path (Join-Path ${whSrc} '*.whl') -Destination ${whDst}
-        Add-MastStagedPayload -Map ${stagedPayload} -Module 'jupyter' -Dir 'wheels'
-        Write-Host (" Staged Jupyter wheelhouse ({0} wheels, {1:N0} MB) -> {2}" -f ${whFiles}.Count, ((${whFiles} | Measure-Object -Property Length -Sum).Sum / 1MB), ${whDst})
+        Add-MastAssetTree -Module 'jupyter' -StagedName 'wheels' -Entries ${whFiles}
+        ${whMb} = ((${whFiles} | ForEach-Object { (Get-Item -LiteralPath $_.Source).Length } | Measure-Object -Sum).Sum / 1MB)
+        Write-Host (" Staged Jupyter wheelhouse ({0} wheels, {1:N0} MB) -> {2}" -f ${whFiles}.Count, ${whMb}, (Join-Path ${staging} 'wheels'))
     } else {
-        throw "Jupyter wheelhouse is empty under '${whSrc}'. The provider installs with --no-index and cannot fall back to PyPI; regenerate with 'pip download -r assets/requirements.txt -d assets/wheels --only-binary=:all:' on a Windows host running the fleet's Python."
+        throw "Jupyter wheelhouse is empty, in the repo and under '${AssetCacheRoot}'. The provider installs with --no-index and cannot fall back to PyPI; run tools/fetch-assets.sh, or regenerate with 'pip download -r assets/requirements.txt -d assets/wheels --only-binary=:all:' on a Windows host running the fleet's Python."
     }
 }
 
-# Astrometry index seed + smoke FITS. Sourced from C:\MAST\ on the build host
-# ("use these paths for now") -- both are far too large to keep in the repo. We
-# now stage the index FITS files themselves (the "seed"), NOT a pre-baked image:
-# the imdisk provider builds a sparse 32 GB NTFS image on the unit and seeds it
-# with these files (see server/providers/imdisk/provide-imdisk.ps1). The seed
-# directory is populated once on the build host from the legacy 15 GB image via
-# build/extract-index-seed.ps1. The smoke FITS is the solve input placed by the
-# astrometry provider. These are required for a VALID run: without them the
-# astrometry + mast-validation stages FAIL (the skip paths were removed), so we
-# warn loudly at build time but do not hard-block the build itself.
-${astroIndexSeedSrc} = 'C:\MAST\mast-indexes'
-${fullFrameFitsSrc}  = 'C:\MAST\full-frame.fits'
+# The build-host inputs: the astrometry index seed, the smoke FITS, the
+# PlateSolve3 catalog and the frozen cygwin package cache. They used to sit in
+# four hard-coded C:\MAST\ directories with a bespoke block each; they are rows
+# in server/data/assets.json now, keyed like every other asset by the path they
+# would have if they were tracked, and they resolve through the same cache
+# (MAST_provisioning#48). Nothing about them is special any more except their
+# size and that no clone can supply them.
+#
+# All four are REQUIRED for a valid run -- without the seed and the FITS the
+# astrometry and mast-validation stages fail on the unit, and without the
+# catalog 'ps3cli --server' has no catalog to boot from. They warned rather than
+# failed until this change, which meant a payload could build clean and fail two
+# hours later on the unit. -TestMode is the dev escape.
+function Assert-MastVendoredAsset {
+    param([Parameter(Mandatory)][string]$What,
+          [Parameter(Mandatory)][string]$Reacquire)
+    ${msg} = "$What is present neither in the repo nor in the asset cache '${AssetCacheRoot}'. Run tools/fetch-assets.sh to populate the cache from the content store; to re-create it from scratch, $Reacquire."
+    if (${TestMode}) { Write-Warning "${msg} Continuing due to -TestMode." } else { throw ${msg} }
+}
+
 if (${Modules} -contains 'imdisk') {
-    if (Test-Path -LiteralPath ${astroIndexSeedSrc}) {
-        ${seedFiles} = @(Get-ChildItem -LiteralPath ${astroIndexSeedSrc} -File -Recurse -ErrorAction SilentlyContinue)
-        ${seedGb}    = ((${seedFiles} | Measure-Object Length -Sum).Sum / 1GB)
-        New-LinkOrCopy -Target ${astroIndexSeedSrc} -LinkPath (Join-Path ${staging} 'mast-indexes')
-        Add-MastStagedPayload -Map ${stagedPayload} -Module 'imdisk' -Dir 'mast-indexes'
-        Write-Host (" Staged astrometry index seed: mast-indexes\ ({0} files, {1:N1} GB); the unit builds the sparse 32 GB image." -f ${seedFiles}.Count, ${seedGb})
+    ${seedEntries} = @(Get-MastAssetTreeEntries -ProvidersRoot ${providersRoot} -Module 'imdisk' `
+                           -RelativeDir 'assets\mast-indexes' -AssetCacheRoot ${AssetCacheRoot})
+    if (${seedEntries}.Count -gt 0) {
+        ${seedGb} = ((${seedEntries} | ForEach-Object { (Get-Item -LiteralPath $_.Source).Length } | Measure-Object -Sum).Sum / 1GB)
+        Add-MastAssetTree -Module 'imdisk' -StagedName 'mast-indexes' -Entries ${seedEntries}
+        Write-Host (" Staged astrometry index seed: mast-indexes\ ({0} files, {1:N1} GB); the unit builds the sparse 32 GB image." -f ${seedEntries}.Count, ${seedGb})
     } else {
-        Write-Warning ("Astrometry index seed missing at {0}; run build/extract-index-seed.ps1 once to populate it from the legacy 15 GB image. imdisk will have nothing to seed and astrometry/mast-validation will FAIL on the unit." -f ${astroIndexSeedSrc})
+        Assert-MastVendoredAsset -What 'The astrometry index seed (imdisk)' `
+            -Reacquire 'run build/extract-index-seed.ps1 against the legacy 15 GB image, or re-download astrometry.net series 5202+5203'
     }
 }
+
 if ((${Modules} -contains 'astrometry') -or (${Modules} -contains 'mast-validation')) {
-    if (Test-Path -LiteralPath ${fullFrameFitsSrc}) {
-        New-LinkOrCopy -Target ${fullFrameFitsSrc} -LinkPath (Join-Path ${staging} 'full-frame.fits')
+    # Owned by astrometry in the manifest; mast-validation solves the same frame.
+    ${fullFrameSrc} = Resolve-MastAssetSource -ProvidersRoot ${providersRoot} -Module 'astrometry' `
+                          -CommandFile 'assets/full-frame.fits' -AssetCacheRoot ${AssetCacheRoot}
+    if (Test-Path -LiteralPath ${fullFrameSrc}) {
+        New-LinkOrCopy -Target ${fullFrameSrc} -LinkPath (Join-Path ${staging} 'full-frame.fits')
         foreach (${ffm} in @('astrometry', 'mast-validation')) {
             if (${Modules} -contains ${ffm}) {
                 Add-MastStagedPayload -Map ${stagedPayload} -Module ${ffm} -File 'full-frame.fits'
             }
         }
-        Write-Host (" Staged smoke FITS: full-frame.fits ({0:N1} MB)" -f ((Get-Item ${fullFrameFitsSrc}).Length / 1MB))
+        Write-Host (" Staged smoke FITS: full-frame.fits ({0:N1} MB)" -f ((Get-Item -LiteralPath ${fullFrameSrc}).Length / 1MB))
     } else {
-        Write-Warning ("Smoke FITS missing at {0}; astrometry + mast-validation will FAIL on the unit." -f ${fullFrameFitsSrc})
+        Assert-MastVendoredAsset -What 'The astrometry smoke FITS (full-frame.fits)' `
+            -Reacquire "supply any comparable MAST full frame, but verify-astrometry.ps1's solve parameters are tuned to the original and would need re-tuning"
     }
 }
 
-# PlaneWave PlateSolve3 catalog (real UCAC4/Orca). Like the astrometry index seed,
-# the vendor files are far too large to keep in the repo, so they are sourced from
-# C:\MAST\ps3-catalog on the build host and staged into the payload beside the
-# planewave provider scripts. The provider (provide-planewave.ps1) runs the Inno
-# installer silently against them. Both files must be staged together and keep
-# their exact names -- the .bin is the installer's data payload and must sit beside
-# the .exe. Without them 'ps3cli --server' cannot boot (no catalog) and the
-# planewave verify FAILS, so warn loudly at build time but do not hard-block.
-${ps3CatalogSrcDir}   = 'C:\MAST\ps3-catalog'
-${ps3CatalogExeSrc}   = Join-Path ${ps3CatalogSrcDir} 'Setup_PlateSolve3_Catalog.exe'
-${ps3CatalogDataSrc}  = Join-Path ${ps3CatalogSrcDir} 'Setup_PlateSolve3_Catalog-1.bin'
 if (${Modules} -contains 'planewave') {
-    if ((Test-Path -LiteralPath ${ps3CatalogExeSrc}) -and (Test-Path -LiteralPath ${ps3CatalogDataSrc})) {
-        New-LinkOrCopy -Target ${ps3CatalogExeSrc}  -LinkPath (Join-Path ${staging} 'Setup_PlateSolve3_Catalog.exe')
-        New-LinkOrCopy -Target ${ps3CatalogDataSrc} -LinkPath (Join-Path ${staging} 'Setup_PlateSolve3_Catalog-1.bin')
-        Add-MastStagedPayload -Map ${stagedPayload} -Module 'planewave' -File 'Setup_PlateSolve3_Catalog.exe'
-        Add-MastStagedPayload -Map ${stagedPayload} -Module 'planewave' -File 'Setup_PlateSolve3_Catalog-1.bin'
-        Write-Host (" Staged PlateSolve3 catalog installer + data ({0:N1} GB)." -f ((Get-Item ${ps3CatalogDataSrc}).Length / 1GB))
+    # Both files must stay together and keep their exact names: the .bin is the
+    # Inno installer's data payload and must sit beside the .exe.
+    ${ps3Names} = @('Setup_PlateSolve3_Catalog.exe', 'Setup_PlateSolve3_Catalog-1.bin')
+    ${ps3Src} = @(${ps3Names} | ForEach-Object {
+        Resolve-MastAssetSource -ProvidersRoot ${providersRoot} -Module 'planewave' `
+            -CommandFile "assets/$_" -AssetCacheRoot ${AssetCacheRoot}
+    })
+    if (@(${ps3Src} | Where-Object { Test-Path -LiteralPath $_ }).Count -eq ${ps3Names}.Count) {
+        for (${i} = 0; ${i} -lt ${ps3Names}.Count; ${i}++) {
+            New-LinkOrCopy -Target ${ps3Src}[${i}] -LinkPath (Join-Path ${staging} ${ps3Names}[${i}])
+            Add-MastStagedPayload -Map ${stagedPayload} -Module 'planewave' -File ${ps3Names}[${i}]
+        }
+        Write-Host (" Staged PlateSolve3 catalog installer + data ({0:N1} GB)." -f ((${ps3Src} | ForEach-Object { (Get-Item -LiteralPath $_).Length } | Measure-Object -Sum).Sum / 1GB))
     } else {
-        Write-Warning ("PlateSolve3 catalog vendor files missing under {0} (need Setup_PlateSolve3_Catalog.exe + Setup_PlateSolve3_Catalog-1.bin); download them from planewave.com once. 'ps3cli --server' will have no catalog and the planewave verify will FAIL on the unit." -f ${ps3CatalogSrcDir})
+        Assert-MastVendoredAsset -What 'The PlateSolve3 catalog (Setup_PlateSolve3_Catalog.exe + -1.bin)' `
+            -Reacquire 're-download both from planewave.com'
     }
 }
 
-# Frozen Cygwin package cache (astrometry-dependencies). Like the astrometry
-# index seed, it is build-host-vendored (binary, ~174 MB, not in git) and
-# staged into the payload here. provide-astrometry-dependencies.ps1 installs
-# from it FULLY OFFLINE (setup-x86_64.exe --local-install) so the installed
-# cygwin is deterministic (3.6.9, matching the bundled fitsio wheel tag) and
-# has no live-mirror dependency -- the itefix mirror is rolling and moving
-# past 3.6.9 broke the pinned wheel (issue #20). Populate once per build host
-# via build/harvest-cygwin-cache.ps1 (harvests a working unit's own cache).
-${cygCacheSrc} = 'C:\MAST\cygwin-pkg-cache'
 if (${Modules} -contains 'astrometry-dependencies') {
-    ${cygCacheIni} = @()
-    if (Test-Path -LiteralPath ${cygCacheSrc}) {
-        ${cygCacheIni} = @(Get-ChildItem -LiteralPath ${cygCacheSrc} -Filter 'setup.ini' -File -Recurse -ErrorAction SilentlyContinue)
-    }
-    if (${cygCacheIni}.Count -gt 0) {
-        ${cacheFiles} = @(Get-ChildItem -LiteralPath ${cygCacheSrc} -File -Recurse -ErrorAction SilentlyContinue)
-        ${cacheMb}    = ((${cacheFiles} | Measure-Object Length -Sum).Sum / 1MB)
-        New-LinkOrCopy -Target ${cygCacheSrc} -LinkPath (Join-Path ${staging} 'cygwin-pkg-cache')
-        Add-MastStagedPayload -Map ${stagedPayload} -Module 'astrometry-dependencies' -Dir 'cygwin-pkg-cache'
-        Write-Host (" Staged frozen cygwin package cache: cygwin-pkg-cache\ ({0} files, {1:N0} MB); astrometry-dependencies installs offline from it." -f ${cacheFiles}.Count, ${cacheMb})
-    } elseif (${TestMode}) {
-        Write-Warning ("Frozen cygwin package cache missing/invalid at {0}; run build/harvest-cygwin-cache.ps1 once to populate it. astrometry-dependencies will FAIL on the unit. Continuing due to -TestMode." -f ${cygCacheSrc})
+    # Deliberately frozen: the itefix mirror is rolling and moving past cygwin
+    # 3.6.9 broke the pinned fitsio wheel (issue #20). setup.ini is what makes
+    # the harvest a usable --local-install source rather than a pile of tarballs.
+    ${cygEntries} = @(Get-MastAssetTreeEntries -ProvidersRoot ${providersRoot} -Module 'astrometry-dependencies' `
+                          -RelativeDir 'assets\cygwin-pkg-cache' -AssetCacheRoot ${AssetCacheRoot})
+    if (@(${cygEntries} | Where-Object { $_.Relative -like '*setup.ini' }).Count -gt 0) {
+        ${cacheMb} = ((${cygEntries} | ForEach-Object { (Get-Item -LiteralPath $_.Source).Length } | Measure-Object -Sum).Sum / 1MB)
+        Add-MastAssetTree -Module 'astrometry-dependencies' -StagedName 'cygwin-pkg-cache' -Entries ${cygEntries}
+        Write-Host (" Staged frozen cygwin package cache: cygwin-pkg-cache\ ({0} files, {1:N0} MB); astrometry-dependencies installs offline from it." -f ${cygEntries}.Count, ${cacheMb})
     } else {
-        throw ("Frozen cygwin package cache missing/invalid at {0} (need setup.ini under it). Run build/harvest-cygwin-cache.ps1 once to populate it from a working unit." -f ${cygCacheSrc})
+        Assert-MastVendoredAsset -What 'The frozen cygwin package cache (no setup.ini under it)' `
+            -Reacquire 'run build/harvest-cygwin-cache.ps1 against a unit still on the pinned cygwin version'
     }
 }
 
@@ -985,7 +1000,8 @@ foreach (${vm} in ${Modules}) {
         version = ${vstr}
         hash    = Get-ModuleContentHash -ProviderDir (Join-Path ${providersRoot} ${vm}) `
                     -CommandFiles ${vmCmdFiles} -Commands ${vmCmds} -Version ([string]${vstr}) `
-                    -RepoTop ${Top} -RepoFiles (Get-MastModuleRepoFiles -Manifest ${vmf})
+                    -RepoTop ${Top} -RepoFiles (Get-MastModuleRepoFiles -Manifest ${vmf}) `
+                    -AssetCacheRoot ${AssetCacheRoot}
     }
 }
 

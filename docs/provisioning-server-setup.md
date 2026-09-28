@@ -110,22 +110,49 @@ If you see pointer stubs, your LFS credentials are not set up. Configure them
 
 ---
 
-## Step 1b - Build-host-local large assets (not in git)
+## Step 1b - The asset cache
 
-A few payloads are too large to keep in the repo (even via LFS) and instead live
-on the build host under `C:\MAST\`. `build-mast.ps1` stages them into each unit's
-payload when the relevant module is enabled, and warns loudly (does not hard-block
-the build) if they are missing. Populate these once per build host:
+Everything a payload needs that the build does not author -- the vendored binaries
+and the four inputs too large or too un-redistributable to commit -- lives in ONE
+machine-wide cache at `C:\MAST\provider-assets`, indexed by
+`server/data/assets.json` (418 files, 13.87 GiB). They are **not** read from the
+repo tree: builds run from git worktrees, and a worktree holds no gitignored file.
 
-| Path | Needed by module | How to obtain |
+Populate it once per build host, and again whenever a build reports an asset
+missing:
+
+```cmd
+C:\cygwin64\bin\bash.exe -lc "bash /cygdrive/c/Users/labcomp2/Desktop/MAST/MAST_provisioning/tools/fetch-assets.sh"
+```
+
+It hashes what is already there against the manifest and fetches only what is
+missing or wrong, in one ssh and one tar stream from the content store on
+mast-ns-control, verifying each blob before placing it. So it is equally the
+first-run fetch, the repair path and the verify -- which is why the daily task
+runs it rather than a report-only job. An empty cache takes about 3 minutes per
+1.8 GiB; re-verifying a complete 13.87 GiB cache takes about 25 s. It writes
+`C:\MAST\logs\fetch-assets.log`; exit **1** means some asset could not be placed,
+**2** that the store or manifest could not be read.
+
+Four of those files cannot be re-fetched from anywhere but the store, so they are
+also the set that would have to be reconstructed by hand if both were lost.
+`server/data/vendor-inputs.json` declares each one's origin and how to re-acquire
+it; the short version:
+
+| Cache slot | Needed by | How to re-create it |
 |------|------------------|---------------|
-| `C:\MAST\mast-indexes\` | `imdisk` (astrometry index seed) | `build\extract-index-seed.ps1` (once, from the legacy index image) |
-| `C:\MAST\full-frame.fits` | `astrometry`, `mast-validation` (smoke solve input) | copy the reference solve FITS |
-| `C:\MAST\ps3-catalog\Setup_PlateSolve3_Catalog.exe` + `Setup_PlateSolve3_Catalog-1.bin` | `planewave` (real PlateSolve3 catalog, ~1.9 GB) | download both parts from planewave.com (["installer part 1"](https://planewave.com/download/platesolve-3-catalog-installer-part-1-of-2-2/) + ["data part 2"](https://planewave.com/download/platesolve-3-catalog-data-part-2-of-2-2/)); keep the exact filenames so the `.bin` sits beside the `.exe` |
+| `server\providers\imdisk\assets\mast-indexes\` | `imdisk` (astrometry index seed, 9.9 GB) | `build\extract-index-seed.ps1` (once, from the legacy index image) |
+| `server\providers\astrometry\assets\full-frame.fits` | `astrometry`, `mast-validation` (smoke solve input) | any comparable MAST full frame, but `verify-astrometry.ps1`'s solve parameters are tuned to the original |
+| `server\providers\planewave\assets\Setup_PlateSolve3_Catalog.exe` + `-1.bin` | `planewave` (real PlateSolve3 catalog, ~1.9 GB) | download both parts from planewave.com (["installer part 1"](https://planewave.com/download/platesolve-3-catalog-installer-part-1-of-2-2/) + ["data part 2"](https://planewave.com/download/platesolve-3-catalog-data-part-2-of-2-2/)); keep the exact filenames so the `.bin` sits beside the `.exe` |
+| `server\providers\astrometry-dependencies\assets\cygwin-pkg-cache\` | `astrometry-dependencies` (frozen offline install source) | `build\harvest-cygwin-cache.ps1` against a unit still on the pinned cygwin version |
 
-Without the PlateSolve3 catalog the `planewave` provider throws (no catalog to
-install) and `ps3cli --server` cannot boot; without the index seed / smoke FITS the
-astrometry stages fail on the unit.
+A missing asset now **fails the build** rather than warning: without the index
+seed or the smoke FITS the astrometry stages fail on the unit, and without the
+catalog `ps3cli --server` cannot boot, so a payload that builds clean without them
+just moves the failure two hours later. `-TestMode` is the dev escape.
+
+The NoMachine licence seats are the one thing deliberately **outside** the cache --
+they are issued certificates and live in the gitignored `vault\` (step 2).
 
 ---
 
@@ -418,13 +445,21 @@ never depends on the WAN.
 times out: the site cannot initiate to the institute. A cron job on the Linux side
 is not an option, so both jobs run here and push.
 
-**Only the verify is scheduled.** Register it against the **canonical clone**, never
+**Only the fetch is scheduled.** Register it against the **canonical clone**, never
 a working copy:
 
 ```cmd
-schtasks /create /tn "MAST-vendor-verify" /sc DAILY /st 06:00 /ru SYSTEM ^
-  /tr "C:\cygwin64\bin\bash.exe -lc '/cygdrive/c/Users/labcomp2/Desktop/MAST/MAST_provisioning/tools/vendor-verify.sh'"
+schtasks /create /tn "MAST-asset-cache" /sc DAILY /st 06:00 ^
+  /tr "C:\cygwin64\bin\bash.exe -lc 'bash /cygdrive/c/Users/labcomp2/Desktop/MAST/MAST_provisioning/tools/fetch-assets.sh'"
 ```
+
+It replaced `MAST-vendor-verify`, which only reported. The fetch does strictly
+more with the same pass: it knows the expected digest **per path**, so it catches a
+file that is intact but is not the file that path should hold -- which a "does the
+store know this digest" check cannot -- and it repairs what it finds rather than
+leaving a log entry for someone to notice. Verification is still by checksum and
+never by re-transfer: at the measured 3.4-6 MB/s, re-pulling 13.87 GiB to compare
+it would take hours.
 
 **The mirror is deliberately NOT on a schedule**, and that is the whole point of
 which copy is canonical. It pushes this machine's cache *to* the store, so running
@@ -441,28 +476,19 @@ newly issued NoMachine seat:
 C:\cygwin64\bin\bash.exe -lc "/cygdrive/c/Users/labcomp2/Desktop/MAST/MAST_provisioning/tools/vendor-mirror.sh"
 ```
 
-These five inputs are frozen by design, so in practice that is rare: the cygwin
-cache is pinned, the index seed is a one-time extraction, the catalog is a vendor
-download, and `full-frame.fits` is a fixed frame. Licences are the one entry that
-grows, one seat per unit.
+These inputs are frozen by design, so in practice that is rare: the cygwin cache is
+pinned, the index seed is a one-time extraction, the catalog is a vendor download,
+and `full-frame.fits` is a fixed frame. Licences are the one entry that grows, one
+seat per unit.
 
 **Not into `C:\agent-worktrees\`.** The first mirror ran from a task folder there,
 which the workspace contract tears down with `rm -rf`, and it was registered
 `One Time Only` -- so it had run exactly once and had no next run. A scheduled task
 pointing into disposable scratch is one teardown away from silently not existing.
 
-`vendor-verify.sh` needs no checksum list of its own. Every vendor byte is already
-a blob in the content-addressed store (#202) whose filename is its SHA-256, so the
-check is: hash what is local, ask the store which of those digests it does not
-hold, name the files behind any that come back. It hashes 266 files / 12 GB in
-about 35 s, which is why it can run daily -- re-pulling to compare would take
-35-60 minutes at the measured 3.4-6 MB/s.
-
-The verify writes `C:\MAST\logs\vendor-verify.log`, the mirror
-`C:\MAST\logs\vendor-mirror.log`. A clean verify ends
-`VENDOR-VERIFY-COMPLETE status=0`; drift exits **1** and names each file; an exit
-of **2** means the store could not be reached, which is an infrastructure problem
-and not corruption.
+The fetch writes `C:\MAST\logs\fetch-assets.log`, the mirror
+`C:\MAST\logs\vendor-mirror.log`. A clean fetch ends
+`FETCH-ASSETS-COMPLETE status=0`.
 
 Register it with `-LogonType S4U` as `labcomp2`, which is what the working task
 uses: it runs without an interactive session and without storing a password, and
