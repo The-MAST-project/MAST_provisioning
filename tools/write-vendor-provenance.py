@@ -90,13 +90,24 @@ def render_index(entries: list[dict]) -> str:
     return "".join(lines)
 
 
+def store_entries(declared: dict) -> list[dict]:
+    """The entries that have a directory in the canonical store.
+
+    An entry marked ``"provenance": false`` does not: the ex-LFS assets frozen by
+    MAST_provisioning#48 are already blobs in the content store and their history
+    is this repository's, so rendering a `retired-lfs/` directory beside
+    `mast-indexes/` would invent a tree nothing writes and nothing reads.
+    """
+    return [e for e in declared["inputs"] if e.get("provenance", True)]
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--inputs", type=Path, required=True, help="server/data/vendor-inputs.json")
     ap.add_argument("--out", type=Path, required=True, help="directory to write the tree into")
     args = ap.parse_args()
 
-    entries = json.loads(args.inputs.read_text(encoding="utf-8"))["inputs"]
+    entries = store_entries(json.loads(args.inputs.read_text(encoding="utf-8")))
     args.out.mkdir(parents=True, exist_ok=True)
     (args.out / "PROVENANCE.md").write_text(render_index(entries), encoding="utf-8")
     for entry in entries:
