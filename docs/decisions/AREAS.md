@@ -52,6 +52,7 @@ front. Expect it to be wrong in places and to shift.
 | `static analysis` | What is checked without running the code: lint, formatting, type checking, the PowerShell parse sweep -- rule selection, what is deferred, and whether the gate blocks |
 | `licensing` | Purchased entitlements and the files that carry them: which host holds which seat, where the authoritative copy lives, expiry and renewal |
 | `firmware` | Settings that live below the OS: BIOS/UEFI setup values, how they are read, what the fleet expects them to be, and who may change them |
+| `os patching` | Windows updates as a deliberate, pinnable axis: baselines, where their bytes come from, how a unit's patch level is read and moved |
 
 Added 2026-08-24 with the BIOS power-policy record. Distinct from `hardware startup`,
 which is about *when* a device is powered and homed relative to software: this is about a
