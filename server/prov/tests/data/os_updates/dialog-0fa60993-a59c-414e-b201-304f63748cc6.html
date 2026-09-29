@@ -1,0 +1,18 @@
+<!--
+  Update Catalog download dialog for update id 0fa60993-a59c-414e-b201-304f63748cc6.
+  Source:  POST https://www.catalog.update.microsoft.com/DownloadDialog.aspx
+           with form field updateIDs=[{"size":0,"languages":"","uidInfo":"0fa60993-a59c-414e-b201-304f63748cc6","updateID":"0fa60993-a59c-414e-b201-304f63748cc6"}]
+  Fetched: 2026-09-29 with curl, for MAST_provisioning#15 stage 1.
+  Trimmed from 621 lines / 40134 bytes, almost all page scaffolding.
+  Kept verbatim: the url, digest (base64 SHA1) and fileName assignments of the one file.
+  Used by: test_os_updates.py (parse_download_dialog, resolve, propose).
+  Every other line was removed; each removal is marked by an ellipsis comment.
+  If the Catalog changes its markup, re-save the page and trim it the same way.
+-->
+<!-- ... -->
+downloadInformation[0].files[0].url = 'https://catalog.s.download.windowsupdate.com/c/msdownload/update/software/secu/2026/08/windows10.0-kb5126046-x64-ndp48_28db9902cf368f5a674c016e0bd3f1d63ab8578d.msu';
+<!-- ... -->
+downloadInformation[0].files[0].digest = 'KNuZAs82j1pnTAFuC9Px1jq4V40=';
+<!-- ... -->
+downloadInformation[0].files[0].fileName = 'windows10.0-kb5126046-x64-ndp48_28db9902cf368f5a674c016e0bd3f1d63ab8578d.msu';
+<!-- ... -->

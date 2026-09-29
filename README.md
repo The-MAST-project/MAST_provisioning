@@ -54,6 +54,8 @@ MAST_provisioning/
 |   |-- lib/mast-firmware.ps1         # The only BIOS/UEFI reader: setup varstore + power-policy verdict
 |   |-- lib/provisioning.psm1         # Shared PS helpers
 |   |-- data/firmware-baseline.json   # Known-good BIOS setup per board + BIOS version (see Firmware baseline)
+|   |-- data/os-builds.json           # Windows builds the fleet runs + where their monthly updates are found (see OS patch baselines)
+|   |-- data/os-baselines/<build>/    # Proposed OS patch baselines, one JSON per build + month
 |   |-- providers/<module>/...        # Per-module install logic + assets
 |   |-- prov/                         # The driver: orchestration, transport, drift, logging (Python)
 |   |-- check_and_provision.py        # Entry point -- one cycle, or --loop for the autonomous cadence
@@ -627,6 +629,44 @@ Known offsets for `PE2100U-C7136ES` BIOS `1.03.00` (measured on mast08, 2026-08-
 `Power On By Ring` = 3381 (expect 0).
 
 ---
+
+## OS patch baselines (Windows updates)
+
+Automatic Windows Update stays off (`windows-update-lockdown`); OS patching is to be a
+deliberate, pinnable act ([#15](https://github.com/The-MAST-project/MAST_provisioning/issues/15)).
+What exists today is **stage 1: the server resolves and fetches a baseline**. Nothing here
+contacts a unit or installs anything.
+
+A **baseline** is a named patch level for one Windows build -- the exact update files that
+define it and the UBR its cumulative update produces, e.g. `19044-2026-09`: LCU KB5122878 +
+.NET 3.5/4.8 CU KB5126046, `target_ubr` 7725. Because LCUs are cumulative, a unit's
+`CurrentBuild.UBR` *is* its OS patch level.
+
+```sh
+cd server
+# What would the latest (or a named) MSRC release contain? Downloads nothing.
+python -m prov.os_updates --repo .. --build 19044 resolve
+python -m prov.os_updates --repo .. --build 19044 --release 2026-Sep resolve
+# Fetch into the machine-wide asset cache and write the baseline manifest.
+python -m prov.os_updates --repo .. --build 19044 propose --cache 'C:\MAST\provider-assets'
+```
+
+- **Which KB** comes from the MSRC CVRF feed, per the product names declared in
+  `server/data/os-builds.json`; the target UBR is the feed's `FixedBuild`.
+- **Which file** comes from the Update Catalog: the row whose title exactly matches the
+  declared `catalog_title`, then the download dialog's URL and SHA1.
+- **`propose`** downloads each file to `<cache>/server/providers/windows-updates/assets/<build>/`,
+  verifies the SHA1, records the sha256, and writes `server/data/os-baselines/<build>/<id>.json`.
+  It is idempotent (a file already hashing right is not re-downloaded), and it refuses to
+  overwrite an existing baseline whose files differ. Committing that JSON is what makes a
+  baseline available; nothing targets it yet.
+- **The Catalog drops superseded updates** -- the fleet's June 2024 LCU (KB5039211) no longer
+  resolves, and `resolve` / `propose` say so (`OS_BASELINE_ERROR the Update Catalog no longer
+  serves KB5039211`). A baseline's bytes must therefore be kept by us.
+
+Only 19044 (Windows 10 IoT Enterprise LTSC 2021, every production unit) is declared. To add
+a build, add a row to `os-builds.json` with the MSRC product names and the Catalog titles,
+and run `resolve` to check that each role matches exactly one row.
 
 ## Dev/test loop (Windows host + VirtualBox VM)
 

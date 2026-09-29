@@ -1,0 +1,14 @@
+<!--
+  Update Catalog search results for KB5039211.
+  Source:  GET https://www.catalog.update.microsoft.com/Search.aspx?q=KB5039211
+  Fetched: 2026-09-29 with curl, for MAST_provisioning#15 stage 1.
+  Trimmed from 802 lines / 39973 bytes, almost all page scaffolding.
+  Kept verbatim: the no-results element and the search-string element beside it.
+  Used by: test_os_updates.py (parse_catalog_search raising NotInCatalogError).
+  Every other line was removed; each removal is marked by an ellipsis comment.
+  If the Catalog changes its markup, re-save the page and trim it the same way.
+-->
+<!-- ... -->
+                        <span id="ctl00_catalogBody_noResultText">We did not find any results for </span>
+                        <span id="ctl00_catalogBody_searchString">"KB5039211"</span>
+<!-- ... -->
