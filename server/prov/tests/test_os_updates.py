@@ -1,9 +1,10 @@
 """OS patch baseline resolution against saved Microsoft responses (MAST_provisioning#15).
 
-The fixtures are real: the September 2026 CVRF (trimmed to the four products that
-matter) and the Update Catalog search and download pages for its two 19044 KBs, as
-served on 2026-09-29. KB5039211 -- the June 2024 LCU the fleet runs -- is the
-Catalog's actual answer for a superseded update.
+The fixtures are real responses from 2026-09-29, trimmed to what the code parses: the
+September 2026 CVRF (four products) and the Update Catalog search and download pages
+for its two 19044 KBs, each page cut to its verbatim result rows or file fields with a
+provenance header. KB5039211 -- the June 2024 LCU the fleet runs -- is the Catalog's
+actual answer for a superseded update.
 """
 
 from __future__ import annotations
