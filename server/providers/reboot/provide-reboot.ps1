@@ -13,6 +13,9 @@ ${ErrorActionPreference} = "Stop"
 ${mastLogDot} = Join-Path ${PSScriptRoot} 'mast-log.ps1'
 if (-not (Test-Path ${mastLogDot})) { ${mastLogDot} = Join-Path ${PSScriptRoot} '..\..\lib\mast-log.ps1' }
 . ${mastLogDot}
+${rebootLibDot} = Join-Path ${PSScriptRoot} 'mast-pending-reboot.ps1'
+if (-not (Test-Path ${rebootLibDot})) { ${rebootLibDot} = Join-Path ${PSScriptRoot} '..\..\lib\mast-pending-reboot.ps1' }
+. ${rebootLibDot}
 
 ${logDir} = Get-MastLogSessionDir
 New-Item -ItemType Directory -Path ${logDir} -Force | Out-Null
@@ -27,27 +30,8 @@ function Write-RebootLog {
 
 Set-Content -LiteralPath ${logFile} -Encoding UTF8 -Value ("[{0}] provide-reboot.ps1 started." -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))
 
-${reasons} = New-Object System.Collections.Generic.List[string]
-
 try {
-    # 1. PendingFileRenameOperations: most installers (vcredist, ASCOM) queue
-    #    file replacements here when they cannot overwrite a DLL in use.
-    ${sm} = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager'
-    ${pfr} = Get-ItemProperty -Path ${sm} -Name 'PendingFileRenameOperations' -ErrorAction SilentlyContinue
-    if (${pfr} -and ${pfr}.PendingFileRenameOperations) {
-        [void]${reasons}.Add('PendingFileRenameOperations')
-    }
-
-    # 2. Component Based Servicing: signals when servicing stack has staged
-    #    changes that need a reboot before they apply (e.g. optional features).
-    if (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending') {
-        [void]${reasons}.Add('CBS RebootPending')
-    }
-
-    # 3. Windows Update auto-update marker.
-    if (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired') {
-        [void]${reasons}.Add('WindowsUpdate RebootRequired')
-    }
+    ${reasons} = Get-MastPendingRebootReason
 
     if (${reasons}.Count -gt 0) {
         ${reasonText} = (${reasons} -join '; ')
