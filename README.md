@@ -52,6 +52,8 @@ MAST_provisioning/
 |   |-- lib/mast-log.ps1              # Canonical log path definitions (unit + prov server)
 |   |-- lib/mast-git-currency.ps1     # Pure verdict logic: is a clone at the revision origin reports?
 |   |-- lib/mast-firmware.ps1         # The only BIOS/UEFI reader: setup varstore + power-policy verdict
+|   |-- lib/mast-pending-reboot.ps1   # The one pending-reboot check (reboot provider + OS patch probe)
+|   |-- lib/mast-os-patch-probe.ps1   # Read-only OS patch snapshot of a unit, as JSON (see OS patch baselines)
 |   |-- lib/provisioning.psm1         # Shared PS helpers
 |   |-- data/firmware-baseline.json   # Known-good BIOS setup per board + BIOS version (see Firmware baseline)
 |   |-- data/os-builds.json           # Windows builds the fleet runs + where their monthly updates are found (see OS patch baselines)
@@ -634,8 +636,8 @@ Known offsets for `PE2100U-C7136ES` BIOS `1.03.00` (measured on mast08, 2026-08-
 
 Automatic Windows Update stays off (`windows-update-lockdown`); OS patching is to be a
 deliberate, pinnable act ([#15](https://github.com/The-MAST-project/MAST_provisioning/issues/15)).
-What exists today is **stage 1: the server resolves and fetches a baseline**. Nothing here
-contacts a unit or installs anything.
+What exists today: the server **resolves and fetches a baseline** (stage 1) and **reads each
+unit's patch level against it** (stage 2, below). Nothing installs anything yet.
 
 A **baseline** is a named patch level for one Windows build -- the exact update files that
 define it and the UBR its cumulative update produces, e.g. `19044-2026-09`: LCU KB5122878 +
@@ -667,6 +669,37 @@ python -m prov.os_updates --repo .. --build 19044 propose --cache 'C:\MAST\provi
 Only 19044 (Windows 10 IoT Enterprise LTSC 2021, every production unit) is declared. To add
 a build, add a row to `os-builds.json` with the MSRC product names and the Catalog titles,
 and run `resolve` to check that each role matches exactly one row.
+
+### Reading a unit's patch level
+
+`tools/fleet-drift-report.py` prints an **OS patch level** section: a live, read-only
+probe of every reachable unit, compared against the **newest committed baseline** for
+its build. It is informational and does **not** affect the report's exit code; nothing
+can patch a unit yet.
+
+```
+=== OS patch level (live probe; reference = newest committed baseline for the build) ===
+  mast08  behind          19044.4529 -> 7725 (19044-2026-09)  lcu-installed=2024-06-13  .NET behind 4.8.4724.0 -> 4.8.4806.0
+  [WARN] mast00: the Windows Update lockdown is not in place (NoAutoUpdate policy or task missing)
+  [note] File renames are queued for the next reboot on 9 unit(s): ...
+```
+
+- **The probe** is `server/lib/mast-os-patch-probe.ps1` (with `mast-pending-reboot.ps1`).
+  It is too long for inline dispatch, so the report uploads both files over SFTP to a
+  per-call folder under `C:\Windows\Temp`, runs the probe, and removes the folder --
+  the only thing the report ever writes on a unit, and a folder it cannot remove is
+  reported. The verdict is computed server-side by `server/prov/os_drift.py`.
+- **State** is `up-to-date`, `behind`, `ahead`, `no-baseline` (build declared, nothing
+  committed) or `unknown-build`. The UBR and the LCU's install date come from the
+  servicing store's `Package_for_RollupFix` entry, not from DISM's text output.
+- **.NET** compares `mscorlib.dll`'s file version with the 4.8 part of the baseline's
+  .NET `FixedBuild`; a 4.8.1 unit reads `other-line`, not `ahead`.
+- **Blockers** (`[WARN]`, would stop a patch going on): a servicing reboot pending
+  (`CBS RebootPending` / `WindowsUpdate RebootRequired`), a component store DISM does not
+  call healthy, or less than 20 GiB free on C:. A queued file rename is only a note:
+  DISM installs over it, and every unit carries one.
+- **Findings** (`[WARN]`, not blockers): the Windows Update lockdown missing, or WinRE
+  disabled. Secure Boot being off is a note.
 
 ## Dev/test loop (Windows host + VirtualBox VM)
 

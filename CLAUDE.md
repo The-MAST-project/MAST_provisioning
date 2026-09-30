@@ -253,6 +253,8 @@ yet provide, add it to the lib rather than defining it locally.
 | `server/lib/mast-log.ps1` | `Get-MastLog*` path helpers; `Get-UtcNow`; `Write-MastLog -Message -LogFile` |
 | `client/mast-client-util.ps1` | `Disable-WindowsAutoUpdate` |
 | `client/mast-invoke-child.ps1` | `Invoke-MastChildCommandLine`, `Import-MastCommandsFromJson` |
+| `server/lib/mast-pending-reboot.ps1` | `Get-MastPendingRebootReason` -- the one definition of "a reboot is pending, and why" (the `reboot` provider and the OS patch probe) |
+| `server/lib/mast-os-patch-probe.ps1` | Read-only OS patch snapshot as marked JSON; its field set is the contract with `prov.os_drift.OsProbe` |
 
 Dot-source pattern (two-path fallback so scripts work both from the repo and from staging):
 
