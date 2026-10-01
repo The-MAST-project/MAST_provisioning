@@ -58,12 +58,17 @@ def test_a_cached_input_is_keyed_in_the_one_asset_namespace():
         if not entry["cached"]:
             assert entry.get("path"), f"{entry['name']}: an uncached input still needs a path"
             continue
-        prefix = entry.get("prefix")
-        assert prefix, f"{entry['name']} is cached but declares no prefix"
-        assert prefix.startswith("server/providers/"), f"{entry['name']}: {prefix}"
         assert entry.get("files"), f"{entry['name']} is cached but declares no files"
+        # A store input is one directory and carries a prefix. The ex-LFS set
+        # frozen by #48 spans every module and the client media, so it has no
+        # single root and declares each path in full instead.
+        prefix = entry.get("prefix")
+        if entry.get("provenance", True):
+            assert prefix, f"{entry['name']} is a store input but declares no prefix"
+            assert prefix.startswith("server/providers/"), f"{entry['name']}: {prefix}"
         for f in entry["files"]:
-            assert f["path"].startswith(prefix), f"{entry['name']}: {f['path']} is outside {prefix}"
+            if prefix:
+                assert f["path"].startswith(prefix), f"{entry['name']}: {f['path']} is outside {prefix}"
             assert re.fullmatch(r"[0-9a-f]{64}", f["sha256"]), f"{entry['name']}: {f['path']}"
             assert f["size"] > 0
 
@@ -139,7 +144,10 @@ def test_the_mirror_carries_every_declared_input():
     """
     block = SOURCES_BLOCK.search(MIRROR.read_text(encoding="utf-8"))
     assert block, "no MIRROR_SOURCES block in vendor-mirror.sh"
-    assert set(SOURCE_NAME.findall(block.group(1))) == {e["name"] for e in load()["inputs"]}
+    # Only the entries that have a directory in the store. The ex-LFS set frozen
+    # by #48 is already blobs there and is not a tree to rsync.
+    store = {e["name"] for e in load()["inputs"] if e.get("provenance", True)}
+    assert set(SOURCE_NAME.findall(block.group(1))) == store
 
 
 def test_the_mirror_reads_the_cache_slots_the_declaration_names():

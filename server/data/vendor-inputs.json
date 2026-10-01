@@ -1,23 +1,36 @@
 {
   "_comment": [
-    "The build-host inputs that are NOT in this repo and are hard to re-acquire: the",
-    "set that would have to be reconstructed by hand if the provisioning server were",
-    "lost. This file is the DECLARATION; nothing in the repo can derive a file the",
-    "repo does not contain.",
-    "",
-    "It is an input, not a surface to read. prov.asset_manifest merges it with the",
-    "rows derived from the git-LFS pointers into server/data/assets.json, and that",
-    "one file is what the build, the fetch and the verify all read. Regenerate with",
+    "Every asset the manifest cannot derive, declared with its digest. This file is the",
+    "INPUT; prov.asset_manifest merges it into server/data/assets.json, and that one file",
+    "is what the build, the fetch and the verify all read. Regenerate with",
     "  python -m prov.asset_manifest --repo . --out server/data/assets.json",
     "",
-    "'prefix' is where the input is keyed in the one asset namespace: the path each",
-    "file would have if it were tracked, so the machine-wide cache mirrors the repo",
-    "tree and one rule covers every asset. 'cached' says whether it is fetched into",
-    "C:\\MAST\\provider-assets at all -- the NoMachine seats are issued certificates and are",
-    "deliberately not, which is what Assert-MastNoNoMachineCertsInAssets enforces.",
+    "Two kinds of entry, and the difference is where the bytes are canonical.",
     "",
-    "'kind' is the shape the entry has in the canonical store on mast-ns-control, which is not always its shape in the cache: the PlateSolve3 installer and its data payload are one directory there and two files beside the planewave certs here. tools/write-vendor-provenance.py keys on it -- a 'file' entry must not get a directory of its own, which is how full-frame.fits was replaced by one.",
-    "C:\\MAST\\ on that machine also holds regenerable images and scratch; those are in",
+    "The build-host inputs ('provenance' absent) were never in git at all: their canonical",
+    "copies live in the content store on mast-ns-control, each carrying a PROVENANCE.md",
+    "written from this file by tools/write-vendor-provenance.py. 'prefix' is where such an",
+    "input is keyed in the one asset namespace -- the path its files would have if they",
+    "were tracked -- so the machine-wide cache mirrors the repo tree.",
+    "",
+    "The 'git-lfs' entry ('provenance': false) is different: those 162 files ARE still in",
+    "this repository, and their digests were derived from the LFS pointers until #48 froze",
+    "them here. A derived digest stops being derivable the moment the pointer goes, so the",
+    "freeze happens BEFORE the untracking rather than with it -- and while both exist,",
+    "test_asset_manifest.py checks every frozen digest against the pointer it came from.",
+    "It spans every module and the client media, so it declares explicit paths and no prefix.",
+    "",
+    "'cached' says whether an entry is fetched into C:\\MAST\\provider-assets at all -- the",
+    "NoMachine seats are issued certificates and deliberately are not, which is what",
+    "Assert-MastNoNoMachineCertsInAssets enforces.",
+    "",
+    "'kind' is the shape the entry has in the canonical store, which is not always its shape",
+    "in the cache: the PlateSolve3 installer and its data payload are one directory there and",
+    "two files beside the planewave certs here. write-vendor-provenance.py keys on it -- a",
+    "'file' entry must not get a directory of its own, which is how full-frame.fits was",
+    "replaced by one.",
+    "",
+    "C:\\MAST\\ on the build host also holds regenerable images and scratch; those are in",
     "'not_vendor_inputs' with the reason, so the distinction is recorded rather than",
     "remembered. Kept in step with the build by server/prov/tests/test_vendor_inputs.py."
   ],
@@ -1378,6 +1391,828 @@
       "why_not_in_repo": "Issued license certificates. Secrets: gitignored, one seat per unit, tracked in server/providers/nomachine/assets/licenses/allocated.csv.",
       "origin": "Issued by NoMachine and originally held on mast-ns-control.",
       "reacquire": "Re-issue through NoMachine; a lost seat is a purchase, not a download. Relative to the repo top, not under C:\\MAST\\."
+    },
+    {
+      "name": "git-lfs",
+      "cached": true,
+      "provenance": false,
+      "used_by": [],
+      "approx_bytes": 1970563322,
+      "why_not_in_repo": "Vendored binaries that git-LFS carried until MAST_provisioning#48 retired it. Frozen here because a digest derived from a pointer stops being derivable the moment the pointer is removed, and the index must not quietly lose 162 rows.",
+      "origin": "Tracked in this repository via git-LFS. These digests are the ones the pointers recorded, frozen here when #48 retired LFS; until the untracking the pointers are still in the tree and each is checked against its row.",
+      "reacquire": "The content store on mast-ns-control holds every one of these digests. While the pointers remain, git lfs pull also restores them.",
+      "files": [
+        {
+          "path": "client/assets/npcap-1.88.exe",
+          "sha256": "a2f4ec1e5ea353ff67efd24b2ebf081ba44532410fae8d5e146af0310aa4f56b",
+          "size": 1320424
+        },
+        {
+          "path": "server/providers/ascom/assets/AscomDeveloper662.4294.NewCertificate.exe",
+          "sha256": "17a4f9cb66ecbf8d5fa896fe8b7ea456b26b5b9cace5d4c046169d55785a13fe",
+          "size": 13863752
+        },
+        {
+          "path": "server/providers/ascom/assets/AscomPlatform700.rc4.4448.exe",
+          "sha256": "45afb1d2faacf0793cb59fb67a65392aeb6ac6edaa6858fa55a95bae2cc17891",
+          "size": 150808968
+        },
+        {
+          "path": "server/providers/ascom/assets/sxs/19044/Microsoft-Windows-NetFx3-OnDemand-Package~31bf3856ad364e35~amd64~en-US~.cab",
+          "sha256": "aa80de1199bb31cf1ba39583ad8faeb4246a77c60556b7311e031862539e81f0",
+          "size": 111049
+        },
+        {
+          "path": "server/providers/ascom/assets/sxs/19044/microsoft-windows-netfx3-ondemand-package~31bf3856ad364e35~amd64~~.cab",
+          "sha256": "5861074b8222152c6d2a29a159b7b5cc4733c2c6a7f78a10ae5f6585e9ef1e59",
+          "size": 72783629
+        },
+        {
+          "path": "server/providers/ascom/assets/sxs/26100/microsoft-windows-netfx3-ondemand-package~31bf3856ad364e35~amd64~~.cab",
+          "sha256": "dc3af93af5c64dc115409437d31018baf2c3c46167806a599124bc905ae512f6",
+          "size": 71321276
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/fitsio-1.2.6-cp39-cp39-cygwin_3_6_9_x86_64.whl",
+          "sha256": "bf6e88d49d87adda00d399703a28c6a172ce55bc0c1773cee0f066f1fcc701b0",
+          "size": 161244
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/setup-x86_64.exe",
+          "sha256": "2c9f2fb56e1fb687b5d9680afa8f8b06e6214f0e483096af0eae1946431226c5",
+          "size": 1574328
+        },
+        {
+          "path": "server/providers/astrometry/assets/astrometry.tgz",
+          "sha256": "1bd6da2769c41650043e95eb112570c66355f414ecda5ea32dc5869814fb84e2",
+          "size": 18334265
+        },
+        {
+          "path": "server/providers/chrome/assets/GoogleChromeStandaloneEnterprise64.msi",
+          "sha256": "f92c6c5a21cac1073ac1380cbc36a0d13ce206df6eff5380ea1eaa433529b79a",
+          "size": 152973312
+        },
+        {
+          "path": "server/providers/cygwin/assets/cygwin64-clean.tgz",
+          "sha256": "c394cbabd426c62b6e5994518e325afa655d9cccec74cec664d019d452d12a10",
+          "size": 57499589
+        },
+        {
+          "path": "server/providers/ds9/assets/SAOImageDS9 8.7 Install.exe",
+          "sha256": "e0d4ac3d251d01ddbb7ff1c79a4ebf23e757d7930549a5f0a7585ec46c85a2ab",
+          "size": 20344832
+        },
+        {
+          "path": "server/providers/gh/assets/gh_2.92.0_windows_amd64.zip",
+          "sha256": "b6a8df3c8c6b9c80f290906387673bc4d272840f3789c5650e0e4e6e75522785",
+          "size": 14468591
+        },
+        {
+          "path": "server/providers/git/assets/Git-2.52.0-64-bit.exe",
+          "sha256": "d8de7a3152266c8bb13577eab850ea1df6dccf8c2aa48be5b4a1c58b7190d62c",
+          "size": 66292520
+        },
+        {
+          "path": "server/providers/imdisk/assets/ImDiskTk-x64.zip",
+          "sha256": "5bc0a472582db2867724a25f23dd6a0200be09c8aefd74d20b29655cc013fbd2",
+          "size": 513143
+        },
+        {
+          "path": "server/providers/instrument-profiles/assets/instrument-profiles-assets.zip",
+          "sha256": "be51939583966b9abfb6dbf58b66d2c1cde9d3de873194a2b1330f0fba775aa7",
+          "size": 8652
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/anyio-4.14.2-py3-none-any.whl",
+          "sha256": "9f505dda5ac9f0c8309b5e8bd445a8c2bf7246f3ce950121e45ea15bc41d1494",
+          "size": 125813
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/argon2_cffi-25.1.0-py3-none-any.whl",
+          "sha256": "fdc8b074db390fccb6eb4a3604ae7231f219aa669a2652e0f20e16ba513d5741",
+          "size": 14657
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/argon2_cffi_bindings-26.1.0-cp310-abi3-win_amd64.whl",
+          "sha256": "2c36ff87b5dfaa477d0bd51e9d7f6abdae7c8955d2983c97419085d842154b3e",
+          "size": 25730
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/arrow-1.4.0-py3-none-any.whl",
+          "sha256": "749f0769958ebdc79c173ff0b0670d59051a535fa26e8eba02953dc19eb43205",
+          "size": 68797
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/astropy-8.0.1-cp311-abi3-win_amd64.whl",
+          "sha256": "ee9024f2237243ebc98726f8eff2efbf201ea4e0bba1d21f6e2dee0cb499fbdf",
+          "size": 6529976
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/astropy_iers_data-0.2026.8.18.14.22.31-py3-none-any.whl",
+          "sha256": "95b9da762fe06940f3ac3187c3e4f24e1ed10e838379f0adcb9d33f2dacd6853",
+          "size": 2000506
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/astroquery-0.4.11-py3-none-any.whl",
+          "sha256": "e34f114b285dd07a10ddb2065ebce829b01b0e740fd89dbc81a3077808e24b2d",
+          "size": 11139417
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/asttokens-3.0.2-py3-none-any.whl",
+          "sha256": "9da13157f5b28becde0bd374fc677dcd3c290614264eff096f167c469cd9f933",
+          "size": 28702
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/async_lru-2.3.0-py3-none-any.whl",
+          "sha256": "eea27b01841909316f2cc739807acea1c623df2be8c5cfad7583286397bb8315",
+          "size": 8403
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/attrs-26.1.0-py3-none-any.whl",
+          "sha256": "c647aa4a12dfbad9333ca4e71fe62ddc36f4e63b2d260a37a8b83d2f043ac309",
+          "size": 67548
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/babel-2.18.0-py3-none-any.whl",
+          "sha256": "e2b422b277c2b9a9630c1d7903c2a00d0830c409c59ac8cae9081c92f1aeba35",
+          "size": 10196845
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/beautifulsoup4-4.15.0-py3-none-any.whl",
+          "sha256": "d6f88de62e1d4e38ecb1077eb9724cd0eff29d2a08ca16a401e9b9e93f117cf9",
+          "size": 109924
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/bleach-6.4.0-py3-none-any.whl",
+          "sha256": "4b6b6a54fff2e69a3dde9d21cc6301220bee3c3cb792187d11403fd795031081",
+          "size": 165109
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/certifi-2026.7.22-py3-none-any.whl",
+          "sha256": "62f22742b58a1a33014a2b6b706588a8d7e2a88ae7bd1a6ebe8c992928483775",
+          "size": 136983
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/cffi-2.1.1-cp312-cp312-win_amd64.whl",
+          "sha256": "f53e442b08449d42821fa4a4fba000095af9f62742a500f978a9f557ec44339a",
+          "size": 185919
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/charset_normalizer-3.5.1-cp312-cp312-win_amd64.whl",
+          "sha256": "3617ac3cfd8b9888f145ad89dd6e692285834b0201c6074a5eeaad3fd4d668c2",
+          "size": 200551
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/colorama-0.4.6-py2.py3-none-any.whl",
+          "sha256": "4f1d9991f5acc0ca119f9d443620b77f9d6b33703e51011c16baf57afb285fc6",
+          "size": 25335
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/comm-0.2.3-py3-none-any.whl",
+          "sha256": "c615d91d75f7f04f095b30d1c1711babd43bdc6419c1be9886a85f2f4e489417",
+          "size": 7294
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/contourpy-1.3.3-cp312-cp312-win_amd64.whl",
+          "sha256": "8153b8bfc11e1e4d75bcb0bff1db232f9e10b274e0929de9d608027e0d34ff8b",
+          "size": 226567
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/cycler-0.12.1-py3-none-any.whl",
+          "sha256": "85cef7cff222d8644161529808465972e51340599459b8ac3ccbac5a854e0d30",
+          "size": 8321
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/debugpy-1.8.21-cp312-cp312-win_amd64.whl",
+          "sha256": "bd7ba9dd3daa7c2f942c6ca8d4695a16bf9ac16b63615261c7982bc74f7ed20c",
+          "size": 5374751
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/defusedxml-0.7.1-py2.py3-none-any.whl",
+          "sha256": "a352e7e428770286cc899e2542b6cdaedb2b4953ff269a210103ec58f6198a61",
+          "size": 25604
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/executing-2.2.1-py2.py3-none-any.whl",
+          "sha256": "760643d3452b4d777d295bb167ccc74c64a81df23fb5e08eff250c425a4b2017",
+          "size": 28317
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/fastjsonschema-2.22.2-py3-none-any.whl",
+          "sha256": "0fb3915616adac85ccfdd737d26be1089845d2019819505b42d39888458f74d4",
+          "size": 27413
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/fonttools-4.63.0-cp312-cp312-win_amd64.whl",
+          "sha256": "59ac449f8cca9b4ffa08d2e7bbadad87ce710d69d1eda5c3c1ce579baa987272",
+          "size": 2343211
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/fqdn-1.5.1-py3-none-any.whl",
+          "sha256": "3a179af3761e4df6eb2e026ff9e1a3033d3587bf980a0b1b2e1e5d08d7358014",
+          "size": 9121
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/h11-0.16.0-py3-none-any.whl",
+          "sha256": "63cf8bbe7522de3bf65932fda1d9c2772064ffb3dae62d55932da54b31cb6c86",
+          "size": 37515
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/html5lib-1.1-py2.py3-none-any.whl",
+          "sha256": "0d78f8fde1c230e99fe37986a60526d7049ed4bf8a9fadbad5f00e22e58e041d",
+          "size": 112173
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/httpcore-1.0.9-py3-none-any.whl",
+          "sha256": "2d400746a40668fc9dec9810239072b40b4484b640a8c38fd654a024c7a1bf55",
+          "size": 78784
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/httpx-0.28.1-py3-none-any.whl",
+          "sha256": "d909fcccc110f8c7faf814ca82a9a4d816bc5a6dbfea25d6591d6985b8ba59ad",
+          "size": 73517
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/idna-3.19-py3-none-any.whl",
+          "sha256": "815e7be7a7806d54abb586dc943addc79e8b2ee16915059658cbeff4b1b43bf4",
+          "size": 68550
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/ipykernel-7.3.0-py3-none-any.whl",
+          "sha256": "897eb64da762549ef610698fca5e9675195ec6ac8ec7f19d81ce1ca20c876057",
+          "size": 120583
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/ipython-9.16.1-py3-none-any.whl",
+          "sha256": "4acae635506f6d352d94c4899a19d5f85f8bc4d230932342dca556fdab1c69b4",
+          "size": 625974
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/ipython_pygments_lexers-1.1.1-py3-none-any.whl",
+          "sha256": "a9462224a505ade19a605f71f8fa63c2048833ce50abc86768a0d81d876dc81c",
+          "size": 8074
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/ipywidgets-8.1.9-py3-none-any.whl",
+          "sha256": "f2b8cbcaae10252b809fbe4d7470db75c09b769a32cbf816d20e5ca6d3c5a79d",
+          "size": 140101
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/isoduration-20.11.0-py3-none-any.whl",
+          "sha256": "b2904c2a4228c3d44f409c8ae8e2370eb21a26f7ac2ec5446df141dde3452042",
+          "size": 11321
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/jaraco.classes-3.4.0-py3-none-any.whl",
+          "sha256": "f662826b6bed8cace05e7ff873ce0f9283b5c924470fe664fff1c2f00f581790",
+          "size": 6777
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/jaraco_context-6.1.2-py3-none-any.whl",
+          "sha256": "bf8150b79a2d5d91ae48629d8b427a8f7ba0e1097dd6202a9059f29a36379535",
+          "size": 7871
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/jaraco_functools-4.6.0-py3-none-any.whl",
+          "sha256": "99e3dc0060c5cbe8fcd1cdb36258e2a65ca40f1566b2033b12abb1bb44dd3c30",
+          "size": 11677
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/jedi-0.20.0-py2.py3-none-any.whl",
+          "sha256": "7bdd9c2634f56713299976f4cbd59cb3fa92165cc5e05ea811fb253480728b67",
+          "size": 4884812
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/jinja2-3.1.6-py3-none-any.whl",
+          "sha256": "85ece4451f492d0c13c5dd7c13a64681a86afae63a5f347908daf103ce6d2f67",
+          "size": 134899
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/json5-0.15.0-py3-none-any.whl",
+          "sha256": "56636a30c0e8a4665fe2179c0212f32eae3796dea89ea6f649b9436ecdb39618",
+          "size": 36570
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/jsonpointer-3.1.1-py3-none-any.whl",
+          "sha256": "8ff8b95779d071ba472cf5bc913028df06031797532f08a7d5b602d8b2a488ca",
+          "size": 7659
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/jsonschema-4.26.0-py3-none-any.whl",
+          "sha256": "d489f15263b8d200f8387e64b4c3a75f06629559fb73deb8fdfb525f2dab50ce",
+          "size": 90630
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/jsonschema_specifications-2025.9.1-py3-none-any.whl",
+          "sha256": "98802fee3a11ee76ecaca44429fda8a41bff98b00a0f2838151b113f210cc6fe",
+          "size": 18437
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/jupyter_builder-1.2.2-py3-none-any.whl",
+          "sha256": "6ebcd4c49daf5df6a18068a74a48010406700ed90a76c189fac43eaf85c60c63",
+          "size": 915266
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/jupyter_client-8.9.1-py3-none-any.whl",
+          "sha256": "0b7a295bc46e8751e9adae84781f726c851c1d911bd793edc4a3bde942e3da81",
+          "size": 109828
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/jupyter_core-5.9.1-py3-none-any.whl",
+          "sha256": "ebf87fdc6073d142e114c72c9e29a9d7ca03fad818c5d300ce2adc1fb0743407",
+          "size": 29032
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/jupyter_events-0.12.1-py3-none-any.whl",
+          "sha256": "c366585253f537a627da52fa7ca7410c5b5301fe893f511e7b077c2d93ec8bcf",
+          "size": 19512
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/jupyter_lsp-2.3.1-py3-none-any.whl",
+          "sha256": "71b954d834e85ff3096400554f2eefaf7fe37053036f9a782b0f7c5e42dadb81",
+          "size": 77513
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/jupyter_server-2.20.0-py3-none-any.whl",
+          "sha256": "c3b67c93c471e947c18b5026f04f21614218adb706df8f48227d3ee8e0a7cdcc",
+          "size": 393143
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/jupyter_server_terminals-0.5.4-py3-none-any.whl",
+          "sha256": "55be353fc74a80bc7f3b20e6be50a55a61cd525626f578dcb66a5708e2007d14",
+          "size": 13704
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/jupyterlab-4.6.3-py3-none-any.whl",
+          "sha256": "0a1ebc6567186f1eabd99536e94df7ed9e96d1e7c5ddf3e4406ae16e88abacb7",
+          "size": 17168312
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/jupyterlab_pygments-0.3.0-py3-none-any.whl",
+          "sha256": "841a89020971da1d8693f1a99997aefc5dc424bb1b251fd6322462a1b8842780",
+          "size": 15884
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/jupyterlab_server-2.28.0-py3-none-any.whl",
+          "sha256": "e4355b148fdcf34d312bbbc80f22467d6d20460e8b8736bf235577dd18506968",
+          "size": 59830
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/jupyterlab_widgets-3.0.17-py3-none-any.whl",
+          "sha256": "40ac1e9955acf116c4d995d9bfa082d86ad9ec6d91c4f134827cf5e0a5eb75e0",
+          "size": 217292
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/keyring-25.7.0-py3-none-any.whl",
+          "sha256": "be4a0b195f149690c166e850609a477c532ddbfbaed96a404d4e43f8d5e2689f",
+          "size": 39160
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/kiwisolver-1.5.0-cp312-cp312-win_amd64.whl",
+          "sha256": "f18c2d9782259a6dc132fdc7a63c168cbc74b35284b6d75c673958982a378384",
+          "size": 73569
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/lark-1.3.1-py3-none-any.whl",
+          "sha256": "c629b661023a014c37da873b4ff58a817398d12635d3bbb2c5a03be7fe5d1e12",
+          "size": 113151
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/markupsafe-3.0.3-cp312-cp312-win_amd64.whl",
+          "sha256": "26a5784ded40c9e318cfc2bdb30fe164bdb8665ded9cd64d500a34fb42067b1c",
+          "size": 15105
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/matplotlib-3.11.1-cp312-cp312-win_amd64.whl",
+          "sha256": "88a2a27dd9691ae448dfae4b26f59036be90c3c28757edd3553a29559d00859f",
+          "size": 9333886
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/matplotlib_inline-0.2.2-py3-none-any.whl",
+          "sha256": "3c821cf1c209f59fb2d2d64abbf5b23b67bcb2210d663f9918dd851c6da1fcf6",
+          "size": 9534
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/mistune-3.3.4-py3-none-any.whl",
+          "sha256": "ee015381e955e370962968befe1d729ab60fafb6a715ac6751763fbce38c8d4a",
+          "size": 66862
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/more_itertools-11.1.0-py3-none-any.whl",
+          "sha256": "4b65538ae22f6fed0ce4874efd317463a7489796a0939fa66824dd542125a192",
+          "size": 72226
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/nbclient-0.11.0-py3-none-any.whl",
+          "sha256": "ef7fa0d59d6e1d41103933d8a445a18d5de860ca6b613b87b8574accdb3c2895",
+          "size": 25288
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/nbconvert-7.17.1-py3-none-any.whl",
+          "sha256": "aa85c087b435e7bf1ffd03319f658e285f2b89eccab33bc1ba7025495ab3e7c8",
+          "size": 261927
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/nbformat-5.11.1-py3-none-any.whl",
+          "sha256": "cc6698fa75f4fab8755ead786317815f13a6fee3b53311c0abb1a8b51d52f7ec",
+          "size": 79849
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/nest_asyncio2-1.7.2-py3-none-any.whl",
+          "sha256": "f5dfa702f3f81f6a03857e9a19e2ba578c0946a4ad417b4c50a24d7ba641fe01",
+          "size": 7843
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/notebook-7.6.2-py3-none-any.whl",
+          "sha256": "5fe9e09c335cb4b7de21627b860f77210e70e54b1fb1276ad942a4a7e1d858d3",
+          "size": 5547102
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/notebook_shim-0.2.4-py3-none-any.whl",
+          "sha256": "411a5be4e9dc882a074ccbcae671eda64cceb068767e9a3419096986560e1cef",
+          "size": 13307
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/numpy-2.5.2-cp312-cp312-win_amd64.whl",
+          "sha256": "28ac63476ec7651484215ee7fa15a1f78b57c14621f01e392afe17b9a1390ce4",
+          "size": 12464674
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/packaging-26.3-py3-none-any.whl",
+          "sha256": "d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c",
+          "size": 129956
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/pandas-3.0.5-cp312-cp312-win_amd64.whl",
+          "sha256": "80a611068e8a3ac23f7398c6c14eb46dc974e5cc9997f653e2dcfd1da74edd41",
+          "size": 9831691
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/pandocfilters-1.5.1-py2.py3-none-any.whl",
+          "sha256": "93be382804a9cdb0a7267585f157e5d1731bbe5545a85b268d6f5fe6232de2bc",
+          "size": 8663
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/parso-0.8.7-py2.py3-none-any.whl",
+          "sha256": "a8926eb2a1b915486941fdbd31e86a4baf88fe8c210f25f2f35ecec5b574ca1c",
+          "size": 107025
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/photutils-3.0.0-cp311-abi3-win_amd64.whl",
+          "sha256": "112ab07628f0b1d8bb6e70c926279a867e6bb57eea82f8141410b155a00e73d1",
+          "size": 1052065
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/pillow-12.3.0-cp312-cp312-win_amd64.whl",
+          "sha256": "a2b55dd6b2a4c4b7d87ffa56bdb33fdc5fdb9a462173861a7bc097f17d91cb09",
+          "size": 7227137
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/pip-26.2.1-py3-none-any.whl",
+          "sha256": "71138adf1f4ca900cdb7d289c21b7494329f2332b6d85f0e1c42108c0384ed3e",
+          "size": 1816632
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/platformdirs-4.11.3-py3-none-any.whl",
+          "sha256": "5ed065d443751de711da036041a7a214122efc4a4de393b3f4137ba5576540e7",
+          "size": 23491
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/prometheus_client-0.26.0-py3-none-any.whl",
+          "sha256": "fa93d06737aa02bacd05794768508bb97d2fbee28cb3bca04eaae92f0ca953d6",
+          "size": 64494
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/prompt_toolkit-3.0.53-py3-none-any.whl",
+          "sha256": "01c0891d7f9237d5e339f7d3e42cdae80b7534abb1c7c0e3352efba6231492f2",
+          "size": 392288
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/psutil-7.2.2-cp37-abi3-win_amd64.whl",
+          "sha256": "eb7e81434c8d223ec4a219b5fc1c47d0417b12be7ea866e24fb5ad6e84b3d988",
+          "size": 137737
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/pure_eval-0.2.3-py3-none-any.whl",
+          "sha256": "1db8e35b67b3d218d818ae653e27f06c3aa420901fa7b081ca98cbedc874e0d0",
+          "size": 11842
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/pycparser-3.0-py3-none-any.whl",
+          "sha256": "b727414169a36b7d524c1c3e31839a521725078d7b2ff038656844266160a992",
+          "size": 48172
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/pyerfa-2.0.1.5-cp39-abi3-win_amd64.whl",
+          "sha256": "66292d437dcf75925b694977aa06eb697126e7b86553e620371ed3e48b5e0ad0",
+          "size": 349410
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/pygments-2.21.0-py3-none-any.whl",
+          "sha256": "2363c69b61c4a97c838da3b130dcd6468f4848992b21a82f2a63ec34377137d9",
+          "size": 1250147
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/pyparsing-3.3.2-py3-none-any.whl",
+          "sha256": "850ba148bd908d7e2411587e247a1e4f0327839c40e2e5e6d05a007ecc69911d",
+          "size": 122781
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/python_dateutil-2.9.0.post0-py2.py3-none-any.whl",
+          "sha256": "a8b2bc7bffae282281c8140a97d3aa9c14da0b136dfe83f850eea9a5f7470427",
+          "size": 229892
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/python_json_logger-4.2.0-py3-none-any.whl",
+          "sha256": "158a52126fcd6869e09574d2b66272666f3dc8f468c62637ef9a1fa883719cb9",
+          "size": 14988
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/pyvo-1.9.1-py3-none-any.whl",
+          "sha256": "098648d00943440f56c1d00ac76330433578a0725ea6187afaa6bae08545bb53",
+          "size": 1152763
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/pywin32_ctypes-0.2.3-py3-none-any.whl",
+          "sha256": "8a1513379d709975552d202d942d9837758905c8d01eb82b8bcc30918929e7b8",
+          "size": 30756
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/pywinpty-3.0.5-cp312-cp312-win_amd64.whl",
+          "sha256": "d62946adf14b15b54c0b8d785f93fe18b04da23f4ad59e2e8c4612646e9abd23",
+          "size": 2090915
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/pyyaml-6.0.3-cp312-cp312-win_amd64.whl",
+          "sha256": "5fcd34e47f6e0b794d17de1b4ff496c00986e1c83f7ab2fb8fcfe9616ff7477b",
+          "size": 154003
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/pyzmq-27.2.0-cp312-abi3-win_amd64.whl",
+          "sha256": "2c218c6ab8bc447ba62054b581fd30209689d199c6ecb253f79615ca74a38e12",
+          "size": 628633
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/referencing-0.37.0-py3-none-any.whl",
+          "sha256": "381329a9f99628c9069361716891d34ad94af76e461dcb0335825aecc7692231",
+          "size": 26766
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/requests-2.34.2-py3-none-any.whl",
+          "sha256": "2a0d60c172f83ac6ab31e4554906c0f3b3588d37b5cb939b1c061f4907e278e0",
+          "size": 73075
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/rfc3339_validator-0.1.4-py2.py3-none-any.whl",
+          "sha256": "24f6ec1eda14ef823da9e36ec7113124b39c04d50a4d3d3a3c2859577e7791fa",
+          "size": 3490
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/rfc3986_validator-0.1.1-py2.py3-none-any.whl",
+          "sha256": "2f235c432ef459970b4306369336b9d5dbdda31b510ca1e327636e01f528bfa9",
+          "size": 4242
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/rfc3987_syntax-1.1.0-py3-none-any.whl",
+          "sha256": "6c3d97604e4c5ce9f714898e05401a0445a641cfa276432b0a648c80856f6a3f",
+          "size": 8046
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/rpds_py-2026.6.3-cp312-cp312-win_amd64.whl",
+          "sha256": "2c958bf94822e9290a40aaf2a822d4bc5c88099093e3948ad6c571eca9272e5f",
+          "size": 220394
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/scipy-1.18.1-cp312-cp312-win_amd64.whl",
+          "sha256": "5e4d44984abc0020154ea81b247adeddcc3ac5527b975ff798bd1ba0adc513c2",
+          "size": 36658278
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/send2trash-2.1.0-py3-none-any.whl",
+          "sha256": "0da2f112e6d6bb22de6aa6daa7e144831a4febf2a87261451c4ad849fe9a873c",
+          "size": 17610
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/six-1.17.0-py2.py3-none-any.whl",
+          "sha256": "4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274",
+          "size": 11050
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/soupsieve-2.9.2-py3-none-any.whl",
+          "sha256": "8089a26fd974ca7a1f30276d3d8492ab266ab15af581642dfe8aa162e0c1c823",
+          "size": 37370
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/stack_data-0.6.3-py3-none-any.whl",
+          "sha256": "d5558e0c25a4cb0853cddad3d77da9891a08cb85dd9f9f91b9f8cd66e511e695",
+          "size": 24521
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/terminado-0.18.1-py3-none-any.whl",
+          "sha256": "a4468e1b37bb318f8a86514f65814e1afc977cf29b3992a4500d9dd305dcceb0",
+          "size": 14154
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/tinycss2-1.5.1-py3-none-any.whl",
+          "sha256": "3415ba0f5839c062696996998176c4a3751d18b7edaaeeb658c9ce21ec150661",
+          "size": 28404
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/tornado-6.5.8-cp39-abi3-win_amd64.whl",
+          "sha256": "11881db6b7c168494be2c2d12e65931451bdf7ee718535418ae1d8855dd5a0ee",
+          "size": 452391
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/traitlets-5.16.1-py3-none-any.whl",
+          "sha256": "f775618166caa0396c8e337099240f2bd3e5e917d203b2e6fbe21a58d3cb1f6b",
+          "size": 86211
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/typing_extensions-4.16.0-py3-none-any.whl",
+          "sha256": "481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8",
+          "size": 45571
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/tzdata-2026.3-py2.py3-none-any.whl",
+          "sha256": "dc096730c87af6cab1b171c9d532be840741ff5d459015e7f6947bd7d7e54931",
+          "size": 348168
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/uri_template-1.3.0-py3-none-any.whl",
+          "sha256": "a44a133ea12d44a0c0f06d7d42a52d71282e77e2f937d8abd5655b8d56fc1363",
+          "size": 11140
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/urllib3-2.7.0-py3-none-any.whl",
+          "sha256": "9fb4c81ebbb1ce9531cce37674bbc6f1360472bc18ca9a553ede278ef7276897",
+          "size": 131087
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/wcwidth-0.8.2-py3-none-any.whl",
+          "sha256": "d63947694a0539a1d51e01eda7caf800c291020e6cdd7e28ad7b14dd33ad4f85",
+          "size": 323166
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/webcolors-25.10.0-py3-none-any.whl",
+          "sha256": "032c727334856fc0b968f63daa252a1ac93d33db2f5267756623c210e57a4f1d",
+          "size": 14905
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/webencodings-0.6.1-py3-none-any.whl",
+          "sha256": "7fab6269c8bf237c657876b52058ccb182e861518d1c695c1a9aaa8c1c105d5b",
+          "size": 8745
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/websocket_client-1.9.0-py3-none-any.whl",
+          "sha256": "af248a825037ef591efbf6ed20cc5faa03d3b47b9e5a2230a529eeee1c1fc3ef",
+          "size": 82616
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/widgetsnbextension-4.0.16-py3-none-any.whl",
+          "sha256": "a31a8774885b96fe825462f5d6496166f0c7cae111195b6465c801d230eb5a4e",
+          "size": 2225148
+        },
+        {
+          "path": "server/providers/mast-autofocus-validation/assets/autofocus-fits.zip",
+          "sha256": "ef7192bb5212afec21144745e2ffe7fafadf5d40621e501924f77979a0dfa56f",
+          "size": 24988864
+        },
+        {
+          "path": "server/providers/mast/assets/uv-x86_64-pc-windows-msvc.zip",
+          "sha256": "c253ce868ad48d29327b661452ce184c9e333e6d6f5bc8d6fcfbf4dd52b83442",
+          "size": 18981332
+        },
+        {
+          "path": "server/providers/mongodb-client/assets/mongodb-compass-1.43.0-win32-x64.exe",
+          "sha256": "828d1f388435cbaaf306685a9d415a139ebd39a86bae812d7eb295bef0e85954",
+          "size": 138020360
+        },
+        {
+          "path": "server/providers/mongodb-client/assets/mongodb-database-tools-windows-x86_64-100.9.4.zip",
+          "sha256": "13cf2bb3a776edac86328c5b1a53a23c1abcf1c1cc0acb0ac13d91ca70c60544",
+          "size": 62570779
+        },
+        {
+          "path": "server/providers/mongodb-client/assets/mongosh-2.2.6-win32-x64.zip",
+          "sha256": "474eb2443132d2c07ee519bc052e21d3541da79115dc39d6b4a3d75e05e37613",
+          "size": 44686157
+        },
+        {
+          "path": "server/providers/nomachine/assets/nomachine-enterprise-desktop_9.0.188_11_x64.exe",
+          "sha256": "78dd8ccefc6130dfd868d21c27902f33e703c8bfc43c71dcdb1bc8f06fdb3910",
+          "size": 123146568
+        },
+        {
+          "path": "server/providers/nssm/assets/nssm-2.24.zip",
+          "sha256": "727d1e42275c605e0f04aba98095c38a8e1e46def453cdffce42869428aa6743",
+          "size": 351793
+        },
+        {
+          "path": "server/providers/openssh-server/assets/OpenSSH-Win64-v10.0.0.0.msi",
+          "sha256": "ddec9c53864280759cf9f74791cefd387100e3946aa849a1c138a4ed1b96b7d9",
+          "size": 6586368
+        },
+        {
+          "path": "server/providers/phd2-log-viewer/assets/phdlogview_setup-0.6.4.exe",
+          "sha256": "c5d2242f252b183dc4d0b831b298b9bc586d8619cd9298f995bc65313fce0aff",
+          "size": 2533149
+        },
+        {
+          "path": "server/providers/phd2/assets/phd2-x64-2.6.14dev1mast03-installer.exe",
+          "sha256": "344fd794ba2854850db89cf88ab73d40e1733b1614b18a6c9fd8efa6d85b182b",
+          "size": 27244541
+        },
+        {
+          "path": "server/providers/planewave/assets/PWTools-2024-09-17.zip",
+          "sha256": "465be6b43e098f104c3bcad617189f10e5f34342c852b6575abac8dd4f101d7a",
+          "size": 3153414
+        },
+        {
+          "path": "server/providers/planewave/assets/Setup_PWI_4.1.6_Final.exe",
+          "sha256": "ac6cb52e854966e678f4219079fc39eb1f1fb9223698454eeff97d42faf4292d",
+          "size": 34398582
+        },
+        {
+          "path": "server/providers/planewave/assets/Setup_PWShutter_1.15.0.exe",
+          "sha256": "f487c7003b5b936f7bb30571a7cbc13e2fb9fc945242aa342c58fc9c4cd44022",
+          "size": 11672804
+        },
+        {
+          "path": "server/providers/planewave/assets/ps3cli.zip",
+          "sha256": "43eeed854f1fdb88f49ede70bf5eabb3c9ed55860011375814cc3b462cb0f2df",
+          "size": 1466553
+        },
+        {
+          "path": "server/providers/python/assets/python-3.12.2-amd64.exe",
+          "sha256": "b9314802f9efbf0f20a8e2cb4cacc4d5cfb0110dac2818d94e770e1ba5137c65",
+          "size": 26667456
+        },
+        {
+          "path": "server/providers/stage/assets/xilab-1.20.12-win32_win64.exe",
+          "sha256": "070da92fdc3103bdc60c6c3ce735d1fd97e674b1d7b51e14341c6a6f932cf198",
+          "size": 27621976
+        },
+        {
+          "path": "server/providers/sysinternals/assets/SysinternalsSuite.zip",
+          "sha256": "0325a15ca74e8b1623338d7556f5ca8f985929715ab55863ee574b35a0451d1d",
+          "size": 174194901
+        },
+        {
+          "path": "server/providers/usbpcap/assets/USBPcapSetup-1.5.4.0.exe",
+          "sha256": "87a7edf9bbbcf07b5f4373d9a192a6770d2ff3add7aa1e276e82e38582ccb622",
+          "size": 195040
+        },
+        {
+          "path": "server/providers/vcredist2013/assets/vcredist_x64_2013.exe",
+          "sha256": "e554425243e3e8ca1cd5fe550db41e6fa58a007c74fad400274b128452f38fb8",
+          "size": 7194312
+        },
+        {
+          "path": "server/providers/vcredist2013/assets/vcredist_x86_2013.exe",
+          "sha256": "a22895e55b26202eae166838edbe2ea6aad00d7ea600c11f8a31ede5cbce2048",
+          "size": 6503984
+        },
+        {
+          "path": "server/providers/vscode/assets/VSCodeUserSetup-x64-1.121.0.exe",
+          "sha256": "5751cbf2552c8dda452df5720e3228627b3234862d0eb7346f9e57f20386561f",
+          "size": 167344048
+        },
+        {
+          "path": "server/providers/vscode/assets/ms-python.debugpy-2026.6.0-win32-x64.vsix",
+          "sha256": "f38c4fd6fe801274c0be4df5d3451607bca4d839aaebf66022aa0a6481f7686e",
+          "size": 8107886
+        },
+        {
+          "path": "server/providers/vscode/assets/ms-python.python-2026.4.0-win32-x64.vsix",
+          "sha256": "c877195e39d5fe88fc8416efbf3b2c5dbd576000bf624dc22821fc26fa112079",
+          "size": 9404643
+        },
+        {
+          "path": "server/providers/windows-exporter-monitoring/assets/windows_exporter-0.31.7-amd64.msi",
+          "sha256": "d29114fb7ae6af2865a9f1c4be7fdccc2b9fbbb4366a811b620bc85c983d0007",
+          "size": 11091968
+        },
+        {
+          "path": "server/providers/wireshark/assets/Wireshark-4.6.0-x64.exe",
+          "sha256": "aaec7abd3b79e0f336722ab86b193bbf5175fed125d7b8e2629ccdfc9a763aa1",
+          "size": 95881032
+        },
+        {
+          "path": "server/providers/zwo/assets/ASIStudio_V1.16.2_x64_Setup.exe",
+          "sha256": "7b015f620b0a7858c10546eded453b468f6f518fff1c8f7ffa71ffd0ba08186e",
+          "size": 125747048
+        },
+        {
+          "path": "server/providers/zwo/assets/ZWO_ASCOM_Setup_V6.5.32.exe",
+          "sha256": "b40204eba2c907a7ee07fa35b9cd616ff20d400ce62a0bb0d36158c044a1ffa2",
+          "size": 3304672
+        },
+        {
+          "path": "server/providers/zwo/assets/ZWO_ASI_Cameras_driver_Setup_V3.25.exe",
+          "sha256": "f78e2d00ed32a3f24c4ebd5c1a184f7e00f1b8d9382af4626f0208d9fb0efbec",
+          "size": 4691952
+        }
+      ]
     }
   ],
   "not_vendor_inputs": [

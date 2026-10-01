@@ -10,11 +10,13 @@ tracked, so the machine-wide cache mirrors the repo tree and one rule covers
 both: an asset lives at ``server/providers/<module>/assets/...``, in the repo or
 in the cache.
 
-Two halves feed it. The LFS rows are DERIVED -- a pointer already records the
-``oid sha256`` and ``size`` of the object it stands for, so retiring LFS is
-mechanical rather than a transcription exercise, and the two cannot disagree
-while both exist. The build-host rows are DECLARED in ``vendor-inputs.json``,
-because nothing in the repo can derive a file the repo does not contain.
+Every row is DECLARED, in ``vendor-inputs.json``. The LFS-held ones were derived
+from the pointers until #48 froze them there, and the freeze had to happen before
+the untracking rather than with it: a digest derived from a pointer stops being
+derivable the moment the pointer is removed, so deriving and untracking in one
+step would have emptied 162 rows out of the index with nothing to notice. While
+both the frozen digests and the pointers exist, ``test_asset_manifest`` checks
+each against the other.
 """
 
 from __future__ import annotations
@@ -26,15 +28,12 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-_OID = re.compile(rb"^oid sha256:([0-9a-f]{64})$", re.MULTILINE)
-_SIZE = re.compile(rb"^size (\d+)$", re.MULTILINE)
 #: server/providers/<module>/assets/... -- the per-provider layout.
 _PROVIDER = re.compile(r"^server/providers/([^/]+)/assets/")
 #: client/assets/... -- the bootstrap payload, which belongs to no provider.
 _CLIENT = re.compile(r"^client/assets/")
 
 VENDOR_INPUTS = Path("server/data/vendor-inputs.json")
-LFS_SOURCE = "git-lfs"
 
 
 class ManifestError(Exception):
@@ -53,16 +52,14 @@ def _git(repo: Path, *args: str, stdin: bytes | None = None) -> bytes:
     return subprocess.run(["git", *args], cwd=repo, input=stdin, capture_output=True, check=True).stdout
 
 
-def discover_lfs_paths(repo: Path) -> set[str]:
-    try:
-        out = _git(repo, "lfs", "ls-files", "-n")
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        return set()
-    return {line for line in out.decode("utf-8", "surrogateescape").splitlines() if line}
-
-
 def _pointers(repo: Path, paths: list[str]) -> dict[str, bytes]:
-    """Every pointer blob in ONE git call; see prov.tree_integrity for why."""
+    """Every blob at HEAD in ONE git call; see prov.tree_integrity for why.
+
+    Nothing here reads it any more -- the manifest is declared, not derived. It
+    stays because the freeze-fidelity check in test_asset_manifest compares each
+    frozen digest against the pointer it was taken from, and that check lives
+    only as long as the pointers do.
+    """
     if not paths:
         return {}
     req = "".join(f"HEAD:{p}\n" for p in paths).encode("utf-8", "surrogateescape")
@@ -82,31 +79,6 @@ def _pointers(repo: Path, paths: list[str]) -> dict[str, bytes]:
     return blobs
 
 
-def _lfs_rows(repo: Path, lfs_paths: set[str] | None) -> list[dict[str, Any]]:
-    ordered = sorted(discover_lfs_paths(repo) if lfs_paths is None else lfs_paths)
-    pointers = _pointers(repo, ordered)
-    rows = []
-    for path in ordered:
-        blob = pointers.get(path)
-        if blob is None:
-            continue
-        oid, size = _OID.search(blob), _SIZE.search(blob)
-        if not (oid and size):
-            # Tracked as LFS but not a pointer in HEAD: nothing to record, and
-            # guessing a hash here would put a wrong one in the index.
-            continue
-        rows.append(
-            {
-                "path": path,
-                "sha256": oid.group(1).decode(),
-                "size": int(size.group(1)),
-                "module": module_of(path),
-                "source": LFS_SOURCE,
-            }
-        )
-    return rows
-
-
 def _declared(repo: Path) -> dict[str, Any]:
     path = repo / VENDOR_INPUTS
     try:
@@ -116,15 +88,7 @@ def _declared(repo: Path) -> dict[str, Any]:
 
 
 def _sources_and_rows(declared: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    sources: list[dict[str, Any]] = [
-        {
-            "name": LFS_SOURCE,
-            "cached": True,
-            "used_by": [],
-            "origin": "Tracked in this repository via git-LFS; the rows are derived from the pointers.",
-            "reacquire": "git lfs pull, while LFS is still in place; afterwards, the content store.",
-        }
-    ]
+    sources: list[dict[str, Any]] = []
     rows: list[dict[str, Any]] = []
     for entry in declared.get("inputs", []):
         source = {
@@ -138,7 +102,7 @@ def _sources_and_rows(declared: dict[str, Any]) -> tuple[list[dict[str, Any]], l
     return sources, rows
 
 
-def build_manifest(repo: Path, *, lfs_paths: set[str] | None = None) -> dict[str, Any]:
+def build_manifest(repo: Path) -> dict[str, Any]:
     """Index of every asset: path, sha256, size, owning module, and where it came from.
 
     No timestamp and no host. This file is committed and regenerated, so anything
@@ -147,8 +111,7 @@ def build_manifest(repo: Path, *, lfs_paths: set[str] | None = None) -> dict[str
     """
     repo = Path(repo)
     declared = _declared(repo)
-    sources, declared_rows = _sources_and_rows(declared)
-    rows = _lfs_rows(repo, lfs_paths) + declared_rows
+    sources, rows = _sources_and_rows(declared)
 
     seen: dict[str, str] = {}
     for row in rows:
@@ -164,8 +127,8 @@ def build_manifest(repo: Path, *, lfs_paths: set[str] | None = None) -> dict[str
         "_comment": (
             "Generated by prov.asset_manifest -- do not hand-edit. One row per file a payload "
             "needs that the build does not author, keyed by the repo-relative path it would "
-            "have if it were tracked. LFS rows are derived from the pointers; build-host rows "
-            "are declared in vendor-inputs.json. See MAST_provisioning#48."
+            "have if it were tracked. Every row is declared in vendor-inputs.json. "
+            "See MAST_provisioning#48."
         ),
         "sources": sources,
         "not_cached": declared.get("not_vendor_inputs", []),
