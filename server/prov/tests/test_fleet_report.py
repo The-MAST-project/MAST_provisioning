@@ -852,7 +852,7 @@ def test_an_unreadable_expiry_warns_rather_than_passing(fdr):
 
 # --- OS patch level (#15 stage 2) -------------------------------------------
 
-_OS_PROBE = Path(__file__).parent / "data" / "os_drift" / "probe-mast08-2026-09-29.json"
+_OS_PROBE = Path(__file__).parent / "data" / "os_drift" / "probe-mast08-2026-09-30.json"
 
 
 def _probe_dict() -> dict:
@@ -888,10 +888,14 @@ def _marked(fdr, body: str) -> bytes:
     return f"noise\r\n{fdr.OS_PROBE_BEGIN}\r\n{body}\r\n{fdr.OS_PROBE_END}\r\n".encode()
 
 
-def test_the_os_probe_files_exist_and_the_probe_loads_its_lib_by_leaf_name(fdr):
-    probe, lib = (_REPO_ROOT / p for p in fdr.OS_PROBE_FILES)
-    assert lib.name in probe.read_text(encoding="utf-8")
-    assert "function Get-MastPendingRebootReason" in lib.read_text(encoding="utf-8")
+def test_the_os_probe_files_exist_and_the_probe_loads_its_libs_by_leaf_name(fdr):
+    probe, *libs = (_REPO_ROOT / p for p in fdr.OS_PROBE_FILES)
+    text = probe.read_text(encoding="utf-8")
+    for lib in libs:
+        assert lib.name in text
+    functions = {lib.name: lib.read_text(encoding="utf-8") for lib in libs}
+    assert "function Get-MastPendingRebootReason" in functions["mast-pending-reboot.ps1"]
+    assert "function Get-MastEdgeUpdateState" in functions["mast-edge-update.ps1"]
 
 
 def test_gather_uploads_both_files_to_one_temp_folder_and_removes_it(fdr):
@@ -902,7 +906,11 @@ def test_gather_uploads_both_files_to_one_temp_folder_and_removes_it(fdr):
     assert len(folders) == 1
     (folder,) = folders
     assert folder.startswith(fdr.OS_PROBE_REMOTE_ROOT + "\\mast-os-patch-probe-")
-    assert sorted(p.rsplit("\\", 1)[1] for p in s.files) == ["mast-os-patch-probe.ps1", "mast-pending-reboot.ps1"]
+    assert sorted(p.rsplit("\\", 1)[1] for p in s.files) == [
+        "mast-edge-update.ps1",
+        "mast-os-patch-probe.ps1",
+        "mast-pending-reboot.ps1",
+    ]
     assert s.scripts[-1] == f"Remove-Item -LiteralPath '{folder}' -Recurse -Force"
 
 
@@ -937,7 +945,8 @@ def test_os_patch_section_renders_state_blockers_and_secure_boot(fdr):
     assert "mast05  unknown         probe failed: timed out" in out
     assert "19044.4529" in out
     assert "File renames are queued for the next reboot on 1 unit(s): mast08" in out
-    assert "[WARN]" not in out
+    assert "[WARN] mast08: Microsoft Edge's own updater is not disabled" in out
+    assert "reboot is already pending" not in out
     assert "Secure Boot is off on 1 unit(s): mast08" in out
 
 

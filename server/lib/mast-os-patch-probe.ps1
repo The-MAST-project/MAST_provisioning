@@ -15,6 +15,9 @@ ${ProgressPreference} = 'SilentlyContinue'
 if (-not (Get-Command Get-MastPendingRebootReason -ErrorAction SilentlyContinue)) {
     . (Join-Path ${PSScriptRoot} 'mast-pending-reboot.ps1')
 }
+if (-not (Get-Command Get-MastEdgeUpdateState -ErrorAction SilentlyContinue)) {
+    . (Join-Path ${PSScriptRoot} 'mast-edge-update.ps1')
+}
 
 ${PROBE_VERSION} = 1
 ${BEGIN_MARK} = '====MAST-OS-PATCH-PROBE-BEGIN===='
@@ -121,6 +124,7 @@ ${probe} = [ordered]@{
         wuauserv       = Get-ServiceStartMode -Name 'wuauserv'
         usosvc         = Get-ServiceStartMode -Name 'UsoSvc'
         waasmedicsvc   = Get-ServiceStartMode -Name 'WaaSMedicSvc'
+        edge_update    = Get-MastEdgeUpdateState
     }
 }
 

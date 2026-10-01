@@ -13,6 +13,9 @@ $mastLogDot = Join-Path $PSScriptRoot 'mast-log.ps1'
 if (-not (Test-Path $mastLogDot)) { $mastLogDot = Join-Path $PSScriptRoot '..\..\lib\mast-log.ps1' }
 . $mastLogDot
 Set-StrictMode -Off  # mast-log.ps1 enables StrictMode; verify scripts probe optional properties
+$edgeLib = Join-Path $PSScriptRoot 'mast-edge-update.ps1'
+if (-not (Test-Path $edgeLib)) { $edgeLib = Join-Path $PSScriptRoot '..\..\lib\mast-edge-update.ps1' }
+. $edgeLib
 $verifyLog = Get-MastVerifyLog -Module 'windows-update-lockdown'
 
 function W { param([string]$Line) Add-Content -LiteralPath $verifyLog -Encoding UTF8 -Value ("[{0}] {1}" -f (Get-Date -Format 'HH:mm:ss'), $Line) }
@@ -36,8 +39,14 @@ $mode = (Get-CimInstance -ClassName Win32_Service -Filter "Name='wuauserv'" -Err
 $wu = Get-Service -Name 'wuauserv' -ErrorAction SilentlyContinue
 W ("wuauserv StartMode={0} Status={1} (informational; re-asserted daily)" -f $mode, $(if ($wu) { $wu.Status } else { 'absent' }))
 
+# 4) Edge Update off (#230). Enforce ran moments ago, so a service or task still live
+#    here was not disabled, rather than drifted back.
+$edge = Get-MastEdgeUpdateState
+W ("edge update: edgeupdate={0} edgeupdatem={1} tasks_enabled={2} off={3}" -f $edge.edgeupdate, $edge.edgeupdatem, $edge.tasks_enabled, $edge.off)
+if (-not $edge.off) { $fail += "Edge Update is not disabled (edgeupdate=$($edge.edgeupdate), edgeupdatem=$($edge.edgeupdatem), tasks enabled=$($edge.tasks_enabled))" }
+
 if ($fail.Count -eq 0) {
-    W 'PASS enforcement task registered and NoAutoUpdate policy set'
+    W 'PASS enforcement task registered, NoAutoUpdate policy set, Edge Update disabled'
     Write-MastSmokeOk -Module 'windows-update-lockdown' | Out-Null
     exit 0
 }

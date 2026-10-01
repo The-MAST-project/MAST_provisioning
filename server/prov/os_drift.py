@@ -66,6 +66,7 @@ class Finding(StrEnum):
     """Worth saying, but not a reason to hold an update back."""
 
     LOCKDOWN_OFF = "lockdown-off"
+    EDGE_UPDATE_ON = "edge-update-on"
     WINRE_DISABLED = "winre-disabled"
 
 
@@ -85,6 +86,16 @@ class ProbeDotnet(BaseModel):
     mscorlib_version: str | None
 
 
+class ProbeEdgeUpdate(BaseModel):
+    """Get-MastEdgeUpdateState (server/lib/mast-edge-update.ps1); ``off`` is its verdict."""
+
+    model_config = _CLOSED
+    edgeupdate: str | None
+    edgeupdatem: str | None
+    tasks_enabled: int
+    off: bool
+
+
 class ProbeLockdown(BaseModel):
     model_config = _CLOSED
     no_auto_update: int | None
@@ -92,6 +103,7 @@ class ProbeLockdown(BaseModel):
     wuauserv: str | None
     usosvc: str | None
     waasmedicsvc: str | None
+    edge_update: ProbeEdgeUpdate
 
 
 class OsProbe(BaseModel):
@@ -185,6 +197,8 @@ def _findings(probe: OsProbe) -> tuple[Finding, ...]:
     out = []
     if probe.lockdown.no_auto_update != NO_AUTO_UPDATE_ON or probe.lockdown.task_state is None:
         out.append(Finding.LOCKDOWN_OFF)
+    if not probe.lockdown.edge_update.off:
+        out.append(Finding.EDGE_UPDATE_ON)
     if probe.winre is not None and probe.winre != "Enabled":
         out.append(Finding.WINRE_DISABLED)
     return tuple(out)
