@@ -445,7 +445,7 @@ never depends on the WAN.
 times out: the site cannot initiate to the institute. A cron job on the Linux side
 is not an option, so both jobs run here and push.
 
-**Only the fetch is scheduled.** Register it against the **canonical clone**, never
+**The fetch is scheduled; the mirror is not.** Register it against the **canonical clone**, never
 a working copy:
 
 ```cmd
@@ -460,6 +460,25 @@ store know this digest" check cannot -- and it repairs what it finds rather than
 leaving a log entry for someone to notice. Verification is still by checksum and
 never by re-transfer: at the measured 3.4-6 MB/s, re-pulling 13.87 GiB to compare
 it would take hours.
+
+A second daily task checks the store itself:
+
+```cmd
+schtasks /create /tn "MAST-store-fsck" /sc DAILY /st 06:30 /ru labcomp2 ^
+  /tr "C:\cygwin64\bin\bash.exe -lc 'bash /cygdrive/c/Users/labcomp2/Desktop/MAST/MAST_provisioning/tools/store-fsck.sh'"
+```
+
+The fetch compares this machine's cache **against** the store; `store-fsck`
+re-hashes every blob **in** the store against its own filename. Without the second,
+the first is comparing against something nobody has checked -- and a rotted blob
+would make every other integrity check in the system agree with the rot. Measured
+2026-09-22: 581 blobs, 14 GB, **33 s**, which is why it can run daily. It writes
+`C:\MAST\logs\store-fsck.log`; exit **1** means corruption, **2** means the store
+could not be reached.
+
+A corrupt blob is reported and **not** deleted. Unlinking it would take out every
+hardlink into it across every host tree at once, and a bad byte is more
+recoverable than a missing file -- re-seed the affected blob instead.
 
 **The mirror is deliberately NOT on a schedule**, and that is the whole point of
 which copy is canonical. It pushes this machine's cache *to* the store, so running
