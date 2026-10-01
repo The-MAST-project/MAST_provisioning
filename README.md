@@ -52,8 +52,12 @@ MAST_provisioning/
 |   |-- lib/mast-log.ps1              # Canonical log path definitions (unit + prov server)
 |   |-- lib/mast-git-currency.ps1     # Pure verdict logic: is a clone at the revision origin reports?
 |   |-- lib/mast-firmware.ps1         # The only BIOS/UEFI reader: setup varstore + power-policy verdict
+|   |-- lib/mast-pending-reboot.ps1   # The one pending-reboot check (reboot provider + OS patch probe)
+|   |-- lib/mast-os-patch-probe.ps1   # Read-only OS patch snapshot of a unit, as JSON (see OS patch baselines)
 |   |-- lib/provisioning.psm1         # Shared PS helpers
 |   |-- data/firmware-baseline.json   # Known-good BIOS setup per board + BIOS version (see Firmware baseline)
+|   |-- data/os-builds.json           # Windows builds the fleet runs + where their monthly updates are found (see OS patch baselines)
+|   |-- data/os-baselines/<build>/    # Proposed OS patch baselines, one JSON per build + month
 |   |-- providers/<module>/...        # Per-module install logic + assets
 |   |-- prov/                         # The driver: orchestration, transport, drift, logging (Python)
 |   |-- check_and_provision.py        # Entry point -- one cycle, or --loop for the autonomous cadence
@@ -148,7 +152,7 @@ renumbering.
 |  1600 | `stage` | Optical stage / mount control software |
 |  1700 | `planewave` | PlaneWave PWI4 + PWShutter + PS3 CLI + PlateSolve3 catalog + PWTools utility bundle. Pre-trusts the PlaneWave and TI Tiva/Stellaris driver publishers and stages PWI4's bundled USB drivers with `pnputil`, outside the installer's idempotency guard so a re-run repairs an already-installed unit |
 |  1800 | `zwo` | ZWO camera drivers, ASI Studio, ASCOM driver |
-|  1850 | `instrument-profiles` | Lay down PWI4 `.cfg` + PHD2 `.reg` **templates** (site location from `C:\WIS\config.toml`; fleet constants verbatim) and apply into the `mast` profile on first logon. Per-unit device->COM binding is the post-hardware `tools/calibrate-instruments.ps1` step, not this provider. |
+|  1850 | `instrument-profiles` | Lay down PWI4 `.cfg` + PHD2 `.reg` **templates** (site location from `C:\WIS\config.toml`; fleet constants verbatim) and apply into the `mast` profile on first logon. Per-unit device->COM binding is the post-hardware `tools/calibrate-instruments.ps1` step, not this provider; that tool also reports whether each ZWO camera is on a SuperSpeed USB link (report only, #221). |
 |  1900 | `vscode` | Visual Studio Code + bundled Python extensions (`ms-python.python`, `ms-python.debugpy`) installed offline from staged `.vsix` |
 |  2000 | `sysinternals` | Sysinternals Suite |
 |  2050 | `jupyter` | Jupyter Notebook + scientific stack (astropy, numpy, scipy, matplotlib, pandas, astroquery, photutils) in a contained venv under `C:\MAST\jupyter` (state kept there; launcher + desktop shortcut). Installs the locked set from `assets/requirements.txt` out of a vendored 118-wheel wheelhouse with `--no-index`, so the wheels are bound to the interpreter the `python` provider pins; `build-mast.ps1` runs `Assert-JupyterWheelhouseInterpreterInSync` and **fails the build** when the two drift -- on either module's build |
@@ -627,6 +631,75 @@ Known offsets for `PE2100U-C7136ES` BIOS `1.03.00` (measured on mast08, 2026-08-
 `Power On By Ring` = 3381 (expect 0).
 
 ---
+
+## OS patch baselines (Windows updates)
+
+Automatic Windows Update stays off (`windows-update-lockdown`); OS patching is to be a
+deliberate, pinnable act ([#15](https://github.com/The-MAST-project/MAST_provisioning/issues/15)).
+What exists today: the server **resolves and fetches a baseline** (stage 1) and **reads each
+unit's patch level against it** (stage 2, below). Nothing installs anything yet.
+
+A **baseline** is a named patch level for one Windows build -- the exact update files that
+define it and the UBR its cumulative update produces, e.g. `19044-2026-09`: LCU KB5122878 +
+.NET 3.5/4.8 CU KB5126046, `target_ubr` 7725. Because LCUs are cumulative, a unit's
+`CurrentBuild.UBR` *is* its OS patch level.
+
+```sh
+cd server
+# What would the latest (or a named) MSRC release contain? Downloads nothing.
+python -m prov.os_updates --repo .. --build 19044 resolve
+python -m prov.os_updates --repo .. --build 19044 --release 2026-Sep resolve
+# Fetch into the machine-wide asset cache and write the baseline manifest.
+python -m prov.os_updates --repo .. --build 19044 propose --cache 'C:\MAST\provider-assets'
+```
+
+- **Which KB** comes from the MSRC CVRF feed, per the product names declared in
+  `server/data/os-builds.json`; the target UBR is the feed's `FixedBuild`.
+- **Which file** comes from the Update Catalog: the row whose title exactly matches the
+  declared `catalog_title`, then the download dialog's URL and SHA1.
+- **`propose`** downloads each file to `<cache>/server/providers/windows-updates/assets/<build>/`,
+  verifies the SHA1, records the sha256, and writes `server/data/os-baselines/<build>/<id>.json`.
+  It is idempotent (a file already hashing right is not re-downloaded), and it refuses to
+  overwrite an existing baseline whose files differ. Committing that JSON is what makes a
+  baseline available; nothing targets it yet.
+- **The Catalog drops superseded updates** -- the fleet's June 2024 LCU (KB5039211) no longer
+  resolves, and `resolve` / `propose` say so (`OS_BASELINE_ERROR the Update Catalog no longer
+  serves KB5039211`). A baseline's bytes must therefore be kept by us.
+
+Only 19044 (Windows 10 IoT Enterprise LTSC 2021, every production unit) is declared. To add
+a build, add a row to `os-builds.json` with the MSRC product names and the Catalog titles,
+and run `resolve` to check that each role matches exactly one row.
+
+### Reading a unit's patch level
+
+`tools/fleet-drift-report.py` prints an **OS patch level** section: a live, read-only
+probe of every reachable unit, compared against the **newest committed baseline** for
+its build. It is informational and does **not** affect the report's exit code; nothing
+can patch a unit yet.
+
+```
+=== OS patch level (live probe; reference = newest committed baseline for the build) ===
+  mast08  behind          19044.4529 -> 7725 (19044-2026-09)  lcu-installed=2024-06-13  .NET behind 4.8.4724.0 -> 4.8.4806.0
+  [WARN] mast00: the Windows Update lockdown is not in place (NoAutoUpdate policy or task missing)
+  [note] File renames are queued for the next reboot on 9 unit(s): ...
+```
+
+- **The probe** is `server/lib/mast-os-patch-probe.ps1` (with `mast-pending-reboot.ps1`).
+  It is too long for inline dispatch, so the report uploads both files over SFTP to a
+  per-call folder under `C:\Windows\Temp`, runs the probe, and removes the folder --
+  the only thing the report ever writes on a unit, and a folder it cannot remove is
+  reported. The verdict is computed server-side by `server/prov/os_drift.py`.
+- **State** is `up-to-date`, `behind`, `ahead`, `no-baseline` (build declared, nothing
+  committed) or `unknown-build`. The UBR and the LCU's install date come from the
+  servicing store's `Package_for_RollupFix` entry, not from DISM's text output.
+- **.NET** compares `mscorlib.dll`'s file version with the 4.8 part of the baseline's
+  .NET `FixedBuild`; a 4.8.1 unit reads `other-line`, not `ahead`.
+- **Blockers** (`[WARN]`, would stop a patch going on): a servicing reboot pending
+  (`CBS RebootPending` / `WindowsUpdate RebootRequired`), a component store DISM does not
+  call healthy, or less than 20 GiB free on C:. A queued file rename is only a note:
+  DISM installs over it, and every unit carries one.
+- **Findings** (`[WARN]`, not blockers): the Windows Update lockdown missing, or WinRE
+  disabled. Secure Boot being off is a note.
 
 ## Dev/test loop (Windows host + VirtualBox VM)
 

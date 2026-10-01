@@ -1,0 +1,34 @@
+{
+  "baseline_id": "19044-2026-09",
+  "build": 19044,
+  "target_ubr": 7725,
+  "msrc_release": "2026-Sep",
+  "msrc_release_date": "2026-09-08T07:00:00Z",
+  "proposed_utc": "2026-09-29T16:26:52Z",
+  "files": [
+    {
+      "role": "lcu",
+      "kb": "5122878",
+      "fixed_build": "10.0.19044.7725",
+      "catalog_update_id": "b8966278-25af-4e52-806f-fda166e18fb3",
+      "url": "https://catalog.s.download.windowsupdate.com/d/msdownload/update/software/secu/2026/09/windows10.0-kb5122878-x64_191c536a44656eb754daa7cb7e9b517b05d690f7.msu",
+      "filename": "windows10.0-kb5122878-x64_191c536a44656eb754daa7cb7e9b517b05d690f7.msu",
+      "path": "server/providers/windows-updates/assets/19044/windows10.0-kb5122878-x64_191c536a44656eb754daa7cb7e9b517b05d690f7.msu",
+      "sha1": "191c536a44656eb754daa7cb7e9b517b05d690f7",
+      "sha256": "d747367b9fc102f7bd52924f936d532bcd1fb4201ef8c574e2c9291be16bfe83",
+      "size": 939426194
+    },
+    {
+      "role": "dotnet",
+      "kb": "5126046",
+      "fixed_build": "2.0.50727.9183 & 3.0.30729.9169 & 4.8.4806.0",
+      "catalog_update_id": "0fa60993-a59c-414e-b201-304f63748cc6",
+      "url": "https://catalog.s.download.windowsupdate.com/c/msdownload/update/software/secu/2026/08/windows10.0-kb5126046-x64-ndp48_28db9902cf368f5a674c016e0bd3f1d63ab8578d.msu",
+      "filename": "windows10.0-kb5126046-x64-ndp48_28db9902cf368f5a674c016e0bd3f1d63ab8578d.msu",
+      "path": "server/providers/windows-updates/assets/19044/windows10.0-kb5126046-x64-ndp48_28db9902cf368f5a674c016e0bd3f1d63ab8578d.msu",
+      "sha1": "28db9902cf368f5a674c016e0bd3f1d63ab8578d",
+      "sha256": "3eb4c3d5a4decbcfd48fd7fdbdd88635fdeaef3b31fe64009dd270feb35d6b52",
+      "size": 81842924
+    }
+  ]
+}

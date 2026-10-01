@@ -9,6 +9,7 @@ is the failure this whole issue is about, one step removed.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import subprocess
 import sys
@@ -17,6 +18,25 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[3]
 GENERATOR = REPO / "tools" / "write-vendor-provenance.py"
 INPUTS = REPO / "server" / "data" / "vendor-inputs.json"
+
+
+def _generator_module():
+    """The generator itself, so which entries get provenance is defined once.
+
+    Not every declared input has a directory in the store: the ex-LFS assets
+    frozen by MAST_provisioning#48 are already blobs there, with their history in
+    this repository. Re-stating that rule here would be the second copy of prose
+    this whole file exists to prevent.
+    """
+    spec = importlib.util.spec_from_file_location("write_vendor_provenance", GENERATOR)
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def store_entries() -> list[dict]:
+    return _generator_module().store_entries(json.loads(INPUTS.read_text(encoding="utf-8")))
 
 
 def generate(out: Path) -> None:
@@ -36,7 +56,7 @@ def provenance_for(out, entry) -> Path:
 
 def test_one_provenance_file_per_declared_input(tmp_path):
     generate(tmp_path)
-    for entry in json.loads(INPUTS.read_text())["inputs"]:
+    for entry in store_entries():
         assert provenance_for(tmp_path, entry).is_file(), entry["name"]
 
 
@@ -50,7 +70,7 @@ def test_a_file_entry_never_becomes_a_directory(tmp_path):
     the blob.
     """
     generate(tmp_path)
-    for entry in json.loads(INPUTS.read_text())["inputs"]:
+    for entry in store_entries():
         if entry["kind"] == "file":
             assert not (tmp_path / entry["name"]).is_dir(), entry["name"]
             assert (tmp_path / (entry["name"] + ".PROVENANCE.md")).is_file()
@@ -60,7 +80,7 @@ def test_each_file_carries_what_recovery_needs(tmp_path):
     # Hashes prove a file is intact and say nothing about how to get it again.
     # These two fields are the entire reason the store exists.
     generate(tmp_path)
-    for entry in json.loads(INPUTS.read_text())["inputs"]:
+    for entry in store_entries():
         text = provenance_for(tmp_path, entry).read_text()
         assert entry["origin"] in text
         assert entry["reacquire"] in text
@@ -69,7 +89,7 @@ def test_each_file_carries_what_recovery_needs(tmp_path):
 def test_the_index_lists_every_entry(tmp_path):
     generate(tmp_path)
     index = (tmp_path / "PROVENANCE.md").read_text()
-    for entry in json.loads(INPUTS.read_text())["inputs"]:
+    for entry in store_entries():
         assert entry["name"] in index
 
 

@@ -1,75 +1,2218 @@
 {
   "_comment": [
-    "The build-host inputs that are NOT in this repo and are hard to re-acquire.",
+    "Every asset the manifest cannot derive, declared with its digest. This file is the",
+    "INPUT; prov.asset_manifest merges it into server/data/assets.json, and that one file",
+    "is what the build, the fetch and the verify all read. Regenerate with",
+    "  python -m prov.asset_manifest --repo . --out server/data/assets.json",
     "",
-    "Everything else a payload needs is tracked here (162 files in git-LFS, 58 provider",
-    "assets), so this list is deliberately short: it is the set that would have to be",
-    "reconstructed by hand if the provisioning server were lost. C:\\MAST\\ on that machine",
-    "also holds regenerable images and scratch; those are in 'not_vendor_inputs' with the",
-    "reason, so the distinction is recorded rather than remembered.",
+    "Two kinds of entry, and the difference is where the bytes are canonical.",
     "",
-    "Kept in step with the build by server/prov/tests/test_vendor_inputs.py: a C:\\MAST\\ path",
-    "used by build/*.ps1 and declared in neither list fails the suite.",
+    "The build-host inputs ('provenance' absent) were never in git at all: their canonical",
+    "copies live in the content store on mast-ns-control, each carrying a PROVENANCE.md",
+    "written from this file by tools/write-vendor-provenance.py. 'prefix' is where such an",
+    "input is keyed in the one asset namespace -- the path its files would have if they",
+    "were tracked -- so the machine-wide cache mirrors the repo tree.",
     "",
-    "Canonical copies live on mast-ns-control at /Storage/mast-vendor/; the provisioning",
-    "server holds a working cache so a build never depends on the WAN. Manifest, provenance",
-    "and the cache-verify job are MAST_provisioning#194."
+    "The 'git-lfs' entry ('provenance': false) is different: those 162 files ARE still in",
+    "this repository, and their digests were derived from the LFS pointers until #48 froze",
+    "them here. A derived digest stops being derivable the moment the pointer goes, so the",
+    "freeze happens BEFORE the untracking rather than with it -- and while both exist,",
+    "test_asset_manifest.py checks every frozen digest against the pointer it came from.",
+    "It spans every module and the client media, so it declares explicit paths and no prefix.",
+    "",
+    "'cached' says whether an entry is fetched into C:\\MAST\\provider-assets at all -- the",
+    "NoMachine seats are issued certificates and deliberately are not, which is what",
+    "Assert-MastNoNoMachineCertsInAssets enforces.",
+    "",
+    "'kind' is the shape the entry has in the canonical store, which is not always its shape",
+    "in the cache: the PlateSolve3 installer and its data payload are one directory there and",
+    "two files beside the planewave certs here. write-vendor-provenance.py keys on it -- a",
+    "'file' entry must not get a directory of its own, which is how full-frame.fits was",
+    "replaced by one.",
+    "",
+    "C:\\MAST\\ on the build host also holds regenerable images and scratch; those are in",
+    "'not_vendor_inputs' with the reason, so the distinction is recorded rather than",
+    "remembered. Kept in step with the build by server/prov/tests/test_vendor_inputs.py."
   ],
   "inputs": [
     {
       "name": "mast-indexes",
-      "path": "C:\\MAST\\mast-indexes",
+      "cached": true,
       "kind": "directory",
+      "prefix": "server/providers/imdisk/assets/mast-indexes/",
+      "used_by": [
+        "imdisk"
+      ],
+      "build_reference": "build/extract-index-seed.ps1",
       "approx_bytes": 10575826560,
-      "used_by": ["imdisk"],
-      "build_reference": "build/build-mast.ps1",
       "why_not_in_repo": "9.9 GB of astrometry.net index FITS; far past what git-LFS should carry, and 71% of every payload.",
       "origin": "Extracted once from the legacy 15 GB index image by build/extract-index-seed.ps1. Upstream is astrometry.net index series 5202+5203.",
-      "reacquire": "build/extract-index-seed.ps1, against the legacy .img, or re-download the series from astrometry.net."
+      "reacquire": "build/extract-index-seed.ps1, against the legacy .img, or re-download the series from astrometry.net.",
+      "files": [
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5202-00.fits",
+          "sha256": "91a3ce19a95fa29d2f0e052e27766ec74adbc021674659884e551d18992f16c6",
+          "size": 101157120
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5202-01.fits",
+          "sha256": "bf7daff2784bd6078bcd78cf30e8b7063098dfe61882ea4f2a3a0d9d99a9fcf8",
+          "size": 101419200
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5202-02.fits",
+          "sha256": "870a7026acc4a67ad2b47238385de1503853df7c8f3382a44ed75185ed05d58a",
+          "size": 101399040
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5202-03.fits",
+          "sha256": "a756d5f5ea4badb47ff33eec7f148f9c5abb9f626e3873359aa245e7dd294baf",
+          "size": 101424960
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5202-04.fits",
+          "sha256": "bf5143f739c2ef357cc6b5fc39e18f6c63130a2f273c5bb622f08a86feb0deaf",
+          "size": 101171520
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5202-05.fits",
+          "sha256": "604b52ca63dbca912be21593b8d694d6d1674f50df4c50d0c45811e74aa333cd",
+          "size": 101422080
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5202-06.fits",
+          "sha256": "b105ef638a7ef6fa0f602df13ee0042d982e66cc04cd87704b9c51933fae7be2",
+          "size": 99532800
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5202-07.fits",
+          "sha256": "455b1e3677f2e18f3f54b4279642ba94564d25251ff1299b8072e19913da5080",
+          "size": 101260800
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5202-08.fits",
+          "sha256": "ab1a6a3a0a247431153ed7e1a43f63055ab42f3b32b60806baa304d223542d91",
+          "size": 101255040
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5202-09.fits",
+          "sha256": "b15ed3e842c90a40e38daf07765ed8aee4026e37485cc47df33112499e2cabfd",
+          "size": 99927360
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5202-10.fits",
+          "sha256": "416c7d168d5dede9cfebf7c4dceb96d129173f5611813198200f10a6cb540be8",
+          "size": 101410560
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5202-11.fits",
+          "sha256": "e9e76c9beba7da7bbeea4fe5d853f0ec21011960249e38ef65786e4c8f230ff0",
+          "size": 101180160
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5202-12.fits",
+          "sha256": "2cf5c32bf2b933c0c62875850fe3c016c90a1d92a0b055470a914bec5778aca9",
+          "size": 101424960
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5202-13.fits",
+          "sha256": "0352007e5aca997c21d8dd990f25ff5de88514310753f82abff2a1ef16533cbf",
+          "size": 101424960
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5202-14.fits",
+          "sha256": "948042c785be53b18ca85bb09554a62071ac756cec279bb1026490a46cedea3b",
+          "size": 101424960
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5202-15.fits",
+          "sha256": "d8bc44585f1f0f18cbbe0b5d54a1fa5af151c293d6cfe536290c3999db7eb961",
+          "size": 101424960
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5202-16.fits",
+          "sha256": "fc7eb2b7596e003bd4fd5014637c1114a074f3aec394b2bf18adb41acb067558",
+          "size": 100445760
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5202-17.fits",
+          "sha256": "bbd10476b7d408273f28e00b92657f28365791976ee81a87302d8000c591a3c4",
+          "size": 101324160
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5202-18.fits",
+          "sha256": "ed61934621e1b845367ff85c50894c1d9733876285f68e08e4d2fa84283f1d74",
+          "size": 99959040
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5202-19.fits",
+          "sha256": "98cfb93348dec23c55cafc89c77be0727cb87fcb4fba9cc704d15d9d1f47dfd4",
+          "size": 101260800
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5202-20.fits",
+          "sha256": "fa04fd12f058d5b63331f509fb13331630a4cceb6873a3467caf1a9e5ed0982b",
+          "size": 101399040
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5202-21.fits",
+          "sha256": "c5e8f2a14c463f5b4d17218dac0683558fd825614b0b89400e8bb02980ebfda1",
+          "size": 101312640
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5202-22.fits",
+          "sha256": "cdebf5cdaa9d387e0849d714604004b9635df77a0d5d21cdf830626c1832a75e",
+          "size": 101424960
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5202-23.fits",
+          "sha256": "383103e124aa1c7f1fdabcbf88a424b7c99b30b3894a6571cd1f332195f62af7",
+          "size": 101424960
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5202-24.fits",
+          "sha256": "7b025a9a9a4bedcfe8b111eece3e17a852ec4456404c236d48f1e0c87951cecf",
+          "size": 101410560
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5202-25.fits",
+          "sha256": "a13fffeafb1d5d5b5ec0649ff2bfa7eaec96143a660bbb755ef87014ab969d09",
+          "size": 100972800
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5202-26.fits",
+          "sha256": "3b0f813cc5091c0a42b6741bd3297d99a757aa9898201e6aec27600186cf552e",
+          "size": 101289600
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5202-27.fits",
+          "sha256": "4388ee07731b0e49588efaaca2be08ac6895ea0c65c362fd875df87708c37486",
+          "size": 99547200
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5202-28.fits",
+          "sha256": "cd6d6773989ad4acf00d67b7edab93957998db72bab2cb4dd5fbd10a16ff63ef",
+          "size": 101424960
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5202-29.fits",
+          "sha256": "d61164204d759e46bd0c9b1a3ad86c4ad315abfcc074179c1b97562533c19f3e",
+          "size": 101424960
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5202-30.fits",
+          "sha256": "8b478ddab462aaa74153e176dfbede7622adfa937c0ab7ee65cedf5a31ae2343",
+          "size": 101419200
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5202-31.fits",
+          "sha256": "4b8428dbc8535c197cf8410be7902811e2feb5427b1d1e66f369687c1997df3f",
+          "size": 101424960
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5202-32.fits",
+          "sha256": "2ff1c36f06884847be80b2b34111a6536ab085283f354d288677c7abb9aaae7e",
+          "size": 101370240
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5202-33.fits",
+          "sha256": "2be5a8c8a52f27f25fc28dc795e8eb22b6a594735353f03e1bcd8986133e9e34",
+          "size": 100431360
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5202-34.fits",
+          "sha256": "3389462efdca0e6fb1e89445ec07fc4d0d133e50c21f41ecfc53e2ccb08a9981",
+          "size": 101312640
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5202-35.fits",
+          "sha256": "14fda1cc398d15cc14819b7c4b1b959b6c0bc882a733728b222d32244d357c7c",
+          "size": 99725760
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5202-36.fits",
+          "sha256": "cfe41e8e48c7b44eba1f726396aee01e933730b8dec3288bb8cc221cd550a6cd",
+          "size": 101424960
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5202-37.fits",
+          "sha256": "ebd9a940ee26f2f8b7207672aa6e0ee0ec8102f922ad75d719bbb95b8ff0f426",
+          "size": 101424960
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5202-38.fits",
+          "sha256": "dd851a8092befe465139b1fcbb579269002c8680f24f895efbe3c0292dd29e32",
+          "size": 101424960
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5202-39.fits",
+          "sha256": "a7c5c2fd9a555d1f1f297cdf57555bd0516d9899034a3da21a8ce560693e8b62",
+          "size": 101424960
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5202-40.fits",
+          "sha256": "658ca26b77bbc8c78eb8bad84387c77a1ddc75d74d0d99bf7b764b4e3fa6ad0b",
+          "size": 101424960
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5202-41.fits",
+          "sha256": "dedfcd662011842e14c812613bc14d56b5cb2f51752046d40ad7e5532e5cf153",
+          "size": 101424960
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5202-42.fits",
+          "sha256": "e5b6f46e35a8a813d53b40fb7b89d50ee923785087ec3ee19d21b5fc171e62dc",
+          "size": 101404800
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5202-43.fits",
+          "sha256": "4756d3c1dfa8b16fbf2cadd596323c566f64f630e4ac09064bff4fa09df6e7e2",
+          "size": 101424960
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5202-44.fits",
+          "sha256": "fcd49fd1f31a183a03c49bb40005588cfde125cd112c432758a999132bb57db0",
+          "size": 101424960
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5202-45.fits",
+          "sha256": "1ccf4887b6d3e3dea7cb5a0e96c78f4768cfba16963a3c17659804ebf2166953",
+          "size": 101424960
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5202-46.fits",
+          "sha256": "5151c530d6bd39b1afa2a3fd2cb014c7a3300978e19a813f9964876652f16531",
+          "size": 101355840
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5202-47.fits",
+          "sha256": "0e31c8b20cdff2e13b1798520e9f2f6f2f008d1109f7718f67dfef8e0140a896",
+          "size": 101424960
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5203-00.fits",
+          "sha256": "b5f6dbf2e077a333b7204a9bc7c0884fd3b5d8c24e11ff862e598c1b4ccb335d",
+          "size": 119171520
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5203-01.fits",
+          "sha256": "ce8a700a74885bf1cdf066ffe99307373d7a37beb71cd9a86a2a859c1a5879b4",
+          "size": 119174400
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5203-02.fits",
+          "sha256": "8fb803490a80a505015d9ebc313063d5502b99011787cdcb9b1dd58ca5ca5479",
+          "size": 119165760
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5203-03.fits",
+          "sha256": "528ae2a95a749cd6110ded66f1aa047384f322aa90dd9fb6671118dbafc6a13d",
+          "size": 119174400
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5203-04.fits",
+          "sha256": "ba71a3934aaaf04ee1b876082692f670e086bea4b5e5edb28eae606f693ef9cd",
+          "size": 119174400
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5203-05.fits",
+          "sha256": "7d9a65bcedf748d58fadb574ac8f820503a52efdde1bcec70686a2b98750d709",
+          "size": 119174400
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5203-06.fits",
+          "sha256": "51716ee690305aaee21efe67ae3a12f5b1e721e7793fe0f87920c3402c8f768e",
+          "size": 119148480
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5203-07.fits",
+          "sha256": "9dd88380534bdcdb922f5be6e62aa5f310e4f25c4f6d1f41f037cc8c2526b50b",
+          "size": 119174400
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5203-08.fits",
+          "sha256": "f0df0e88d14238ce64687882534dfdcb5703673c4eba32f8d13e4fb19a957aa3",
+          "size": 119174400
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5203-09.fits",
+          "sha256": "32fcd30df1b2dd55e9553a86ae9f898d9281b3a8bf06c9713dce3beb945daf85",
+          "size": 119168640
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5203-10.fits",
+          "sha256": "bea572dfec04a1e87cb70f972c2a36c1658533776a5e596def12481130a2b795",
+          "size": 119174400
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5203-11.fits",
+          "sha256": "8cae33c5f32369342557e79fe532278f3477377cc3b4caff4177e725cf52001c",
+          "size": 119174400
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5203-12.fits",
+          "sha256": "a2e4465fd53c64293141f7c6aa0fb4297ff222adaf1fce94587a4f09b066328c",
+          "size": 119174400
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5203-13.fits",
+          "sha256": "af92105ddb29bafc32fc0b2c5e35311bccdf115cefe68c02d3dd3412db4c267d",
+          "size": 119174400
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5203-14.fits",
+          "sha256": "0a88468a564825deafef053e110271eaa01fb4b0625b482b7931259843a363d4",
+          "size": 119174400
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5203-15.fits",
+          "sha256": "d794d740d5d33a73cbd2527742d7115214e470993541987742e0cdf8daec6f7b",
+          "size": 119174400
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5203-16.fits",
+          "sha256": "e98acac06213b90eb2b9a369afa6635d6ca97fcc22a73f3c1cd2169b2fc7b09b",
+          "size": 119174400
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5203-17.fits",
+          "sha256": "fcc9ca2aca509794289bf6bf5c2855795de58a9378a35033a85e9759fe42f6e3",
+          "size": 119174400
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5203-18.fits",
+          "sha256": "2bc55faba6c79890e6d26ed4b2956bcfabb4d2352677820eed9a0d8b22220e79",
+          "size": 119168640
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5203-19.fits",
+          "sha256": "470be6aae35efdb189a88537c379b039916412e84a7e70a8ba216d3e5a64068f",
+          "size": 119174400
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5203-20.fits",
+          "sha256": "8f47b912e14980bd815498a3bc7ccf4dd473938bb3492e00e8f5867f9cdab792",
+          "size": 119162880
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5203-21.fits",
+          "sha256": "d33ac1ae4fa7adc1558cc71f69836bd821a6f6d0085ddfc2640ea7456b17bf59",
+          "size": 119171520
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5203-22.fits",
+          "sha256": "769227faf73c03efe32a4f63187a13a2d71cbceb3c7fef4668eeeece3683dfef",
+          "size": 119174400
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5203-23.fits",
+          "sha256": "dd78b49577325b312cee792e07d829a17e2be28ddc4f312f0cf6319b8fddf73c",
+          "size": 119174400
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5203-24.fits",
+          "sha256": "2ba52886fd5308f268c2b3135c884d3fee780f08db8dff19fb0abc5aa6797b71",
+          "size": 119174400
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5203-25.fits",
+          "sha256": "9953e288dd89de3939bcbe95e79b26950dcc987e0b303c91d5e3af3cf1c74f54",
+          "size": 119174400
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5203-26.fits",
+          "sha256": "fe1e5a34d119a4b23dde9b9bd418d73fb615ef48f6ebaab91392638f24af77d7",
+          "size": 119174400
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5203-27.fits",
+          "sha256": "69c760ef3161c3cc65537d9ffb8465f5666e028271027799d29d3c72df4a3da8",
+          "size": 119148480
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5203-28.fits",
+          "sha256": "7c23c65e0a8eaeb7c92b592727875ec8e69876d84ea575bc2f2b25f51695527d",
+          "size": 119174400
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5203-29.fits",
+          "sha256": "bc6615fe3328a0412f36233746a32f5b2dcf5715c43c2d530362a04685d39e57",
+          "size": 119174400
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5203-30.fits",
+          "sha256": "858c6dbe8e632b97f04aea43f15fce000a286ad431a85381ac4efdf695ec0c83",
+          "size": 119171520
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5203-31.fits",
+          "sha256": "afb42f00c8085f7be75179c2e5ca116362b6011761ae0291f5dd037e0334deed",
+          "size": 119174400
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5203-32.fits",
+          "sha256": "435e994e12c0b470840a83f613957d972d597d3f553b11043f87a57400e1ee7c",
+          "size": 119174400
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5203-33.fits",
+          "sha256": "ef817b3753395ebc59493e254efb7c9f369999f30405be387dae30b14f11faf8",
+          "size": 119171520
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5203-34.fits",
+          "sha256": "4447d1f96793e8a87a18c677e55b7ac77c36cfb1b833845efac0d223f6f18b2d",
+          "size": 119174400
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5203-35.fits",
+          "sha256": "056cd42581ec8e4bc8d0ef709186d11f3fa0b3894846451d99ef4ce01b36c8ee",
+          "size": 119160000
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5203-36.fits",
+          "sha256": "55457362340eec7697172f0e4e047ed3c799447144008a09be91c0e2293cb2b6",
+          "size": 119174400
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5203-37.fits",
+          "sha256": "034f31553ea646c18571f1cec4c5e566f9ab566fe87b6a013fc7f6d2bd0859d8",
+          "size": 119174400
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5203-38.fits",
+          "sha256": "37c3d648e560a24d4184ed8a4ba06d70bb56ad42accc55842ffcb99aa568237d",
+          "size": 119174400
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5203-39.fits",
+          "sha256": "5a22bdb895286f772c62ee321a21f23d366b0d6f69379b80bc472597fa99b495",
+          "size": 119174400
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5203-40.fits",
+          "sha256": "fdaabe963fbd0a7d45523e71d846cc674c0e7163d8f9fe78965afffbd442aca3",
+          "size": 119174400
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5203-41.fits",
+          "sha256": "eb29cd2e3a0c16f2a3654504cd54ffa4443e73bdff2a2f89b624f0e389664b00",
+          "size": 119174400
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5203-42.fits",
+          "sha256": "f1b137ccd21cddee2bf7cf72ca5b8d59efa7b6d4cd7026f12af86d7f0c5c3aae",
+          "size": 119162880
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5203-43.fits",
+          "sha256": "37a64d9fcfd33ee0953ce55081bde768c5bda1433096a7d05aae4b7ce51c5380",
+          "size": 119174400
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5203-44.fits",
+          "sha256": "dd1f1aafd3526c90e20c5f6e8f5d0d81f21e49657690300c44821dabcb860f75",
+          "size": 119174400
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5203-45.fits",
+          "sha256": "357f7999b0446c4558df30173b251d77d108db8832304c8a9af98dbf22bc76b2",
+          "size": 119174400
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5203-46.fits",
+          "sha256": "c9d375dd19f489a877320388eab58a7c51ef32808c18db1ca8f29e36ff49e5a4",
+          "size": 119174400
+        },
+        {
+          "path": "server/providers/imdisk/assets/mast-indexes/index-5203-47.fits",
+          "sha256": "7fa682058a9bbf829ec05344cd1d72de6521781f8974a8081ce575d4a86b696e",
+          "size": 119174400
+        }
+      ]
     },
     {
       "name": "full-frame.fits",
-      "path": "C:\\MAST\\full-frame.fits",
+      "cached": true,
       "kind": "file",
+      "prefix": "server/providers/astrometry/assets/full-frame.fits",
+      "used_by": [
+        "astrometry",
+        "mast-validation"
+      ],
       "approx_bytes": 93559680,
-      "used_by": ["astrometry", "mast-validation"],
-      "build_reference": "build/build-mast.ps1",
       "why_not_in_repo": "90 MB of real sky data; the solve input the astrometry smoke test needs to be a real solve rather than a skipped one.",
       "origin": "A mast00 full frame. The astrometry verify's solve arguments are tuned to this specific frame.",
-      "reacquire": "Any comparable MAST full frame, but verify-astrometry.ps1's solve parameters would need re-tuning."
+      "reacquire": "Any comparable MAST full frame, but verify-astrometry.ps1's solve parameters would need re-tuning.",
+      "files": [
+        {
+          "path": "server/providers/astrometry/assets/full-frame.fits",
+          "sha256": "fd8618de757bb29080ce5ea352b0332257d176caf3b84a57c35af4d26570e526",
+          "size": 93559680
+        }
+      ]
     },
     {
       "name": "ps3-catalog",
-      "path": "C:\\MAST\\ps3-catalog",
+      "cached": true,
       "kind": "directory",
+      "prefix": "server/providers/planewave/assets/",
+      "used_by": [
+        "planewave"
+      ],
       "approx_bytes": 2066278429,
-      "used_by": ["planewave"],
-      "build_reference": "build/build-mast.ps1",
       "why_not_in_repo": "2.0 GB PlaneWave vendor download (Setup_PlateSolve3_Catalog.exe plus its Inno data payload .bin). Both must stay together and keep their exact names.",
       "origin": "Downloaded from planewave.com. Real UCAC4/Orca catalog for PlateSolve3.",
-      "reacquire": "Re-download from planewave.com; without it 'ps3cli --server' has no catalog and the planewave verify fails."
+      "reacquire": "Re-download from planewave.com; without it 'ps3cli --server' has no catalog and the planewave verify fails.",
+      "files": [
+        {
+          "path": "server/providers/planewave/assets/Setup_PlateSolve3_Catalog-1.bin",
+          "sha256": "ca381f3e9a9f1908284e934c61e1210a24e571146bef0e2d553c65736beaea30",
+          "size": 2065946757
+        },
+        {
+          "path": "server/providers/planewave/assets/Setup_PlateSolve3_Catalog.exe",
+          "sha256": "7ca773cdb8d16e86c6dee807e15283a77dfcbecb9afe6f79de77b353b803ccae",
+          "size": 331672
+        }
+      ]
     },
     {
       "name": "cygwin-pkg-cache",
-      "path": "C:\\MAST\\cygwin-pkg-cache",
+      "cached": true,
       "kind": "directory",
-      "approx_bytes": 183500800,
-      "used_by": ["astrometry-dependencies"],
-      "build_reference": "build/build-mast.ps1",
+      "prefix": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/",
+      "used_by": [
+        "astrometry-dependencies"
+      ],
+      "build_reference": "build/harvest-cygwin-cache.ps1",
+      "approx_bytes": 182503093,
       "why_not_in_repo": "A frozen harvest of a working unit's own cygwin package cache, not a redistributable artifact.",
       "origin": "Harvested from a provisioned unit by build/harvest-cygwin-cache.ps1. Deliberately frozen: the itefix mirror is rolling, and moving past cygwin 3.6.9 broke the pinned fitsio wheel (#20).",
-      "reacquire": "build/harvest-cygwin-cache.ps1 against a unit still on the pinned cygwin version. Re-harvesting from a newer mirror is NOT equivalent."
+      "reacquire": "build/harvest-cygwin-cache.ps1 against a unit still on the pinned cygwin version. Re-harvesting from a newer mirror is NOT equivalent.",
+      "files": [
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/noarch/release/dejavu-fonts/dejavu-fonts-2.37-1.tar.xz",
+          "sha256": "a0dabadeb236cb278957f23435bba7f5ffd1e21462aee76a158d523b8b67c768",
+          "size": 2513500
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/noarch/release/ghostscript-fonts-other/ghostscript-fonts-other-6.0-1.tar.bz2",
+          "sha256": "692d9effa1ad1c11b7c05561e6c113a751b923e0929a6edcd4b6af4bdc9ca01f",
+          "size": 724924
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/noarch/release/gsettings-desktop-schemas/gsettings-desktop-schemas-3.24.1-1.tar.xz",
+          "sha256": "0836277de04f56c8b90ff71d5710db428159742d423199fc537a61008a44eb5d",
+          "size": 502752
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/noarch/release/poppler-data/poppler-data-0.4.10-1.tar.xz",
+          "sha256": "4960893e4b41137f8c1361d16407e23b4b4fcd84d736a97519a58c22801a1522",
+          "size": 1600620
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/noarch/release/publicsuffix-list/publicsuffix-list-dafsa/publicsuffix-list-dafsa-20260129-1-noarch.tar.xz",
+          "sha256": "634deca6a635920198f53896a2af286dc294dafe528e661d89315ba8bce6f421",
+          "size": 51904
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/noarch/release/python-attrs/python39-attrs/python39-attrs-25.4.0-1-noarch.tar.xz",
+          "sha256": "70b74dce4c9fee6e1d74094c62666ac74af08fc9c86d0be4d7ef210689cc6e7c",
+          "size": 86528
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/noarch/release/python-babel/python39-babel/python39-babel-2.17.0-1-noarch.tar.xz",
+          "sha256": "4a6620fa20f7b3e442b1f1397978d4e777338655638fc3c336f3d53d7427168f",
+          "size": 6275108
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/noarch/release/python-chardet/python39-chardet/python39-chardet-5.2.0-1.tar.xz",
+          "sha256": "621be80a9fbdacdf1868fede541faa5a2eede9d855f05a7cea19cadf2b4a1f35",
+          "size": 191920
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/noarch/release/python-dateutil/python39-dateutil/python39-dateutil-2.9.0.post0-1.tar.xz",
+          "sha256": "19cce564ec9065619d89adfbfd7054070b3fefc4b315dbff4fc5786da3d6c5d4",
+          "size": 278844
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/noarch/release/python-docutils/python39-docutils/python39-docutils-0.22.4-1-noarch.tar.xz",
+          "sha256": "b8d1d39edc68abed8b14a471c9084987adee9215d35808c14ea911bbdd009d2a",
+          "size": 823240
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/noarch/release/python-filelock/python39-filelock/python39-filelock-3.17.0-1.tar.xz",
+          "sha256": "37976d20b27d874ea171538b12adc413663441fe3f750a2e5ca18d846dcec413",
+          "size": 21152
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/noarch/release/python-hypothesis/python39-hypothesis/python39-hypothesis-6.124.9-1.tar.xz",
+          "sha256": "1381a86d1a37ad6ca0eab9e3d3cf72b838877e55c4b1bb768cce8f113f86fbc7",
+          "size": 656464
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/noarch/release/python-idna/python39-idna/python39-idna-3.11-1-noarch.tar.xz",
+          "sha256": "fc1dbfa15f1fc24d5df1e6ae0f3026d326dc0dec357388c935763b9080f786ab",
+          "size": 72068
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/noarch/release/python-imagesize/python39-imagesize/python39-imagesize-1.3.0-1.tar.xz",
+          "sha256": "a074c84f13a68f0ac940d79be6a852b1569107659981fa67a512174b54bd51a6",
+          "size": 8932
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/noarch/release/python-importlib-metadata/python39-importlib-metadata/python39-importlib-metadata-8.7.1-1-noarch.tar.xz",
+          "sha256": "5f99c2e611f81cadd97b1823843f91a129835e1e7b5a2ae178ba6c9873c35f9e",
+          "size": 48500
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/noarch/release/python-iniconfig/python39-iniconfig/python39-iniconfig-2.0.0-2.tar.xz",
+          "sha256": "9e36cde05debd335724d5da36eff12aa421f0ca5f04cd129249d7faec09da98a",
+          "size": 8904
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/noarch/release/python-jinja2/python39-jinja2/python39-jinja2-3.1.6-1-noarch.tar.xz",
+          "sha256": "b8d90f5e01091e0b516495e55d130c04711ea2f939e001ad669dc79d333314bd",
+          "size": 227084
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/noarch/release/python-olefile/python39-olefile/python39-olefile-0.47-1.tar.xz",
+          "sha256": "1de1a0dd80c5a7186230fb29f84b94a1f29d22fb12ba553f9d353fbbf011cbfa",
+          "size": 51944
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/noarch/release/python-packaging/python39-packaging/python39-packaging-25.0-1-noarch.tar.xz",
+          "sha256": "34fda04dadf8a94f5481e4cbeb0900e14e7a9c194f21744891df3d142837033f",
+          "size": 96192
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/noarch/release/python-pip/python39-pip/python39-pip-26.0.1-1-noarch.tar.xz",
+          "sha256": "439cc01fb49219078def56305dd72b11c8a8dbaded9191c472160060f6d7b1d6",
+          "size": 1942112
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/noarch/release/python-platformdirs/python39-platformdirs/python39-platformdirs-4.4.0-1-noarch.tar.xz",
+          "sha256": "08ca6e9c24ae410eae8390e4996f8e5c87002ecc5f1033eb540ff904780f1ade",
+          "size": 26944
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/noarch/release/python-pluggy/python39-pluggy/python39-pluggy-1.6.0-1-noarch.tar.xz",
+          "sha256": "c32257af76806fde9170e98b542c89a4dc0484b978d7b11aebdeee4d887fca8f",
+          "size": 33704
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/noarch/release/python-pycparser/python39-pycparser/python39-pycparser-2.23-1-noarch.tar.xz",
+          "sha256": "384b9ccbf8347aa9ad56f7773731357f4cf9a49f02f0c12a371912f8e6d02518",
+          "size": 178268
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/noarch/release/python-pygments/python39-pygments/python39-pygments-2.19.2-1-noarch.tar.xz",
+          "sha256": "a4bafc64c5338f2f6274560cc5f3041ed3470a6a1485cfe33e82e75e6d03a030",
+          "size": 1787420
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/noarch/release/python-pytest/python39-pytest/python39-pytest-8.3.4-1.tar.xz",
+          "sha256": "a286a6946dbf2770842717f13e4a389fe6b9d43cf577f3c8e750f842b53fbde9",
+          "size": 538844
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/noarch/release/python-pytz/python39-pytz/python39-pytz-2025.2-1-noarch.tar.xz",
+          "sha256": "eaf30de4c9f8b7a14243c86b873ae858e52baacd46b5b88ba77db84f22304721",
+          "size": 157316
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/noarch/release/python-requests/python39-requests/python39-requests-2.32.5-1-noarch.tar.xz",
+          "sha256": "71980a86179d579e24a9cbe789c029790e3c12560a9189ba2f6ea40fccf351e7",
+          "size": 110428
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/noarch/release/python-setuptools/python39-setuptools/python39-setuptools-80.9.0-1-noarch.tar.xz",
+          "sha256": "652a1ac24a681b8fe86da0c984d9eeec0b0e67acd59803096506673bf2df0a96",
+          "size": 1583012
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/noarch/release/python-six/python39-six/python39-six-1.17.0-1.tar.xz",
+          "sha256": "38c4d9a0c5a2c62c1d8b59fb8171548244c01079095bd6df5c63bc3c22c261e2",
+          "size": 23004
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/noarch/release/python-snowballstemmer/python39-snowballstemmer/python39-snowballstemmer-2.2.0-1.tar.xz",
+          "sha256": "9936ab34565866c2348c637513d7ecb2f5cde3ddc7c8b1eaa45ee0ac21b7fa16",
+          "size": 175152
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/noarch/release/python-sortedcontainers/python39-sortedcontainers/python39-sortedcontainers-2.4.0-2.tar.xz",
+          "sha256": "67a51088d7ef6b4c4d663fa0ca8b48224ad63b6cd07b937b4557bbe4eafb4968",
+          "size": 41828
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/noarch/release/python-sphinx/python39-sphinx/python39-sphinx-4.4.0-1.tar.xz",
+          "sha256": "b9731d27c374881cbdfffacf012760ca67c7b059430ec3990fd81185405d2172",
+          "size": 1921580
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/noarch/release/python-sphinxcontrib-serializinghtml/python39-sphinxcontrib-serializinghtml/python39-sphinxcontrib-serializinghtml-1.1.5-1.tar.xz",
+          "sha256": "31d9fd116cc926f638dcaa7c60a6baf594001ea0054592cd56c82589299195c0",
+          "size": 20688
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/noarch/release/python-toml/python39-toml/python39-toml-0.10.2-3.tar.xz",
+          "sha256": "14a981144407d5ed64c34c9b5e4125cffbbdec8a1dbac85d90a3c861f4ca0db0",
+          "size": 29196
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/noarch/release/python-typing_extension/python39-typing_extension/python39-typing_extension-4.15.0-1-noarch.tar.xz",
+          "sha256": "213d4feaf218e626e38dcc49e04df9942d890a751cffaa46bc4f308fd25f0973",
+          "size": 68744
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/noarch/release/python-urllib3/python39-urllib3/python39-urllib3-2.6.2-1-noarch.tar.xz",
+          "sha256": "97f637ab28dce5ab69ee75256ae1315f990a9cf81834b89a4873baf626a53ea1",
+          "size": 199812
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/noarch/release/python-wheel/python39-wheel/python39-wheel-0.45.1-1.tar.xz",
+          "sha256": "77dc52b7ad509861013e272dc503618dccac5ce042875478ef93a80befdbde0c",
+          "size": 106880
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/noarch/release/python-zipp/python39-zipp/python39-zipp-3.23.0-1-noarch.tar.xz",
+          "sha256": "3fc347d6328773ee5a211f7f8960fcfac043530f15e337cd6735e97af258974f",
+          "size": 18528
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/noarch/release/tzdata/tzdata-2026b-1-noarch.tar.xz",
+          "sha256": "02d4344f7c368f6098137c7282d0c184c4703ce28b49a72eee26e5e1c70c1b6d",
+          "size": 183800
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/noarch/release/urw-base35-fonts/urw-base35-fonts-20170801-5.tar.xz",
+          "sha256": "05dc637952f885ca89b3c8447993b1e098fba1f48bc9332350b9b1edf29d10e5",
+          "size": 6351440
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/attr/libattr1/libattr1-2.5.2-2-x86_64.tar.xz",
+          "sha256": "aeba975424886ff2a520e02df22a22876ff3c1d3abb32810297646896667e19d",
+          "size": 6160
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/binutils/binutils-2.46.1-1-x86_64.tar.zst",
+          "sha256": "19e08b34d05cd1a1c03724a8fd635cc71a5c779f228ca0d7d04c7da7fb039470",
+          "size": 9287354
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/brotli/libbrotlicommon1/libbrotlicommon1-1.2.0-1-x86_64.tar.xz",
+          "sha256": "6be7948907c016e65bce4e38fdd1cac2375cb2e3cd232c97f7118c8aef85468b",
+          "size": 55340
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/brotli/libbrotlidec1/libbrotlidec1-1.2.0-1-x86_64.tar.xz",
+          "sha256": "ac797bd3e7bc85de9f5d0d3da8fa303eed404b855308f73f51549b5c5c8b157d",
+          "size": 20668
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/cairo/libcairo2/libcairo2-1.18.4-1.tar.xz",
+          "sha256": "72f836ac122785c76927c1dc360f095413164c95ed4a0ed8301e4c2557cda1d7",
+          "size": 634724
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/cfitsio/libcfitsio10/libcfitsio10-4.6.4-1-x86_64.tar.zst",
+          "sha256": "1ba9df3e7e2273908d66afac692b84f739dc13e9189b9b6ff8cb45c029d1b8a5",
+          "size": 493481
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/curl/libcurl4/libcurl4-8.20.0-1-x86_64.tar.xz",
+          "sha256": "e1d93a7a17d349fd9e8b67291e7cf851669cef441cecda1179fed31836502f60",
+          "size": 340780
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/cygwin/cygwin-3.6.9-1-x86_64.tar.xz",
+          "sha256": "a9b62ff4a288613eec6b4034c414234668fb827a785e8dc29ebf8e6c9545f70a",
+          "size": 1599984
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/cygwin/cygwin-devel/cygwin-devel-3.6.9-1-x86_64.tar.xz",
+          "sha256": "9b3b0a84bd0707d30c4f98937582811414ab2f8c347f3d758c5eba62b530eed8",
+          "size": 320340
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/cyrus-sasl/libsasl2_3/libsasl2_3-2.1.27-1.tar.xz",
+          "sha256": "0f98a05f75dbe15e6b9e38719c53fd0f1295a6880541b519b9fc8e77ba4dda55",
+          "size": 138480
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/db/libdb5.3/libdb5.3-5.3.28-2.tar.xz",
+          "sha256": "f1e75316215f1ab30721935308470bd10a912a026ba986dcbbaab01c9a4e8e0e",
+          "size": 883388
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/desktop-file-utils/desktop-file-utils-0.28-1.tar.xz",
+          "sha256": "9054a5dba5762fe454540d4497a05f2cf4956497e8787cfc14fb544d17317047",
+          "size": 83620
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/e2fsprogs/libcom_err2/libcom_err2-1.44.5-1.tar.xz",
+          "sha256": "ce3d6826165e61142ba2ca45318e94bfb345a814983a614f7b0b452affe80817",
+          "size": 4132
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/expat/libexpat1/libexpat1-2.8.0-1-x86_64.tar.xz",
+          "sha256": "d9d7b7658d07068949e431cc767b18c94a7c533fbefbb588f6ea045159b674fb",
+          "size": 56784
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/file/file-5.46-1-x86_64.tar.xz",
+          "sha256": "ea0f3037cb9924782048a614a12033ed45da32bd3d1c579653df5dbd83099c42",
+          "size": 840940
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/fontconfig/libfontconfig-common/libfontconfig-common-2.18.1-1-x86_64.tar.xz",
+          "sha256": "ea6c9160e4080040001e5c153e978791fefbd42930f4aa9beacef348484dbcd3",
+          "size": 76712
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/fontconfig/libfontconfig1/libfontconfig1-2.18.1-1-x86_64.tar.xz",
+          "sha256": "4ffe64af934dab5993deb140392657f626b675c9960ab6c94fe5299b5b344522",
+          "size": 120108
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/freetype2/libfreetype6/libfreetype6-2.13.3-1.tar.xz",
+          "sha256": "926ad2ad00e2bcbb4f651ce3793d211a132fa89a48b04df8dd235dd2744a70f0",
+          "size": 482788
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/fribidi/libfribidi0/libfribidi0-1.0.16-1.tar.xz",
+          "sha256": "37a0f3642b8e3ca20afdb389159a931ef2266028f08ddeadebfbd49767982953",
+          "size": 18152
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/gawk/gawk-5.4.0-1-x86_64.tar.xz",
+          "sha256": "56cbeeff8e613014fc9091f28cfb1327db096c8f004cf0f69ff5cfb10550bc2a",
+          "size": 1496256
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/gcc/gcc-core/gcc-core-14.4.0-1-x86_64.tar.zst",
+          "sha256": "e99fe5e64fbd4cd1b06fa1b7f3ee6c705c631aa024943870d9b9ecce7d096948",
+          "size": 39606756
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/gcc/libatomic1/libatomic1-14.4.0-1-x86_64.tar.zst",
+          "sha256": "73be57399c74f3c18c33251fb1d461e1ccb658f8ef71cd9eadfc16a1593c5c6d",
+          "size": 6589
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/gcc/libgcc1/libgcc1-14.4.0-1-x86_64.tar.zst",
+          "sha256": "81df68770dd59e1e451d6bce1ba75c020339ce05cf262c6ea5e76aea233ef1f0",
+          "size": 59166
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/gcc/libgfortran5/libgfortran5-14.4.0-1-x86_64.tar.zst",
+          "sha256": "08ca2308c461e932480450331b52aacca47b92bc6d02ee9f75ea55cca4413a76",
+          "size": 867946
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/gcc/libgomp1/libgomp1-14.4.0-1-x86_64.tar.zst",
+          "sha256": "d9db3afeeaa28c5a7b4085ec7ff14e92088cf561f2538eeca0dca5b6e57c46cc",
+          "size": 112610
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/gcc/libquadmath0/libquadmath0-14.4.0-1-x86_64.tar.zst",
+          "sha256": "b1dce77c368193cb988fbc64d8611abb611f7a9eea87a88c9a25ea8691273e5a",
+          "size": 159401
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/gcc/libstdc++6/libstdc++6-14.4.0-1-x86_64.tar.zst",
+          "sha256": "146d46ab5e842dddba46aa32869d408303315e6d0da4e304faafcd9fc20fb776",
+          "size": 651767
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/gdbm/libgdbm_compat4/libgdbm_compat4-1.26-1-x86_64.tar.xz",
+          "sha256": "e3b7180b02cba4b6a9439df6786869bd0f5e90077c7ddf12fa82aef77ccb6352",
+          "size": 3892
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/gettext/gettext-locale-alias/gettext-locale-alias-0.26-1-x86_64.tar.xz",
+          "sha256": "137dead760a5e15b749e812cce6081d3af2d463d98660a183d7af23fbb230f62",
+          "size": 1596
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/gettext/libintl-devel/libintl-devel-0.22.5-1.tar.xz",
+          "sha256": "27f754f7db29a4c73ecdc85651d8af393fd329439bc5d04835816eeb4acbcb8d",
+          "size": 221432
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/ghostscript/ghostscript-10.03.1-1.tar.xz",
+          "sha256": "7c92c8951c3c0fbec865c7924576ddbd1962b71b8d4dd314db31eb16697ac828",
+          "size": 12956080
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/ghostscript/libgs10/libgs10-10.03.1-1.tar.xz",
+          "sha256": "3dc7a8816d787b951baa3e21079ca545fd1831416fa703252f8a048a974265f0",
+          "size": 4166208
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/glib2.0/libglib2.0_0/libglib2.0_0-2.88.2-1-x86_64.tar.xz",
+          "sha256": "912aca3ab78f02ed87e9d519860542dfa9d0e967bc097e1e4ea240bc4c53f029",
+          "size": 2573584
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/graphite2/libgraphite2_3/libgraphite2_3-1.3.14-1.tar.xz",
+          "sha256": "0cdb5bd22d545e10f0cf1200e553ba49e8d3254d59a08825dd3e6fb7c8a7f057",
+          "size": 61468
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/groff/groff-1.24.1-1-x86_64.tar.zst",
+          "sha256": "e862f09acc52065a5f9c26d29d70eae602611679bf4bc0d2971e9c788a92d90e",
+          "size": 5878965
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/harfbuzz/libharfbuzz0/libharfbuzz0-11.0.1-2-x86_64.tar.xz",
+          "sha256": "3b06eafa9b699cf632d570b221222751757c2d8b344d15a83f6e5073cc8952e3",
+          "size": 466396
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/isl/libisl23/libisl23-0.27-1.tar.zst",
+          "sha256": "afea3bb46754f0a14cc13d5bae73691a508a4884016623e974565c0bb2b76a9e",
+          "size": 626213
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/jasper/libjasper4/libjasper4-2.0.14-1.tar.xz",
+          "sha256": "a3857e594aab5f6c804492a34275584514f87535e5427280e6ee2bed331b1aa3",
+          "size": 119468
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/jbigkit/libjbig2/libjbig2-2.1-2.tar.xz",
+          "sha256": "ad81152b7ada6b787d3072e231058af4be9641c4a17d3cfc3629d54c19814088",
+          "size": 24548
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/krb5/libgssapi_krb5_2/libgssapi_krb5_2-1.15.2-2.tar.xz",
+          "sha256": "c15f980020ad00eaedeb8587ad67cd63fdfe375bd3c45d4a830dccbe2604d9fc",
+          "size": 102828
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/krb5/libk5crypto3/libk5crypto3-1.15.2-2.tar.xz",
+          "sha256": "32970af8cb53f602464dc2ccc03492214709939b9d104b5ba9208b9bb2294b61",
+          "size": 73344
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/krb5/libkrb5_3/libkrb5_3-1.15.2-2.tar.xz",
+          "sha256": "c7a3097f9b70f94d63b3423d77950f8133ea8cc09866cdd549da054d4a3a25ff",
+          "size": 236076
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/krb5/libkrb5support0/libkrb5support0-1.15.2-2.tar.xz",
+          "sha256": "b16c2fc9c30e3e8d08d4c03a971aaa1542dd3adb079c5481bae36f20517a20cc",
+          "size": 14424
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/lapack/liblapack0/liblapack0-3.12.0-1.tar.xz",
+          "sha256": "56f5a085152f6abdacda2a21dcc0c6944ccfdcb60b582fd225f06c0a0f99b0db",
+          "size": 2291988
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/lcms2/liblcms2_2/liblcms2_2-2.16-1.tar.xz",
+          "sha256": "ec37b480e927e1a32a049723e65a336c5da16b37b711392db9b19d5072bd05af",
+          "size": 135188
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/less/less-692-1-x86_64.tar.xz",
+          "sha256": "86571e1e280344933f45c8597be57013cd15440fab7e92ac9c39673a10e155a0",
+          "size": 165804
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/libICE/libICE6/libICE6-1.1.2-1.tar.xz",
+          "sha256": "311babc3a3fc1e6b1ed6b35da1237c2af0354aa8d8243d6ce74792858abec57c",
+          "size": 59484
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/libSM/libSM6/libSM6-1.2.6-1-x86_64.tar.xz",
+          "sha256": "e010d36c56a28abd02d2f667ff4e1da7f8691a970a9103b453810d1ec01928b5",
+          "size": 32004
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/libX11/libX11_6/libX11_6-1.8.12-1-x86_64.tar.xz",
+          "sha256": "a605b07d30aee139db485d3df908228f95058e18d6328458845c6a3872cc1eb5",
+          "size": 823180
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/libXau/libXau6/libXau6-1.0.12-1.tar.xz",
+          "sha256": "42f2086b3e84486be2af8896f06e1f2f26026b4ee2b5c06127e4e6dff69f7a4d",
+          "size": 21596
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/libXdmcp/libXdmcp6/libXdmcp6-1.1.5-1.tar.xz",
+          "sha256": "f42bcd11f8ee4a06de26165a6f7b208838a8ad29984d85f5f82dcd5fe9030dbd",
+          "size": 23960
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/libXext/libXext6/libXext6-1.3.6-1.tar.xz",
+          "sha256": "4bf0371d825ea88dd024adbedb6732dd0bb404f0dd3b2649cf98aa8c7de57e09",
+          "size": 44660
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/libXrender/libXrender1/libXrender1-0.9.12-1.tar.xz",
+          "sha256": "8b3f9f387994b8c2fbdabfc090cda06c53f0eb246baa686c895f6254970dfb4f",
+          "size": 31048
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/libXt/libXt6/libXt6-1.3.1-1.tar.xz",
+          "sha256": "d899718467e049c684c896439e3ed9d895d115a622fb2e6ccc6ee07bcc6c934b",
+          "size": 489664
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/libargp/libargp-20250917-2-x86_64.tar.xz",
+          "sha256": "0d97166663d2dae461425a4c34edc0e6fafdcccbe3ca3d9ebddb9a33c0d065bf",
+          "size": 19508
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/libdeflate/libdeflate0/libdeflate0-1.25-1-x86_64.tar.xz",
+          "sha256": "85d147cf45add9a59de6d74df575682bbe419a553a1697f0bd60d7b174346877",
+          "size": 41412
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/libffi/libffi8/libffi8-3.5.2-1-x86_64.tar.xz",
+          "sha256": "296b5ffe0cccd98749f6b50443e08c9ed28b013a86498af7fc40c651f47fb3e0",
+          "size": 158500
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/libiconv/libcharset1/libcharset1-1.19-2-x86_64.tar.xz",
+          "sha256": "843eb1b8047a5ed3bf28e13edb37aa961bb5293b1b0fc9e640f843f328cd2155",
+          "size": 2100
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/libiconv/libiconv-devel/libiconv-devel-1.19-2-x86_64.tar.xz",
+          "sha256": "cba7a6d2c5b02456b411bb18958155ec94e7568f9517c3e7d4059d1cdf9f2682",
+          "size": 751764
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/libiconv/libiconv2/libiconv2-1.19-2-x86_64.tar.xz",
+          "sha256": "c424218c7ef7d82a3481d5aa7f1f1dda8364524fb86b687871184647ec59fcbf",
+          "size": 555664
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/libidn/libidn12/libidn12-1.43-1.tar.xz",
+          "sha256": "20ac56a277579408a9f2a1123f431a47d3590a52d386adf05dbede9daaf7a689",
+          "size": 39296
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/libidn2/libidn2_0/libidn2_0-2.3.8-1.tar.xz",
+          "sha256": "23a3ee52643cf3dbcb4736b6158eb5417879b8e139b16c5f8be9d7e25836c5ef",
+          "size": 117676
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/libimagequant/libimagequant0/libimagequant0-2.10.0-1.tar.xz",
+          "sha256": "d246906a64899bcc080d400030d412879ffbdcc18619f130d8c805827ad7fa8a",
+          "size": 44392
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/libjpeg-turbo/libjpeg8/libjpeg8-3.1.4.1-1-x86_64.tar.xz",
+          "sha256": "51cf30d91e3c2190d1fdff02954617a2f9d78891e38751048caa15d3bcd13f40",
+          "size": 193444
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/liblzo2/liblzo2_2/liblzo2_2-2.10-2.tar.xz",
+          "sha256": "311674b56478b2234f18b8de0b6bdaa43281365662a1043dd1c2a8c4e2dab76f",
+          "size": 39520
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/libpaper/libpaper-common/libpaper-common-1.1.29-1.tar.xz",
+          "sha256": "83cb4f24e962d892bbd65a5be1ee2b10751057574f8044090e627ff518d83eca",
+          "size": 9036
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/libpaper/libpaper1/libpaper1-1.1.29-1.tar.xz",
+          "sha256": "da489404951eb5ec530a06d678af3501532fc9bc8e78f61e2f178bc110ae5471",
+          "size": 4064
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/libpng/libpng16/libpng16-1.6.47-2-x86_64.tar.xz",
+          "sha256": "e49a8c8681838bae1c9edb3528b554d034c8a79ef3cc50d5cf4afd3ba209aba8",
+          "size": 176340
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/libpsl/libpsl5/libpsl5-0.21.5-1.tar.xz",
+          "sha256": "34c879609e6b13c8561720d87daa195bba5b48c4204d753446deaddb27da507e",
+          "size": 53524
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/libssh2/libssh2_1/libssh2_1-1.11.0-1.tar.xz",
+          "sha256": "0a8a88fe94c929199221a52b5a665453437fd7027addd9a198546682f85753de",
+          "size": 186580
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/libtasn1/libtasn1_6/libtasn1_6-4.21.0-1-x86_64.tar.xz",
+          "sha256": "b382cf24c6942ecd1c44e0f9505df021a92582d6ef2567446237cc156bff5827",
+          "size": 32072
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/libunistring/libunistring5/libunistring5-1.4.1-1-x86_64.tar.xz",
+          "sha256": "f90c81793e5abc40a3d70f0697ee32dd237fa8548097d577450325c9d76b7574",
+          "size": 498220
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/libwebp/libwebp7/libwebp7-1.6.0-1-x86_64.tar.xz",
+          "sha256": "c12f3308f63c556f78c81bf28ab744e717127349c8bc304f655ba53c2239bb06",
+          "size": 197532
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/libwebp/libwebpdemux2/libwebpdemux2-1.6.0-1-x86_64.tar.xz",
+          "sha256": "fc3c8e9dcbe169c1bb9fdeff7604668132781af77fa20293aba972077b97e20f",
+          "size": 6976
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/libwebp/libwebpmux3/libwebpmux3-1.6.0-1-x86_64.tar.xz",
+          "sha256": "9c7979ea109286a4f36a3787743d8d652d16e8145783fd3f44c3aaa618f71e89",
+          "size": 16848
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/libxcb/libxcb-render0/libxcb-render0-1.17.0-2-x86_64.tar.xz",
+          "sha256": "439d3f24414b811a80ea0b92262a24de2715bc3bd6f50d4546aca94833b940e0",
+          "size": 9384
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/libxcb/libxcb-shm0/libxcb-shm0-1.17.0-2-x86_64.tar.xz",
+          "sha256": "2575fd551cae8f461c63a71ef4d56f8693338895d71fc7b30eea8ba55e07aa3a",
+          "size": 3016
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/libxcb/libxcb1/libxcb1-1.17.0-2-x86_64.tar.xz",
+          "sha256": "c90fd6a60f20fe556320dcbdf555d49ca9cf4d78aca7288e9221d0122bf18662",
+          "size": 120640
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/libxcrypt/libcrypt-devel/libcrypt-devel-4.5.2-1-x86_64.tar.xz",
+          "sha256": "1740f91fd2114c1f9f8d0a7c5ce22de8628c880c3f0ca9683dcbbac7e497f660",
+          "size": 22268
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/libxcrypt/libcrypt2/libcrypt2-4.5.2-1-x86_64.tar.xz",
+          "sha256": "71bfbd6feb19a4803afb6f33908b4dbb46d1629dc850b1715cb69e87e07bc7a7",
+          "size": 106104
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/libxml2/libxml2-2.10.4-2.tar.xz",
+          "sha256": "eb2a277ffb812d9e3edb322c9494d46f3742500eb5fd667e52655048c10da95c",
+          "size": 500596
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/mintty/mintty-3.8.3-1-x86_64.tar.xz",
+          "sha256": "183417d1db81558b20882e25a96c0672599cadf43e4a1c9ab59a78656f3e44b6",
+          "size": 1190356
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/mpclib/libmpc3/libmpc3-1.4.1-1-x86_64.tar.zst",
+          "sha256": "e39644ebd69fee49276e3be8b976649452c1eb584d15c8fe6120bcb9a60ba9a0",
+          "size": 51914
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/netpbm/libnetpbm10/libnetpbm10-10.80.00-1.tar.xz",
+          "sha256": "8b66edee662945274aeb8cb2d9e2d6da3d80959c9673c82bd1eace87ba476784",
+          "size": 76856
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/netpbm/netpbm-10.80.00-1.tar.xz",
+          "sha256": "27ebd62f1bbdab9261545374c322b7256bb72ae95cf7bb2766fb23a4bb9b38bf",
+          "size": 1590616
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/nghttp2/libnghttp2_14/libnghttp2_14-1.69.0-1-x86_64.tar.xz",
+          "sha256": "a33e5bfbf78e6e0bcf0b52dbc2ea9c3a5988f7e7b999d7b990dc48dd30c2ec3a",
+          "size": 86464
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/openblas/libopenblas/libopenblas-0.3.25-1.tar.xz",
+          "sha256": "db67831fa85f55dba885e7b08c0d9f730662e3c667cbf380b768de5450eba4c8",
+          "size": 1328500
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/openldap/libopenldap2/libopenldap2-2.6.13-1-x86_64.tar.zst",
+          "sha256": "d84ab5569831ee5db92ab1126f5106a3b0f2b6eb0f43df923523cd1dc33a4891",
+          "size": 153254
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/openldap/libopenldap2_4_2/libopenldap2_4_2-2.6.13-1-x86_64.tar.zst",
+          "sha256": "651256844e130954b0d5ea38bf1b121c31dc5ed2c106c589a676482c70f8ed8e",
+          "size": 153129
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/openssl/libssl3/libssl3-3.5.7-1-x86_64.tar.zst",
+          "sha256": "a78edef1b35c9bbcaf1d52ad5433741e94170d3d9be0446b126b90880e5bafc4",
+          "size": 2081790
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/openssl/openssl-3.5.7-1-x86_64.tar.zst",
+          "sha256": "421d3a4d608793bb78bb57880a4d7dc3ff32bc80a42619455462e0d441187c6e",
+          "size": 1392875
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/pcre2/libpcre2_8_0/libpcre2_8_0-10.47-1-x86_64.tar.zst",
+          "sha256": "9cc869dee45ba2c1e9a0f478176636044ffb2fe4d2e046ad3a322ace781ec2e9",
+          "size": 237134
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/pixman/libpixman1_0/libpixman1_0-0.46.4-1-x86_64.tar.xz",
+          "sha256": "30de793dbfde833751d7f94dc4c2e3834dcd1d7a0daf43f71de7ee1c7f72e77e",
+          "size": 244592
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/pkgconf/libpkgconf7/libpkgconf7-2.5.1-1-x86_64.tar.zst",
+          "sha256": "1a71ff6021fa9550ab2c0c099125df36c3b224db4e4968e5bc5d54b509f2a0a1",
+          "size": 27775
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/pkgconf/pkg-config/pkg-config-2.5.1-1-x86_64.tar.zst",
+          "sha256": "1ad28e763eb4c0b79fb0e8f86df6678e9a49f42b141791df48178a67f7cf1a86",
+          "size": 7399
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/pkgconf/pkgconf-2.5.1-1-x86_64.tar.zst",
+          "sha256": "227c57f39e7fab9efd2f512d511962daddee2fb4da6e1d7f8da6f7d4494334ed",
+          "size": 40954
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/python-cffi/python39-cffi/python39-cffi-2.0.0-1-x86_64.tar.xz",
+          "sha256": "c6fa0d4984240bee08f2e6bef9d3fe083d990f280b7f25c1ae8e78166a1fe8c4",
+          "size": 216884
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/python-cython/python39-cython/python39-cython-3.2.3-1-x86_64.tar.xz",
+          "sha256": "eafb5fa4214af87bbb30044d1d16dbcfbc589562be862636bb76d758c4952b93",
+          "size": 3075592
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/python-imaging/python39-imaging/python39-imaging-11.3.0-1-x86_64.tar.xz",
+          "sha256": "3b1fca0117ba7597df704c8fd016eb7f94583311ec7dfe0126bba8cf12011f8f",
+          "size": 719708
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/python-markupsafe/python39-markupsafe/python39-markupsafe-3.0.3-1-x86_64.tar.xz",
+          "sha256": "ac3f9d3d3e0516ba8a2f0a5d47dc75a7d54c5496306116686791daf9d7841514",
+          "size": 17436
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/python-numpy/python39-numpy/python39-numpy-2.0.1-1.tar.xz",
+          "sha256": "008cdf33e742c10a2c01d4aac4ffff5db24345ba20522055c10a97f5b81a2053",
+          "size": 6278792
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/python39/python39-3.9.16-1.tar.xz",
+          "sha256": "c2bd5b2255d6544f4876b5c8025015a8e7da5c948a5d7661279a4428ab60aa1e",
+          "size": 5802040
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/python39/python39-devel/python39-devel-3.9.16-1.tar.xz",
+          "sha256": "27a7bff799b3f3001d4d9334ddfaa020bceceef8e858ffde7782a5085813486a",
+          "size": 196640
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/raqm/libraqm0/libraqm0-0.7.0-1.tar.xz",
+          "sha256": "02827f2e8f074cf971338121c5b632a242cd42754d280ede5c621a71925d6d8a",
+          "size": 7060
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/sed/sed-4.10-1-x86_64.tar.xz",
+          "sha256": "c4f2b45111eede670354d03733e5a884d74e3718d2afc3cde69f05a82e2b95ba",
+          "size": 359252
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/shared-mime-info/shared-mime-info-2.4-1.tar.xz",
+          "sha256": "e7b26309d1176035b11adec6c12f211249a71492d984794f08b2aacb5805e2c9",
+          "size": 280908
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/tiff/libtiff6/libtiff6-4.4.0-1.tar.xz",
+          "sha256": "ff6cc1752e0a9bf990daf909b7fbf429d245cc86263f8c337a6182bd12b8cc9f",
+          "size": 147396
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/tiff/libtiff7/libtiff7-4.7.1-1-x86_64.tar.xz",
+          "sha256": "fa781eab276db7077048d4543b19e69794a5cb1331c9605142cddec6d191a0c0",
+          "size": 162512
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/tzcode/tzcode-2026b-1-x86_64.tar.xz",
+          "sha256": "4f37b6daaeaa1a2065b312119190be6d1be956bb902e5949225bac542ea424d7",
+          "size": 184324
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/w32api-headers/w32api-headers-14.0.0-1-x86_64.tar.xz",
+          "sha256": "71d6e9e3bb6b0ae3245ae51db183de6b090dc5aa17d2ff4b0f998d604d244fe5",
+          "size": 6178248
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/w32api-runtime/w32api-runtime-14.0.0-1-x86_64.tar.xz",
+          "sha256": "6963d4fcb6258eb480111a73ee72d1e6cded512037ae700ec8e1b091d2d0ddfd",
+          "size": 3484152
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/wcslib/libwcs4/libwcs4-4.18-1.tar.bz2",
+          "sha256": "2e0db88e0917b5ed5f9b986c7bcc1c12b99e9b64d212c13319ae5d3ba8aec3fb",
+          "size": 206940
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/windows-default-manifest/windows-default-manifest-6.5-1-x86_64.tar.xz",
+          "sha256": "050ab8754782c121708f82365195717aa1f92abbdf8f04f110b88d9ac1186307",
+          "size": 1244
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/xz/liblzma5/liblzma5-5.8.3-1-x86_64.tar.zst",
+          "sha256": "6126ef64ce7eb94046c309dc294f91b65570e7459343e01e9e654d7ffe591ba8",
+          "size": 87321
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/xz/xz-5.8.3-1-x86_64.tar.zst",
+          "sha256": "df2ed34e63ffe7a3104946bec0105ffcc831bb38f11c34ef0f3bed42a725369b",
+          "size": 767298
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/release/zlib/zlib0/zlib0-1.3.2-1-x86_64.tar.zst",
+          "sha256": "b0314c05b5ed130ddc1f0fe988e1f2aec15723d609d912e7d6300f47aa3c540e",
+          "size": 46254
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/https%3a%2f%2fcygwin.itefix.net%2f/x86_64/setup.ini",
+          "sha256": "a5d7d1147d65ad4d9fe0d4c1ee143d36b7c4b1336dafcee87482f8ecc68fe2d2",
+          "size": 21904204
+        }
+      ]
     },
     {
       "name": "nomachine-licenses",
-      "path": "vault\\nomachine-licenses",
+      "cached": false,
       "kind": "directory",
-      "approx_bytes": 8330,
-      "used_by": ["nomachine"],
+      "path": "vault\\nomachine-licenses",
+      "used_by": [
+        "nomachine"
+      ],
       "build_reference": "build/build-mast.ps1",
+      "approx_bytes": 8330,
       "why_not_in_repo": "Issued license certificates. Secrets: gitignored, one seat per unit, tracked in server/providers/nomachine/assets/licenses/allocated.csv.",
       "origin": "Issued by NoMachine and originally held on mast-ns-control.",
       "reacquire": "Re-issue through NoMachine; a lost seat is a purchase, not a download. Relative to the repo top, not under C:\\MAST\\."
+    },
+    {
+      "name": "git-lfs",
+      "cached": true,
+      "provenance": false,
+      "used_by": [],
+      "approx_bytes": 1970563322,
+      "why_not_in_repo": "Vendored binaries that git-LFS carried until MAST_provisioning#48 retired it. Frozen here because a digest derived from a pointer stops being derivable the moment the pointer is removed, and the index must not quietly lose 162 rows.",
+      "origin": "Tracked in this repository via git-LFS. These digests are the ones the pointers recorded, frozen here when #48 retired LFS; until the untracking the pointers are still in the tree and each is checked against its row.",
+      "reacquire": "The content store on mast-ns-control holds every one of these digests. While the pointers remain, git lfs pull also restores them.",
+      "files": [
+        {
+          "path": "client/assets/npcap-1.88.exe",
+          "sha256": "a2f4ec1e5ea353ff67efd24b2ebf081ba44532410fae8d5e146af0310aa4f56b",
+          "size": 1320424
+        },
+        {
+          "path": "server/providers/ascom/assets/AscomDeveloper662.4294.NewCertificate.exe",
+          "sha256": "17a4f9cb66ecbf8d5fa896fe8b7ea456b26b5b9cace5d4c046169d55785a13fe",
+          "size": 13863752
+        },
+        {
+          "path": "server/providers/ascom/assets/AscomPlatform700.rc4.4448.exe",
+          "sha256": "45afb1d2faacf0793cb59fb67a65392aeb6ac6edaa6858fa55a95bae2cc17891",
+          "size": 150808968
+        },
+        {
+          "path": "server/providers/ascom/assets/sxs/19044/Microsoft-Windows-NetFx3-OnDemand-Package~31bf3856ad364e35~amd64~en-US~.cab",
+          "sha256": "aa80de1199bb31cf1ba39583ad8faeb4246a77c60556b7311e031862539e81f0",
+          "size": 111049
+        },
+        {
+          "path": "server/providers/ascom/assets/sxs/19044/microsoft-windows-netfx3-ondemand-package~31bf3856ad364e35~amd64~~.cab",
+          "sha256": "5861074b8222152c6d2a29a159b7b5cc4733c2c6a7f78a10ae5f6585e9ef1e59",
+          "size": 72783629
+        },
+        {
+          "path": "server/providers/ascom/assets/sxs/26100/microsoft-windows-netfx3-ondemand-package~31bf3856ad364e35~amd64~~.cab",
+          "sha256": "dc3af93af5c64dc115409437d31018baf2c3c46167806a599124bc905ae512f6",
+          "size": 71321276
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/fitsio-1.2.6-cp39-cp39-cygwin_3_6_9_x86_64.whl",
+          "sha256": "bf6e88d49d87adda00d399703a28c6a172ce55bc0c1773cee0f066f1fcc701b0",
+          "size": 161244
+        },
+        {
+          "path": "server/providers/astrometry-dependencies/assets/setup-x86_64.exe",
+          "sha256": "2c9f2fb56e1fb687b5d9680afa8f8b06e6214f0e483096af0eae1946431226c5",
+          "size": 1574328
+        },
+        {
+          "path": "server/providers/astrometry/assets/astrometry.tgz",
+          "sha256": "1bd6da2769c41650043e95eb112570c66355f414ecda5ea32dc5869814fb84e2",
+          "size": 18334265
+        },
+        {
+          "path": "server/providers/chrome/assets/GoogleChromeStandaloneEnterprise64.msi",
+          "sha256": "f92c6c5a21cac1073ac1380cbc36a0d13ce206df6eff5380ea1eaa433529b79a",
+          "size": 152973312
+        },
+        {
+          "path": "server/providers/cygwin/assets/cygwin64-clean.tgz",
+          "sha256": "c394cbabd426c62b6e5994518e325afa655d9cccec74cec664d019d452d12a10",
+          "size": 57499589
+        },
+        {
+          "path": "server/providers/ds9/assets/SAOImageDS9 8.7 Install.exe",
+          "sha256": "e0d4ac3d251d01ddbb7ff1c79a4ebf23e757d7930549a5f0a7585ec46c85a2ab",
+          "size": 20344832
+        },
+        {
+          "path": "server/providers/gh/assets/gh_2.92.0_windows_amd64.zip",
+          "sha256": "b6a8df3c8c6b9c80f290906387673bc4d272840f3789c5650e0e4e6e75522785",
+          "size": 14468591
+        },
+        {
+          "path": "server/providers/git/assets/Git-2.52.0-64-bit.exe",
+          "sha256": "d8de7a3152266c8bb13577eab850ea1df6dccf8c2aa48be5b4a1c58b7190d62c",
+          "size": 66292520
+        },
+        {
+          "path": "server/providers/imdisk/assets/ImDiskTk-x64.zip",
+          "sha256": "5bc0a472582db2867724a25f23dd6a0200be09c8aefd74d20b29655cc013fbd2",
+          "size": 513143
+        },
+        {
+          "path": "server/providers/instrument-profiles/assets/instrument-profiles-assets.zip",
+          "sha256": "be51939583966b9abfb6dbf58b66d2c1cde9d3de873194a2b1330f0fba775aa7",
+          "size": 8652
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/anyio-4.14.2-py3-none-any.whl",
+          "sha256": "9f505dda5ac9f0c8309b5e8bd445a8c2bf7246f3ce950121e45ea15bc41d1494",
+          "size": 125813
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/argon2_cffi-25.1.0-py3-none-any.whl",
+          "sha256": "fdc8b074db390fccb6eb4a3604ae7231f219aa669a2652e0f20e16ba513d5741",
+          "size": 14657
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/argon2_cffi_bindings-26.1.0-cp310-abi3-win_amd64.whl",
+          "sha256": "2c36ff87b5dfaa477d0bd51e9d7f6abdae7c8955d2983c97419085d842154b3e",
+          "size": 25730
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/arrow-1.4.0-py3-none-any.whl",
+          "sha256": "749f0769958ebdc79c173ff0b0670d59051a535fa26e8eba02953dc19eb43205",
+          "size": 68797
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/astropy-8.0.1-cp311-abi3-win_amd64.whl",
+          "sha256": "ee9024f2237243ebc98726f8eff2efbf201ea4e0bba1d21f6e2dee0cb499fbdf",
+          "size": 6529976
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/astropy_iers_data-0.2026.8.18.14.22.31-py3-none-any.whl",
+          "sha256": "95b9da762fe06940f3ac3187c3e4f24e1ed10e838379f0adcb9d33f2dacd6853",
+          "size": 2000506
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/astroquery-0.4.11-py3-none-any.whl",
+          "sha256": "e34f114b285dd07a10ddb2065ebce829b01b0e740fd89dbc81a3077808e24b2d",
+          "size": 11139417
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/asttokens-3.0.2-py3-none-any.whl",
+          "sha256": "9da13157f5b28becde0bd374fc677dcd3c290614264eff096f167c469cd9f933",
+          "size": 28702
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/async_lru-2.3.0-py3-none-any.whl",
+          "sha256": "eea27b01841909316f2cc739807acea1c623df2be8c5cfad7583286397bb8315",
+          "size": 8403
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/attrs-26.1.0-py3-none-any.whl",
+          "sha256": "c647aa4a12dfbad9333ca4e71fe62ddc36f4e63b2d260a37a8b83d2f043ac309",
+          "size": 67548
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/babel-2.18.0-py3-none-any.whl",
+          "sha256": "e2b422b277c2b9a9630c1d7903c2a00d0830c409c59ac8cae9081c92f1aeba35",
+          "size": 10196845
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/beautifulsoup4-4.15.0-py3-none-any.whl",
+          "sha256": "d6f88de62e1d4e38ecb1077eb9724cd0eff29d2a08ca16a401e9b9e93f117cf9",
+          "size": 109924
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/bleach-6.4.0-py3-none-any.whl",
+          "sha256": "4b6b6a54fff2e69a3dde9d21cc6301220bee3c3cb792187d11403fd795031081",
+          "size": 165109
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/certifi-2026.7.22-py3-none-any.whl",
+          "sha256": "62f22742b58a1a33014a2b6b706588a8d7e2a88ae7bd1a6ebe8c992928483775",
+          "size": 136983
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/cffi-2.1.1-cp312-cp312-win_amd64.whl",
+          "sha256": "f53e442b08449d42821fa4a4fba000095af9f62742a500f978a9f557ec44339a",
+          "size": 185919
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/charset_normalizer-3.5.1-cp312-cp312-win_amd64.whl",
+          "sha256": "3617ac3cfd8b9888f145ad89dd6e692285834b0201c6074a5eeaad3fd4d668c2",
+          "size": 200551
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/colorama-0.4.6-py2.py3-none-any.whl",
+          "sha256": "4f1d9991f5acc0ca119f9d443620b77f9d6b33703e51011c16baf57afb285fc6",
+          "size": 25335
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/comm-0.2.3-py3-none-any.whl",
+          "sha256": "c615d91d75f7f04f095b30d1c1711babd43bdc6419c1be9886a85f2f4e489417",
+          "size": 7294
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/contourpy-1.3.3-cp312-cp312-win_amd64.whl",
+          "sha256": "8153b8bfc11e1e4d75bcb0bff1db232f9e10b274e0929de9d608027e0d34ff8b",
+          "size": 226567
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/cycler-0.12.1-py3-none-any.whl",
+          "sha256": "85cef7cff222d8644161529808465972e51340599459b8ac3ccbac5a854e0d30",
+          "size": 8321
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/debugpy-1.8.21-cp312-cp312-win_amd64.whl",
+          "sha256": "bd7ba9dd3daa7c2f942c6ca8d4695a16bf9ac16b63615261c7982bc74f7ed20c",
+          "size": 5374751
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/defusedxml-0.7.1-py2.py3-none-any.whl",
+          "sha256": "a352e7e428770286cc899e2542b6cdaedb2b4953ff269a210103ec58f6198a61",
+          "size": 25604
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/executing-2.2.1-py2.py3-none-any.whl",
+          "sha256": "760643d3452b4d777d295bb167ccc74c64a81df23fb5e08eff250c425a4b2017",
+          "size": 28317
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/fastjsonschema-2.22.2-py3-none-any.whl",
+          "sha256": "0fb3915616adac85ccfdd737d26be1089845d2019819505b42d39888458f74d4",
+          "size": 27413
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/fonttools-4.63.0-cp312-cp312-win_amd64.whl",
+          "sha256": "59ac449f8cca9b4ffa08d2e7bbadad87ce710d69d1eda5c3c1ce579baa987272",
+          "size": 2343211
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/fqdn-1.5.1-py3-none-any.whl",
+          "sha256": "3a179af3761e4df6eb2e026ff9e1a3033d3587bf980a0b1b2e1e5d08d7358014",
+          "size": 9121
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/h11-0.16.0-py3-none-any.whl",
+          "sha256": "63cf8bbe7522de3bf65932fda1d9c2772064ffb3dae62d55932da54b31cb6c86",
+          "size": 37515
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/html5lib-1.1-py2.py3-none-any.whl",
+          "sha256": "0d78f8fde1c230e99fe37986a60526d7049ed4bf8a9fadbad5f00e22e58e041d",
+          "size": 112173
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/httpcore-1.0.9-py3-none-any.whl",
+          "sha256": "2d400746a40668fc9dec9810239072b40b4484b640a8c38fd654a024c7a1bf55",
+          "size": 78784
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/httpx-0.28.1-py3-none-any.whl",
+          "sha256": "d909fcccc110f8c7faf814ca82a9a4d816bc5a6dbfea25d6591d6985b8ba59ad",
+          "size": 73517
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/idna-3.19-py3-none-any.whl",
+          "sha256": "815e7be7a7806d54abb586dc943addc79e8b2ee16915059658cbeff4b1b43bf4",
+          "size": 68550
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/ipykernel-7.3.0-py3-none-any.whl",
+          "sha256": "897eb64da762549ef610698fca5e9675195ec6ac8ec7f19d81ce1ca20c876057",
+          "size": 120583
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/ipython-9.16.1-py3-none-any.whl",
+          "sha256": "4acae635506f6d352d94c4899a19d5f85f8bc4d230932342dca556fdab1c69b4",
+          "size": 625974
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/ipython_pygments_lexers-1.1.1-py3-none-any.whl",
+          "sha256": "a9462224a505ade19a605f71f8fa63c2048833ce50abc86768a0d81d876dc81c",
+          "size": 8074
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/ipywidgets-8.1.9-py3-none-any.whl",
+          "sha256": "f2b8cbcaae10252b809fbe4d7470db75c09b769a32cbf816d20e5ca6d3c5a79d",
+          "size": 140101
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/isoduration-20.11.0-py3-none-any.whl",
+          "sha256": "b2904c2a4228c3d44f409c8ae8e2370eb21a26f7ac2ec5446df141dde3452042",
+          "size": 11321
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/jaraco.classes-3.4.0-py3-none-any.whl",
+          "sha256": "f662826b6bed8cace05e7ff873ce0f9283b5c924470fe664fff1c2f00f581790",
+          "size": 6777
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/jaraco_context-6.1.2-py3-none-any.whl",
+          "sha256": "bf8150b79a2d5d91ae48629d8b427a8f7ba0e1097dd6202a9059f29a36379535",
+          "size": 7871
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/jaraco_functools-4.6.0-py3-none-any.whl",
+          "sha256": "99e3dc0060c5cbe8fcd1cdb36258e2a65ca40f1566b2033b12abb1bb44dd3c30",
+          "size": 11677
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/jedi-0.20.0-py2.py3-none-any.whl",
+          "sha256": "7bdd9c2634f56713299976f4cbd59cb3fa92165cc5e05ea811fb253480728b67",
+          "size": 4884812
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/jinja2-3.1.6-py3-none-any.whl",
+          "sha256": "85ece4451f492d0c13c5dd7c13a64681a86afae63a5f347908daf103ce6d2f67",
+          "size": 134899
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/json5-0.15.0-py3-none-any.whl",
+          "sha256": "56636a30c0e8a4665fe2179c0212f32eae3796dea89ea6f649b9436ecdb39618",
+          "size": 36570
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/jsonpointer-3.1.1-py3-none-any.whl",
+          "sha256": "8ff8b95779d071ba472cf5bc913028df06031797532f08a7d5b602d8b2a488ca",
+          "size": 7659
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/jsonschema-4.26.0-py3-none-any.whl",
+          "sha256": "d489f15263b8d200f8387e64b4c3a75f06629559fb73deb8fdfb525f2dab50ce",
+          "size": 90630
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/jsonschema_specifications-2025.9.1-py3-none-any.whl",
+          "sha256": "98802fee3a11ee76ecaca44429fda8a41bff98b00a0f2838151b113f210cc6fe",
+          "size": 18437
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/jupyter_builder-1.2.2-py3-none-any.whl",
+          "sha256": "6ebcd4c49daf5df6a18068a74a48010406700ed90a76c189fac43eaf85c60c63",
+          "size": 915266
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/jupyter_client-8.9.1-py3-none-any.whl",
+          "sha256": "0b7a295bc46e8751e9adae84781f726c851c1d911bd793edc4a3bde942e3da81",
+          "size": 109828
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/jupyter_core-5.9.1-py3-none-any.whl",
+          "sha256": "ebf87fdc6073d142e114c72c9e29a9d7ca03fad818c5d300ce2adc1fb0743407",
+          "size": 29032
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/jupyter_events-0.12.1-py3-none-any.whl",
+          "sha256": "c366585253f537a627da52fa7ca7410c5b5301fe893f511e7b077c2d93ec8bcf",
+          "size": 19512
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/jupyter_lsp-2.3.1-py3-none-any.whl",
+          "sha256": "71b954d834e85ff3096400554f2eefaf7fe37053036f9a782b0f7c5e42dadb81",
+          "size": 77513
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/jupyter_server-2.20.0-py3-none-any.whl",
+          "sha256": "c3b67c93c471e947c18b5026f04f21614218adb706df8f48227d3ee8e0a7cdcc",
+          "size": 393143
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/jupyter_server_terminals-0.5.4-py3-none-any.whl",
+          "sha256": "55be353fc74a80bc7f3b20e6be50a55a61cd525626f578dcb66a5708e2007d14",
+          "size": 13704
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/jupyterlab-4.6.3-py3-none-any.whl",
+          "sha256": "0a1ebc6567186f1eabd99536e94df7ed9e96d1e7c5ddf3e4406ae16e88abacb7",
+          "size": 17168312
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/jupyterlab_pygments-0.3.0-py3-none-any.whl",
+          "sha256": "841a89020971da1d8693f1a99997aefc5dc424bb1b251fd6322462a1b8842780",
+          "size": 15884
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/jupyterlab_server-2.28.0-py3-none-any.whl",
+          "sha256": "e4355b148fdcf34d312bbbc80f22467d6d20460e8b8736bf235577dd18506968",
+          "size": 59830
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/jupyterlab_widgets-3.0.17-py3-none-any.whl",
+          "sha256": "40ac1e9955acf116c4d995d9bfa082d86ad9ec6d91c4f134827cf5e0a5eb75e0",
+          "size": 217292
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/keyring-25.7.0-py3-none-any.whl",
+          "sha256": "be4a0b195f149690c166e850609a477c532ddbfbaed96a404d4e43f8d5e2689f",
+          "size": 39160
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/kiwisolver-1.5.0-cp312-cp312-win_amd64.whl",
+          "sha256": "f18c2d9782259a6dc132fdc7a63c168cbc74b35284b6d75c673958982a378384",
+          "size": 73569
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/lark-1.3.1-py3-none-any.whl",
+          "sha256": "c629b661023a014c37da873b4ff58a817398d12635d3bbb2c5a03be7fe5d1e12",
+          "size": 113151
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/markupsafe-3.0.3-cp312-cp312-win_amd64.whl",
+          "sha256": "26a5784ded40c9e318cfc2bdb30fe164bdb8665ded9cd64d500a34fb42067b1c",
+          "size": 15105
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/matplotlib-3.11.1-cp312-cp312-win_amd64.whl",
+          "sha256": "88a2a27dd9691ae448dfae4b26f59036be90c3c28757edd3553a29559d00859f",
+          "size": 9333886
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/matplotlib_inline-0.2.2-py3-none-any.whl",
+          "sha256": "3c821cf1c209f59fb2d2d64abbf5b23b67bcb2210d663f9918dd851c6da1fcf6",
+          "size": 9534
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/mistune-3.3.4-py3-none-any.whl",
+          "sha256": "ee015381e955e370962968befe1d729ab60fafb6a715ac6751763fbce38c8d4a",
+          "size": 66862
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/more_itertools-11.1.0-py3-none-any.whl",
+          "sha256": "4b65538ae22f6fed0ce4874efd317463a7489796a0939fa66824dd542125a192",
+          "size": 72226
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/nbclient-0.11.0-py3-none-any.whl",
+          "sha256": "ef7fa0d59d6e1d41103933d8a445a18d5de860ca6b613b87b8574accdb3c2895",
+          "size": 25288
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/nbconvert-7.17.1-py3-none-any.whl",
+          "sha256": "aa85c087b435e7bf1ffd03319f658e285f2b89eccab33bc1ba7025495ab3e7c8",
+          "size": 261927
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/nbformat-5.11.1-py3-none-any.whl",
+          "sha256": "cc6698fa75f4fab8755ead786317815f13a6fee3b53311c0abb1a8b51d52f7ec",
+          "size": 79849
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/nest_asyncio2-1.7.2-py3-none-any.whl",
+          "sha256": "f5dfa702f3f81f6a03857e9a19e2ba578c0946a4ad417b4c50a24d7ba641fe01",
+          "size": 7843
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/notebook-7.6.2-py3-none-any.whl",
+          "sha256": "5fe9e09c335cb4b7de21627b860f77210e70e54b1fb1276ad942a4a7e1d858d3",
+          "size": 5547102
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/notebook_shim-0.2.4-py3-none-any.whl",
+          "sha256": "411a5be4e9dc882a074ccbcae671eda64cceb068767e9a3419096986560e1cef",
+          "size": 13307
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/numpy-2.5.2-cp312-cp312-win_amd64.whl",
+          "sha256": "28ac63476ec7651484215ee7fa15a1f78b57c14621f01e392afe17b9a1390ce4",
+          "size": 12464674
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/packaging-26.3-py3-none-any.whl",
+          "sha256": "d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c",
+          "size": 129956
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/pandas-3.0.5-cp312-cp312-win_amd64.whl",
+          "sha256": "80a611068e8a3ac23f7398c6c14eb46dc974e5cc9997f653e2dcfd1da74edd41",
+          "size": 9831691
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/pandocfilters-1.5.1-py2.py3-none-any.whl",
+          "sha256": "93be382804a9cdb0a7267585f157e5d1731bbe5545a85b268d6f5fe6232de2bc",
+          "size": 8663
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/parso-0.8.7-py2.py3-none-any.whl",
+          "sha256": "a8926eb2a1b915486941fdbd31e86a4baf88fe8c210f25f2f35ecec5b574ca1c",
+          "size": 107025
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/photutils-3.0.0-cp311-abi3-win_amd64.whl",
+          "sha256": "112ab07628f0b1d8bb6e70c926279a867e6bb57eea82f8141410b155a00e73d1",
+          "size": 1052065
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/pillow-12.3.0-cp312-cp312-win_amd64.whl",
+          "sha256": "a2b55dd6b2a4c4b7d87ffa56bdb33fdc5fdb9a462173861a7bc097f17d91cb09",
+          "size": 7227137
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/pip-26.2.1-py3-none-any.whl",
+          "sha256": "71138adf1f4ca900cdb7d289c21b7494329f2332b6d85f0e1c42108c0384ed3e",
+          "size": 1816632
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/platformdirs-4.11.3-py3-none-any.whl",
+          "sha256": "5ed065d443751de711da036041a7a214122efc4a4de393b3f4137ba5576540e7",
+          "size": 23491
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/prometheus_client-0.26.0-py3-none-any.whl",
+          "sha256": "fa93d06737aa02bacd05794768508bb97d2fbee28cb3bca04eaae92f0ca953d6",
+          "size": 64494
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/prompt_toolkit-3.0.53-py3-none-any.whl",
+          "sha256": "01c0891d7f9237d5e339f7d3e42cdae80b7534abb1c7c0e3352efba6231492f2",
+          "size": 392288
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/psutil-7.2.2-cp37-abi3-win_amd64.whl",
+          "sha256": "eb7e81434c8d223ec4a219b5fc1c47d0417b12be7ea866e24fb5ad6e84b3d988",
+          "size": 137737
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/pure_eval-0.2.3-py3-none-any.whl",
+          "sha256": "1db8e35b67b3d218d818ae653e27f06c3aa420901fa7b081ca98cbedc874e0d0",
+          "size": 11842
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/pycparser-3.0-py3-none-any.whl",
+          "sha256": "b727414169a36b7d524c1c3e31839a521725078d7b2ff038656844266160a992",
+          "size": 48172
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/pyerfa-2.0.1.5-cp39-abi3-win_amd64.whl",
+          "sha256": "66292d437dcf75925b694977aa06eb697126e7b86553e620371ed3e48b5e0ad0",
+          "size": 349410
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/pygments-2.21.0-py3-none-any.whl",
+          "sha256": "2363c69b61c4a97c838da3b130dcd6468f4848992b21a82f2a63ec34377137d9",
+          "size": 1250147
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/pyparsing-3.3.2-py3-none-any.whl",
+          "sha256": "850ba148bd908d7e2411587e247a1e4f0327839c40e2e5e6d05a007ecc69911d",
+          "size": 122781
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/python_dateutil-2.9.0.post0-py2.py3-none-any.whl",
+          "sha256": "a8b2bc7bffae282281c8140a97d3aa9c14da0b136dfe83f850eea9a5f7470427",
+          "size": 229892
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/python_json_logger-4.2.0-py3-none-any.whl",
+          "sha256": "158a52126fcd6869e09574d2b66272666f3dc8f468c62637ef9a1fa883719cb9",
+          "size": 14988
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/pyvo-1.9.1-py3-none-any.whl",
+          "sha256": "098648d00943440f56c1d00ac76330433578a0725ea6187afaa6bae08545bb53",
+          "size": 1152763
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/pywin32_ctypes-0.2.3-py3-none-any.whl",
+          "sha256": "8a1513379d709975552d202d942d9837758905c8d01eb82b8bcc30918929e7b8",
+          "size": 30756
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/pywinpty-3.0.5-cp312-cp312-win_amd64.whl",
+          "sha256": "d62946adf14b15b54c0b8d785f93fe18b04da23f4ad59e2e8c4612646e9abd23",
+          "size": 2090915
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/pyyaml-6.0.3-cp312-cp312-win_amd64.whl",
+          "sha256": "5fcd34e47f6e0b794d17de1b4ff496c00986e1c83f7ab2fb8fcfe9616ff7477b",
+          "size": 154003
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/pyzmq-27.2.0-cp312-abi3-win_amd64.whl",
+          "sha256": "2c218c6ab8bc447ba62054b581fd30209689d199c6ecb253f79615ca74a38e12",
+          "size": 628633
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/referencing-0.37.0-py3-none-any.whl",
+          "sha256": "381329a9f99628c9069361716891d34ad94af76e461dcb0335825aecc7692231",
+          "size": 26766
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/requests-2.34.2-py3-none-any.whl",
+          "sha256": "2a0d60c172f83ac6ab31e4554906c0f3b3588d37b5cb939b1c061f4907e278e0",
+          "size": 73075
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/rfc3339_validator-0.1.4-py2.py3-none-any.whl",
+          "sha256": "24f6ec1eda14ef823da9e36ec7113124b39c04d50a4d3d3a3c2859577e7791fa",
+          "size": 3490
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/rfc3986_validator-0.1.1-py2.py3-none-any.whl",
+          "sha256": "2f235c432ef459970b4306369336b9d5dbdda31b510ca1e327636e01f528bfa9",
+          "size": 4242
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/rfc3987_syntax-1.1.0-py3-none-any.whl",
+          "sha256": "6c3d97604e4c5ce9f714898e05401a0445a641cfa276432b0a648c80856f6a3f",
+          "size": 8046
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/rpds_py-2026.6.3-cp312-cp312-win_amd64.whl",
+          "sha256": "2c958bf94822e9290a40aaf2a822d4bc5c88099093e3948ad6c571eca9272e5f",
+          "size": 220394
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/scipy-1.18.1-cp312-cp312-win_amd64.whl",
+          "sha256": "5e4d44984abc0020154ea81b247adeddcc3ac5527b975ff798bd1ba0adc513c2",
+          "size": 36658278
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/send2trash-2.1.0-py3-none-any.whl",
+          "sha256": "0da2f112e6d6bb22de6aa6daa7e144831a4febf2a87261451c4ad849fe9a873c",
+          "size": 17610
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/six-1.17.0-py2.py3-none-any.whl",
+          "sha256": "4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274",
+          "size": 11050
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/soupsieve-2.9.2-py3-none-any.whl",
+          "sha256": "8089a26fd974ca7a1f30276d3d8492ab266ab15af581642dfe8aa162e0c1c823",
+          "size": 37370
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/stack_data-0.6.3-py3-none-any.whl",
+          "sha256": "d5558e0c25a4cb0853cddad3d77da9891a08cb85dd9f9f91b9f8cd66e511e695",
+          "size": 24521
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/terminado-0.18.1-py3-none-any.whl",
+          "sha256": "a4468e1b37bb318f8a86514f65814e1afc977cf29b3992a4500d9dd305dcceb0",
+          "size": 14154
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/tinycss2-1.5.1-py3-none-any.whl",
+          "sha256": "3415ba0f5839c062696996998176c4a3751d18b7edaaeeb658c9ce21ec150661",
+          "size": 28404
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/tornado-6.5.8-cp39-abi3-win_amd64.whl",
+          "sha256": "11881db6b7c168494be2c2d12e65931451bdf7ee718535418ae1d8855dd5a0ee",
+          "size": 452391
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/traitlets-5.16.1-py3-none-any.whl",
+          "sha256": "f775618166caa0396c8e337099240f2bd3e5e917d203b2e6fbe21a58d3cb1f6b",
+          "size": 86211
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/typing_extensions-4.16.0-py3-none-any.whl",
+          "sha256": "481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8",
+          "size": 45571
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/tzdata-2026.3-py2.py3-none-any.whl",
+          "sha256": "dc096730c87af6cab1b171c9d532be840741ff5d459015e7f6947bd7d7e54931",
+          "size": 348168
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/uri_template-1.3.0-py3-none-any.whl",
+          "sha256": "a44a133ea12d44a0c0f06d7d42a52d71282e77e2f937d8abd5655b8d56fc1363",
+          "size": 11140
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/urllib3-2.7.0-py3-none-any.whl",
+          "sha256": "9fb4c81ebbb1ce9531cce37674bbc6f1360472bc18ca9a553ede278ef7276897",
+          "size": 131087
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/wcwidth-0.8.2-py3-none-any.whl",
+          "sha256": "d63947694a0539a1d51e01eda7caf800c291020e6cdd7e28ad7b14dd33ad4f85",
+          "size": 323166
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/webcolors-25.10.0-py3-none-any.whl",
+          "sha256": "032c727334856fc0b968f63daa252a1ac93d33db2f5267756623c210e57a4f1d",
+          "size": 14905
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/webencodings-0.6.1-py3-none-any.whl",
+          "sha256": "7fab6269c8bf237c657876b52058ccb182e861518d1c695c1a9aaa8c1c105d5b",
+          "size": 8745
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/websocket_client-1.9.0-py3-none-any.whl",
+          "sha256": "af248a825037ef591efbf6ed20cc5faa03d3b47b9e5a2230a529eeee1c1fc3ef",
+          "size": 82616
+        },
+        {
+          "path": "server/providers/jupyter/assets/wheels/widgetsnbextension-4.0.16-py3-none-any.whl",
+          "sha256": "a31a8774885b96fe825462f5d6496166f0c7cae111195b6465c801d230eb5a4e",
+          "size": 2225148
+        },
+        {
+          "path": "server/providers/mast-autofocus-validation/assets/autofocus-fits.zip",
+          "sha256": "ef7192bb5212afec21144745e2ffe7fafadf5d40621e501924f77979a0dfa56f",
+          "size": 24988864
+        },
+        {
+          "path": "server/providers/mast/assets/uv-x86_64-pc-windows-msvc.zip",
+          "sha256": "c253ce868ad48d29327b661452ce184c9e333e6d6f5bc8d6fcfbf4dd52b83442",
+          "size": 18981332
+        },
+        {
+          "path": "server/providers/mongodb-client/assets/mongodb-compass-1.43.0-win32-x64.exe",
+          "sha256": "828d1f388435cbaaf306685a9d415a139ebd39a86bae812d7eb295bef0e85954",
+          "size": 138020360
+        },
+        {
+          "path": "server/providers/mongodb-client/assets/mongodb-database-tools-windows-x86_64-100.9.4.zip",
+          "sha256": "13cf2bb3a776edac86328c5b1a53a23c1abcf1c1cc0acb0ac13d91ca70c60544",
+          "size": 62570779
+        },
+        {
+          "path": "server/providers/mongodb-client/assets/mongosh-2.2.6-win32-x64.zip",
+          "sha256": "474eb2443132d2c07ee519bc052e21d3541da79115dc39d6b4a3d75e05e37613",
+          "size": 44686157
+        },
+        {
+          "path": "server/providers/nomachine/assets/nomachine-enterprise-desktop_9.0.188_11_x64.exe",
+          "sha256": "78dd8ccefc6130dfd868d21c27902f33e703c8bfc43c71dcdb1bc8f06fdb3910",
+          "size": 123146568
+        },
+        {
+          "path": "server/providers/nssm/assets/nssm-2.24.zip",
+          "sha256": "727d1e42275c605e0f04aba98095c38a8e1e46def453cdffce42869428aa6743",
+          "size": 351793
+        },
+        {
+          "path": "server/providers/openssh-server/assets/OpenSSH-Win64-v10.0.0.0.msi",
+          "sha256": "ddec9c53864280759cf9f74791cefd387100e3946aa849a1c138a4ed1b96b7d9",
+          "size": 6586368
+        },
+        {
+          "path": "server/providers/phd2-log-viewer/assets/phdlogview_setup-0.6.4.exe",
+          "sha256": "c5d2242f252b183dc4d0b831b298b9bc586d8619cd9298f995bc65313fce0aff",
+          "size": 2533149
+        },
+        {
+          "path": "server/providers/phd2/assets/phd2-x64-2.6.14dev1mast03-installer.exe",
+          "sha256": "344fd794ba2854850db89cf88ab73d40e1733b1614b18a6c9fd8efa6d85b182b",
+          "size": 27244541
+        },
+        {
+          "path": "server/providers/planewave/assets/PWTools-2024-09-17.zip",
+          "sha256": "465be6b43e098f104c3bcad617189f10e5f34342c852b6575abac8dd4f101d7a",
+          "size": 3153414
+        },
+        {
+          "path": "server/providers/planewave/assets/Setup_PWI_4.1.6_Final.exe",
+          "sha256": "ac6cb52e854966e678f4219079fc39eb1f1fb9223698454eeff97d42faf4292d",
+          "size": 34398582
+        },
+        {
+          "path": "server/providers/planewave/assets/Setup_PWShutter_1.15.0.exe",
+          "sha256": "f487c7003b5b936f7bb30571a7cbc13e2fb9fc945242aa342c58fc9c4cd44022",
+          "size": 11672804
+        },
+        {
+          "path": "server/providers/planewave/assets/ps3cli.zip",
+          "sha256": "43eeed854f1fdb88f49ede70bf5eabb3c9ed55860011375814cc3b462cb0f2df",
+          "size": 1466553
+        },
+        {
+          "path": "server/providers/python/assets/python-3.12.2-amd64.exe",
+          "sha256": "b9314802f9efbf0f20a8e2cb4cacc4d5cfb0110dac2818d94e770e1ba5137c65",
+          "size": 26667456
+        },
+        {
+          "path": "server/providers/stage/assets/xilab-1.20.12-win32_win64.exe",
+          "sha256": "070da92fdc3103bdc60c6c3ce735d1fd97e674b1d7b51e14341c6a6f932cf198",
+          "size": 27621976
+        },
+        {
+          "path": "server/providers/sysinternals/assets/SysinternalsSuite.zip",
+          "sha256": "0325a15ca74e8b1623338d7556f5ca8f985929715ab55863ee574b35a0451d1d",
+          "size": 174194901
+        },
+        {
+          "path": "server/providers/usbpcap/assets/USBPcapSetup-1.5.4.0.exe",
+          "sha256": "87a7edf9bbbcf07b5f4373d9a192a6770d2ff3add7aa1e276e82e38582ccb622",
+          "size": 195040
+        },
+        {
+          "path": "server/providers/vcredist2013/assets/vcredist_x64_2013.exe",
+          "sha256": "e554425243e3e8ca1cd5fe550db41e6fa58a007c74fad400274b128452f38fb8",
+          "size": 7194312
+        },
+        {
+          "path": "server/providers/vcredist2013/assets/vcredist_x86_2013.exe",
+          "sha256": "a22895e55b26202eae166838edbe2ea6aad00d7ea600c11f8a31ede5cbce2048",
+          "size": 6503984
+        },
+        {
+          "path": "server/providers/vscode/assets/VSCodeUserSetup-x64-1.121.0.exe",
+          "sha256": "5751cbf2552c8dda452df5720e3228627b3234862d0eb7346f9e57f20386561f",
+          "size": 167344048
+        },
+        {
+          "path": "server/providers/vscode/assets/ms-python.debugpy-2026.6.0-win32-x64.vsix",
+          "sha256": "f38c4fd6fe801274c0be4df5d3451607bca4d839aaebf66022aa0a6481f7686e",
+          "size": 8107886
+        },
+        {
+          "path": "server/providers/vscode/assets/ms-python.python-2026.4.0-win32-x64.vsix",
+          "sha256": "c877195e39d5fe88fc8416efbf3b2c5dbd576000bf624dc22821fc26fa112079",
+          "size": 9404643
+        },
+        {
+          "path": "server/providers/windows-exporter-monitoring/assets/windows_exporter-0.31.7-amd64.msi",
+          "sha256": "d29114fb7ae6af2865a9f1c4be7fdccc2b9fbbb4366a811b620bc85c983d0007",
+          "size": 11091968
+        },
+        {
+          "path": "server/providers/wireshark/assets/Wireshark-4.6.0-x64.exe",
+          "sha256": "aaec7abd3b79e0f336722ab86b193bbf5175fed125d7b8e2629ccdfc9a763aa1",
+          "size": 95881032
+        },
+        {
+          "path": "server/providers/zwo/assets/ASIStudio_V1.16.2_x64_Setup.exe",
+          "sha256": "7b015f620b0a7858c10546eded453b468f6f518fff1c8f7ffa71ffd0ba08186e",
+          "size": 125747048
+        },
+        {
+          "path": "server/providers/zwo/assets/ZWO_ASCOM_Setup_V6.5.32.exe",
+          "sha256": "b40204eba2c907a7ee07fa35b9cd616ff20d400ce62a0bb0d36158c044a1ffa2",
+          "size": 3304672
+        },
+        {
+          "path": "server/providers/zwo/assets/ZWO_ASI_Cameras_driver_Setup_V3.25.exe",
+          "sha256": "f78e2d00ed32a3f24c4ebd5c1a184f7e00f1b8d9382af4626f0208d9fb0efbec",
+          "size": 4691952
+        }
+      ]
     }
   ],
   "not_vendor_inputs": [

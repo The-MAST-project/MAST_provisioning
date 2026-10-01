@@ -1,0 +1,34 @@
+{
+  "_comment": [
+    "The Windows builds the fleet runs, and where each one's monthly updates are found.",
+    "Read by prov.os_updates to resolve and fetch an OS patch baseline (MAST_provisioning#15).",
+    "",
+    "'msrc_product' is the product name exactly as the MSRC CVRF feed spells it; it is how",
+    "the month's KB for that role is found. 'catalog_title' is the Update Catalog row title",
+    "for that KB with the leading 'YYYY-MM ' and trailing ' (KBnnnnnnn)' removed; the two",
+    "sources do not name products the same way ('for x64' vs 'for x64-based Systems'), so",
+    "both are declared rather than one derived from the other. The match is exact, which is",
+    "what excludes the ARM64, x86, 22H2 and 'Dynamic' rows the same KB search returns.",
+    "",
+    "Only builds the fleet runs are declared. The dev VM's 26100 is deliberately absent: it",
+    "is not a patch target, and a row nobody exercises is a row that silently rots."
+  ],
+  "builds": [
+    {
+      "build": 19044,
+      "edition": "Windows 10 IoT Enterprise LTSC 2021",
+      "updates": [
+        {
+          "role": "lcu",
+          "msrc_product": "Windows 10 Version 21H2 for x64-based Systems",
+          "catalog_title": "Cumulative Update for Windows 10 Version 21H2 for x64-based Systems"
+        },
+        {
+          "role": "dotnet",
+          "msrc_product": "Microsoft .NET Framework 3.5 AND 4.8 on Windows 10 Version 21H2 for x64-based Systems",
+          "catalog_title": "Cumulative Update for .NET Framework 3.5 and 4.8 for Windows 10 Version 21H2 for x64"
+        }
+      ]
+    }
+  ]
+}

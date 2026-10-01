@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import csv
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -847,3 +848,120 @@ def test_an_unreadable_expiry_warns_rather_than_passing(fdr):
     )
     assert "[WARN]" in out
     assert "could not be read" in out
+
+
+# --- OS patch level (#15 stage 2) -------------------------------------------
+
+_OS_PROBE = Path(__file__).parent / "data" / "os_drift" / "probe-mast08-2026-09-29.json"
+
+
+def _probe_dict() -> dict:
+    return json.loads(_OS_PROBE.read_text(encoding="utf-8"))
+
+
+class _Resp:
+    def __init__(self, status_code: int = 0, std_out: bytes = b"", std_err: bytes = b"") -> None:
+        self.status_code, self.std_out, self.std_err = status_code, std_out, std_err
+
+
+class _FakeSession:
+    """Records what the gather does to a unit; answers the probe run with ``probe_out``."""
+
+    def __init__(self, fdr, probe_out: bytes, probe_rc: int = 0, cleanup_rc: int = 0) -> None:
+        self.fdr, self.probe_out, self.probe_rc, self.cleanup_rc = fdr, probe_out, probe_rc, cleanup_rc
+        self.scripts: list[str] = []
+        self.files: dict[str, bytes] = {}
+
+    def run_ps(self, script: str) -> _Resp:
+        self.scripts.append(script)
+        if script.startswith("& "):
+            return _Resp(self.probe_rc, self.probe_out, b"boom" if self.probe_rc else b"")
+        if script.startswith("Remove-Item"):
+            return _Resp(self.cleanup_rc, b"", b"locked" if self.cleanup_rc else b"")
+        return _Resp()
+
+    def put_file(self, remote_path: str, data: bytes) -> None:
+        self.files[remote_path] = data
+
+
+def _marked(fdr, body: str) -> bytes:
+    return f"noise\r\n{fdr.OS_PROBE_BEGIN}\r\n{body}\r\n{fdr.OS_PROBE_END}\r\n".encode()
+
+
+def test_the_os_probe_files_exist_and_the_probe_loads_its_lib_by_leaf_name(fdr):
+    probe, lib = (_REPO_ROOT / p for p in fdr.OS_PROBE_FILES)
+    assert lib.name in probe.read_text(encoding="utf-8")
+    assert "function Get-MastPendingRebootReason" in lib.read_text(encoding="utf-8")
+
+
+def test_gather_uploads_both_files_to_one_temp_folder_and_removes_it(fdr):
+    s = _FakeSession(fdr, _marked(fdr, json.dumps(_probe_dict())))
+    got = fdr.gather_os_probe(s)
+    assert got["ubr"] == 4529
+    folders = {p.rsplit("\\", 1)[0] for p in s.files}
+    assert len(folders) == 1
+    (folder,) = folders
+    assert folder.startswith(fdr.OS_PROBE_REMOTE_ROOT + "\\mast-os-patch-probe-")
+    assert sorted(p.rsplit("\\", 1)[1] for p in s.files) == ["mast-os-patch-probe.ps1", "mast-pending-reboot.ps1"]
+    assert s.scripts[-1] == f"Remove-Item -LiteralPath '{folder}' -Recurse -Force"
+
+
+def test_a_failed_probe_still_removes_the_folder(fdr):
+    s = _FakeSession(fdr, b"", probe_rc=1)
+    with pytest.raises(RuntimeError, match="probe exited 1"):
+        fdr.gather_os_probe(s)
+    assert s.scripts[-1].startswith("Remove-Item")
+
+
+def test_a_folder_left_on_the_unit_is_reported(fdr):
+    s = _FakeSession(fdr, _marked(fdr, json.dumps(_probe_dict())), cleanup_rc=1)
+    with pytest.raises(RuntimeError, match="could not remove"):
+        fdr.gather_os_probe(s)
+
+
+def test_probe_output_without_markers_is_an_error(fdr):
+    with pytest.raises(ValueError, match="no OS probe output"):
+        fdr.parse_os_probe("InitializeDefaultDrives failed")
+
+
+def test_os_patch_section_renders_state_blockers_and_secure_boot(fdr):
+    units = [
+        fdr.UnitRecord(host="mast08", status="ok", os_probe=_probe_dict()),
+        fdr.UnitRecord(host="mast05", status="ok", os_probe_error="timed out"),
+        fdr.UnitRecord(host="mast03", status="ok"),
+    ]
+    assessed = fdr.assess_os_patch(units, _REPO_ROOT)
+    assert set(assessed) == {"mast08", "mast05"}
+    out = "\n".join(fdr._render_os_patch(assessed))
+    assert "=== OS patch level" in out
+    assert "mast05  unknown         probe failed: timed out" in out
+    assert "19044.4529" in out
+    assert "File renames are queued for the next reboot on 1 unit(s): mast08" in out
+    assert "[WARN]" not in out
+    assert "Secure Boot is off on 1 unit(s): mast08" in out
+
+
+def test_a_servicing_reboot_warns_and_is_not_also_a_rename_note(fdr):
+    probe = _probe_dict() | {"pending_reboot": ["PendingFileRenameOperations", "CBS RebootPending"]}
+    out = "\n".join(
+        fdr._render_os_patch(fdr.assess_os_patch([fdr.UnitRecord(host="mast08", status="ok", os_probe=probe)], _REPO_ROOT))
+    )
+    assert "[WARN] mast08: a reboot is already pending (PendingFileRenameOperations, CBS RebootPending)" in out
+    assert "File renames are queued" not in out
+
+
+def test_a_probe_the_contract_rejects_is_reported_not_raised(fdr):
+    bad = _probe_dict() | {"surprise": 1}
+    assessed = fdr.assess_os_patch([fdr.UnitRecord(host="mast08", status="ok", os_probe=bad)], _REPO_ROOT)
+    assert str(assessed["mast08"]).startswith("probe output rejected:")
+
+
+def test_no_probe_data_means_no_section(fdr):
+    assert fdr.assess_os_patch([fdr.UnitRecord(host="mast08", status="ok")], _REPO_ROOT) == {}
+    assert fdr._render_os_patch({}) == []
+
+
+def test_the_probe_survives_a_json_round_trip(fdr):
+    rec = fdr.UnitRecord(host="mast08", status="ok", os_probe=_probe_dict())
+    again = fdr.UnitRecord(**json.loads(json.dumps(fdr.asdict(rec))))
+    assert again.os_probe == rec.os_probe

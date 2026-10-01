@@ -274,3 +274,33 @@ def test_fsck_leaves_the_corrupt_blob_in_place(tmp_path):
 
     run_store(root, "fsck")
     assert blob.is_file()
+
+
+def test_seed_reports_failure_when_it_cannot_adopt(tmp_path, monkeypatch):
+    """It returned 0 having adopted nothing, until 2026-09-27.
+
+    Seeding from /tmp into a store on /Storage fails every link -- hardlinks
+    cannot cross filesystems, which is a documented constraint of this store --
+    and `seed` printed the errors, summarised `added=0`, and exited 0. A caller
+    that seeds before dropping its own copy would have dropped the last one.
+    """
+    root = tmp_path / "relay"
+    (root / "store").mkdir(parents=True)
+    src = tmp_path / "incoming"
+    src.mkdir()
+    (src / "asset.bin").write_bytes(b"bytes that cannot be linked")
+
+    def refuse(*_a, **_k):
+        raise OSError(18, "Invalid cross-device link")
+
+    monkeypatch.setattr(rs.os, "link", refuse)
+    assert run_store(root, "seed", str(src)) == 1
+
+
+def test_seed_succeeds_when_it_adopts(tmp_path):
+    root = tmp_path / "relay"
+    (root / "store").mkdir(parents=True)
+    src = tmp_path / "incoming"
+    src.mkdir()
+    (src / "asset.bin").write_bytes(b"adoptable bytes")
+    assert run_store(root, "seed", str(src)) == 0

@@ -17,8 +17,9 @@ import subprocess
 from prov import transport as T
 
 #: Vendor artifacts consumed byte for byte -- driver INFs and catalogs are read by
-#: Windows setup, certificates are signed blobs. A filter must never rewrite them.
-BYTE_EXACT_SUFFIXES = (".inf", ".sys", ".cat", ".cer")
+#: Windows setup, certificates are signed blobs, and two DLLs are members of a
+#: signed driver package. A filter must never rewrite them.
+BYTE_EXACT_SUFFIXES = (".inf", ".sys", ".cat", ".cer", ".dll")
 
 
 def ls_files_eol() -> list[tuple[str, str, str]]:
@@ -32,15 +33,34 @@ def ls_files_eol() -> list[tuple[str, str, str]]:
     return rows
 
 
-def test_no_tracked_file_carries_crlf_into_the_index():
-    """The repository stores LF, so a checkout can be made to reproduce it.
+def test_no_filtered_file_carries_crlf_into_the_index():
+    """The repository stores LF for everything a filter is allowed to touch.
 
     A CRLF blob is one committed from a CRLF working tree, and it is how the two
     exceptions arrived: a decision record and jupyter's requirements.txt, both
     renormalized here.
+
+    Byte-exact artifacts are exempt, and the exemption is the point rather than a
+    loophole. The goal is that a commit decides the bytes instead of whichever git
+    checked it out -- `-text` achieves that exactly as `eol=lf` does, by storing
+    and restoring the file unchanged on every platform. Demanding LF of them
+    instead is not neutral: a `.cat` signs the exact bytes of its package, so
+    normalising a `.inf` inside one voids the signature and Windows refuses the
+    driver. This assertion used to cover them, and passed only because both
+    driver INFs were already in that broken state -- it was holding the damage in
+    place rather than catching it (#48).
     """
-    crlf = [path for eol, _attrs, path in ls_files_eol() if "crlf" in eol]
+    crlf = [path for eol, _attrs, path in ls_files_eol() if "crlf" in eol and not path.endswith(BYTE_EXACT_SUFFIXES)]
     assert crlf == []
+
+
+def test_a_byte_exact_artifact_keeps_the_line_endings_its_signature_covers():
+    # The companion to the exemption above: exempt from the LF rule is not the
+    # same as unchecked. server/prov/tests/test_driver_catalogs.py enforces this
+    # per signed package; here it is the repo-wide statement that a .inf which
+    # went in LF-only is a bug, not a style choice.
+    flattened = [path for eol, _attrs, path in ls_files_eol() if path.endswith(".inf") and "lf" in eol and "crlf" not in eol]
+    assert flattened == [], f"these .inf files lost their CRLF and void their catalogs: {flattened}"
 
 
 def test_text_files_are_pinned_to_lf_rather_than_left_to_the_tool():

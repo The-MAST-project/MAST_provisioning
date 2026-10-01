@@ -67,9 +67,25 @@ Describe 'Get-ModuleContentHash' {
     It 'changes when the version changes' {
         Get-AlphaHash -Version '1.1' | Should Not Be (Get-AlphaHash)
     }
-    It 'skips a missing optional commandfile without crashing (-TestMode payloads)' {
+    It 'records a missing optional commandfile rather than dropping it' {
+        # -TestMode and the -AllowMissing* switches skip staging a large optional
+        # asset, so a commandfile CAN legitimately be absent and this must not
+        # crash. What it must also not do is omit the line: that made a payload
+        # built without a 2 GB installer hash identically to one built with it,
+        # so a unit holding the wrong payload looked up to date (#48).
         $withMissing = Get-AlphaHash -Files ($alphaFiles + 'assets/astrometry.tgz')
-        $withMissing | Should Be (Get-AlphaHash)
+        $withMissing | Should Match '^[0-9a-f]{64}$'
+        $withMissing | Should Not Be (Get-AlphaHash)
+    }
+    It 'hashes a present optional commandfile differently from an absent one' {
+        # The pair that matters: the same declaration, the asset there and not.
+        $files = $alphaFiles + 'assets/astrometry.tgz'
+        $absent = Get-AlphaHash -Files $files
+        New-Item -ItemType Directory -Force -Path (Join-Path $provA 'assets') | Out-Null
+        Set-Content -LiteralPath (Join-Path $provA 'assets\astrometry.tgz') -Value 'payload' -Encoding Ascii
+        $present = Get-AlphaHash -Files $files
+        Remove-Item -LiteralPath (Join-Path $provA 'assets\astrometry.tgz') -Force
+        $present | Should Not Be $absent
     }
     It 'accepts a module with no commandfiles' {
         $h = Get-ModuleContentHash -ProviderDir $provB -CommandFiles @() -Commands @('cmd /c echo hi') -Version '0.1'

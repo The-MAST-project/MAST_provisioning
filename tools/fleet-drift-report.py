@@ -5,7 +5,9 @@ Gathers each unit's C:\\MAST\\installed-manifest.json (provisioning payload vers
 C:\\MAST\\bootstrap-manifest.json (which bootstrap the operator ran) over SSH and prints a
 cross-unit comparison: a per-unit summary, a module-version matrix flagging where units
 diverge, and a bootstrap section flagging units on an older/unstamped bootstrap (with the
-bootstrap elements they may be missing). Read-only -- it never changes anything on a unit.
+bootstrap elements they may be missing). It also runs a live OS patch probe (#15). Read-only
+in effect: the one thing it writes on a unit is the probe's own temp folder, removed in the
+same call.
 
 Why SSH (not WinRM): SSH reaches units from any egress, whereas the units' WinRM listener
 is LocalSubnet-scoped, so a cross-subnet host (e.g. labcomp) cannot WinRM to them. A --winrm
@@ -37,6 +39,7 @@ import csv
 import json
 import re
 import sys
+import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -44,7 +47,9 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_REPO_ROOT / "vm"))  # so a lazy 'import vm_lib' resolves in the gather path
 sys.path.insert(0, str(_REPO_ROOT / "server"))  # prov.* -- shared with the driver
 
+from prov import os_drift, os_updates  # noqa: E402
 from prov.drift import ModuleState, classify  # noqa: E402
+from prov.transport import ps_lit  # noqa: E402
 from prov.unit_paths import UNIT_INSTALLED, UNIT_VALIDATION  # noqa: E402
 
 # The unit-side paths come from prov.unit_paths so this tool and the driver
@@ -55,6 +60,12 @@ BOOTSTRAP_PATH = r"C:\MAST\bootstrap-manifest.json"
 NO_MANIFEST_SENTINEL = "__MAST_NO_MANIFEST__"
 NO_BOOTSTRAP_SENTINEL = "__MAST_NO_BOOTSTRAP__"
 SPLIT = "====MAST-DRIFT-SPLIT===="
+#: The OS patch probe and the lib it dot-sources, uploaded together because the
+#: probe is past what an inline -EncodedCommand can carry through cmd.exe.
+OS_PROBE_FILES = ("server/lib/mast-os-patch-probe.ps1", "server/lib/mast-pending-reboot.ps1")
+OS_PROBE_REMOTE_ROOT = r"C:\Windows\Temp"
+OS_PROBE_BEGIN = "====MAST-OS-PATCH-PROBE-BEGIN===="
+OS_PROBE_END = "====MAST-OS-PATCH-PROBE-END===="
 
 
 @dataclass
@@ -88,6 +99,11 @@ class UnitRecord:
     #: run-verify-only pass; empty when tier 2 has not run.
     validation: dict[str, str] = field(default_factory=dict)
     validated_at: str | None = None
+    #: What server/lib/mast-os-patch-probe.ps1 printed (#15): the live OS patch
+    #: state, read every gather rather than from the manifest. None when the probe
+    #: was not run (a --from-json gathered before it existed) or failed.
+    os_probe: dict | None = None
+    os_probe_error: str | None = None
     error: str | None = None
 
 
@@ -224,11 +240,69 @@ def gather_unit(host: str, cred: dict[str, str], connect_timeout_s: int) -> Unit
         rec.bootstrapped_at = bootstrapped_at
         rec.validation = validation
         rec.validated_at = validated_at
+        try:
+            rec.os_probe = gather_os_probe(session)
+        except Exception as exc:  # noqa: BLE001 - the manifest read above still stands
+            rec.os_probe_error = str(exc)
         return rec
     except Exception as exc:  # noqa: BLE001
         return UnitRecord(host=host, status="error", error=str(exc))
     finally:
         session.close()
+
+
+def parse_os_probe(out: str) -> dict:
+    _, begin, rest = out.partition(OS_PROBE_BEGIN)
+    body, end, _ = rest.partition(OS_PROBE_END)
+    if not (begin and end):
+        raise ValueError(f"no OS probe output between markers: {out.strip()[:300]!r}")
+    return json.loads(body)
+
+
+def _remote_join(parent: str, name: str) -> str:
+    """A unit-side path: literal Windows form, never pathlib (see CLAUDE.md)."""
+    return parent + "\\" + name
+
+
+def gather_os_probe(session) -> dict:
+    """Upload the probe to a per-call temp folder, run it, and remove the folder.
+
+    That folder is the one thing this report writes on a unit, and only for the
+    length of the call: the probe is too long for inline dispatch.
+    """
+    remote = _remote_join(OS_PROBE_REMOTE_ROOT, f"mast-os-patch-probe-{uuid.uuid4().hex}")
+    session.run_ps(f"New-Item -ItemType Directory -Force -Path {ps_lit(remote)} | Out-Null")
+    try:
+        for rel in OS_PROBE_FILES:
+            session.put_file(_remote_join(remote, Path(rel).name), (_REPO_ROOT / rel).read_bytes())
+        resp = session.run_ps(f"& {ps_lit(_remote_join(remote, Path(OS_PROBE_FILES[0]).name))}")
+        out = resp.std_out.decode("utf-8-sig", errors="replace")
+        if resp.status_code != 0:
+            raise RuntimeError(f"probe exited {resp.status_code}: {resp.std_err.decode(errors='replace').strip()[:300]}")
+        return parse_os_probe(out)
+    finally:
+        cleanup = session.run_ps(f"Remove-Item -LiteralPath {ps_lit(remote)} -Recurse -Force")
+        if cleanup.status_code != 0:
+            raise RuntimeError(f"could not remove {remote} from the unit: {cleanup.std_err.decode(errors='replace')[:300]}")
+
+
+def assess_os_patch(units: list[UnitRecord], repo_root: Path) -> dict:
+    """{host: OsPatchAssessment | error string} for every unit the probe reached or tried."""
+    probed = [u for u in units if u.os_probe is not None or u.os_probe_error]
+    if not probed:
+        return {}
+    builds = os_updates.load_os_builds(repo_root / os_updates.OS_BUILDS)
+    baselines = os_drift.load_baselines(repo_root)
+    out: dict[str, os_drift.OsPatchAssessment | str] = {}
+    for u in probed:
+        if u.os_probe is None:
+            out[u.host] = f"probe failed: {u.os_probe_error}"
+            continue
+        try:
+            out[u.host] = os_drift.assess(os_drift.OsProbe.model_validate(u.os_probe), builds, baselines)
+        except ValueError as exc:
+            out[u.host] = f"probe output rejected: {exc}"
+    return out
 
 
 def load_bootstrap_elements(repo_root: Path) -> dict:
@@ -911,6 +985,57 @@ def _render_nomachine(ok_cols: list[UnitRecord]) -> list[str]:
     return out
 
 
+_BLOCKER_TEXT = {
+    os_drift.Blocker.PENDING_REBOOT: "a reboot is already pending ({reasons}); reboot before patching",
+    os_drift.Blocker.COMPONENT_STORE: "the component store is not healthy; repair it (DISM /RestoreHealth) before patching",
+    os_drift.Blocker.LOW_DISK: "less than the free space an LCU install needs on C:",
+}
+_FINDING_TEXT = {
+    os_drift.Finding.LOCKDOWN_OFF: "the Windows Update lockdown is not in place (NoAutoUpdate policy or task missing)",
+    os_drift.Finding.WINRE_DISABLED: "WinRE is not enabled, so a failed update has no recovery environment",
+}
+
+
+def _render_os_patch(os_patch: dict | None) -> list[str]:
+    """OS patch level per unit (#15) -- live, read-only, and informational.
+
+    It warns about what would stop a patch from going on, but it does not touch
+    the exit code: until units can be patched there is nothing to act on, and a
+    report that is red on every unit trains people to ignore it.
+    """
+    if not os_patch:
+        return []
+    out = ["", "=== OS patch level (live probe; reference = newest committed baseline for the build) ==="]
+    width = max(len(h) for h in os_patch)
+    notes: list[str] = []
+    for host, a in sorted(os_patch.items()):
+        if isinstance(a, str):
+            out.append(f"  {host.ljust(width)}  unknown         {a}")
+            continue
+        target = f" -> {a.target_ubr} ({a.baseline_id})" if a.target_ubr is not None else ""
+        dotnet = f"{a.dotnet}" + (f" {a.dotnet_version} -> {a.dotnet_target}" if a.dotnet_target else "")
+        out.append(
+            f"  {host.ljust(width)}  {a.state:<14}  {a.build}.{a.ubr}{target}"
+            f"  lcu-installed={a.lcu_installed or '?'}  .NET {dotnet}"
+        )
+        for b in a.blockers:
+            notes.append(f"  [WARN] {host}: {_BLOCKER_TEXT[b].format(reasons=', '.join(a.pending_reboot))}")
+        for f in a.findings:
+            notes.append(f"  [WARN] {host}: {_FINDING_TEXT[f]}")
+    out += notes
+    renames = sorted(
+        h
+        for h, a in os_patch.items()
+        if not isinstance(a, str) and a.pending_reboot and os_drift.Blocker.PENDING_REBOOT not in a.blockers
+    )
+    if renames:
+        out.append(f"  [note] File renames are queued for the next reboot on {len(renames)} unit(s): {', '.join(renames)}")
+    no_sb = sorted(h for h, a in os_patch.items() if not isinstance(a, str) and a.secure_boot is False)
+    if no_sb:
+        out.append(f"  [note] Secure Boot is off on {len(no_sb)} unit(s): {', '.join(no_sb)}")
+    return out
+
+
 def _render_repo_warnings(repos: dict) -> list[str]:
     # Spelled out rather than left to the glyphs: 'pinned and yet divergent'
     # means a MOVED TAG, which is a different failure from a branch drifting.
@@ -1059,6 +1184,7 @@ def render(
     repo_boot_v: int | None,
     repos: dict | None = None,
     facts: dict | None = None,
+    os_patch: dict | None = None,
 ) -> str:
     """The text report, section by section, in the order an operator reads it.
 
@@ -1079,6 +1205,7 @@ def render(
     lines += _render_facts_matrix(facts, ok_cols)
     lines += _render_bios_policy(ok_cols)
     lines += _render_nomachine(ok_cols)
+    lines += _render_os_patch(os_patch)
     lines += _render_bootstrap(units, boot, repo_boot_v)
     lines += _render_result(units, cmp, boot, repos)
     return "\n".join(lines)
@@ -1226,7 +1353,8 @@ def main() -> int:  # noqa: C901 -- argparse branching IS the CLI surface
     if args.csv_out:
         write_csv(Path(args.csv_out), units, cmp, boot, repos_cmp, facts_cmp)
 
-    print(render(units, reference, cmp, boot, repo_bootstrap_version(_REPO_ROOT), repos_cmp, facts_cmp))
+    os_patch = assess_os_patch(units, _REPO_ROOT)
+    print(render(units, reference, cmp, boot, repo_bootstrap_version(_REPO_ROOT), repos_cmp, facts_cmp, os_patch))
 
     if not units:
         return 1

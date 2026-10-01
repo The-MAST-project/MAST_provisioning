@@ -1,0 +1,152 @@
+"""The one index of every file a payload needs that the build does not author.
+
+Two sets used to be tracked apart: the binaries git-LFS carried, and the five
+build-host inputs too large or too un-redistributable to commit. They had two
+index files, two caches, two stores and two fetch paths, and the build read them
+through eight bespoke blocks. They are one set here (MAST_provisioning#48).
+
+Every row is keyed by the repo-relative path the file WOULD have if it were
+tracked, so the machine-wide cache mirrors the repo tree and one rule covers
+both: an asset lives at ``server/providers/<module>/assets/...``, in the repo or
+in the cache.
+
+Every row is DECLARED, in ``vendor-inputs.json``. The LFS-held ones were derived
+from the pointers until #48 froze them there, and the freeze had to happen before
+the untracking rather than with it: a digest derived from a pointer stops being
+derivable the moment the pointer is removed, so deriving and untracking in one
+step would have emptied 162 rows out of the index with nothing to notice. While
+both the frozen digests and the pointers exist, ``test_asset_manifest`` checks
+each against the other.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import subprocess
+from pathlib import Path
+from typing import Any
+
+#: server/providers/<module>/assets/... -- the per-provider layout.
+_PROVIDER = re.compile(r"^server/providers/([^/]+)/assets/")
+#: client/assets/... -- the bootstrap payload, which belongs to no provider.
+_CLIENT = re.compile(r"^client/assets/")
+
+VENDOR_INPUTS = Path("server/data/vendor-inputs.json")
+
+
+class ManifestError(Exception):
+    """The manifest cannot be built as asked."""
+
+
+def module_of(path: str) -> str | None:
+    """Which provider owns an asset, for a drift report a person has to read."""
+    m = _PROVIDER.match(path)
+    if m:
+        return m.group(1)
+    return "client" if _CLIENT.match(path) else None
+
+
+def _git(repo: Path, *args: str, stdin: bytes | None = None) -> bytes:
+    return subprocess.run(["git", *args], cwd=repo, input=stdin, capture_output=True, check=True).stdout
+
+
+def _pointers(repo: Path, paths: list[str]) -> dict[str, bytes]:
+    """Every blob at HEAD in ONE git call; see prov.tree_integrity for why.
+
+    Nothing here reads it any more -- the manifest is declared, not derived. It
+    stays because the freeze-fidelity check in test_asset_manifest compares each
+    frozen digest against the pointer it was taken from, and that check lives
+    only as long as the pointers do.
+    """
+    if not paths:
+        return {}
+    req = "".join(f"HEAD:{p}\n" for p in paths).encode("utf-8", "surrogateescape")
+    out = _git(repo, "cat-file", "--batch", stdin=req)
+    blobs: dict[str, bytes] = {}
+    pos = 0
+    for path in paths:
+        nl = out.index(b"\n", pos)
+        header = out[pos:nl].split()
+        if len(header) < 3:
+            pos = nl + 1
+            continue
+        size = int(header[2])
+        start = nl + 1
+        blobs[path] = out[start : start + size]
+        pos = start + size + 1
+    return blobs
+
+
+def _declared(repo: Path) -> dict[str, Any]:
+    path = repo / VENDOR_INPUTS
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise ManifestError(f"{VENDOR_INPUTS} is missing; the build-host inputs cannot be derived") from exc
+
+
+def _sources_and_rows(declared: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    sources: list[dict[str, Any]] = []
+    rows: list[dict[str, Any]] = []
+    for entry in declared.get("inputs", []):
+        source = {
+            k: entry[k]
+            for k in ("name", "cached", "used_by", "why_not_in_repo", "origin", "reacquire", "prefix")
+            if k in entry
+        }
+        sources.append(source)
+        for f in entry.get("files", []):
+            rows.append({**f, "module": module_of(f["path"]), "source": entry["name"]})
+    return sources, rows
+
+
+def build_manifest(repo: Path) -> dict[str, Any]:
+    """Index of every asset: path, sha256, size, owning module, and where it came from.
+
+    No timestamp and no host. This file is committed and regenerated, so anything
+    that changes when nothing changed would churn the diff and teach the reader to
+    skip it -- the same reason the provenance generator is byte-stable.
+    """
+    repo = Path(repo)
+    declared = _declared(repo)
+    sources, rows = _sources_and_rows(declared)
+
+    seen: dict[str, str] = {}
+    for row in rows:
+        other = seen.get(row["path"])
+        if other is not None:
+            raise ManifestError(
+                f"{row['path']} is claimed by both '{other}' and '{row['source']}'. "
+                "One path is one file; the cache cannot hold two."
+            )
+        seen[row["path"]] = row["source"]
+
+    return {
+        "_comment": (
+            "Generated by prov.asset_manifest -- do not hand-edit. One row per file a payload "
+            "needs that the build does not author, keyed by the repo-relative path it would "
+            "have if it were tracked. Every row is declared in vendor-inputs.json. "
+            "See MAST_provisioning#48."
+        ),
+        "sources": sources,
+        "not_cached": declared.get("not_vendor_inputs", []),
+        "files": sorted(rows, key=lambda r: r["path"]),
+    }
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--repo", type=Path, default=Path.cwd())
+    ap.add_argument("--out", type=Path, required=True)
+    a = ap.parse_args(argv)
+    manifest = build_manifest(a.repo)
+    a.out.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    total = sum(f["size"] for f in manifest["files"])
+    print(f"wrote {len(manifest['files'])} assets ({total / 2**30:.2f} GiB) to {a.out}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
