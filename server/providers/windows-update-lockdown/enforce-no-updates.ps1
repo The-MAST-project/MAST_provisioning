@@ -31,6 +31,14 @@ foreach (${p} in '\Microsoft\Windows\UpdateOrchestrator\', '\Microsoft\Windows\W
     }
 }
 
+# 4) Microsoft Edge's own updater, which Windows Update's knobs above do not reach (#230).
+#    The lib is deployed beside this script by provide-windows-update-lockdown.ps1.
+${edgeLib} = Join-Path ${PSScriptRoot} 'mast-edge-update.ps1'
+if (Test-Path -LiteralPath ${edgeLib}) {
+    . ${edgeLib}
+    try { Disable-MastEdgeUpdate } catch { Write-Verbose "edge update: $($_.Exception.Message)" }
+}
+
 # Breadcrumb so drift/enforcement is auditable.
 ${logDir} = Join-Path ${env:SystemDrive} 'MAST\logs\windows-update'
 New-Item -ItemType Directory -Path ${logDir} -Force -ErrorAction SilentlyContinue | Out-Null
@@ -38,5 +46,5 @@ ${wu}   = Get-Service -Name 'wuauserv' -ErrorAction SilentlyContinue
 ${mode} = (Get-CimInstance -ClassName Win32_Service -Filter "Name='wuauserv'" -ErrorAction SilentlyContinue).StartMode
 ${status} = if (${wu}) { ${wu}.Status } else { 'absent' }
 Add-Content -LiteralPath (Join-Path ${logDir} 'enforce.log') -Encoding UTF8 `
-    -Value ("[{0}] enforced no-updates; wuauserv StartMode={1} Status={2}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), ${mode}, ${status})
+    -Value ("[{0}] enforced no-updates; wuauserv StartMode={1} Status={2}; edge-update-off={3}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), ${mode}, ${status}, $(if (Get-Command Get-MastEdgeUpdateState -ErrorAction SilentlyContinue) { (Get-MastEdgeUpdateState).off } else { 'lib-missing' }))
 exit 0

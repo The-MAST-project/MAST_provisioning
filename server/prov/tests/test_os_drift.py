@@ -1,8 +1,8 @@
 """A unit's OS patch level against its build's baseline (MAST_provisioning#15, stage 2).
 
-``probe-mast08-2026-09-29.json`` is what server/lib/mast-os-patch-probe.ps1 printed
+``probe-mast08-2026-09-30.json`` is what server/lib/mast-os-patch-probe.ps1 printed
 on mast08 that day: 19044.4529, the June 2024 factory image, with a file-rename
-reboot pending. ``baseline-19044-2026-09.json`` is the first committed baseline.
+reboot pending and Edge's own updater still live. ``baseline-19044-2026-09.json`` is the first committed baseline.
 Both are copies, so a later baseline landing in server/data/ cannot move these
 tests.
 """
@@ -25,7 +25,7 @@ REPO = Path(__file__).resolve().parents[3]
 
 
 def probe(**changes) -> OsProbe:
-    raw = json.loads((DATA / "probe-mast08-2026-09-29.json").read_text(encoding="utf-8"))
+    raw = json.loads((DATA / "probe-mast08-2026-09-30.json").read_text(encoding="utf-8"))
     for key, value in changes.items():
         head, _, tail = key.partition("__")
         if tail:
@@ -53,7 +53,7 @@ def test_mast08_on_the_factory_image_is_behind_with_a_reboot_pending():
     # A queued file rename is reported but does not hold servicing back.
     assert a.blockers == ()
     assert a.pending_reboot == ("PendingFileRenameOperations",)
-    assert a.findings == ()
+    assert a.findings == (Finding.EDGE_UPDATE_ON,)
     assert a.secure_boot is False
 
 
@@ -118,12 +118,20 @@ def test_blockers(changes: dict, blocker: Blocker):
     ],
 )
 def test_findings(changes: dict, finding: Finding):
-    assert os_drift.assess(probe(**changes), BUILDS, SEP).findings == (finding,)
+    assert finding in os_drift.assess(probe(**changes), BUILDS, SEP).findings
+
+
+EDGE_OFF = {"edgeupdate": "Disabled", "edgeupdatem": "Disabled", "tasks_enabled": 0, "off": True}
+
+
+def test_edge_update_disabled_is_not_a_finding():
+    assert os_drift.assess(probe(lockdown__edge_update=EDGE_OFF), BUILDS, SEP).findings == ()
 
 
 def test_wuauserv_back_on_manual_is_not_a_finding():
     # WaaSMedicSvc flips it back between the lockdown's daily runs; the policy is the lever.
-    assert os_drift.assess(probe(lockdown__wuauserv="Manual"), BUILDS, SEP).findings == ()
+    got = os_drift.assess(probe(lockdown__wuauserv="Manual", lockdown__edge_update=EDGE_OFF), BUILDS, SEP)
+    assert got.findings == ()
 
 
 @pytest.mark.parametrize(
@@ -143,7 +151,7 @@ def test_dotnet_against_the_baseline(changes: dict, state: DotnetState):
 
 
 def test_the_probe_contract_is_closed():
-    raw = json.loads((DATA / "probe-mast08-2026-09-29.json").read_text(encoding="utf-8"))
+    raw = json.loads((DATA / "probe-mast08-2026-09-30.json").read_text(encoding="utf-8"))
     raw["new_field"] = 1
     with pytest.raises(ValidationError):
         OsProbe.model_validate(raw)

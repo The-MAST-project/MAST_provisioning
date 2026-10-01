@@ -60,9 +60,13 @@ BOOTSTRAP_PATH = r"C:\MAST\bootstrap-manifest.json"
 NO_MANIFEST_SENTINEL = "__MAST_NO_MANIFEST__"
 NO_BOOTSTRAP_SENTINEL = "__MAST_NO_BOOTSTRAP__"
 SPLIT = "====MAST-DRIFT-SPLIT===="
-#: The OS patch probe and the lib it dot-sources, uploaded together because the
+#: The OS patch probe and the libs it dot-sources, uploaded together because the
 #: probe is past what an inline -EncodedCommand can carry through cmd.exe.
-OS_PROBE_FILES = ("server/lib/mast-os-patch-probe.ps1", "server/lib/mast-pending-reboot.ps1")
+OS_PROBE_FILES = (
+    "server/lib/mast-os-patch-probe.ps1",
+    "server/lib/mast-pending-reboot.ps1",
+    "server/lib/mast-edge-update.ps1",
+)
 OS_PROBE_REMOTE_ROOT = r"C:\Windows\Temp"
 OS_PROBE_BEGIN = "====MAST-OS-PATCH-PROBE-BEGIN===="
 OS_PROBE_END = "====MAST-OS-PATCH-PROBE-END===="
@@ -992,6 +996,7 @@ _BLOCKER_TEXT = {
 }
 _FINDING_TEXT = {
     os_drift.Finding.LOCKDOWN_OFF: "the Windows Update lockdown is not in place (NoAutoUpdate policy or task missing)",
+    os_drift.Finding.EDGE_UPDATE_ON: "Microsoft Edge's own updater is not disabled (services or tasks live)",
     os_drift.Finding.WINRE_DISABLED: "WinRE is not enabled, so a failed update has no recovery environment",
 }
 

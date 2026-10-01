@@ -37,6 +37,12 @@ try {
     ${enforceDst} = Join-Path ${DeployDir} 'enforce-no-updates.ps1'
     Copy-Item -LiteralPath ${enforceSrc} -Destination ${enforceDst} -Force
     Write-WuLog ("Deployed enforcement script: {0}" -f ${enforceDst})
+    # The scheduled task runs the script long after staging is gone, so its lib goes with it.
+    ${edgeLibSrc} = Join-Path ${PSScriptRoot} 'mast-edge-update.ps1'
+    if (-not (Test-Path -LiteralPath ${edgeLibSrc})) { ${edgeLibSrc} = Join-Path ${PSScriptRoot} '..\..\lib\mast-edge-update.ps1' }
+    if (-not (Test-Path -LiteralPath ${edgeLibSrc})) { throw "mast-edge-update.ps1 not found beside provide script or in server\lib." }
+    Copy-Item -LiteralPath ${edgeLibSrc} -Destination (Join-Path ${DeployDir} 'mast-edge-update.ps1') -Force
+    Write-WuLog ("Deployed Edge Update lib: {0}" -f (Join-Path ${DeployDir} 'mast-edge-update.ps1'))
 
     # 2) Register the daily + at-startup SYSTEM task that re-asserts the state.
     ${argLine} = ('-ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -File "{0}"' -f ${enforceDst})

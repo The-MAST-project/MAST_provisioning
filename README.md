@@ -159,7 +159,7 @@ renumbering.
 |  2100 | `chrome` | Google Chrome (offline Enterprise MSI) |
 |  2200 | `mast` | Clone MAST repos, create the venv, install requirements, open the unit API port. Registers no service |
 |  2210 | `mast-shared-mount` | Map `Z:` to the operational share `\\<controller_host>\mast-share` **in the LocalSystem session** (SYSTEM at-startup task); clear stale per-user mappings |
-|  2350 | `windows-update-lockdown` | Keep auto Windows Updates disabled: daily + at-startup SYSTEM task re-asserts the policy/services (Windows self-heals, so it must be re-applied) |
+|  2350 | `windows-update-lockdown` | Keep auto Windows Updates disabled: daily + at-startup SYSTEM task re-asserts the policy/services (Windows self-heals, so it must be re-applied). Also disables Microsoft Edge's own updater (its services and tasks; its policy is ignored on a non-managed machine), which Windows Update's settings do not reach |
 |  2400 | `windows-exporter-monitoring` | Prometheus windows_exporter service (TCP 9182) |
 |  2500 | `diagnostics` | Post-smoke runtime checks (ASCOM, app launch, PHD2 RPC). Nothing here touches the MAST services |
 |  2600 | `ds9` | SAOImage DS9 8.7 imaging / data visualization |
@@ -698,8 +698,8 @@ can patch a unit yet.
   (`CBS RebootPending` / `WindowsUpdate RebootRequired`), a component store DISM does not
   call healthy, or less than 20 GiB free on C:. A queued file rename is only a note:
   DISM installs over it, and every unit carries one.
-- **Findings** (`[WARN]`, not blockers): the Windows Update lockdown missing, or WinRE
-  disabled. Secure Boot being off is a note.
+- **Findings** (`[WARN]`, not blockers): the Windows Update lockdown missing, Microsoft
+  Edge's own updater not disabled (`edge-update-on`), or WinRE disabled. Secure Boot being off is a note.
 
 ## Dev/test loop (Windows host + VirtualBox VM)
 
