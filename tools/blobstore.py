@@ -256,7 +256,7 @@ def cmd_fsck(root: Path, args) -> int:
     Silent corruption is the case this exists for, so a mismatch is reported and
     the blob is left alone: deleting it would take out every hardlink into it
     across every host tree at once, and a bad byte is more recoverable than a
-    missing file.
+    missing file. ``repair`` rewrites it in place from a good copy.
     """
     store = root / BLOBSTORE_DIR
     checked = bad = 0
@@ -277,6 +277,29 @@ def cmd_fsck(root: Path, args) -> int:
                     print(blob.name)
     print(f"FSCK checked={checked} corrupt={bad} corrupt_bytes={bad_bytes}", file=sys.stderr)
     return 1 if bad else 0
+
+
+def cmd_repair(root: Path, args) -> int:
+    """Write good bytes back into a rotted blob, keeping its inode.
+
+    Every host tree and snapshot naming the blob is a link to that inode, so this
+    repairs all of them at once. Deleting the blob and seeding a good copy would not:
+    the copy gets a new inode, and every existing tree keeps the rotted one.
+    """
+    blob = blob_path(root, args.digest)
+    if not blob.is_file():
+        raise SystemExit(f"repair: the blobstore holds no {args.digest}; seed it instead")
+    good = Path(args.source)
+    actual = sha256_of(good)
+    if actual != args.digest:
+        raise SystemExit(f"repair: {good} hashes to {actual}, not {args.digest}")
+    with good.open("rb") as src, blob.open("r+b") as dst:
+        shutil.copyfileobj(src, dst, READ_CHUNK)
+        dst.truncate()
+    if sha256_of(blob) != args.digest:
+        raise SystemExit(f"repair: {blob} still does not hash to its name after the rewrite")
+    print(f"REPAIRED {args.digest} links={blob.stat().st_nlink}")
+    return 0
 
 
 def cmd_gc(root: Path, _args) -> int:
@@ -322,6 +345,10 @@ def main(argv: list[str] | None = None) -> int:
     snap.add_argument("--kind", required=True, choices=[k.value for k in SnapshotKind])
     snap.add_argument("--id", required=True)
     snap.set_defaults(fn=cmd_snapshot)
+    repair = sub.add_parser("repair", help="rewrite a rotted blob in place from a good copy")
+    repair.add_argument("digest")
+    repair.add_argument("source")
+    repair.set_defaults(fn=cmd_repair)
     sub.add_parser("gc").set_defaults(fn=cmd_gc)
     fsck = sub.add_parser("fsck")
     fsck.add_argument("--names", action="store_true", help="print corrupt blob names on stdout")

@@ -431,3 +431,37 @@ def test_a_relay_still_holding_the_old_store_is_refused_not_emptied(tmp_path):
     with pytest.raises(SystemExit, match="mv"):
         run(tmp_path, ["want"], manifest_for(FILES))
     assert not (tmp_path / rs.BLOBSTORE_DIR).exists()
+
+
+def rot(blob):
+    """Flip bytes in place, as disk rot does: the inode, and every link to it, stay."""
+    with blob.open("r+b") as fh:
+        fh.write(b"\x00rot")
+
+
+def test_repair_restores_a_rotted_blob_in_every_tree_that_links_it(tmp_path):
+    seed_blobs(tmp_path, FILES)
+    m = manifest_for(FILES)
+    run(tmp_path, ["assemble", "--host", "mast07"], m)
+    digest = hashlib.sha256(b"x" * 4096).hexdigest()
+    blob = rs.blob_path(tmp_path, digest)
+    rot(blob)
+    assert run_store(tmp_path, "fsck") == 1
+
+    good = tmp_path / "good.exe"
+    good.write_bytes(b"x" * 4096)
+    run(tmp_path, ["repair", digest, str(good)])
+
+    assert run_store(tmp_path, "fsck") == 0
+    snap = snapshot_dir(tmp_path, "provisioning-payload", m["payload_hash"])
+    assert (snap / "installer.exe").read_bytes() == b"x" * 4096, "the snapshot shares the repaired inode"
+    assert "snapshot=existing" in run(tmp_path, ["assemble", "--host", "mast07"], m)
+
+
+def test_repair_refuses_bytes_that_are_not_the_blob(tmp_path):
+    seed_blobs(tmp_path, FILES)
+    digest = hashlib.sha256(b"x" * 4096).hexdigest()
+    wrong = tmp_path / "wrong.exe"
+    wrong.write_bytes(b"y" * 4096)
+    with pytest.raises(SystemExit, match="not"):
+        run(tmp_path, ["repair", digest, str(wrong)])

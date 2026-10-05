@@ -55,9 +55,10 @@ case "$rc" in
         echo "BLOBSTORE-FSCK-COMPLETE status=0"
         ;;
     1)
-        # Deliberately not repaired here. Unlinking a blob takes out every hardlink
-        # into it across every host tree at once, and a bad byte is more
-        # recoverable than a missing file -- re-seed the affected blob instead.
+        # Deliberately not repaired here: the good copy has to come from somewhere
+        # trusted. Never unlink the blob -- that takes out every hardlink into it --
+        # and never seed a fresh copy, which gets a new inode while every tree keeps
+        # the rotted one. `blobstore.py repair <digest> <good file>` rewrites it in place.
         say "BLOBSTORE_FSCK_CORRUPT the blobstore holds blobs that are not what their names say -- see MAST_provisioning#216"
         echo "BLOBSTORE-FSCK-COMPLETE status=1"
         ;;

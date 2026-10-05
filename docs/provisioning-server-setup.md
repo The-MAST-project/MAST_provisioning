@@ -492,8 +492,14 @@ would make every other integrity check in the system agree with the rot. Measure
 could not be reached.
 
 A corrupt blob is reported and **not** deleted. Unlinking it would take out every
-hardlink into it across every host tree at once, and a bad byte is more
-recoverable than a missing file -- re-seed the affected blob instead.
+hardlink into it across every host tree and snapshot at once, and seeding a fresh
+copy would not help either: the copy gets a new inode while every tree keeps the
+rotted one. Repair it in place from a good copy -- the asset cache here, by the path
+`assets.json` gives that digest -- which fixes every tree that links it:
+
+```bash
+tools/blobstore.py --root /Storage/mast-provisioning repair <sha256> <good copy>
+```
 
 **Not into `C:\agent-worktrees\`.** A scheduled task once ran from a task folder
 there, which the workspace contract tears down with `rm -rf`, and it was registered
