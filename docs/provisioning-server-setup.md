@@ -126,7 +126,7 @@ C:\cygwin64\bin\bash.exe -lc "bash /cygdrive/c/Users/labcomp2/Desktop/MAST/MAST_
 ```
 
 It hashes what is already there against the manifest and fetches only what is
-missing or wrong, in one ssh and one tar stream from the content store on
+missing or wrong, in one ssh and one tar stream from the blobstore on
 mast-ns-control, verifying each blob before placing it. So it is equally the
 first-run fetch, the repair path and the verify -- which is why the daily task
 runs it rather than a report-only job. An empty cache takes about 3 minutes per
@@ -338,9 +338,9 @@ address instead of its own. Nothing else about the pull changes.
 Declared per site in [`server/data/staging-hosts.json`](../server/data/staging-hosts.json);
 a site with no entry keeps pulling from the orchestrator.
 
-**Why this is affordable.** The staging host keeps a **content-addressed store**
+**Why this is affordable.** The staging host keeps a **blobstore**
 (#202) and a host's payload is a tree of hardlinks into it. The build writes
-`payload-manifest.json` beside the staging root; the orchestrator asks the store
+`payload-manifest.json` beside the staging root; the orchestrator asks the blobstore
 which SHA-256 digests it lacks, sends only those, and has the tree assembled from
 links. Measured on mast07: 5.5 s and one 41,800-byte blob for a 14.88 GB payload
 that cost 1,959,264,676 bytes under the `--link-dest` scheme it replaced.
@@ -348,16 +348,16 @@ that cost 1,959,264,676 bytes under the `--link-dest` scheme it replaced.
 ### On the staging host
 
 ```bash
-mkdir -p /Storage/mast-provisioning/{hosts,store}
+mkdir -p /Storage/mast-provisioning/{hosts,blobstore}
 ```
 
-Seed the store from trees the host already holds — the vendor mirror (#194) and
+Seed the blobstore from trees the host already holds — the vendor mirror (#194) and
 any existing host tree — so the first sync is not a 14.9 GB upload. Seeding
-**adopts** each file: the store entry is a second name for the same inode, the
+**adopts** each file: the blobstore entry is a second name for the same inode, the
 source tree is left exactly as it was, and no disk is consumed:
 
 ```bash
-tools/relay-store.py --root /Storage/mast-provisioning seed /Storage/mast-vendor
+tools/blobstore.py --root /Storage/mast-provisioning seed /Storage/mast-vendor
 ```
 
 On mast-ns-control that collapsed 1,895 names into 561 distinct blobs (14.88 GB)
@@ -427,7 +427,7 @@ du -sh --total /Storage/mast-vendor /Storage/mast-provisioning | tail -1
 Link counts above 1, and a total that has not grown by a payload. The run's own
 `RELAY_SYNC_OK` line carries `blobs_sent=`, which is the same fact per sync.
 
-`tools/relay-store.py gc` drops blobs no host tree references. It is manual; run
+`tools/blobstore.py gc` drops blobs no host tree references. It is manual; run
 it after retiring a unit, not on a schedule.
 
 ---
@@ -461,19 +461,19 @@ leaving a log entry for someone to notice. Verification is still by checksum and
 never by re-transfer: at the measured 3.4-6 MB/s, re-pulling 13.87 GiB to compare
 it would take hours.
 
-A second daily task checks the store itself:
+A second daily task checks the blobstore itself:
 
 ```cmd
-schtasks /create /tn "MAST-store-fsck" /sc DAILY /st 06:30 /ru labcomp2 ^
-  /tr "C:\cygwin64\bin\bash.exe -lc 'bash /cygdrive/c/Users/labcomp2/Desktop/MAST/MAST_provisioning/tools/store-fsck.sh'"
+schtasks /create /tn "MAST-blobstore-fsck" /sc DAILY /st 06:30 /ru labcomp2 ^
+  /tr "C:\cygwin64\bin\bash.exe -lc 'bash /cygdrive/c/Users/labcomp2/Desktop/MAST/MAST_provisioning/tools/blobstore-fsck.sh'"
 ```
 
-The fetch compares this machine's cache **against** the store; `store-fsck`
-re-hashes every blob **in** the store against its own filename. Without the second,
+The fetch compares this machine's cache **against** the blobstore; `blobstore-fsck`
+re-hashes every blob **in** the blobstore against its own filename. Without the second,
 the first is comparing against something nobody has checked -- and a rotted blob
 would make every other integrity check in the system agree with the rot. Measured
 2026-09-22: 581 blobs, 14 GB, **33 s**, which is why it can run daily. It writes
-`C:\MAST\logs\store-fsck.log`; exit **1** means corruption, **2** means the store
+`C:\MAST\logs\blobstore-fsck.log`; exit **1** means corruption, **2** means the blobstore
 could not be reached.
 
 A corrupt blob is reported and **not** deleted. Unlinking it would take out every

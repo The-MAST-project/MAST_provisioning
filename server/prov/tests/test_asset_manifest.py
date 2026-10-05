@@ -216,7 +216,7 @@ def tracked_pointer_paths() -> set[str]:
 
 def committed_lfs_rows() -> dict[str, dict]:
     """The frozen ex-LFS rows. The build-host rows have no pointer to check
-    against -- their digests came from the content store, by inode."""
+    against -- their digests came from the blobstore, by inode."""
     return {f["path"]: f for f in json.loads(COMMITTED.read_text())["files"] if f["source"] == "git-lfs"}
 
 

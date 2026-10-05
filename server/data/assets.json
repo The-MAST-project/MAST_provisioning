@@ -62,7 +62,7 @@
       "used_by": [],
       "why_not_in_repo": "Vendored binaries that git-LFS carried until MAST_provisioning#48 retired it. Frozen here because a digest derived from a pointer stops being derivable the moment the pointer is removed, and the index must not quietly lose 162 rows.",
       "origin": "Tracked in this repository via git-LFS. These digests are the ones the pointers recorded, frozen here when #48 retired LFS; until the untracking the pointers are still in the tree and each is checked against its row.",
-      "reacquire": "The content store on mast-ns-control holds every one of these digests. While the pointers remain, git lfs pull also restores them."
+      "reacquire": "The blobstore on mast-ns-control holds every one of these digests. While the pointers remain, git lfs pull also restores them."
     }
   ],
   "not_cached": [

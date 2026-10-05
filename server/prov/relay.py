@@ -11,9 +11,9 @@ the relay exactly as it pulled from the orchestrator before. Only the address an
 share name it is handed change -- the pull script, the per-module exclusions
 (#195) and the destination verification (#189) are untouched.
 
-**Why the WAN cost is small.** The relay keeps a content-addressed store and a
-host's payload is a tree of hardlinks into it (#202, ``tools/relay-store.py``).
-The build writes a per-file manifest; this module asks the store which digests it
+**Why the WAN cost is small.** The relay keeps a blobstore and a host's payload
+is a tree of hardlinks into it (#202, ``tools/blobstore.py``).
+The build writes a per-file manifest; this module asks the blobstore which digests it
 lacks, sends only those, and has the tree assembled from links. Two builds share
 exactly the bytes they share, with no notion of a predecessor to be wrong about.
 Measured on mast07: 5.5 s and one 41,800-byte blob for a 14,877,440,807-byte
@@ -129,7 +129,7 @@ class SyncResult:
     detail: str
 
 
-# --- content-addressed store (#202) -----------------------------------------
+# --- blobstore (#202) -------------------------------------------------------
 #
 # Replaces the --link-dest passes. Those deduped against a tree we guessed was
 # similar, which meant the previous payload -- a linear-history assumption that
@@ -143,7 +143,7 @@ class SyncResult:
 
 #: Where the relay-side script lands. Shipped every run like the pull script, so
 #: the relay cannot be running an older copy than the driver expects.
-RELAY_STORE_REMOTE = "/tmp/mast-relay-store.py"
+RELAY_STORE_REMOTE = "/tmp/mast-blobstore.py"
 
 
 def _ssh_argv(relay: StagingHost, identity: str, remote_cmd: str) -> list[str]:
@@ -176,7 +176,7 @@ def sync_payload(
     if not isinstance(entries, list) or not entries:
         return SyncResult(False, -1, f"{manifest_path}: no file list to assemble from")
 
-    script = Path(script_path) if script_path else Path(__file__).resolve().parents[2] / "tools" / "relay-store.py"
+    script = Path(script_path) if script_path else Path(__file__).resolve().parents[2] / "tools" / "blobstore.py"
     sent = runner(
         _ssh_argv(relay, identity, f"cat > {RELAY_STORE_REMOTE}"),
         input=script.read_text(encoding="utf-8"),
@@ -186,7 +186,7 @@ def sync_payload(
         check=False,
     )
     if sent.returncode != 0:
-        return SyncResult(False, sent.returncode, f"shipping relay-store.py: {(sent.stderr or '').strip()[:300]}")
+        return SyncResult(False, sent.returncode, f"shipping blobstore.py: {(sent.stderr or '').strip()[:300]}")
 
     payload = json.dumps(manifest)
     want = runner(
@@ -241,7 +241,7 @@ def upload_blobs(
 
     Built as a hardlink farm in a temp directory rather than a copy: the staging
     tree is on the same volume, so naming 2 GB by hash costs directory entries.
-    The farm mirrors the store's own sharding so rsync can write straight into
+    The farm mirrors the blobstore's own sharding so rsync can write straight into
     it without an ingest step.
     """
     by_hash = {e["sha256"]: e["path"] for e in entries if e["sha256"] in missing}
@@ -271,7 +271,7 @@ def upload_blobs(
             "-e",
             ssh_spec(identity),
             cygwin_path(farm).rstrip("/") + "/",
-            f"{relay.ssh_target}:{relay.root}/store/",
+            f"{relay.ssh_target}:{relay.root}/blobstore/",
         ]
         done = runner(argv, capture_output=True, text=True, timeout=timeout_s, check=False)
     if done.returncode != 0:

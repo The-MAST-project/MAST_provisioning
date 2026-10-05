@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Content-addressed payload store on the staging relay (MAST_provisioning#202).
+"""The blobstore on the staging relay (MAST_provisioning#202).
 
 Runs ON THE RELAY (mast-ns-control), driven over ssh by prov.relay. Blobs are
 named by their own SHA-256 and every payload is a tree of hardlinks into them, so
@@ -15,15 +15,15 @@ about -- two versions share exactly the bytes they share, in any order.
 
 ``--link-dest`` could not be reused for this: rsync matches by relative PATH, so
 a store keyed by hash is invisible to it. The assembly is therefore ours, and
-rsync moves only the blobs the store lacks.
+rsync moves only the blobs the blobstore lacks.
 
 Layout under --root:
 
-    store/<aa>/<sha256>              one copy of each distinct blob
-    hosts/<host>/01-provisioning/    hardlinks into store; what SMB serves
+    blobstore/<aa>/<sha256>          one copy of each distinct blob
+    hosts/<host>/01-provisioning/    hardlinks into blobstore; what SMB serves
     hosts/<host>/payload-manifest.json
 
-Hardlinks cannot cross filesystems, so store/ and hosts/ must share one volume;
+Hardlinks cannot cross filesystems, so blobstore/ and hosts/ must share one volume;
 ``assemble`` checks rather than assumes.
 """
 
@@ -37,6 +37,7 @@ import sys
 from pathlib import Path
 
 READ_CHUNK = 1024 * 1024
+BLOBSTORE_DIR = "blobstore"
 
 
 def sha256_of(path: Path) -> str:
@@ -48,9 +49,9 @@ def sha256_of(path: Path) -> str:
 
 
 def blob_path(root: Path, digest: str) -> Path:
-    """Sharded by the first two characters: a flat store would hold tens of
+    """Sharded by the first two characters: a flat blobstore would hold tens of
     thousands of entries after a year of builds, which nothing needs."""
-    return root / "store" / digest[:2] / digest
+    return root / BLOBSTORE_DIR / digest[:2] / digest
 
 
 def read_manifest(stream) -> dict:
@@ -62,16 +63,16 @@ def read_manifest(stream) -> dict:
 
 
 def cmd_seed(root: Path, args) -> int:
-    """Adopt existing trees into the store without transferring anything.
+    """Adopt existing trees into the blobstore without transferring anything.
 
     The relay already holds every blob of every payload it has served, so the
-    first store-backed sync should move nothing. Idempotent: a blob already
+    first blobstore-backed sync should move nothing. Idempotent: a blob already
     present is left alone.
     """
-    # Seeded files are hardlinked, not copied, so the store shares an inode with
+    # Seeded files are hardlinked, not copied, so the blobstore shares an inode with
     # the tree it adopted. Anything that then writes to that tree IN PLACE --
     # truncating rather than replacing -- rewrites the blob under its old name,
-    # and the store silently stops being content-addressed. Seeded trees are
+    # and the blobstore silently stops being content-addressed. Seeded trees are
     # read-only from here on; a payload is rebuilt, never edited.
     added = linked = failed = 0
     for src_dir in args.dirs:
@@ -101,7 +102,7 @@ def cmd_seed(root: Path, args) -> int:
 
 
 def cmd_want(root: Path, _args) -> int:
-    """Hashes from the manifest on stdin that the store does not hold.
+    """Hashes from the manifest on stdin that the blobstore does not hold.
 
     One line per missing digest; empty output means the payload is already
     entirely present and the build costs no transfer at all.
@@ -114,19 +115,19 @@ def cmd_want(root: Path, _args) -> int:
 
 
 def cmd_assemble(root: Path, args) -> int:
-    """Materialise one host's payload as hardlinks into the store."""
+    """Materialise one host's payload as hardlinks into the blobstore."""
     manifest = read_manifest(sys.stdin)
     target = root / "hosts" / args.host / "01-provisioning"
     target.mkdir(parents=True, exist_ok=True)
 
-    if os.stat(root / "store").st_dev != os.stat(target).st_dev:
-        raise SystemExit("store/ and hosts/ are on different filesystems; hardlinks cannot span them")
+    if os.stat(root / BLOBSTORE_DIR).st_dev != os.stat(target).st_dev:
+        raise SystemExit("blobstore/ and hosts/ are on different filesystems; hardlinks cannot span them")
 
     wanted: set[Path] = set()
     for entry in manifest["files"]:
         blob = blob_path(root, entry["sha256"])
         if not blob.exists():
-            raise SystemExit(f"assemble: store is missing {entry['sha256']} for {entry['path']}")
+            raise SystemExit(f"assemble: blobstore is missing {entry['sha256']} for {entry['path']}")
         dest = target / entry["path"]
         wanted.add(dest)
         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -171,7 +172,7 @@ def cmd_fsck(root: Path, args) -> int:
 
     A content-addressed store's filename IS the checksum, which makes it
     *checkable* -- but nothing ever checked it, so the property was an assumption.
-    Every other guard in this system compares something against this store: the
+    Every other guard in this system compares something against the blobstore: the
     build host's vendor cache (#194), a unit's landed payload (#189). If a blob
     rots, all of them agree with the rot.
 
@@ -180,7 +181,7 @@ def cmd_fsck(root: Path, args) -> int:
     across every host tree at once, and a bad byte is more recoverable than a
     missing file.
     """
-    store = root / "store"
+    store = root / BLOBSTORE_DIR
     checked = bad = 0
     bad_bytes = 0
     for shard in sorted(store.iterdir()) if store.exists() else []:
@@ -210,7 +211,7 @@ def cmd_gc(root: Path, _args) -> int:
     the vendor mirror counts, so a seeded blob is never collected whether or not
     a payload currently wants it.
     """
-    store = root / "store"
+    store = root / BLOBSTORE_DIR
     freed = kept = 0
     freed_bytes = 0
     for shard in sorted(store.iterdir()) if store.exists() else []:
@@ -231,7 +232,7 @@ def cmd_gc(root: Path, _args) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(description="Content-addressed payload store on the staging relay.")
+    p = argparse.ArgumentParser(description="The blobstore on the staging relay.")
     p.add_argument("--root", type=Path, required=True)
     sub = p.add_subparsers(dest="cmd", required=True)
     seed = sub.add_parser("seed")
@@ -246,7 +247,7 @@ def main(argv: list[str] | None = None) -> int:
     fsck.add_argument("--names", action="store_true", help="print corrupt blob names on stdout")
     fsck.set_defaults(fn=cmd_fsck)
     args = p.parse_args(argv)
-    (args.root / "store").mkdir(parents=True, exist_ok=True)
+    (args.root / BLOBSTORE_DIR).mkdir(parents=True, exist_ok=True)
     return args.fn(args.root, args)
 
 

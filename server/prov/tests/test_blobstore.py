@@ -1,4 +1,4 @@
-"""Tests for tools/relay-store.py -- the content-addressed payload store (#202).
+"""Tests for tools/blobstore.py -- the blobstore on the staging relay (#202).
 
 The properties that matter are the two the design was chosen for: a version is a
 self-describing whole, and no version is defined by reference to another. Both
@@ -18,7 +18,7 @@ import pytest
 
 from prov import transport as T
 
-_spec = importlib.util.spec_from_file_location("relay_store", T.REPO_ROOT / "tools" / "relay-store.py")
+_spec = importlib.util.spec_from_file_location("blobstore", T.REPO_ROOT / "tools" / "blobstore.py")
 assert _spec and _spec.loader
 rs = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(rs)
@@ -189,7 +189,7 @@ def test_seed_is_idempotent(tmp_path):
 def test_seeding_the_same_bytes_from_two_places_stores_one_copy(tmp_path):
     seed_blobs(tmp_path, {"a.bin": b"same"})
     seed_blobs(tmp_path, {"b.bin": b"same"})
-    blobs = [b for shard in (tmp_path / "store").iterdir() for b in shard.iterdir()]
+    blobs = [b for shard in (tmp_path / rs.BLOBSTORE_DIR).iterdir() for b in shard.iterdir()]
     assert len(blobs) == 1, blobs
 
 
@@ -202,7 +202,7 @@ def test_seed_adopts_without_transferring(tmp_path):
 
 def test_the_store_is_sharded_so_one_directory_does_not_hold_everything(tmp_path):
     seed_blobs(tmp_path, FILES)
-    shards = [d.name for d in (tmp_path / "store").iterdir() if d.is_dir()]
+    shards = [d.name for d in (tmp_path / rs.BLOBSTORE_DIR).iterdir() if d.is_dir()]
     assert all(len(s) == 2 for s in shards), shards
     for entry in manifest_for(FILES)["files"]:
         assert rs.blob_path(tmp_path, entry["sha256"]).exists()
@@ -218,7 +218,7 @@ def test_blob_name_is_its_own_checksum(tmp_path):
     # Which is what makes the store self-verifying and #194's separate
     # MANIFEST.sha256 unnecessary.
     seed_blobs(tmp_path, FILES)
-    for shard in (tmp_path / "store").iterdir():
+    for shard in (tmp_path / rs.BLOBSTORE_DIR).iterdir():
         for blob in shard.iterdir():
             assert rs.sha256_of(blob) == blob.name
 
@@ -231,10 +231,10 @@ def test_fsck_passes_a_sound_store(tmp_path):
     against this store (#194, #189). If a blob rots they all agree with the rot.
     """
     root = tmp_path / "relay"
-    (root / "store").mkdir(parents=True)
+    (root / rs.BLOBSTORE_DIR).mkdir(parents=True)
     body = b"an installer, notionally"
     digest = hashlib.sha256(body).hexdigest()
-    shard = root / "store" / digest[:2]
+    shard = root / rs.BLOBSTORE_DIR / digest[:2]
     shard.mkdir()
     (shard / digest).write_bytes(body)
 
@@ -244,10 +244,10 @@ def test_fsck_passes_a_sound_store(tmp_path):
 
 def test_fsck_catches_a_rotted_blob(tmp_path):
     root = tmp_path / "relay"
-    (root / "store").mkdir(parents=True)
+    (root / rs.BLOBSTORE_DIR).mkdir(parents=True)
     body = b"an installer, notionally"
     digest = hashlib.sha256(body).hexdigest()
-    shard = root / "store" / digest[:2]
+    shard = root / rs.BLOBSTORE_DIR / digest[:2]
     shard.mkdir()
     blob = shard / digest
     blob.write_bytes(body)
@@ -265,9 +265,9 @@ def test_fsck_leaves_the_corrupt_blob_in_place(tmp_path):
     not repair.
     """
     root = tmp_path / "relay"
-    (root / "store").mkdir(parents=True)
+    (root / rs.BLOBSTORE_DIR).mkdir(parents=True)
     digest = hashlib.sha256(b"original").hexdigest()
-    shard = root / "store" / digest[:2]
+    shard = root / rs.BLOBSTORE_DIR / digest[:2]
     shard.mkdir()
     blob = shard / digest
     blob.write_bytes(b"corrupted")
@@ -285,7 +285,7 @@ def test_seed_reports_failure_when_it_cannot_adopt(tmp_path, monkeypatch):
     that seeds before dropping its own copy would have dropped the last one.
     """
     root = tmp_path / "relay"
-    (root / "store").mkdir(parents=True)
+    (root / rs.BLOBSTORE_DIR).mkdir(parents=True)
     src = tmp_path / "incoming"
     src.mkdir()
     (src / "asset.bin").write_bytes(b"bytes that cannot be linked")
@@ -299,7 +299,7 @@ def test_seed_reports_failure_when_it_cannot_adopt(tmp_path, monkeypatch):
 
 def test_seed_succeeds_when_it_adopts(tmp_path):
     root = tmp_path / "relay"
-    (root / "store").mkdir(parents=True)
+    (root / rs.BLOBSTORE_DIR).mkdir(parents=True)
     src = tmp_path / "incoming"
     src.mkdir()
     (src / "asset.bin").write_bytes(b"adoptable bytes")
