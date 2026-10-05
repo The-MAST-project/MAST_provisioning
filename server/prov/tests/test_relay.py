@@ -10,11 +10,13 @@ from; the orchestrator itself no longer has to be on that VLAN.
 
 from __future__ import annotations
 
+import hashlib
 import json
+import subprocess
 
 import pytest
 
-from prov.relay import StagingHost, cygwin_path, load_staging_hosts
+from prov.relay import SnapshotFile, StagingHost, cygwin_path, load_staging_hosts, sync_snapshot
 
 NS = {
     "address": "10.23.1.181",
@@ -72,3 +74,52 @@ def test_the_shipped_declaration_loads():
     assert ns.unc("mast07") == r"\\10.23.1.181\mast-provisioning\mast07\01-provisioning"
     assert ns.host_dir("mast07") == "/Storage/mast-provisioning/hosts/mast07/01-provisioning"
     assert "wis" not in hosts, "the bench pulls from the orchestrator itself"
+
+
+def _files(tmp_path, bodies: dict[str, bytes]) -> list[SnapshotFile]:
+    out = []
+    for name, body in bodies.items():
+        src = tmp_path / "cache" / "deep" / name
+        src.parent.mkdir(parents=True, exist_ok=True)
+        src.write_bytes(body)
+        out.append(SnapshotFile(name, hashlib.sha256(body).hexdigest(), len(body), src))
+    return out
+
+
+class FakeRunner:
+    """Answers the four relay steps; ``want`` reports ``missing`` as lacking."""
+
+    def __init__(self, missing: set[str]):
+        self.missing = missing
+        self.calls: list[tuple[list[str], str | None]] = []
+
+    def __call__(self, argv, input=None, **_kw):
+        self.calls.append((argv, input))
+        out = "\n".join(sorted(self.missing)) if argv[-1].endswith(" want") else ""
+        return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
+
+
+def test_sync_snapshot_sends_only_what_is_missing_and_records_the_snapshot(tmp_path):
+    files = _files(tmp_path, {"a.msu": b"lcu", "b.msu": b"dotnet"})
+    runner = FakeRunner({files[0].sha256})
+    result = sync_snapshot(
+        kind="windows-os-baseline", snapshot_id="19044-2026-09", files=files, relay=StagingHost(**NS), runner=runner
+    )
+    assert result.ok, result.detail
+    assert "blobs_sent=1" in result.detail
+    final_cmd, final_input = runner.calls[-1]
+    assert final_cmd[-1].endswith("snapshot --kind windows-os-baseline --id 19044-2026-09")
+    assert final_input is not None
+    assert {e["path"] for e in json.loads(final_input)["files"]} == {"a.msu", "b.msu"}
+
+
+def test_sync_snapshot_refuses_a_source_that_is_not_its_digest(tmp_path):
+    # Uploading it would put wrong bytes under a name that claims they are right,
+    # and every tree that ever links that digest would inherit them.
+    files = _files(tmp_path, {"a.msu": b"lcu"})
+    bad = [SnapshotFile(files[0].path, hashlib.sha256(b"other").hexdigest(), 3, files[0].source)]
+    runner = FakeRunner(set())
+    result = sync_snapshot(kind="windows-os-baseline", snapshot_id="x", files=bad, relay=StagingHost(**NS), runner=runner)
+    assert not result.ok
+    assert "a.msu" in result.detail
+    assert runner.calls == [], "nothing is sent once a source fails its digest"

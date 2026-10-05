@@ -651,6 +651,8 @@ python -m prov.os_updates --repo .. --build 19044 resolve
 python -m prov.os_updates --repo .. --build 19044 --release 2026-Sep resolve
 # Fetch into the machine-wide asset cache and write the baseline manifest.
 python -m prov.os_updates --repo .. --build 19044 propose --cache 'C:\MAST\provider-assets'
+# Once the manifest is committed: keep its files on the relay for good.
+python -m prov.os_updates --repo .. --build 19044 snapshot --baseline-id 19044-2026-09 --cache 'C:\MAST\provider-assets'
 ```
 
 - **Which KB** comes from the MSRC CVRF feed, per the product names declared in
@@ -665,6 +667,11 @@ python -m prov.os_updates --repo .. --build 19044 propose --cache 'C:\MAST\provi
 - **The Catalog drops superseded updates** -- the fleet's June 2024 LCU (KB5039211) no longer
   resolves, and `resolve` / `propose` say so (`OS_BASELINE_ERROR the Update Catalog no longer
   serves KB5039211`). A baseline's bytes must therefore be kept by us.
+- **`snapshot`** is how they are kept: it hashes each file in the cache against the committed
+  manifest, sends the relay only the blobs its blobstore lacks, and records them as
+  `windows-os-baseline/<id>/` there. A snapshot is never rewritten under its id, and its
+  files outlive any payload, so `gc` cannot take them. Run it right after committing a
+  baseline: until then the asset cache on this machine is the only copy.
 
 Only 19044 (Windows 10 IoT Enterprise LTSC 2021, every production unit) is declared. To add
 a build, add a row to `os-builds.json` with the MSRC product names and the Catalog titles,

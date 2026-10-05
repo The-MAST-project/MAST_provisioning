@@ -38,6 +38,7 @@ payload that cost 1,959,264,676 bytes the day before.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -62,6 +63,7 @@ CYGWIN_SSH = "/usr/bin/ssh"
 DEFAULT_IDENTITY = "/cygdrive/c/Users/labcomp2/.ssh/id_ed25519"
 #: Directory entries the relay serves; the share points here, not at the root.
 HOSTS_SUBDIR = "hosts"
+READ_CHUNK = 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -175,7 +177,84 @@ def sync_payload(
     entries = manifest.get("files")
     if not isinstance(entries, list) or not entries:
         return SyncResult(False, -1, f"{manifest_path}: no file list to assemble from")
+    staging = Path(staging_dir)
+    sources = {e["sha256"]: staging / e["path"] for e in entries}
+    return _sync(
+        manifest=manifest,
+        sources=sources,
+        final=("assemble", "--host", host),
+        relay=relay,
+        identity=identity,
+        timeout_s=timeout_s,
+        runner=runner,
+        script_path=script_path,
+    )
 
+
+@dataclass(frozen=True)
+class SnapshotFile:
+    """One file of a pack: where it sits in the snapshot, what it must hash to, and
+    where its bytes are on this machine."""
+
+    path: str
+    sha256: str
+    size: int
+    source: Path
+
+
+def sync_snapshot(
+    *,
+    kind: str,
+    snapshot_id: str,
+    files: Sequence[SnapshotFile],
+    relay: StagingHost,
+    identity: str = DEFAULT_IDENTITY,
+    timeout_s: int = 7200,
+    runner=subprocess.run,
+    script_path: str | Path | None = None,
+) -> SyncResult:
+    """Record a pack as a snapshot on the relay, sending only the blobs it lacks.
+
+    Unlike a payload, a snapshot's sources were not just built: they come out of
+    a cache, so each is hashed before anything is sent. A blob uploaded under a
+    digest it does not have would be served to every tree that links that digest.
+    """
+    for f in files:
+        actual = _sha256(f.source) if f.source.is_file() else "absent"
+        if actual != f.sha256:
+            return SyncResult(False, -1, f"{f.path}: {f.source} is {actual}, not {f.sha256}")
+    manifest = {"files": [{"path": f.path, "size": f.size, "sha256": f.sha256} for f in files]}
+    return _sync(
+        manifest=manifest,
+        sources={f.sha256: f.source for f in files},
+        final=("snapshot", "--kind", kind, "--id", snapshot_id),
+        relay=relay,
+        identity=identity,
+        timeout_s=timeout_s,
+        runner=runner,
+        script_path=script_path,
+    )
+
+
+def _sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as fh:
+        while chunk := fh.read(READ_CHUNK):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _sync(
+    *,
+    manifest: dict,
+    sources: dict[str, Path],
+    final: tuple[str, ...],
+    relay: StagingHost,
+    identity: str,
+    timeout_s: int,
+    runner,
+    script_path: str | Path | None,
+) -> SyncResult:
     script = Path(script_path) if script_path else Path(__file__).resolve().parents[2] / "tools" / "blobstore.py"
     sent = runner(
         _ssh_argv(relay, identity, f"cat > {RELAY_STORE_REMOTE}"),
@@ -204,8 +283,7 @@ def sync_payload(
     if missing:
         staged = upload_blobs(
             missing=missing,
-            entries=entries,
-            staging_dir=staging_dir,
+            sources=sources,
             relay=relay,
             identity=identity,
             timeout_s=timeout_s,
@@ -215,7 +293,7 @@ def sync_payload(
             return staged
 
     done = runner(
-        _ssh_argv(relay, identity, _store_cmd(relay, "assemble", "--host", host)),
+        _ssh_argv(relay, identity, _store_cmd(relay, *final)),
         input=payload,
         capture_output=True,
         text=True,
@@ -223,15 +301,14 @@ def sync_payload(
         check=False,
     )
     if done.returncode != 0:
-        return SyncResult(False, done.returncode, f"assemble: {(done.stderr or '').strip()[:300]}")
+        return SyncResult(False, done.returncode, f"{final[0]}: {(done.stderr or '').strip()[:300]}")
     return SyncResult(True, 0, f"blobs_sent={len(missing)} {done.stdout.strip()}")
 
 
 def upload_blobs(
     *,
     missing: set[str],
-    entries: Sequence[dict],
-    staging_dir: str | Path,
+    sources: dict[str, Path],
     relay: StagingHost,
     identity: str = DEFAULT_IDENTITY,
     timeout_s: int = 7200,
@@ -244,17 +321,15 @@ def upload_blobs(
     The farm mirrors the blobstore's own sharding so rsync can write straight into
     it without an ingest step.
     """
-    by_hash = {e["sha256"]: e["path"] for e in entries if e["sha256"] in missing}
+    by_hash = {digest: src for digest, src in sources.items() if digest in missing}
     if len(by_hash) != len(missing):
         return SyncResult(False, -1, "manifest does not name every missing hash")
 
-    staging = Path(staging_dir)
     with tempfile.TemporaryDirectory(prefix="mast-blobs-") as tmp:
         farm = Path(tmp)
-        for digest, rel in by_hash.items():
+        for digest, src in by_hash.items():
             shard = farm / digest[:2]
             shard.mkdir(exist_ok=True)
-            src = staging / rel
             try:
                 os.link(src, shard / digest)
             except OSError:
