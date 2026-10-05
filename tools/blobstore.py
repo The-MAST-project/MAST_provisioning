@@ -47,6 +47,8 @@ from pathlib import Path
 
 READ_CHUNK = 1024 * 1024
 BLOBSTORE_DIR = "blobstore"
+#: Its name before 2026-10-05; hardlinks survive a rename on one filesystem, so moving it is free.
+LEGACY_STORE_DIR = "store"
 #: Written per build with the time and the host, after payload_hash is taken, so it
 #: is not part of the payload that hash names.
 BUILD_MANIFEST = "build-manifest.json"
@@ -325,6 +327,9 @@ def main(argv: list[str] | None = None) -> int:
     fsck.add_argument("--names", action="store_true", help="print corrupt blob names on stdout")
     fsck.set_defaults(fn=cmd_fsck)
     args = p.parse_args(argv)
+    legacy = args.root / LEGACY_STORE_DIR
+    if legacy.is_dir() and not (args.root / BLOBSTORE_DIR).exists():
+        raise SystemExit(f"{legacy} is the blobstore under its old name; run: mv {legacy} {args.root / BLOBSTORE_DIR}")
     (args.root / BLOBSTORE_DIR).mkdir(parents=True, exist_ok=True)
     return args.fn(args.root, args)
 

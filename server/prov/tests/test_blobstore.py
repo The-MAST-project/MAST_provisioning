@@ -421,3 +421,13 @@ def test_seed_succeeds_when_it_adopts(tmp_path):
     src.mkdir()
     (src / "asset.bin").write_bytes(b"adoptable bytes")
     assert run_store(root, "seed", str(src)) == 0
+
+
+def test_a_relay_still_holding_the_old_store_is_refused_not_emptied(tmp_path):
+    """Starting an empty blobstore beside the old store/ would report every blob
+    missing, push the whole payload over the WAN, and orphan store/ out of reach of
+    gc and fsck. Moving it is one `mv`, so the tool asks for that instead."""
+    (tmp_path / "store").mkdir()
+    with pytest.raises(SystemExit, match="mv"):
+        run(tmp_path, ["want"], manifest_for(FILES))
+    assert not (tmp_path / rs.BLOBSTORE_DIR).exists()

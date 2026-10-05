@@ -351,6 +351,14 @@ that cost 1,959,264,676 bytes under the `--link-dest` scheme it replaced.
 mkdir -p /Storage/mast-provisioning/{hosts,blobstore}
 ```
 
+A relay set up before 2026-10-05 has the blobstore under its old name, `store/`.
+`blobstore.py` refuses to run against it rather than start an empty one beside it;
+rename it, which on one filesystem keeps every hardlink and copies nothing:
+
+```bash
+mv /Storage/mast-provisioning/store /Storage/mast-provisioning/blobstore
+```
+
 Seed the blobstore from any tree the host already holds — an earlier payload, a copy
 of another relay's host trees — so the first sync is not a 14.9 GB upload. Seeding
 **adopts** each file: the blobstore entry is a second name for the same inode, the
