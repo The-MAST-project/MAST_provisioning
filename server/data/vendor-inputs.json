@@ -13,7 +13,7 @@
     "how to get it again is written here, in 'origin' and 'reacquire'; the bytes live in",
     "the relay's blobstore, held there by the payload snapshots that carry them.",
     "",
-    "The 'git-lfs' entry is different: those 162 files ARE still in this repository, and",
+    "The 'git-lfs' entry is different: those 161 files ARE still in this repository, and",
     "their digests were derived from the LFS pointers until #48 froze them here. A derived",
     "digest stops being derivable the moment the pointer goes, so the freeze happens BEFORE",
     "the untracking rather than with it -- and while both exist, test_asset_manifest.py",
@@ -1394,11 +1394,6 @@
           "path": "client/assets/npcap-1.88.exe",
           "sha256": "a2f4ec1e5ea353ff67efd24b2ebf081ba44532410fae8d5e146af0310aa4f56b",
           "size": 1320424
-        },
-        {
-          "path": "server/providers/ascom/assets/AscomDeveloper662.4294.NewCertificate.exe",
-          "sha256": "17a4f9cb66ecbf8d5fa896fe8b7ea456b26b5b9cace5d4c046169d55785a13fe",
-          "size": 13863752
         },
         {
           "path": "server/providers/ascom/assets/AscomPlatform700.rc4.4448.exe",

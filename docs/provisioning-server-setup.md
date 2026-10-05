@@ -115,7 +115,7 @@ If you see pointer stubs, your LFS credentials are not set up. Configure them
 Everything a payload needs that the build does not author -- the vendored binaries
 and the four inputs too large or too un-redistributable to commit -- lives in ONE
 machine-wide cache at `C:\MAST\provider-assets`, indexed by
-`server/data/assets.json` (418 files, 13.87 GiB). They are **not** read from the
+`server/data/assets.json` (417 files, 13.85 GiB). They are **not** read from the
 repo tree: builds run from git worktrees, and a worktree holds no gitignored file.
 
 Populate it once per build host, and again whenever a build reports an asset
@@ -465,7 +465,7 @@ schtasks /create /tn "MAST-asset-cache" /sc DAILY /st 06:00 /ru labcomp2 ^
 It knows the expected digest **per path**, so it catches a file that is intact but
 is not the file that path should hold, and it repairs what it finds from the
 blobstore rather than leaving a log entry for someone to notice. Verification is by
-checksum and never by re-transfer: at the measured 3.4-6 MB/s, re-pulling 13.87 GiB
+checksum and never by re-transfer: at the measured 3.4-6 MB/s, re-pulling 13.85 GiB
 to compare it would take hours.
 
 A second daily task checks the blobstore itself:

@@ -994,7 +994,7 @@ one, why it cannot be tracked here, where it came from, and how to re-acquire it
 | `C:\MAST\full-frame.fits` | 90 MB | `astrometry`, `mast-validation` |
 | `vault\nomachine-licenses` | 8 KB | `nomachine` |
 
-Everything else a payload carries **is** tracked here (162 files in git-LFS, 58
+Everything else a payload carries **is** tracked here (161 files in git-LFS, 58
 provider assets), which is why this list is short.
 
 `C:\MAST\` on the build host also holds regenerable images and scratch. The

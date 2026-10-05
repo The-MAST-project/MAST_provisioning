@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Enables .NET 3.5 and silently installs ASCOM Platform & Developer tools for provisioning.
+  Enables .NET 3.5 and silently installs the ASCOM Platform for provisioning.
 
 .DESCRIPTION
   - Looks for installers under .\ascom\assets by default (override with -AssetsRoot).
@@ -8,7 +8,6 @@
     a one-shot scheduled task running dism.exe as SYSTEM, then in-session DISM with media sources.
   - Installs:
       * AscomPlatform700.rc4.4448.exe
-      * AscomDeveloper662.4294.NewCertificate (exe or msi; extension optional)
   - Writes logs under <SystemDrive>\MAST\logs\sessions\<timestamp>
   - Designed for WCD provisioning (unattended / no UI / no reboot).
 
@@ -55,7 +54,7 @@ try {
 
 function Show-Help {
 @"
-provide-ascom.ps1 - Silently provision ASCOM Platform & Developer tools and enable .NET 3.5
+provide-ascom.ps1 - Silently provision the ASCOM Platform and enable .NET 3.5
 
 USAGE:
   .\provide-ascom.ps1 [-AssetsRoot <path>] [-FoDSource <path>] [-NoNet] [-Verbose] [-Help]
@@ -386,7 +385,7 @@ if (-not $ascomPlatform) {
 
 Write-Host "Found ASCOM Platform: $ascomPlatform"
 
-# --- Installers (order: Platform -> Developer) ---
+# --- Installer ---
 try {
   Start-Step 'ascom-platform-install'
   Install-Silent -InstallerPath $ascomPlatform -DisplayName "ASCOM Platform 7.0 RC4"
