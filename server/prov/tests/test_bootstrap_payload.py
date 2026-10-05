@@ -95,3 +95,10 @@ def test_stage_copies_the_payload_flat(tmp_path):
     B.stage(B.payload_files(repo, tmp_path / "cache"), out)
     assert sorted(p.name for p in out.iterdir()) == ["bootstrap.ps1", "mast-firmware.ps1"]
     assert (out / "mast-firmware.ps1").read_bytes() == b"fw"
+
+
+def test_snapshot_to_an_undeclared_site_is_an_error_line_not_a_traceback(tmp_path, capsys):
+    repo = make_repo(tmp_path, {"client/bootstrap.ps1": b"ps"})
+    rc = B.main(["--repo", str(repo), "--cache", str(tmp_path), "snapshot", "--site", "nowhere"])
+    assert rc == 1
+    assert "BOOTSTRAP_PAYLOAD_ERROR" in capsys.readouterr().err

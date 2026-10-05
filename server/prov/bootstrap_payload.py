@@ -22,9 +22,6 @@ from prov import relay, transport
 
 BOOTSTRAP_PAYLOAD = Path("client/bootstrap-payload.json")
 ASSETS = Path("server/data/assets.json")
-STAGING_HOSTS = Path("server/data/staging-hosts.json")
-SNAPSHOT_KIND = "bootstrap-payload"
-READ_CHUNK = 1024 * 1024
 
 
 class BootstrapPayloadError(Exception):
@@ -33,14 +30,6 @@ class BootstrapPayloadError(Exception):
 
 def load_declared(repo: Path) -> list[str]:
     return [str(p) for p in transport.load_json_object(repo / BOOTSTRAP_PAYLOAD)["files"]]
-
-
-def _sha256(path: Path) -> str:
-    h = hashlib.sha256()
-    with path.open("rb") as fh:
-        while chunk := fh.read(READ_CHUNK):
-            h.update(chunk)
-    return h.hexdigest()
 
 
 def payload_files(repo: Path, cache: Path) -> list[relay.SnapshotFile]:
@@ -60,7 +49,7 @@ def payload_files(repo: Path, cache: Path) -> list[relay.SnapshotFile]:
         source = repo / rel if (repo / rel).is_file() else cache / rel
         if not source.is_file():
             raise BootstrapPayloadError(f"{rel} is in neither the repo nor the asset cache; run tools/fetch-assets.sh")
-        digest = _sha256(source)
+        digest = relay.sha256_of(source)
         if rel in indexed and digest != indexed[rel]:
             raise BootstrapPayloadError(f"{source} hashes to {digest}, not the indexed {indexed[rel]} for {leaf}")
         files.append(relay.SnapshotFile(leaf, digest, source.stat().st_size, source))
@@ -93,17 +82,17 @@ def main(argv: list[str] | None = None) -> int:
     args = p.parse_args(argv)
 
     try:
+        site = relay.staging_host(args.repo / relay.STAGING_HOSTS, args.site) if args.cmd == "snapshot" else None
         files = payload_files(args.repo, args.cache)
-    except BootstrapPayloadError as exc:
+    except (BootstrapPayloadError, relay.UnknownSiteError) as exc:
         print(f"BOOTSTRAP_PAYLOAD_ERROR {exc}", file=sys.stderr)
         return 1
     digest = payload_hash(files)
-    if args.cmd == "stage":
+    if site is None:
         stage(files, args.out)
         print(f"BOOTSTRAP_PAYLOAD_STAGED hash={digest} files={len(files)} -> {args.out}")
         return 0
-    site = relay.load_staging_hosts(args.repo / STAGING_HOSTS)[args.site]
-    result = relay.sync_snapshot(kind=SNAPSHOT_KIND, snapshot_id=digest, files=files, relay=site)
+    result = relay.sync_snapshot(kind=relay.SnapshotKind.BOOTSTRAP_PAYLOAD, snapshot_id=digest, files=files, relay=site)
     if not result.ok:
         print(f"BOOTSTRAP_PAYLOAD_SNAPSHOT_FAILED hash={digest} rc={result.returncode} {result.detail}", file=sys.stderr)
         return 1

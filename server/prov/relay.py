@@ -46,6 +46,7 @@ import subprocess
 import tempfile
 from collections.abc import Sequence
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 
 # Two path vocabularies are in play and they are not interchangeable.
@@ -64,6 +65,22 @@ DEFAULT_IDENTITY = "/cygdrive/c/Users/labcomp2/.ssh/id_ed25519"
 #: Directory entries the relay serves; the share points here, not at the root.
 HOSTS_SUBDIR = "hosts"
 READ_CHUNK = 1024 * 1024
+#: The declared staging hosts, repo-relative.
+STAGING_HOSTS = Path("server/data/staging-hosts.json")
+
+
+class SnapshotKind(StrEnum):
+    """The snapshot kinds tools/blobstore.py accepts. That script runs on the relay
+    and cannot import this package, so the set lives in both and a test holds them
+    equal."""
+
+    PROVISIONING_PAYLOAD = "provisioning-payload"
+    BOOTSTRAP_PAYLOAD = "bootstrap-payload"
+    WINDOWS_OS_BASELINE = "windows-os-baseline"
+
+
+class UnknownSiteError(ValueError):
+    """No staging host is declared for the site asked for."""
 
 
 @dataclass(frozen=True)
@@ -104,6 +121,16 @@ def load_staging_hosts(path: Path) -> dict[str, StagingHost]:
         except TypeError as exc:
             raise ValueError(f"{path}: staging host for site '{site}' is malformed: {exc}") from exc
     return out
+
+
+def staging_host(path: Path, site: str) -> StagingHost:
+    """The staging host declared for ``site``, or an error naming the file and the
+    sites it does declare -- not a bare KeyError."""
+    hosts = load_staging_hosts(path)
+    if site not in hosts:
+        declared = ", ".join(sorted(hosts)) or "none"
+        raise UnknownSiteError(f"no staging host for site '{site}' in {path} (declared: {declared})")
+    return hosts[site]
 
 
 def cygwin_path(windows_path: str | Path) -> str:
@@ -204,7 +231,7 @@ class SnapshotFile:
 
 def sync_snapshot(
     *,
-    kind: str,
+    kind: SnapshotKind,
     snapshot_id: str,
     files: Sequence[SnapshotFile],
     relay: StagingHost,
@@ -220,7 +247,7 @@ def sync_snapshot(
     digest it does not have would be served to every tree that links that digest.
     """
     for f in files:
-        actual = _sha256(f.source) if f.source.is_file() else "absent"
+        actual = sha256_of(f.source) if f.source.is_file() else "absent"
         if actual != f.sha256:
             return SyncResult(False, -1, f"{f.path}: {f.source} is {actual}, not {f.sha256}")
     manifest = {"files": [{"path": f.path, "size": f.size, "sha256": f.sha256} for f in files]}
@@ -236,7 +263,7 @@ def sync_snapshot(
     )
 
 
-def _sha256(path: Path) -> str:
+def sha256_of(path: Path) -> str:
     h = hashlib.sha256()
     with path.open("rb") as fh:
         while chunk := fh.read(READ_CHUNK):

@@ -44,9 +44,6 @@ OS_BUILDS = Path("server/data/os-builds.json")
 BASELINES_DIR = Path("server/data/os-baselines")
 #: Repo-relative key prefix of a fetched update, per #48's one asset rule.
 ASSET_PREFIX = "server/providers/windows-updates/assets"
-#: Where a committed baseline's files are kept on the relay, one tree per baseline.
-SNAPSHOT_KIND = "windows-os-baseline"
-STAGING_HOSTS = Path("server/data/staging-hosts.json")
 
 HTTP_TIMEOUT_S = 60
 READ_CHUNK = 1024 * 1024
@@ -413,13 +410,15 @@ def main(argv: list[str] | None = None) -> int:
 
 def _snapshot(args: argparse.Namespace) -> int:
     try:
+        site = relay.staging_host(args.repo / relay.STAGING_HOSTS, args.site)
         baseline = load_baseline(args.repo, args.build, args.baseline_id)
         files = snapshot_files(baseline, args.cache)
-    except OsUpdatesError as exc:
+    except (OsUpdatesError, relay.UnknownSiteError) as exc:
         print(f"OS_BASELINE_ERROR {exc}", file=sys.stderr)
         return 1
-    site = relay.load_staging_hosts(args.repo / STAGING_HOSTS)[args.site]
-    result = relay.sync_snapshot(kind=SNAPSHOT_KIND, snapshot_id=baseline.baseline_id, files=files, relay=site)
+    result = relay.sync_snapshot(
+        kind=relay.SnapshotKind.WINDOWS_OS_BASELINE, snapshot_id=baseline.baseline_id, files=files, relay=site
+    )
     if not result.ok:
         failure = f"OS_BASELINE_SNAPSHOT_FAILED id={baseline.baseline_id} rc={result.returncode} {result.detail}"
         print(failure, file=sys.stderr)

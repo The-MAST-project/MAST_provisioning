@@ -16,7 +16,16 @@ import subprocess
 
 import pytest
 
-from prov.relay import SnapshotFile, StagingHost, cygwin_path, load_staging_hosts, sync_snapshot
+from prov.relay import (
+    SnapshotFile,
+    SnapshotKind,
+    StagingHost,
+    UnknownSiteError,
+    cygwin_path,
+    load_staging_hosts,
+    staging_host,
+    sync_snapshot,
+)
 
 NS = {
     "address": "10.23.1.181",
@@ -103,7 +112,11 @@ def test_sync_snapshot_sends_only_what_is_missing_and_records_the_snapshot(tmp_p
     files = _files(tmp_path, {"a.msu": b"lcu", "b.msu": b"dotnet"})
     runner = FakeRunner({files[0].sha256})
     result = sync_snapshot(
-        kind="windows-os-baseline", snapshot_id="19044-2026-09", files=files, relay=StagingHost(**NS), runner=runner
+        kind=SnapshotKind.WINDOWS_OS_BASELINE,
+        snapshot_id="19044-2026-09",
+        files=files,
+        relay=StagingHost(**NS),
+        runner=runner,
     )
     assert result.ok, result.detail
     assert "blobs_sent=1" in result.detail
@@ -119,7 +132,34 @@ def test_sync_snapshot_refuses_a_source_that_is_not_its_digest(tmp_path):
     files = _files(tmp_path, {"a.msu": b"lcu"})
     bad = [SnapshotFile(files[0].path, hashlib.sha256(b"other").hexdigest(), 3, files[0].source)]
     runner = FakeRunner(set())
-    result = sync_snapshot(kind="windows-os-baseline", snapshot_id="x", files=bad, relay=StagingHost(**NS), runner=runner)
+    result = sync_snapshot(
+        kind=SnapshotKind.WINDOWS_OS_BASELINE, snapshot_id="x", files=bad, relay=StagingHost(**NS), runner=runner
+    )
     assert not result.ok
     assert "a.msu" in result.detail
     assert runner.calls == [], "nothing is sent once a source fails its digest"
+
+
+def test_an_unknown_site_names_the_file_and_the_sites_it_declares(tmp_path):
+    path = write(tmp_path, {"ns": NS})
+    with pytest.raises(UnknownSiteError, match=r"wis.*staging-hosts\.json.*ns"):
+        staging_host(path, "wis")
+
+
+def test_a_missing_declaration_is_an_unknown_site_too(tmp_path):
+    with pytest.raises(UnknownSiteError, match="nope.json"):
+        staging_host(tmp_path / "nope.json", "ns")
+
+
+def test_the_snapshot_kinds_match_the_relay_side_tool():
+    """blobstore.py runs on the relay and cannot import prov, so the kinds live in
+    both. A kind only one side knew would fail on the relay after the upload."""
+    import importlib.util
+
+    from prov import transport as T
+
+    spec = importlib.util.spec_from_file_location("blobstore", T.REPO_ROOT / "tools" / "blobstore.py")
+    assert spec and spec.loader
+    tool = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(tool)
+    assert {k.value for k in SnapshotKind} == {k.value for k in tool.SnapshotKind}

@@ -242,9 +242,7 @@ class Driver:
         #: set per unit by _process_unit. The staging UNC is built from this.
         self.prov_address = self.prov_identity
         #: Per-site staging relays; empty when none are declared.
-        self.staging_hosts = relay.load_staging_hosts(
-            cfg.staging_hosts or (cfg.repo_top / "server" / "data" / "staging-hosts.json")
-        )
+        self.staging_hosts = relay.load_staging_hosts(cfg.staging_hosts or (cfg.repo_top / relay.STAGING_HOSTS))
         #: The relay serving the unit currently being processed, if any.
         self.relay: relay.StagingHost | None = None
         #: The share this run's unit pulls from -- this machine's own unless a

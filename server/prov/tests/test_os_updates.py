@@ -234,3 +234,9 @@ def test_snapshot_files_refuse_an_update_missing_from_the_cache(tmp_path: Path):
     (cache / baseline.files[0].path).unlink()
     with pytest.raises(OsUpdatesError, match=baseline.files[0].filename):
         os_updates.snapshot_files(baseline, cache)
+
+
+def test_snapshot_to_an_undeclared_site_is_an_error_line_not_a_traceback(tmp_path: Path, capsys):
+    argv = ["--repo", str(tmp_path), "--build", "19044", "snapshot", "--baseline-id", "x", "--cache", str(tmp_path)]
+    assert os_updates.main([*argv, "--site", "nowhere"]) == 1
+    assert "OS_BASELINE_ERROR" in capsys.readouterr().err
