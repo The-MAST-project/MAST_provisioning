@@ -47,6 +47,9 @@ from pathlib import Path
 
 READ_CHUNK = 1024 * 1024
 BLOBSTORE_DIR = "blobstore"
+#: Written per build with the time and the host, after payload_hash is taken, so it
+#: is not part of the payload that hash names.
+BUILD_MANIFEST = "build-manifest.json"
 
 
 class SnapshotKind(StrEnum):
@@ -156,7 +159,8 @@ def cmd_assemble(root: Path, args) -> int:
 
     removed = prune_to(target, wanted)
     (root / "hosts" / args.host / "payload-manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-    snapshot_state = snapshot(root, SnapshotKind.PROVISIONING_PAYLOAD, manifest["payload_hash"], manifest)
+    payload = {**manifest, "files": [e for e in manifest["files"] if e["path"] != BUILD_MANIFEST]}
+    snapshot_state = snapshot(root, SnapshotKind.PROVISIONING_PAYLOAD, manifest["payload_hash"], payload)
     total = sum(e["size"] for e in manifest["files"])
     print(
         f"ASSEMBLED host={args.host} files={len(manifest['files'])} bytes={total} pruned={removed} snapshot={snapshot_state}"

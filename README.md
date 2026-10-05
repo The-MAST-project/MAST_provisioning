@@ -963,7 +963,9 @@ windows-os-baseline/<id>/        every committed OS patch baseline
 The blobstore only stores; it does not say what to keep. The snapshots do: each is
 a payload or baseline that was shipped or may be shipped again, written once and never rewritten
 under its id, and a blob lives while any tree names it. Assembling a host's tree
-also snapshots its payload, so every version a unit has run stays restorable.
+also snapshots its payload, so every version a unit has run stays restorable. The
+snapshot leaves out `build-manifest.json`, which records when and for which host a
+payload was built and is not part of what `payload_hash` names.
 
 Two builds share exactly the bytes they share, with no notion of a previous
 version — which matters once units sit on deliberately different stacks, where

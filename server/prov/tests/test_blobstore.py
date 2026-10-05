@@ -25,9 +25,10 @@ _spec.loader.exec_module(rs)
 
 
 def manifest_for(files: dict[str, bytes], payload_hash: str | None = None) -> dict:
-    # Derived from the content by default, as the build derives it: two different
-    # payloads under one hash would be refused as a changed snapshot.
-    digest = hashlib.sha256(json.dumps(sorted(files.items()), default=bytes.hex).encode()).hexdigest()
+    # Derived from the content by default, as the build derives it -- including the
+    # build's one exclusion: build-manifest.json carries the hash, so it is not in it.
+    hashed = sorted((p, b) for p, b in files.items() if p != rs.BUILD_MANIFEST)
+    digest = hashlib.sha256(json.dumps(hashed, default=bytes.hex).encode()).hexdigest()
     return {
         "payload_hash": payload_hash or digest,
         "hostname": "unit1",
@@ -219,6 +220,29 @@ def test_two_units_on_one_payload_share_one_snapshot(tmp_path):
     run(tmp_path, ["assemble", "--host", "unitA"], m)
     run(tmp_path, ["assemble", "--host", "unitB"], m)
     assert [d.name for d in (tmp_path / "provisioning-payload").iterdir() if d.is_dir()] == [m["payload_hash"]]
+
+
+def test_two_builds_of_one_payload_differ_only_in_build_manifest_and_share_a_snapshot(tmp_path):
+    """build-manifest.json records when and for whom a payload was built, so two
+    builds of one payload_hash always differ in it. The snapshot is the payload,
+    which payload_hash names, so it leaves that file out rather than refusing the
+    second build as a changed snapshot."""
+    first = {**FILES, "build-manifest.json": b'{"hostname": "mast05"}'}
+    second = {**FILES, "build-manifest.json": b'{"hostname": "mast06"}'}
+    seed_blobs(tmp_path, first)
+    seed_blobs(tmp_path, {"build-manifest.json": second["build-manifest.json"]})
+    m1, m2 = manifest_for(first), manifest_for(second)
+    assert m1["payload_hash"] == m2["payload_hash"]
+    run(tmp_path, ["assemble", "--host", "mast05"], m1)
+    run(tmp_path, ["assemble", "--host", "mast06"], m2)
+
+    snap = snapshot_dir(tmp_path, "provisioning-payload", m1["payload_hash"])
+    assert not (snap / "build-manifest.json").exists()
+    assert (snap / "installer.exe").is_file()
+    recorded = json.loads((tmp_path / "provisioning-payload" / f"{m1['payload_hash']}.json").read_text())
+    assert "build-manifest.json" not in {e["path"] for e in recorded["files"]}
+    host = tmp_path / "hosts" / "mast06" / "01-provisioning" / "build-manifest.json"
+    assert host.read_bytes() == second["build-manifest.json"], "the host tree still carries its own"
 
 
 def test_snapshot_builds_a_named_tree_of_any_kind(tmp_path):
