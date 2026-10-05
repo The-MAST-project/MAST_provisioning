@@ -934,7 +934,15 @@ those, and builds the host tree from links (`assemble`):
 ```
 blobstore/<aa>/<sha256>          one copy of each distinct blob
 hosts/<host>/01-provisioning/    hardlinks into blobstore; what SMB serves
+provisioning-payload/<hash>/     every payload ever assembled, one snapshot each
+bootstrap-payload/<hash>/        every bootstrap kit
+windows-os-baseline/<id>/        every committed OS patch baseline
 ```
+
+The blobstore only stores; it does not say what to keep. The snapshots do: each is
+a pack that was shipped or may be shipped again, written once and never rewritten
+under its id, and a blob lives while any tree names it. Assembling a host's tree
+also snapshots its payload, so every version a unit has run stays restorable.
 
 Two builds share exactly the bytes they share, with no notion of a previous
 version — which matters once units sit on deliberately different stacks, where
@@ -942,7 +950,8 @@ version — which matters once units sit on deliberately different stacks, where
 would degrade silently. Measured on mast07: a build that cost 1,959,264,676 bytes
 under `--link-dest` synced in **5.5 s with one blob, 41,800 bytes**.
 
-`blobstore.py gc` drops blobs no host tree references; it is run by hand.
+`blobstore.py gc` drops blobs no host tree or snapshot references; it is run by hand.
+Nothing prunes snapshots yet, so in practice it frees nothing.
 Setup and the transport gotchas are in
 [docs/provisioning-server-setup.md](docs/provisioning-server-setup.md) Step 4c.
 

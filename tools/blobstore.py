@@ -22,6 +22,13 @@ Layout under --root:
     blobstore/<aa>/<sha256>          one copy of each distinct blob
     hosts/<host>/01-provisioning/    hardlinks into blobstore; what SMB serves
     hosts/<host>/payload-manifest.json
+    <kind>/<id>/                     a snapshot: one pack, as hardlinks into blobstore
+    <kind>/<id>.json                 the manifest it was built from
+
+The blobstore says nothing about what must be kept. Snapshots do: each is a pack
+that was shipped or may be shipped again, and a blob lives while any tree names
+it. The kinds are fixed (``SnapshotKind``): every provisioning payload assembled
+for a host, every bootstrap kit, every committed OS patch baseline.
 
 Hardlinks cannot cross filesystems, so blobstore/ and hosts/ must share one volume;
 ``assemble`` checks rather than assumes.
@@ -33,11 +40,19 @@ import argparse
 import hashlib
 import json
 import os
+import shutil
 import sys
+from enum import StrEnum
 from pathlib import Path
 
 READ_CHUNK = 1024 * 1024
 BLOBSTORE_DIR = "blobstore"
+
+
+class SnapshotKind(StrEnum):
+    PROVISIONING_PAYLOAD = "provisioning-payload"
+    BOOTSTRAP_PAYLOAD = "bootstrap-payload"
+    WINDOWS_OS_BASELINE = "windows-os-baseline"
 
 
 def sha256_of(path: Path) -> str:
@@ -141,8 +156,64 @@ def cmd_assemble(root: Path, args) -> int:
 
     removed = prune_to(target, wanted)
     (root / "hosts" / args.host / "payload-manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    snapshot_state = snapshot(root, SnapshotKind.PROVISIONING_PAYLOAD, manifest["payload_hash"], manifest)
     total = sum(e["size"] for e in manifest["files"])
-    print(f"ASSEMBLED host={args.host} files={len(manifest['files'])} bytes={total} pruned={removed}")
+    print(
+        f"ASSEMBLED host={args.host} files={len(manifest['files'])} bytes={total} pruned={removed} snapshot={snapshot_state}"
+    )
+    return 0
+
+
+def snapshot(root: Path, kind: SnapshotKind, snapshot_id: str, manifest: dict) -> str:
+    """Record one pack as an immutable tree of hardlinks; ``created`` or ``existing``.
+
+    Built beside its final name and renamed into place, so a failure leaves no
+    half-tree that a later run would mistake for the pack. An id names one set of
+    bytes for good: the same id with different content is refused, never rewritten.
+    """
+    final = root / kind / snapshot_id
+    record = root / kind / f"{snapshot_id}.json"
+    wanted = {e["path"]: e["sha256"] for e in manifest["files"]}
+    if final.exists():
+        if not tree_matches(root, final, wanted):
+            raise SystemExit(f"snapshot {kind}/{snapshot_id} exists and differs from this manifest")
+        return "existing"
+
+    building = root / kind / f".{snapshot_id}.building"
+    if building.exists():
+        shutil.rmtree(building)
+    try:
+        for path, digest in wanted.items():
+            blob = blob_path(root, digest)
+            if not blob.exists():
+                raise SystemExit(f"snapshot: blobstore is missing {digest} for {path}")
+            dest = building / path
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            os.link(blob, dest)
+    except BaseException:
+        shutil.rmtree(building, ignore_errors=True)
+        raise
+    record.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    building.rename(final)
+    return "created"
+
+
+def tree_matches(root: Path, tree: Path, wanted: dict[str, str]) -> bool:
+    """Whether a tree holds exactly these paths, each linked to the blob its digest names."""
+    present = {f.relative_to(tree).as_posix() for f in tree.rglob("*") if f.is_file()}
+    if present != set(wanted):
+        return False
+    for path, digest in wanted.items():
+        blob = blob_path(root, digest)
+        if not blob.exists() or (tree / path).stat().st_ino != blob.stat().st_ino:
+            return False
+    return True
+
+
+def cmd_snapshot(root: Path, args) -> int:
+    manifest = read_manifest(sys.stdin)
+    state = snapshot(root, SnapshotKind(args.kind), args.id, manifest)
+    print(f"SNAPSHOT kind={args.kind} id={args.id} files={len(manifest['files'])} state={state}")
     return 0
 
 
@@ -206,10 +277,9 @@ def cmd_gc(root: Path, _args) -> int:
     """Drop blobs nothing references.
 
     Retention is a refcount, not a policy: a blob is live while any *other* name
-    points at the same inode, so a version can be dropped in any order without
-    consulting a schedule or a lineage. That refcount is deliberately broad --
-    the vendor mirror counts, so a seeded blob is never collected whether or not
-    a payload currently wants it.
+    points at the same inode -- a host tree or a snapshot -- so a pack can be
+    dropped in any order without consulting a schedule or a lineage. What must
+    outlive its current use is therefore whatever has a snapshot.
     """
     store = root / BLOBSTORE_DIR
     freed = kept = 0
@@ -242,6 +312,10 @@ def main(argv: list[str] | None = None) -> int:
     assemble = sub.add_parser("assemble")
     assemble.add_argument("--host", required=True)
     assemble.set_defaults(fn=cmd_assemble)
+    snap = sub.add_parser("snapshot")
+    snap.add_argument("--kind", required=True, choices=[k.value for k in SnapshotKind])
+    snap.add_argument("--id", required=True)
+    snap.set_defaults(fn=cmd_snapshot)
     sub.add_parser("gc").set_defaults(fn=cmd_gc)
     fsck = sub.add_parser("fsck")
     fsck.add_argument("--names", action="store_true", help="print corrupt blob names on stdout")

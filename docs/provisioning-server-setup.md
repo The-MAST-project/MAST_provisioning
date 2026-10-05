@@ -427,8 +427,8 @@ du -sh --total /Storage/mast-vendor /Storage/mast-provisioning | tail -1
 Link counts above 1, and a total that has not grown by a payload. The run's own
 `RELAY_SYNC_OK` line carries `blobs_sent=`, which is the same fact per sync.
 
-`tools/blobstore.py gc` drops blobs no host tree references. It is manual; run
-it after retiring a unit, not on a schedule.
+`tools/blobstore.py gc` drops blobs no host tree or snapshot references. It is
+manual, and since nothing prunes snapshots yet, it frees nothing in practice.
 
 ---
 
