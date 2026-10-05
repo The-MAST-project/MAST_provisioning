@@ -230,11 +230,25 @@ drifts from `sites/*.toml`. The shared enumerator is `Get-ConfiguredSites` in
 This is the only path operators run by hand. Everything else is autonomous.
 
 1. Install Windows IoT on the unit machine and complete OOBE.
-2. Copy `client/bootstrap.cmd`, `client/bootstrap.ps1` and
-   `client/mast-client-util.ps1` to the unit via USB thumb drive or a temporary network
-   share. All three files must be in the same folder. (In the VM workflow these files are
-   bundled on the autounattend ISO; for physical units that ISO is not present, so manual
-   copy is required.)
+2. Stage the **bootstrap payload** onto a USB stick, from the canonical clone on the
+   provisioning server:
+
+   ```cmd
+   cd server
+   python -m prov.bootstrap_payload --repo .. --cache C:\MAST\provider-assets stage --out E:\
+   ```
+
+   The kit is the seven files `client/bootstrap-payload.json` lists, staged flat:
+   `bootstrap.cmd`, `bootstrap.ps1`, `mast-client-util.ps1`, the BIOS power-policy reader
+   and its baseline, and the Npcap and OpenSSH installers. The command prints the kit's
+   hash. After changing any of those files, keep the new kit on the relay as well, so it
+   can be cut again once its installers have left the repo:
+
+   ```cmd
+   python -m prov.bootstrap_payload --repo .. --cache C:\MAST\provider-assets snapshot
+   ```
+
+   (In the VM workflow the same files are bundled on the autounattend ISO.)
 3. On the unit, open an **elevated Command Prompt** (Run as administrator) and run:
 
    ```cmd
