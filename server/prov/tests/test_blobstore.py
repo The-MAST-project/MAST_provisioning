@@ -242,7 +242,7 @@ def test_a_snapshot_keeps_its_blobs_through_gc(tmp_path):
 def test_an_unknown_snapshot_kind_is_refused(tmp_path):
     seed_blobs(tmp_path, FILES)
     with pytest.raises(SystemExit):
-        run(tmp_path, ["snapshot", "--kind", "retain", "--id", "x"], manifest_for(FILES))
+        run(tmp_path, ["snapshot", "--kind", "bogus", "--id", "x"], manifest_for(FILES))
 
 
 def test_resnapshotting_the_same_content_is_a_no_op(tmp_path):

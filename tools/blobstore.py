@@ -22,13 +22,13 @@ Layout under --root:
     blobstore/<aa>/<sha256>          one copy of each distinct blob
     hosts/<host>/01-provisioning/    hardlinks into blobstore; what SMB serves
     hosts/<host>/payload-manifest.json
-    <kind>/<id>/                     a snapshot: one pack, as hardlinks into blobstore
+    <kind>/<id>/                     a snapshot: one payload or baseline, as hardlinks into blobstore
     <kind>/<id>.json                 the manifest it was built from
 
-The blobstore says nothing about what must be kept. Snapshots do: each is a pack
-that was shipped or may be shipped again, and a blob lives while any tree names
+The blobstore says nothing about what must be kept. Snapshots do: each is a payload or
+baseline that was shipped or may be shipped again, and a blob lives while any tree names
 it. The kinds are fixed (``SnapshotKind``): every provisioning payload assembled
-for a host, every bootstrap kit, every committed OS patch baseline.
+for a host, every bootstrap payload, every committed OS patch baseline.
 
 Hardlinks cannot cross filesystems, so blobstore/ and hosts/ must share one volume;
 ``assemble`` checks rather than assumes.
@@ -165,10 +165,10 @@ def cmd_assemble(root: Path, args) -> int:
 
 
 def snapshot(root: Path, kind: SnapshotKind, snapshot_id: str, manifest: dict) -> str:
-    """Record one pack as an immutable tree of hardlinks; ``created`` or ``existing``.
+    """Record one payload or baseline as an immutable tree of hardlinks; ``created`` or ``existing``.
 
     Built beside its final name and renamed into place, so a failure leaves no
-    half-tree that a later run would mistake for the pack. An id names one set of
+    half-tree that a later run would mistake for the snapshot. An id names one set of
     bytes for good: the same id with different content is refused, never rewritten.
     """
     final = root / kind / snapshot_id
@@ -241,7 +241,7 @@ def prune_to(target: Path, wanted: set[Path]) -> int:
 def cmd_fsck(root: Path, args) -> int:
     """Re-hash every blob and confirm it still is what its name says.
 
-    A content-addressed store's filename IS the checksum, which makes it
+    A blob's filename IS its checksum, which makes it
     *checkable* -- but nothing ever checked it, so the property was an assumption.
     Every other guard in this system compares something against the blobstore: the
     build host's vendor cache (#194), a unit's landed payload (#189). If a blob
@@ -277,7 +277,7 @@ def cmd_gc(root: Path, _args) -> int:
     """Drop blobs nothing references.
 
     Retention is a refcount, not a policy: a blob is live while any *other* name
-    points at the same inode -- a host tree or a snapshot -- so a pack can be
+    points at the same inode -- a host tree or a snapshot -- so a snapshot can be
     dropped in any order without consulting a schedule or a lineage. What must
     outlive its current use is therefore whatever has a snapshot.
     """

@@ -1,13 +1,13 @@
-"""The bootstrap payload: the USB kit for a bare unit, as one pack.
+"""The bootstrap payload: every file a bare unit needs on its bootstrap medium.
 
 A bare unit is brought up by running ``bootstrap.cmd`` from a USB stick that also
 carries everything ``bootstrap.ps1`` reads beside itself: its util, the BIOS
 power-policy reader and baseline, and the Npcap and OpenSSH installers. That set
 is declared once, in ``client/bootstrap-payload.json``. This module resolves it
 (repo first, then the machine-wide asset cache, as for any provider asset),
-stages it flat onto a stick, and keeps each kit on the relay as a
-``bootstrap-payload/<hash>/`` snapshot, so the kit that built a unit can be cut
-again after its installers have left the repo.
+stages it flat onto a stick, and keeps each version on the relay as a
+``bootstrap-payload/<hash>/`` snapshot, so the payload that built a unit can be
+staged again after its installers have left the repo.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from pathlib import Path
 
 from prov import relay, transport
 
-KIT = Path("client/bootstrap-payload.json")
+BOOTSTRAP_PAYLOAD = Path("client/bootstrap-payload.json")
 ASSETS = Path("server/data/assets.json")
 STAGING_HOSTS = Path("server/data/staging-hosts.json")
 SNAPSHOT_KIND = "bootstrap-payload"
@@ -28,11 +28,11 @@ READ_CHUNK = 1024 * 1024
 
 
 class BootstrapPayloadError(Exception):
-    """The kit cannot be assembled as declared."""
+    """The bootstrap payload cannot be assembled as declared."""
 
 
-def load_kit(repo: Path) -> list[str]:
-    return [str(p) for p in transport.load_json_object(repo / KIT)["files"]]
+def load_declared(repo: Path) -> list[str]:
+    return [str(p) for p in transport.load_json_object(repo / BOOTSTRAP_PAYLOAD)["files"]]
 
 
 def _sha256(path: Path) -> str:
@@ -43,19 +43,19 @@ def _sha256(path: Path) -> str:
     return h.hexdigest()
 
 
-def kit_files(repo: Path, cache: Path) -> list[relay.SnapshotFile]:
-    """Each declared file, resolved and hashed, named by its leaf in the flat kit.
+def payload_files(repo: Path, cache: Path) -> list[relay.SnapshotFile]:
+    """Each declared file, resolved and hashed, named by its leaf in the flat payload.
 
     A file the asset index knows must hash to its indexed digest: a stale cache
-    copy would otherwise become the kit, and be snapshotted as if it were right.
+    copy would otherwise become the payload, and be snapshotted as if it were right.
     """
     indexed = {row["path"]: row["sha256"] for row in transport.load_json_object(repo / ASSETS)["files"]}
     files: list[relay.SnapshotFile] = []
     seen: set[str] = set()
-    for rel in load_kit(repo):
+    for rel in load_declared(repo):
         leaf = Path(rel).name
         if leaf in seen:
-            raise BootstrapPayloadError(f"two kit files are named {leaf}; the kit is flat")
+            raise BootstrapPayloadError(f"two bootstrap payload files are named {leaf}; the payload is flat")
         seen.add(leaf)
         source = repo / rel if (repo / rel).is_file() else cache / rel
         if not source.is_file():
@@ -67,8 +67,8 @@ def kit_files(repo: Path, cache: Path) -> list[relay.SnapshotFile]:
     return files
 
 
-def kit_hash(files: list[relay.SnapshotFile]) -> str:
-    """The kit's identity: its file names and contents, in no particular order."""
+def payload_hash(files: list[relay.SnapshotFile]) -> str:
+    """The payload's identity: its file names and contents, in no particular order."""
     lines = sorted(f"{f.sha256}  {f.path}" for f in files)
     return hashlib.sha256("\n".join(lines).encode("utf-8")).hexdigest()
 
@@ -80,22 +80,24 @@ def stage(files: list[relay.SnapshotFile], out: Path) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(description="Stage or snapshot the bootstrap payload (the USB kit for a bare unit).")
+    p = argparse.ArgumentParser(
+        description="Stage or snapshot the bootstrap payload (what a bare unit's USB stick carries)."
+    )
     p.add_argument("--repo", type=Path, default=Path("."))
     p.add_argument("--cache", type=Path, required=True, help="the machine-wide asset cache, e.g. C:\\MAST\\provider-assets")
     sub = p.add_subparsers(dest="cmd", required=True)
-    stage_p = sub.add_parser("stage", help="copy the kit flat into a folder, e.g. the root of a USB stick")
+    stage_p = sub.add_parser("stage", help="copy the payload flat into a folder, e.g. the root of a USB stick")
     stage_p.add_argument("--out", type=Path, required=True)
-    snap = sub.add_parser("snapshot", help="keep this kit on the relay as bootstrap-payload/<hash>/")
+    snap = sub.add_parser("snapshot", help="keep this payload on the relay as bootstrap-payload/<hash>/")
     snap.add_argument("--site", default="ns", help="the staging host to keep it on (server/data/staging-hosts.json)")
     args = p.parse_args(argv)
 
     try:
-        files = kit_files(args.repo, args.cache)
+        files = payload_files(args.repo, args.cache)
     except BootstrapPayloadError as exc:
         print(f"BOOTSTRAP_PAYLOAD_ERROR {exc}", file=sys.stderr)
         return 1
-    digest = kit_hash(files)
+    digest = payload_hash(files)
     if args.cmd == "stage":
         stage(files, args.out)
         print(f"BOOTSTRAP_PAYLOAD_STAGED hash={digest} files={len(files)} -> {args.out}")

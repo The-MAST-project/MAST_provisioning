@@ -193,7 +193,7 @@ def sync_payload(
 
 @dataclass(frozen=True)
 class SnapshotFile:
-    """One file of a pack: where it sits in the snapshot, what it must hash to, and
+    """One file of a snapshot: where it sits in the tree, what it must hash to, and
     where its bytes are on this machine."""
 
     path: str
@@ -213,7 +213,7 @@ def sync_snapshot(
     runner=subprocess.run,
     script_path: str | Path | None = None,
 ) -> SyncResult:
-    """Record a pack as a snapshot on the relay, sending only the blobs it lacks.
+    """Record a payload or baseline as a snapshot on the relay, sending only the blobs it lacks.
 
     Unlike a payload, a snapshot's sources were not just built: they come out of
     a cache, so each is hashed before anything is sent. A blob uploaded under a

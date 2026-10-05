@@ -238,11 +238,11 @@ This is the only path operators run by hand. Everything else is autonomous.
    python -m prov.bootstrap_payload --repo .. --cache C:\MAST\provider-assets stage --out E:\
    ```
 
-   The kit is the seven files `client/bootstrap-payload.json` lists, staged flat:
+   The payload is the seven files `client/bootstrap-payload.json` lists, staged flat:
    `bootstrap.cmd`, `bootstrap.ps1`, `mast-client-util.ps1`, the BIOS power-policy reader
-   and its baseline, and the Npcap and OpenSSH installers. The command prints the kit's
-   hash. After changing any of those files, keep the new kit on the relay as well, so it
-   can be cut again once its installers have left the repo:
+   and its baseline, and the Npcap and OpenSSH installers. The command prints the payload's
+   hash. After changing any of those files, keep the new version on the relay as well, so
+   it can be staged again once its installers have left the repo:
 
    ```cmd
    python -m prov.bootstrap_payload --repo .. --cache C:\MAST\provider-assets snapshot
@@ -956,12 +956,12 @@ those, and builds the host tree from links (`assemble`):
 blobstore/<aa>/<sha256>          one copy of each distinct blob
 hosts/<host>/01-provisioning/    hardlinks into blobstore; what SMB serves
 provisioning-payload/<hash>/     every payload ever assembled, one snapshot each
-bootstrap-payload/<hash>/        every bootstrap kit
+bootstrap-payload/<hash>/        every bootstrap payload
 windows-os-baseline/<id>/        every committed OS patch baseline
 ```
 
 The blobstore only stores; it does not say what to keep. The snapshots do: each is
-a pack that was shipped or may be shipped again, written once and never rewritten
+a payload or baseline that was shipped or may be shipped again, written once and never rewritten
 under its id, and a blob lives while any tree names it. Assembling a host's tree
 also snapshots its payload, so every version a unit has run stays restorable.
 

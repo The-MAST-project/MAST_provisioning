@@ -53,7 +53,7 @@ DECLARED = {
             "used_by": [],
             "why_not_in_repo": "Carried by git-LFS until it was retired.",
             "origin": "This repository's history.",
-            "reacquire": "The content store.",
+            "reacquire": "The blobstore.",
             "files": [
                 {"path": "server/providers/chrome/assets/chrome.msi", "sha256": "c" * 64, "size": 4096},
                 {"path": "client/assets/npcap.exe", "sha256": "d" * 64, "size": 99},

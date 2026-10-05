@@ -352,7 +352,7 @@ def load_baseline(repo: Path, build: int, baseline_id: str) -> Baseline:
 
 
 def snapshot_files(baseline: Baseline, cache: Path) -> list[relay.SnapshotFile]:
-    """The baseline's files as a pack, each named by its own filename in the snapshot."""
+    """The baseline's files, each named by its own filename in the snapshot."""
     files = []
     for f in baseline.files:
         source = cache / f.path
