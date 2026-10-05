@@ -24,7 +24,12 @@ CACHE="${MAST_ASSET_CACHE:-/cygdrive/c/MAST/provider-assets}"
 MANIFEST="${ASSET_MANIFEST:-${REPO_TOP}/server/data/assets.json}"
 PYTHON="${MAST_PYTHON:-/cygdrive/c/Program Files/Python312/python.exe}"
 SSH_KEY="${VENDOR_MIRROR_KEY:-/cygdrive/c/Users/labcomp2/.ssh/id_ed25519}"
-# Cygwin ssh, for the reason vendor-mirror.sh documents.
+# CYGWIN ssh, not Windows OpenSSH. Under Task Scheduler (a non-console session)
+# cygwin tools cannot hand their pipes to a native Windows child: ssh authenticates
+# fine on its own, then the transfer dies with "connection unexpectedly closed (0
+# bytes received)". Interactively the identical command works, which is what makes
+# it expensive to diagnose. -i is explicit and UserKnownHostsFile is /dev/null
+# because cygwin ssh takes its home from /etc/passwd (/home/<user>), absent here.
 SSH="/usr/bin/ssh -i $SSH_KEY -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ServerAliveInterval=30 -o ServerAliveCountMax=10"
 
 LOG="${FETCH_ASSETS_LOG:-/cygdrive/c/MAST/logs/fetch-assets.log}"

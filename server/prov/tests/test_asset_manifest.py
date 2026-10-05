@@ -35,7 +35,6 @@ DECLARED = {
         {
             "name": "big-catalog",
             "cached": True,
-            "kind": "directory",
             "prefix": "server/providers/planewave/assets/catalog/",
             "used_by": ["planewave"],
             "why_not_in_repo": "2 GB vendor download.",
@@ -49,7 +48,6 @@ DECLARED = {
             "name": "frozen",
             "cached": True,
             # No prefix: the frozen set spans every module and the client media.
-            "provenance": False,
             "used_by": [],
             "why_not_in_repo": "Carried by git-LFS until it was retired.",
             "origin": "This repository's history.",
@@ -62,7 +60,6 @@ DECLARED = {
         {
             "name": "secrets",
             "cached": False,
-            "kind": "directory",
             "path": "vault\\secrets",
             "used_by": ["nomachine"],
             "why_not_in_repo": "Issued certificates.",

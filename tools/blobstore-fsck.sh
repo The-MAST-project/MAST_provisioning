@@ -22,7 +22,7 @@ DEST="${VENDOR_MIRROR_DEST:-mast@10.23.1.181}"
 STORE_ROOT="${VENDOR_STORE_ROOT:-/Storage/mast-provisioning}"
 REMOTE_STORE=/tmp/mast-blobstore.py
 SSH_KEY="${VENDOR_MIRROR_KEY:-/cygdrive/c/Users/labcomp2/.ssh/id_ed25519}"
-# Cygwin ssh for the same reason vendor-mirror.sh uses it; see that script.
+# Cygwin ssh for the same reason fetch-assets.sh uses it; see that script.
 SSH="/usr/bin/ssh -i $SSH_KEY -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ServerAliveInterval=30 -o ServerAliveCountMax=10"
 
 # Scheduled runs have nowhere for stdout to go, and a corruption report nobody can

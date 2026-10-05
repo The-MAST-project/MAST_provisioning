@@ -1004,10 +1004,12 @@ listed in the same file under `not_vendor_inputs` with a reason.
 `build/*.ps1` appears in neither list — a new vendored input cannot become
 load-bearing without being written down.
 
-Canonical copies live on `mast-ns-control` at `/Storage/mast-vendor/`; the build
-host holds a working cache, so a build never depends on the WAN. Manifests,
-provenance records and the cache-verify job are
-[#194](https://github.com/The-MAST-project/MAST_provisioning/issues/194).
+The build host holds every one of them in its asset cache, so a build never depends
+on the WAN, and the relay's blobstore holds the second copy, kept there by the
+payload snapshots that carry them. Where each input came from and how to get it
+again is recorded in `vendor-inputs.json` itself. The daily cache fetch and the
+blobstore check are in
+[docs/provisioning-server-setup.md](docs/provisioning-server-setup.md) Step 4d.
 
 ## Secrets / vault
 

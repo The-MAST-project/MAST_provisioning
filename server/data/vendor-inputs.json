@@ -5,30 +5,24 @@
     "is what the build, the fetch and the verify all read. Regenerate with",
     "  python -m prov.asset_manifest --repo . --out server/data/assets.json",
     "",
-    "Two kinds of entry, and the difference is where the bytes are canonical.",
+    "Two kinds of entry, and the difference is where they came from.",
     "",
-    "The build-host inputs ('provenance' absent) were never in git at all: their canonical",
-    "copies live in the content store on mast-ns-control, each carrying a PROVENANCE.md",
-    "written from this file by tools/write-vendor-provenance.py. 'prefix' is where such an",
-    "input is keyed in the one asset namespace -- the path its files would have if they",
-    "were tracked -- so the machine-wide cache mirrors the repo tree.",
+    "The build-host inputs were never in git at all. 'prefix' is where such an input is",
+    "keyed in the one asset namespace -- the path its files would have if they were",
+    "tracked -- so the machine-wide cache mirrors the repo tree. Where each came from and",
+    "how to get it again is written here, in 'origin' and 'reacquire'; the bytes live in",
+    "the relay's blobstore, held there by the payload snapshots that carry them.",
     "",
-    "The 'git-lfs' entry ('provenance': false) is different: those 162 files ARE still in",
-    "this repository, and their digests were derived from the LFS pointers until #48 froze",
-    "them here. A derived digest stops being derivable the moment the pointer goes, so the",
-    "freeze happens BEFORE the untracking rather than with it -- and while both exist,",
-    "test_asset_manifest.py checks every frozen digest against the pointer it came from.",
-    "It spans every module and the client media, so it declares explicit paths and no prefix.",
+    "The 'git-lfs' entry is different: those 162 files ARE still in this repository, and",
+    "their digests were derived from the LFS pointers until #48 froze them here. A derived",
+    "digest stops being derivable the moment the pointer goes, so the freeze happens BEFORE",
+    "the untracking rather than with it -- and while both exist, test_asset_manifest.py",
+    "checks every frozen digest against the pointer it came from. It spans every module",
+    "and the client media, so it declares explicit paths and no prefix.",
     "",
     "'cached' says whether an entry is fetched into C:\\MAST\\provider-assets at all -- the",
     "NoMachine seats are issued certificates and deliberately are not, which is what",
     "Assert-MastNoNoMachineCertsInAssets enforces.",
-    "",
-    "'kind' is the shape the entry has in the canonical store, which is not always its shape",
-    "in the cache: the PlateSolve3 installer and its data payload are one directory there and",
-    "two files beside the planewave certs here. write-vendor-provenance.py keys on it -- a",
-    "'file' entry must not get a directory of its own, which is how full-frame.fits was",
-    "replaced by one.",
     "",
     "C:\\MAST\\ on the build host also holds regenerable images and scratch; those are in",
     "'not_vendor_inputs' with the reason, so the distinction is recorded rather than",
@@ -38,7 +32,6 @@
     {
       "name": "mast-indexes",
       "cached": true,
-      "kind": "directory",
       "prefix": "server/providers/imdisk/assets/mast-indexes/",
       "used_by": [
         "imdisk"
@@ -534,7 +527,6 @@
     {
       "name": "full-frame.fits",
       "cached": true,
-      "kind": "file",
       "prefix": "server/providers/astrometry/assets/full-frame.fits",
       "used_by": [
         "astrometry",
@@ -555,7 +547,6 @@
     {
       "name": "ps3-catalog",
       "cached": true,
-      "kind": "directory",
       "prefix": "server/providers/planewave/assets/",
       "used_by": [
         "planewave"
@@ -580,7 +571,6 @@
     {
       "name": "cygwin-pkg-cache",
       "cached": true,
-      "kind": "directory",
       "prefix": "server/providers/astrometry-dependencies/assets/cygwin-pkg-cache/",
       "used_by": [
         "astrometry-dependencies"
@@ -1381,7 +1371,6 @@
     {
       "name": "nomachine-licenses",
       "cached": false,
-      "kind": "directory",
       "path": "vault\\nomachine-licenses",
       "used_by": [
         "nomachine"
@@ -1395,7 +1384,6 @@
     {
       "name": "git-lfs",
       "cached": true,
-      "provenance": false,
       "used_by": [],
       "approx_bytes": 1970563322,
       "why_not_in_repo": "Vendored binaries that git-LFS carried until MAST_provisioning#48 retired it. Frozen here because a digest derived from a pointer stops being derivable the moment the pointer is removed, and the index must not quietly lose 162 rows.",
@@ -2218,7 +2206,7 @@
   "not_vendor_inputs": [
     {
       "path": "C:\\MAST\\MAST-15GB-indexes-5202+5203.img",
-      "reason": "Superseded. The legacy index image the mast-indexes seed was extracted from once; the unit now builds its own sparse image from the seed. Kept only as the input to a re-extraction, and not worth 15 GB of mirror."
+      "reason": "Superseded as a build input: the unit builds its own sparse image from the mast-indexes seed. This machine mounts it read-write as its own D: for local astrometry testing, which is why its write time moves, and build/extract-index-seed.ps1 reads it to re-extract the seed. Not worth 15 GB in the blobstore."
     }
   ]
 }
