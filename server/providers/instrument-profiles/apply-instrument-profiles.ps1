@@ -54,7 +54,11 @@ try {
     if (${existing}.Count -gt 0) {
         Log ("Kept {0} existing PHD2 profile(s) under {1}; {2} was not imported." -f ${existing}.Count, ${Phd2ProfilesKey}, ${reg})
     } elseif (Test-Path -LiteralPath ${reg}) {
-        ${p} = Start-Process -FilePath 'reg.exe' -ArgumentList @('import', ${reg}) -Wait -PassThru -NoNewWindow
+        # Not -Wait: Windows PowerShell's Start-Process -Wait -PassThru can return a null
+        # ExitCode, which reads as a failure. Holding the handle keeps the exit code.
+        ${p} = Start-Process -FilePath 'reg.exe' -ArgumentList @('import', ('"{0}"' -f ${reg})) -PassThru -NoNewWindow
+        ${null} = ${p}.Handle
+        ${p}.WaitForExit()
         if (${p}.ExitCode -ne 0) { throw ("reg import failed (exit {0}) for {1}" -f ${p}.ExitCode, ${reg}) }
         Log ("Imported PHD2 profiles from {0} into HKCU." -f ${reg})
     } else {
