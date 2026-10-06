@@ -18,7 +18,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from prov import relay, transport
+from prov import hashing, relay, transport
 
 BOOTSTRAP_PAYLOAD = Path("client/bootstrap-payload.json")
 ASSETS = Path("server/data/assets.json")
@@ -49,7 +49,7 @@ def payload_files(repo: Path, cache: Path) -> list[relay.SnapshotFile]:
         source = repo / rel if (repo / rel).is_file() else cache / rel
         if not source.is_file():
             raise BootstrapPayloadError(f"{rel} is in neither the repo nor the asset cache; run tools/fetch-assets.sh")
-        digest = relay.sha256_of(source)
+        digest = hashing.sha256_of(source)
         if rel in indexed and digest != indexed[rel]:
             raise BootstrapPayloadError(f"{source} hashes to {digest}, not the indexed {indexed[rel]} for {leaf}")
         files.append(relay.SnapshotFile(leaf, digest, source.stat().st_size, source))

@@ -307,6 +307,7 @@ The WinRM/SSH transport is the canonical `server/prov/transport.py` (lifted out 
 | `local_address_for(peer_ip)` | This machine's address on the route to a unit, from the kernel. **Never send a unit this machine's name** (`COMPUTERNAME` / `gethostname()`) and never pick from the interface list — see the #70 record. |
 | `pull_staging_args(...)` | The argument list for `client/mast-pull-staging.ps1`. The only place that names its parameters; both the driver and the `vm/` harness call it. Add a parameter there and here, never at a call site. |
 | `connect_unit(host, cred)` | WinRM-preferred, SSH-fallback session to a unit. Prefer over `winrm_session` for real work. |
+| `prov.hashing.sha256_of(path)` | A file's SHA-256, read in chunks. The one file hasher in `prov`; `tools/blobstore.py` keeps its own only because it runs on the relay and cannot import the package. |
 | `prov.payload.exclusions(build, targets)` | The staged assets no targeted module claims, from `build-manifest.json`'s `module_payload`. An empty `targets` excludes nothing — that one rule is what covers `--force`, a first provisioning, and the `MODULE_DRIFT_NONE` fallback, so do not add a force check at a call site. |
 | `run_ps(session, script, ...)` | Run PS on a unit with heartbeat + hard timeout + resilient retry. |
 | `winrm_session(host, cred, read_timeout_s, op_timeout_s)` | Construct a `winrm.Session`. Never instantiate `winrm.Session` directly outside this factory. |

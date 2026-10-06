@@ -38,7 +38,6 @@ payload that cost 1,959,264,676 bytes the day before.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import shutil
@@ -48,6 +47,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
+
+from prov import hashing
 
 # Two path vocabularies are in play and they are not interchangeable.
 #
@@ -64,7 +65,6 @@ CYGWIN_SSH = "/usr/bin/ssh"
 DEFAULT_IDENTITY = "/cygdrive/c/Users/labcomp2/.ssh/id_ed25519"
 #: Directory entries the relay serves; the share points here, not at the root.
 HOSTS_SUBDIR = "hosts"
-READ_CHUNK = 1024 * 1024
 #: The declared staging hosts, repo-relative.
 STAGING_HOSTS = Path("server/data/staging-hosts.json")
 
@@ -247,7 +247,7 @@ def sync_snapshot(
     digest it does not have would be served to every tree that links that digest.
     """
     for f in files:
-        actual = sha256_of(f.source) if f.source.is_file() else "absent"
+        actual = hashing.sha256_of(f.source) if f.source.is_file() else "absent"
         if actual != f.sha256:
             return SyncResult(False, -1, f"{f.path}: {f.source} is {actual}, not {f.sha256}")
     manifest = {"files": [{"path": f.path, "size": f.size, "sha256": f.sha256} for f in files]}
@@ -261,14 +261,6 @@ def sync_snapshot(
         runner=runner,
         script_path=script_path,
     )
-
-
-def sha256_of(path: Path) -> str:
-    h = hashlib.sha256()
-    with path.open("rb") as fh:
-        while chunk := fh.read(READ_CHUNK):
-            h.update(chunk)
-    return h.hexdigest()
 
 
 def _sync(
