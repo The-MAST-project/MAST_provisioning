@@ -6,6 +6,13 @@
 # apply-instrument-profiles.ps1). Phase 2 is needed because the per-user mast
 # profile (Documents dir + HKCU hive) is not materialized at provisioning time.
 #
+# A re-run only refreshes the staging dir. The '.applied' sentinel phase 2 writes is
+# kept, so a deployed unit is not given the apply task again, and phase 2 itself never
+# overwrites a live cfg or existing PHD2 profiles. Per-unit state written after the first
+# apply -- calibrate-instruments' COM bindings, PHD2 tuning -- survives every later
+# provisioning run. A fleet-wide change to a deployed unit's profile needs its own
+# targeted provider that edits just the fields it owns.
+#
 # Stage 1 (provisioning, pre-hardware) lays down TEMPLATES ONLY:
 #   - PWI4.cfg Latitude/Longitude/HeightMeters <- C:\WIS\config.toml [location].
 #   - Fleet-constant cfg values (CountsPerMicron, mount ConnectionMethod=usb,
@@ -87,7 +94,9 @@ try {
     if (-not (Test-Path -LiteralPath ${zip})) { ${zip} = Join-Path ${PSScriptRoot} 'instrument-profiles-assets.zip' }
     if (-not (Test-Path -LiteralPath ${zip})) { throw "asset bundle not found: instrument-profiles-assets.zip" }
 
-    if (Test-Path -LiteralPath ${ProfilesRoot}) { Remove-Item -LiteralPath ${ProfilesRoot} -Recurse -Force }
+    # Unpacked over the existing dir, never deleted first: deleting it removed the
+    # '.applied' sentinel, and failed outright while an operator's calibrate-instruments
+    # shell held the dir open (#190).
     New-Item -ItemType Directory -Path ${ProfilesRoot} -Force | Out-Null
     Expand-Archive -LiteralPath ${zip} -DestinationPath ${ProfilesRoot} -Force
     Log ("Extracted profile bundle to {0}" -f ${ProfilesRoot})
@@ -138,7 +147,10 @@ try {
     # 4) Register the AtLogon task that applies the profiles into the mast user's
     #    profile on first sign-in (copies cfgs into Documents, imports the PHD2
     #    HKCU profiles). Runs as the mast user, non-elevated, in the logon session.
-    if (-not ${SkipTask}) {
+    ${sentinel} = Join-Path ${ProfilesRoot} '.applied'
+    if (Test-Path -LiteralPath ${sentinel}) {
+        Log ("Profiles already applied on this unit ({0}); staging refreshed, live profiles left as they are, apply task not registered." -f ${sentinel})
+    } elseif (-not ${SkipTask}) {
         ${argLine} = ('-ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -File "{0}"' -f ${applyDst})
         ${action} = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ${argLine}
         ${trigger} = New-ScheduledTaskTrigger -AtLogOn -User ${MastUser}

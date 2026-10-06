@@ -1,11 +1,15 @@
 #requires -Version 5.1
 # Verify the instrument-profiles provisioning (provide-instrument-profiles.ps1).
 # Stage 1 is template-only, so this just asserts the templates + PHD2 reg are
-# staged, PWI4.cfg location was injected, and the AtLogon apply task is
-# registered. Device->COM binding is verified separately by Stage 2
+# staged, PWI4.cfg location was injected, and the profiles are either applied
+# (the '.applied' sentinel) or about to be (the AtLogon apply task). Device->COM binding is verified separately by Stage 2
 # (tools/calibrate-instruments.ps1) on a connected unit.
 [CmdletBinding()]
-param()
+param(
+    # Overridable so the script can be exercised against a planted staging dir (server/tests).
+    [string]${ProfilesRoot} = 'C:\ProgramData\MAST\instrument-profiles',
+    [string]${TaskName} = 'MAST-InstrumentProfiles-Apply'
+)
 
 ${ErrorActionPreference} = 'Stop'
 ${mastLogDot} = Join-Path ${PSScriptRoot} 'mast-log.ps1'
@@ -17,9 +21,7 @@ ${verifyLog} = Get-MastVerifyLog -Module 'instrument-profiles'
 function W { param([string]${Line}) Add-Content -LiteralPath ${verifyLog} -Encoding UTF8 -Value ("[{0}] {1}" -f (Get-Date -Format 'HH:mm:ss'), ${Line}) }
 Set-Content -LiteralPath ${verifyLog} -Encoding UTF8 -Value ("[{0}] verify-instrument-profiles.ps1 started" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))
 
-${ProfilesRoot} = 'C:\ProgramData\MAST\instrument-profiles'
 ${Pwi4StageDir} = Join-Path ${ProfilesRoot} 'PWI4\Settings'
-${TaskName}     = 'MAST-InstrumentProfiles-Apply'
 ${ExpectedCfgs} = @(
     'ASCOM.Camera_1.cfg', 'EFA.Controller_1.cfg', 'EFA.Hedrick.Focuser_1.cfg',
     'Elmo.Controller.cfg', 'Elmo.L500.Mount.cfg', 'GUI.cfg',
@@ -51,12 +53,15 @@ ${reg} = Join-Path ${ProfilesRoot} 'phd2_profiles.reg'
 if (Test-Path -LiteralPath ${reg}) { W ("PHD2 reg staged: {0}" -f ${reg}) }
 else { ${fail} += "missing staged phd2_profiles.reg" }
 
-# 4) AtLogon apply task registered.
-if (Get-ScheduledTask -TaskName ${TaskName} -ErrorAction SilentlyContinue) { W ("apply task registered: {0}" -f ${TaskName}) }
-else { ${fail} += ("apply task not registered: {0}" -f ${TaskName}) }
+# 4) Applied, or about to be. The task unregisters itself once it has run, so on an
+#    applied unit the sentinel is the evidence, not the task.
+${sentinel} = Join-Path ${ProfilesRoot} '.applied'
+if (Test-Path -LiteralPath ${sentinel}) { W ("profiles applied: {0}" -f ${sentinel}) }
+elseif (Get-ScheduledTask -TaskName ${TaskName} -ErrorAction SilentlyContinue) { W ("apply task registered: {0}" -f ${TaskName}) }
+else { ${fail} += ("profiles neither applied ({0} absent) nor pending (apply task {1} not registered)" -f ${sentinel}, ${TaskName}) }
 
 if (${fail}.Count -eq 0) {
-    W 'PASS instrument-profiles templates staged + apply task registered'
+    W 'PASS instrument-profiles templates staged + profiles applied or pending'
     Write-MastSmokeOk -Module 'instrument-profiles' | Out-Null
     exit 0
 }
