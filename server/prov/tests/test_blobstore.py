@@ -465,3 +465,16 @@ def test_repair_refuses_bytes_that_are_not_the_blob(tmp_path):
     wrong.write_bytes(b"y" * 4096)
     with pytest.raises(SystemExit, match="not"):
         run(tmp_path, ["repair", digest, str(wrong)])
+
+
+def test_gc_dry_run_names_what_it_would_free_and_frees_nothing(tmp_path):
+    import shutil
+
+    src = seed_blobs(tmp_path, FILES)
+    shutil.rmtree(src)
+    out = run(tmp_path, ["gc", "--dry-run"])
+    assert "freed=3" in out, out
+    assert out.count("WOULD_FREE ") == 3, out
+    assert hashlib.sha256(b"x" * 4096).hexdigest() in out
+    blobs = [b for shard in (tmp_path / rs.BLOBSTORE_DIR).iterdir() for b in shard.iterdir()]
+    assert len(blobs) == 3, "a dry run deletes nothing"

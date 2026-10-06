@@ -302,13 +302,16 @@ def cmd_repair(root: Path, args) -> int:
     return 0
 
 
-def cmd_gc(root: Path, _args) -> int:
+def cmd_gc(root: Path, args) -> int:
     """Drop blobs nothing references.
 
     Retention is a refcount, not a policy: a blob is live while any *other* name
     points at the same inode -- a host tree or a snapshot -- so a snapshot can be
     dropped in any order without consulting a schedule or a lineage. What must
     outlive its current use is therefore whatever has a snapshot.
+
+    ``--dry-run`` names each blob it would free, with its size, and frees none:
+    the review step before the first gc after a layout change.
     """
     store = root / BLOBSTORE_DIR
     freed = kept = 0
@@ -320,13 +323,16 @@ def cmd_gc(root: Path, _args) -> int:
             st = blob.stat()
             if st.st_nlink == 1:
                 freed_bytes += st.st_size
-                blob.unlink()
                 freed += 1
+                if args.dry_run:
+                    print(f"WOULD_FREE {blob.name} {st.st_size}")
+                else:
+                    blob.unlink()
             else:
                 kept += 1
-        if not any(shard.iterdir()):
+        if not args.dry_run and not any(shard.iterdir()):
             shard.rmdir()
-    print(f"GC freed={freed} bytes_freed={freed_bytes} kept={kept}")
+    print(f"GC{' DRY_RUN' if args.dry_run else ''} freed={freed} bytes_freed={freed_bytes} kept={kept}")
     return 0
 
 
@@ -349,7 +355,9 @@ def main(argv: list[str] | None = None) -> int:
     repair.add_argument("digest")
     repair.add_argument("source")
     repair.set_defaults(fn=cmd_repair)
-    sub.add_parser("gc").set_defaults(fn=cmd_gc)
+    gc = sub.add_parser("gc")
+    gc.add_argument("--dry-run", action="store_true", help="name what would be freed; free nothing")
+    gc.set_defaults(fn=cmd_gc)
     fsck = sub.add_parser("fsck")
     fsck.add_argument("--names", action="store_true", help="print corrupt blob names on stdout")
     fsck.set_defaults(fn=cmd_fsck)

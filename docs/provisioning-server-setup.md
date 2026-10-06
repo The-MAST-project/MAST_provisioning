@@ -437,7 +437,8 @@ Link counts above 1, and a total that has not grown by a payload. The run's own
 `RELAY_SYNC_OK` line carries `blobs_sent=`, which is the same fact per sync.
 
 `tools/blobstore.py gc` drops blobs no host tree or snapshot references. It is
-manual, and since nothing prunes snapshots yet, it frees nothing in practice.
+manual, and since nothing prunes snapshots yet, it frees nothing in practice. Run it
+with `--dry-run` first: it names each blob it would free, with its size, and frees none.
 
 ---
 
