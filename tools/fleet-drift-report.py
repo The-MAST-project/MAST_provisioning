@@ -41,6 +41,7 @@ import re
 import sys
 import uuid
 from dataclasses import asdict, dataclass, field
+from enum import StrEnum
 from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -70,6 +71,13 @@ OS_PROBE_FILES = (
 OS_PROBE_REMOTE_ROOT = r"C:\Windows\Temp"
 OS_PROBE_BEGIN = "====MAST-OS-PATCH-PROBE-BEGIN===="
 OS_PROBE_END = "====MAST-OS-PATCH-PROBE-END===="
+#: The PWI4 site probe and the lib it shares with the pwi4-site provider (#209).
+SITE_PROBE_FILES = (
+    "server/lib/mast-pwi4-site-probe.ps1",
+    "server/lib/mast-pwi4-site.ps1",
+)
+SITE_PROBE_BEGIN = "====MAST-PWI4-SITE-PROBE-BEGIN===="
+SITE_PROBE_END = "====MAST-PWI4-SITE-PROBE-END===="
 
 
 @dataclass
@@ -108,6 +116,11 @@ class UnitRecord:
     #: was not run (a --from-json gathered before it existed) or failed.
     os_probe: dict | None = None
     os_probe_error: str | None = None
+    #: What server/lib/mast-pwi4-site-probe.ps1 printed (#209): the site in config.toml,
+    #: the live PWI4.cfg and the pointing model, compared on the unit. None when the
+    #: probe was not run or failed.
+    site_probe: dict | None = None
+    site_probe_error: str | None = None
     error: str | None = None
 
 
@@ -248,6 +261,10 @@ def gather_unit(host: str, cred: dict[str, str], connect_timeout_s: int) -> Unit
             rec.os_probe = gather_os_probe(session)
         except Exception as exc:  # noqa: BLE001 - the manifest read above still stands
             rec.os_probe_error = str(exc)
+        try:
+            rec.site_probe = gather_site_probe(session)
+        except Exception as exc:  # noqa: BLE001 - the manifest read above still stands
+            rec.site_probe_error = str(exc)
         return rec
     except Exception as exc:  # noqa: BLE001
         return UnitRecord(host=host, status="error", error=str(exc))
@@ -255,12 +272,20 @@ def gather_unit(host: str, cred: dict[str, str], connect_timeout_s: int) -> Unit
         session.close()
 
 
-def parse_os_probe(out: str) -> dict:
-    _, begin, rest = out.partition(OS_PROBE_BEGIN)
-    body, end, _ = rest.partition(OS_PROBE_END)
+def _between_markers(out: str, begin_mark: str, end_mark: str, what: str) -> dict:
+    _, begin, rest = out.partition(begin_mark)
+    body, end, _ = rest.partition(end_mark)
     if not (begin and end):
-        raise ValueError(f"no OS probe output between markers: {out.strip()[:300]!r}")
+        raise ValueError(f"no {what} output between markers: {out.strip()[:300]!r}")
     return json.loads(body)
+
+
+def parse_os_probe(out: str) -> dict:
+    return _between_markers(out, OS_PROBE_BEGIN, OS_PROBE_END, "OS probe")
+
+
+def parse_site_probe(out: str) -> dict:
+    return _between_markers(out, SITE_PROBE_BEGIN, SITE_PROBE_END, "PWI4 site probe")
 
 
 def _remote_join(parent: str, name: str) -> str:
@@ -268,26 +293,89 @@ def _remote_join(parent: str, name: str) -> str:
     return parent + "\\" + name
 
 
-def gather_os_probe(session) -> dict:
-    """Upload the probe to a per-call temp folder, run it, and remove the folder.
+def _run_uploaded_probe(session, files: tuple[str, ...]) -> str:
+    """Upload a probe and its libs to a per-call temp folder, run the first file, and
+    remove the folder. Returns the probe's stdout.
 
     That folder is the one thing this report writes on a unit, and only for the
-    length of the call: the probe is too long for inline dispatch.
+    length of the call: a probe is too long for inline dispatch.
     """
-    remote = _remote_join(OS_PROBE_REMOTE_ROOT, f"mast-os-patch-probe-{uuid.uuid4().hex}")
+    probe = Path(files[0])
+    remote = _remote_join(OS_PROBE_REMOTE_ROOT, f"{probe.stem}-{uuid.uuid4().hex}")
     session.run_ps(f"New-Item -ItemType Directory -Force -Path {ps_lit(remote)} | Out-Null")
     try:
-        for rel in OS_PROBE_FILES:
+        for rel in files:
             session.put_file(_remote_join(remote, Path(rel).name), (_REPO_ROOT / rel).read_bytes())
-        resp = session.run_ps(f"& {ps_lit(_remote_join(remote, Path(OS_PROBE_FILES[0]).name))}")
+        resp = session.run_ps(f"& {ps_lit(_remote_join(remote, probe.name))}")
         out = resp.std_out.decode("utf-8-sig", errors="replace")
         if resp.status_code != 0:
             raise RuntimeError(f"probe exited {resp.status_code}: {resp.std_err.decode(errors='replace').strip()[:300]}")
-        return parse_os_probe(out)
+        return out
     finally:
         cleanup = session.run_ps(f"Remove-Item -LiteralPath {ps_lit(remote)} -Recurse -Force")
         if cleanup.status_code != 0:
             raise RuntimeError(f"could not remove {remote} from the unit: {cleanup.std_err.decode(errors='replace')[:300]}")
+
+
+def gather_os_probe(session) -> dict:
+    return parse_os_probe(_run_uploaded_probe(session, OS_PROBE_FILES))
+
+
+def gather_site_probe(session) -> dict:
+    return parse_site_probe(_run_uploaded_probe(session, SITE_PROBE_FILES))
+
+
+class SiteVerdict(StrEnum):
+    """One unit's PWI4 site, judged against its own C:\\WIS\\config.toml (#209)."""
+
+    ALIGNED = "aligned"
+    NO_MODEL = "aligned, no model"
+    MODEL_UNREADABLE = "aligned, model site unreadable"
+    MODEL_ORPHANED = "MODEL ORPHANED"
+    CONFIG_DRIFT = "PWI4.cfg DRIFT"
+    NO_CFG = "no PWI4.cfg"
+    NO_CONFIG = "no config.toml"
+
+
+def site_verdict(probe: dict) -> SiteVerdict:
+    if probe["config"] is None:
+        return SiteVerdict.NO_CONFIG
+    if probe["cfg"] is None:
+        return SiteVerdict.NO_CFG
+    if not probe["cfg_matches_config"]:
+        return SiteVerdict.CONFIG_DRIFT
+    if not probe["model_present"]:
+        return SiteVerdict.NO_MODEL
+    if probe["model"] is None:
+        return SiteVerdict.MODEL_UNREADABLE
+    if not probe["model_matches_config"]:
+        return SiteVerdict.MODEL_ORPHANED
+    return SiteVerdict.ALIGNED
+
+
+def _site_text(site: dict | None) -> str:
+    return "-" if site is None else f"{site['latitude']!r} / {site['longitude']!r}"
+
+
+def _render_pwi4_site(units: list[UnitRecord]) -> list[str]:
+    """PWI4 site per unit (#209) -- live, read-only, and informational, like the OS patch
+    section: a model orphaned by a site change needs sky to fix, so it does not touch the
+    exit code."""
+    probed = [u for u in units if u.site_probe is not None or u.site_probe_error]
+    if not probed:
+        return []
+    out = ["", "=== PWI4 site (live probe; reference = each unit's C:\\WIS\\config.toml) ==="]
+    width = max(len(u.host) for u in probed)
+    for u in sorted(probed, key=lambda r: r.host):
+        if u.site_probe is None:
+            out.append(f"  {u.host.ljust(width)}  unknown  probe failed: {u.site_probe_error}")
+            continue
+        p = u.site_probe
+        verdict = site_verdict(p)
+        detail = f"cfg {_site_text(p['cfg'])}  model {_site_text(p['model'])}"
+        running = "  (PWI4 running)" if p["pwi4_running"] else ""
+        out.append(f"  {u.host.ljust(width)}  {verdict:<30}  {detail}{running}")
+    return out
 
 
 def assess_os_patch(units: list[UnitRecord], repo_root: Path) -> dict:
@@ -1211,6 +1299,7 @@ def render(
     lines += _render_bios_policy(ok_cols)
     lines += _render_nomachine(ok_cols)
     lines += _render_os_patch(os_patch)
+    lines += _render_pwi4_site(units)
     lines += _render_bootstrap(units, boot, repo_boot_v)
     lines += _render_result(units, cmp, boot, repos)
     return "\n".join(lines)

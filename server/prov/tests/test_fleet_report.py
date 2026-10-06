@@ -974,3 +974,80 @@ def test_the_probe_survives_a_json_round_trip(fdr):
     rec = fdr.UnitRecord(host="mast08", status="ok", os_probe=_probe_dict())
     again = fdr.UnitRecord(**json.loads(json.dumps(fdr.asdict(rec))))
     assert again.os_probe == rec.os_probe
+
+
+# --- PWI4 site probe (#209) ---------------------------------------------------------------
+
+_NS = {"latitude": 30.05301166519461, "longitude": 35.04079611164462, "height": 400.0}
+_ROUNDED = {"latitude": 30.053, "longitude": 35.0408055555556}
+
+
+def _site_probe(**over) -> dict:
+    base = {
+        "config": _NS,
+        "cfg": _NS,
+        "model_present": True,
+        "model": {"latitude": _NS["latitude"], "longitude": _NS["longitude"]},
+        "cfg_matches_config": True,
+        "model_matches_config": True,
+        "pwi4_running": False,
+    }
+    return base | over
+
+
+def _site_marked(fdr, body: str) -> bytes:
+    return f"noise\r\n{fdr.SITE_PROBE_BEGIN}\r\n{body}\r\n{fdr.SITE_PROBE_END}\r\n".encode()
+
+
+def test_the_site_probe_loads_the_lib_the_provider_uses(fdr):
+    probe, lib = (_REPO_ROOT / p for p in fdr.SITE_PROBE_FILES)
+    assert lib.name in probe.read_text(encoding="utf-8")
+    assert "function Test-MastSiteMatch" in lib.read_text(encoding="utf-8")
+    module = json.loads((_REPO_ROOT / "server/providers/pwi4-site/module.json").read_text(encoding="utf-8-sig"))
+    assert fdr.SITE_PROBE_FILES[1] in module["repofiles"]
+
+
+def test_site_gather_uploads_probe_and_lib_and_removes_the_folder(fdr):
+    s = _FakeSession(fdr, _site_marked(fdr, json.dumps(_site_probe())))
+    got = fdr.gather_site_probe(s)
+    assert got["cfg_matches_config"] is True
+    (folder,) = {p.rsplit("\\", 1)[0] for p in s.files}
+    assert folder.startswith(fdr.OS_PROBE_REMOTE_ROOT + "\\mast-pwi4-site-probe-")
+    assert sorted(p.rsplit("\\", 1)[1] for p in s.files) == ["mast-pwi4-site-probe.ps1", "mast-pwi4-site.ps1"]
+    assert s.scripts[-1] == f"Remove-Item -LiteralPath '{folder}' -Recurse -Force"
+
+
+@pytest.mark.parametrize(
+    ("probe", "verdict"),
+    [
+        (_site_probe(), "aligned"),
+        (_site_probe(model_present=False, model=None, model_matches_config=None), "aligned, no model"),
+        (_site_probe(model=None, model_matches_config=None), "aligned, model site unreadable"),
+        (_site_probe(model=_ROUNDED, model_matches_config=False), "MODEL ORPHANED"),
+        (_site_probe(cfg=_ROUNDED | {"height": 400.0}, cfg_matches_config=False), "PWI4.cfg DRIFT"),
+        (_site_probe(cfg=None, cfg_matches_config=None), "no PWI4.cfg"),
+        (_site_probe(config=None, cfg_matches_config=None, model_matches_config=None), "no config.toml"),
+    ],
+    ids=["aligned", "no-model", "unreadable", "orphaned", "drift", "no-cfg", "no-config"],
+)
+def test_site_verdict(fdr, probe, verdict):
+    assert fdr.site_verdict(probe) == verdict
+
+
+def test_site_section_renders_each_unit_and_a_failed_probe(fdr):
+    units = [
+        fdr.UnitRecord(host="mast06", status="ok", site_probe=_site_probe(model=_ROUNDED, model_matches_config=False)),
+        fdr.UnitRecord(host="mast01", status="ok", site_probe=_site_probe(pwi4_running=True)),
+        fdr.UnitRecord(host="mast05", status="ok", site_probe_error="timed out"),
+        fdr.UnitRecord(host="mast03", status="ok"),
+    ]
+    out = "\n".join(fdr._render_pwi4_site(units))
+    assert "=== PWI4 site" in out
+    assert "mast06  MODEL ORPHANED" in out
+    assert "mast01  aligned" in out and "(PWI4 running)" in out
+    assert "mast05  unknown  probe failed: timed out" in out
+    assert "mast03" not in out
+
+
+def test_no_site_probe_data_means_no_site_section(fdr):
+    assert fdr._render_pwi4_site([fdr.UnitRecord(host="mast08", status="ok")]) == []
