@@ -18,16 +18,40 @@ $providerDir = Join-Path $here '..\providers\instrument-profiles'
 $provide = Join-Path $providerDir 'provide-instrument-profiles.ps1'
 $apply = Join-Path $providerDir 'apply-instrument-profiles.ps1'
 $verify = Join-Path $providerDir 'verify-instrument-profiles.ps1'
-$assets = Join-Path $providerDir 'assets'
 $nsToml = Join-Path $here '..\providers\config-bootstrap\sites\ns.toml'
 $noTask = 'MAST-Tests-NoSuchTask'
 
 function Invoke-Script {
     param([string]$Path, [string[]]$Arguments)
+    # A child's stderr arrives as error records through 2>&1 (reg.exe reports success on
+    # stderr); do not let a 'Stop' left by another suite turn that into a throw here.
+    $ErrorActionPreference = 'Continue'
     $out = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $Path @Arguments 2>&1 | Out-String
     $code = $LASTEXITCODE
     $global:LASTEXITCODE = 0
     return [pscustomobject]@{ ExitCode = $code; Output = $out }
+}
+
+function New-Bundle {
+    # A stand-in for assets\instrument-profiles-assets.zip, which is in Git LFS and is
+    # only a pointer file in CI's checkout. Same layout: the ten cfgs verify expects,
+    # and the PHD2 .reg.
+    param([string]$Name)
+    $src = Join-Path $TestDrive "$Name-src"
+    $settings = Join-Path $src 'PWI4\Settings'
+    New-Item -ItemType Directory -Path $settings -Force | Out-Null
+    foreach ($cfg in 'ASCOM.Camera_1.cfg', 'EFA.Controller_1.cfg', 'EFA.Hedrick.Focuser_1.cfg',
+        'Elmo.Controller.cfg', 'Elmo.L500.Mount.cfg', 'GUI.cfg',
+        'PWBus.StandardOTA.Controller.cfg', 'TempManager.cfg', 'Telemetry.cfg') {
+        Set-Content -LiteralPath (Join-Path $settings $cfg) -Encoding ASCII -Value 'Key = (template)'
+    }
+    Set-Content -LiteralPath (Join-Path $settings 'PWI4.cfg') -Encoding ASCII -Value @(
+        'Latitude            = 0', 'Longitude           = 0', 'HeightMeters        = 0')
+    Set-Content -LiteralPath (Join-Path $src 'phd2_profiles.reg') -Encoding Unicode -Value 'Windows Registry Editor Version 5.00'
+    $assetsDir = Join-Path $TestDrive "$Name-assets"
+    New-Item -ItemType Directory -Path $assetsDir -Force | Out-Null
+    Compress-Archive -Path (Join-Path $src '*') -DestinationPath (Join-Path $assetsDir 'instrument-profiles-assets.zip')
+    return $assetsDir
 }
 
 function Get-Sha {
@@ -38,7 +62,7 @@ function Get-Sha {
 Describe 'provide-instrument-profiles.ps1 on a re-run' {
     $env:MAST_LOG_SESSION_DIR = Join-Path $TestDrive 'logs'
     $root = Join-Path $TestDrive 'staging'
-    $provideArgs = @('-AssetsRoot', $assets, '-ProfilesRoot', $root, '-UnitToml', $nsToml, '-SkipTask')
+    $provideArgs = @('-AssetsRoot', (New-Bundle -Name 'rerun'), '-ProfilesRoot', $root, '-UnitToml', $nsToml, '-SkipTask')
 
     It 'stages the templates on a first run' {
         (Invoke-Script -Path $provide -Arguments $provideArgs).ExitCode | Should Be 0
@@ -119,7 +143,7 @@ Describe 'apply-instrument-profiles.ps1' {
 Describe 'verify-instrument-profiles.ps1' {
     $env:MAST_LOG_SESSION_DIR = Join-Path $TestDrive 'logs'
     $root = Join-Path $TestDrive 'verify-staging'
-    Invoke-Script -Path $provide -Arguments @('-AssetsRoot', $assets, '-ProfilesRoot', $root, '-UnitToml', $nsToml, '-SkipTask') | Out-Null
+    Invoke-Script -Path $provide -Arguments @('-AssetsRoot', (New-Bundle -Name 'verify'), '-ProfilesRoot', $root, '-UnitToml', $nsToml, '-SkipTask') | Out-Null
 
     It 'fails a unit whose profiles are neither applied nor pending' {
         (Invoke-Script -Path $verify -Arguments @('-ProfilesRoot', $root, '-TaskName', $noTask)).ExitCode | Should Be 1
