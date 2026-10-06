@@ -123,7 +123,10 @@ $verify = Join-Path $here '..\providers\pwi4-site\verify-pwi4-site.ps1'
 function Invoke-Script {
     param([string]$Path, [string[]]$Arguments)
     $out = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $Path @Arguments 2>&1 | Out-String
-    return [pscustomobject]@{ ExitCode = $LASTEXITCODE; Output = $out }
+    $code = $LASTEXITCODE
+    # Several cases exit non-zero on purpose; do not leave that behind for the caller.
+    $global:LASTEXITCODE = 0
+    return [pscustomobject]@{ ExitCode = $code; Output = $out }
 }
 
 function New-Unit {
