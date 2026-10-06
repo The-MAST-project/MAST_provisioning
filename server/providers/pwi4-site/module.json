@@ -1,0 +1,17 @@
+{
+  "name": "pwi4-site",
+  "version": "1.0",
+  "description": "Align the LIVE PWI4.cfg site (Latitude/Longitude/HeightMeters) with C:\\WIS\\config.toml [location], the boot-time mirror of the control DB 'sites' document. Only those three fields are written, after a backup and only while PWI4 is closed (it rewrites PWI4.cfg on exit; while it runs the provider refuses and the module is retried next run). Reads the site DefaultModel.pxp was built at and warns when the model is orphaned, since PWI4 refuses a model whose site differs from its configured one (#209). Not always: the site profiles are repofiles so a site change re-runs it; a GUI edit shows up in the fleet drift report instead. Runs after instrument-profiles (1850), which stages the PWI4.cfg template.",
+  "order": 1860,
+  "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-pwi4-site.ps1\"",
+  "commandfiles": [
+    "provide-pwi4-site.ps1",
+    "verify-pwi4-site.ps1"
+  ],
+  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\verify-pwi4-site.ps1\"",
+  "repofiles": [
+    "server/lib/mast-pwi4-site.ps1",
+    "server/providers/config-bootstrap/sites/ns.toml",
+    "server/providers/config-bootstrap/sites/wis.toml"
+  ]
+}
