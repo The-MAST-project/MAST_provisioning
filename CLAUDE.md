@@ -433,6 +433,15 @@ fleet-constant values verbatim (focuser `CountsPerMicron`, mount `ConnectionMeth
 IPs, equatorial). Because the per-user `mast` profile is not materialized at provisioning time,
 artifacts stage to `C:\ProgramData\MAST\instrument-profiles` and apply (cfgs -> Documents, PHD2 ->
 HKCU) via a one-shot `AtLogon` task on first `mast` logon. **No device->COM binding here.**
+**A re-run never touches the live profiles.** `provide` unpacks over the staging dir instead of deleting
+it, so the `.applied` sentinel survives and the apply task is registered only when it is absent. `apply`
+copies a template `.cfg` only where no live file of that name exists and imports the PHD2 `.reg` only when
+`HKCU\Software\StarkLabs\PHDGuidingV2\profile` has no subkeys; `verify` accepts the sentinel in place of
+the task, which outlives the apply on every unit (it runs as `mast`, unelevated, and cannot unregister a
+SYSTEM-registered task). So calibrate-instruments' COM bindings and any PHD2
+tuning survive every later provisioning run, and **a change to the template bundle reaches new units
+only**: a fleet-wide change to a deployed unit's profile needs its own targeted provider that edits just
+the fields it owns (#232's star-mass guard is the first such case).
 
 **Stage 2 -- `tools/calibrate-instruments.ps1` (post-hardware, operator-run, re-runnable -- BUILT + hardware-validated on mastw/mast00/mast02 2026-06-30):**
 Run it as `mast` on a connected unit after the instruments are cabled. `-DryRun` reports without writing (safe even while PWI4 is open); a real run refuses if PWI4 is running (it rewrites its `.cfg` on exit). Preservation-safe: it only writes a `SerialPort` when the current value is empty or stale (points at an absent COM); a present-but-different COM is left alone unless `-Force`; `-EfaCom <COMx>` overrides when more than one generic adapter is present. It never touches focuser calibration, the pointing model, or mount-firmware tuning. It also **reports each ZWO camera's USB link** (PASS/FAIL/UNVERIFIED from the PnP parent chain via `instrument-link-lib.ps1`, which is copied beside it): a FAIL means the camera is on a USB 2.0 path (6.5x slower readout) and must be re-cabled, and UNVERIFIED means it sits directly on a root port, whose speed the PnP tree cannot show; it never blocks the bindings or changes the exit code (`docs/decisions/2026-09-24-calibration-reports-the-guide-camera-usb-link.md`). Operators normally run it via the **"MAST Instrument Calibration" desktop shortcut** (`-Interactive` menu: view state / dry run / apply / force, showing the diff and prompting to close PWI4). The tool lives in the `instrument-profiles` provider, which deploys it to `C:\ProgramData\MAST\instrument-profiles\calibrate-instruments.ps1`; the `desktop-shortcuts` provider creates the launcher.
