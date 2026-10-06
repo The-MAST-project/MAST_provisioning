@@ -53,8 +53,8 @@ ${reg} = Join-Path ${ProfilesRoot} 'phd2_profiles.reg'
 if (Test-Path -LiteralPath ${reg}) { W ("PHD2 reg staged: {0}" -f ${reg}) }
 else { ${fail} += "missing staged phd2_profiles.reg" }
 
-# 4) Applied, or about to be. The task unregisters itself once it has run, so on an
-#    applied unit the sentinel is the evidence, not the task.
+# 4) Applied, or about to be. The sentinel is the evidence of an apply: the task cannot
+#    unregister itself (it runs as mast, unelevated), so it is no evidence either way.
 ${sentinel} = Join-Path ${ProfilesRoot} '.applied'
 if (Test-Path -LiteralPath ${sentinel}) { W ("profiles applied: {0}" -f ${sentinel}) }
 elseif (Get-ScheduledTask -TaskName ${TaskName} -ErrorAction SilentlyContinue) { W ("apply task registered: {0}" -f ${TaskName}) }

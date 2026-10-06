@@ -437,7 +437,8 @@ HKCU) via a one-shot `AtLogon` task on first `mast` logon. **No device->COM bind
 it, so the `.applied` sentinel survives and the apply task is registered only when it is absent. `apply`
 copies a template `.cfg` only where no live file of that name exists and imports the PHD2 `.reg` only when
 `HKCU\Software\StarkLabs\PHDGuidingV2\profile` has no subkeys; `verify` accepts the sentinel in place of
-the task, which unregisters itself once it has run. So calibrate-instruments' COM bindings and any PHD2
+the task, which outlives the apply on every unit (it runs as `mast`, unelevated, and cannot unregister a
+SYSTEM-registered task). So calibrate-instruments' COM bindings and any PHD2
 tuning survive every later provisioning run, and **a change to the template bundle reaches new units
 only**: a fleet-wide change to a deployed unit's profile needs its own targeted provider that edits just
 the fields it owns (#232's star-mass guard is the first such case).
