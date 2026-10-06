@@ -134,9 +134,6 @@ jobs:
             Write-Host "No tests ran -- treating as failure (the suites were not discovered)."
             exit 1
           }
-          # Explicit: the runner's powershell wrapper otherwise ends the step with
-          # `exit $LASTEXITCODE`, i.e. the last native command any test ran.
-          exit 0
 
   lint:
     name: lint
