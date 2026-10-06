@@ -115,7 +115,7 @@ If you see pointer stubs, your LFS credentials are not set up. Configure them
 Everything a payload needs that the build does not author -- the vendored binaries
 and the four inputs too large or too un-redistributable to commit -- lives in ONE
 machine-wide cache at `C:\MAST\provider-assets`, indexed by
-`server/data/assets.json` (418 files, 13.87 GiB). They are **not** read from the
+`server/data/assets.json` (417 files, 13.85 GiB). They are **not** read from the
 repo tree: builds run from git worktrees, and a worktree holds no gitignored file.
 
 Populate it once per build host, and again whenever a build reports an asset
@@ -126,7 +126,7 @@ C:\cygwin64\bin\bash.exe -lc "bash /cygdrive/c/Users/labcomp2/Desktop/MAST/MAST_
 ```
 
 It hashes what is already there against the manifest and fetches only what is
-missing or wrong, in one ssh and one tar stream from the content store on
+missing or wrong, in one ssh and one tar stream from the blobstore on
 mast-ns-control, verifying each blob before placing it. So it is equally the
 first-run fetch, the repair path and the verify -- which is why the daily task
 runs it rather than a report-only job. An empty cache takes about 3 minutes per
@@ -338,9 +338,9 @@ address instead of its own. Nothing else about the pull changes.
 Declared per site in [`server/data/staging-hosts.json`](../server/data/staging-hosts.json);
 a site with no entry keeps pulling from the orchestrator.
 
-**Why this is affordable.** The staging host keeps a **content-addressed store**
+**Why this is affordable.** The staging host keeps a **blobstore**
 (#202) and a host's payload is a tree of hardlinks into it. The build writes
-`payload-manifest.json` beside the staging root; the orchestrator asks the store
+`payload-manifest.json` beside the staging root; the orchestrator asks the blobstore
 which SHA-256 digests it lacks, sends only those, and has the tree assembled from
 links. Measured on mast07: 5.5 s and one 41,800-byte blob for a 14.88 GB payload
 that cost 1,959,264,676 bytes under the `--link-dest` scheme it replaced.
@@ -348,20 +348,29 @@ that cost 1,959,264,676 bytes under the `--link-dest` scheme it replaced.
 ### On the staging host
 
 ```bash
-mkdir -p /Storage/mast-provisioning/{hosts,store}
+mkdir -p /Storage/mast-provisioning/{hosts,blobstore}
 ```
 
-Seed the store from trees the host already holds — the vendor mirror (#194) and
-any existing host tree — so the first sync is not a 14.9 GB upload. Seeding
-**adopts** each file: the store entry is a second name for the same inode, the
+A relay set up before 2026-10-05 has the blobstore under its old name, `store/`.
+`blobstore.py` refuses to run against it rather than start an empty one beside it;
+rename it, which on one filesystem keeps every hardlink and copies nothing:
+
+```bash
+mv /Storage/mast-provisioning/store /Storage/mast-provisioning/blobstore
+```
+
+Seed the blobstore from any tree the host already holds — an earlier payload, a copy
+of another relay's host trees — so the first sync is not a 14.9 GB upload. Seeding
+**adopts** each file: the blobstore entry is a second name for the same inode, the
 source tree is left exactly as it was, and no disk is consumed:
 
 ```bash
-tools/relay-store.py --root /Storage/mast-provisioning seed /Storage/mast-vendor
+tools/blobstore.py --root /Storage/mast-provisioning seed <tree>
 ```
 
 On mast-ns-control that collapsed 1,895 names into 561 distinct blobs (14.88 GB)
-with no change in `du`.
+with no change in `du`. A seeded tree must then be kept or snapshotted: once it is
+deleted, only snapshots and host trees hold its blobs.
 
 A read-only share over `hosts/`, reusing the account the operational share already
 uses so no new Samba user is needed:
@@ -421,98 +430,90 @@ Sharing is invisible in a directory listing, so assert on the effect:
 
 ```bash
 stat -c '%h %n' /Storage/mast-provisioning/hosts/*/01-provisioning/mast-indexes/index-5202-00.fits
-du -sh --total /Storage/mast-vendor /Storage/mast-provisioning | tail -1
+du -sh /Storage/mast-provisioning
 ```
 
 Link counts above 1, and a total that has not grown by a payload. The run's own
 `RELAY_SYNC_OK` line carries `blobs_sent=`, which is the same fact per sync.
 
-`tools/relay-store.py gc` drops blobs no host tree references. It is manual; run
-it after retiring a unit, not on a schedule.
+`tools/blobstore.py gc` drops blobs no host tree or snapshot references. It is
+manual, and since nothing prunes snapshots yet, it frees nothing in practice. Run it
+with `--dry-run` first: it names each blob it would free, with its size, and frees none.
 
 ---
 
-## Step 4d - Vendor store mirror and cache verify (elevated, once)
+## Step 4d - Asset cache and blobstore checks (elevated, once)
 
-Five build inputs are not in this repo and cannot be re-downloaded easily -- the
-astrometry index seed, the PlateSolve3 catalog, the frozen cygwin package cache,
-the full-frame solve input, and the NoMachine licences. They are declared in
-`server/data/vendor-inputs.json`; the canonical copies live on `mast-ns-control`
-at `/Storage/mast-vendor/`, and this machine holds a working cache so a build
-never depends on the WAN.
+Every file a payload needs that the build does not author is a row in
+`server/data/assets.json`, and this machine holds all of them in the machine-wide
+asset cache, `C:\MAST\provider-assets`, so a build never depends on the WAN. The
+second copy is the relay's blobstore. Each kind of file gets there one way:
+
+| What | How it reaches the blobstore |
+| --- | --- |
+| A provider asset | The first payload sync that stages it sends the blob; the payload's snapshot holds it from then on. |
+| An OS baseline's updates | `python -m prov.os_updates ... snapshot`, right after the baseline is committed. |
+| The bootstrap payload | `python -m prov.bootstrap_payload ... snapshot`, after any of its files change. |
+| NoMachine seats | Not cached and not blobs: they are issued certificates, kept in `vault\` here and as `Licenses 2026/files.zip` under `/Storage/mast-share/Downloads/NoMachine/` on mast-ns-control. |
+
+So an asset added to the index is on this machine only until the first build that
+carries it. Sync that build the same day.
 
 **Direction is fixed and is not a preference.** `mast-ns-control -> labcomp2:22`
 times out: the site cannot initiate to the institute. A cron job on the Linux side
-is not an option, so both jobs run here and push.
+is not an option, so both jobs below run here.
 
-**The fetch is scheduled; the mirror is not.** Register it against the **canonical clone**, never
-a working copy:
+The fetch keeps the cache complete. Register it against the **canonical clone**,
+never a working copy:
 
 ```cmd
-schtasks /create /tn "MAST-asset-cache" /sc DAILY /st 06:00 ^
+schtasks /create /tn "MAST-asset-cache" /sc DAILY /st 06:00 /ru labcomp2 ^
   /tr "C:\cygwin64\bin\bash.exe -lc 'bash /cygdrive/c/Users/labcomp2/Desktop/MAST/MAST_provisioning/tools/fetch-assets.sh'"
 ```
 
-It replaced `MAST-vendor-verify`, which only reported. The fetch does strictly
-more with the same pass: it knows the expected digest **per path**, so it catches a
-file that is intact but is not the file that path should hold -- which a "does the
-store know this digest" check cannot -- and it repairs what it finds rather than
-leaving a log entry for someone to notice. Verification is still by checksum and
-never by re-transfer: at the measured 3.4-6 MB/s, re-pulling 13.87 GiB to compare
-it would take hours.
+It knows the expected digest **per path**, so it catches a file that is intact but
+is not the file that path should hold, and it repairs what it finds from the
+blobstore rather than leaving a log entry for someone to notice. Verification is by
+checksum and never by re-transfer: at the measured 3.4-6 MB/s, re-pulling 13.85 GiB
+to compare it would take hours.
 
-A second daily task checks the store itself:
+A second daily task checks the blobstore itself:
 
 ```cmd
-schtasks /create /tn "MAST-store-fsck" /sc DAILY /st 06:30 /ru labcomp2 ^
-  /tr "C:\cygwin64\bin\bash.exe -lc 'bash /cygdrive/c/Users/labcomp2/Desktop/MAST/MAST_provisioning/tools/store-fsck.sh'"
+schtasks /create /tn "MAST-blobstore-fsck" /sc DAILY /st 06:30 /ru labcomp2 ^
+  /tr "C:\cygwin64\bin\bash.exe -lc 'bash /cygdrive/c/Users/labcomp2/Desktop/MAST/MAST_provisioning/tools/blobstore-fsck.sh'"
 ```
 
-The fetch compares this machine's cache **against** the store; `store-fsck`
-re-hashes every blob **in** the store against its own filename. Without the second,
+The fetch compares this machine's cache **against** the blobstore; `blobstore-fsck`
+re-hashes every blob **in** the blobstore against its own filename. Without the second,
 the first is comparing against something nobody has checked -- and a rotted blob
 would make every other integrity check in the system agree with the rot. Measured
 2026-09-22: 581 blobs, 14 GB, **33 s**, which is why it can run daily. It writes
-`C:\MAST\logs\store-fsck.log`; exit **1** means corruption, **2** means the store
+`C:\MAST\logs\blobstore-fsck.log`; exit **1** means corruption, **2** means the blobstore
 could not be reached.
 
 A corrupt blob is reported and **not** deleted. Unlinking it would take out every
-hardlink into it across every host tree at once, and a bad byte is more
-recoverable than a missing file -- re-seed the affected blob instead.
+hardlink into it across every host tree and snapshot at once, and seeding a fresh
+copy would not help either: the copy gets a new inode while every tree keeps the
+rotted one. Repair it in place from a good copy -- the asset cache here, by the path
+`assets.json` gives that digest -- which fixes every tree that links it:
 
-**The mirror is deliberately NOT on a schedule**, and that is the whole point of
-which copy is canonical. It pushes this machine's cache *to* the store, so running
-it on a cadence means the cache overwrites the canonical copy every week -- and if
-a file has rotted here, that is the mechanism that propagates the rot to the good
-copy. This machine already holds a file named
-`MAST-15GB-indexes-5202+5203-corrupt.img`.
-
-Run it by hand, from the canonical clone, when you have deliberately added or
-changed a vendor input -- a re-harvested cygwin cache, a re-downloaded catalog, a
-newly issued NoMachine seat:
-
-```cmd
-C:\cygwin64\bin\bash.exe -lc "/cygdrive/c/Users/labcomp2/Desktop/MAST/MAST_provisioning/tools/vendor-mirror.sh"
+```bash
+tools/blobstore.py --root /Storage/mast-provisioning repair <sha256> <good copy>
 ```
 
-These inputs are frozen by design, so in practice that is rare: the cygwin cache is
-pinned, the index seed is a one-time extraction, the catalog is a vendor download,
-and `full-frame.fits` is a fixed frame. Licences are the one entry that grows, one
-seat per unit.
-
-**Not into `C:\agent-worktrees\`.** The first mirror ran from a task folder there,
-which the workspace contract tears down with `rm -rf`, and it was registered
+**Not into `C:\agent-worktrees\`.** A scheduled task once ran from a task folder
+there, which the workspace contract tears down with `rm -rf`, and it was registered
 `One Time Only` -- so it had run exactly once and had no next run. A scheduled task
 pointing into disposable scratch is one teardown away from silently not existing.
 
-The fetch writes `C:\MAST\logs\fetch-assets.log`, the mirror
-`C:\MAST\logs\vendor-mirror.log`. A clean fetch ends
+The fetch writes `C:\MAST\logs\fetch-assets.log`. A clean fetch ends
 `FETCH-ASSETS-COMPLETE status=0`.
 
-Register it with `-LogonType S4U` as `labcomp2`, which is what the working task
-uses: it runs without an interactive session and without storing a password, and
-as the user who owns the SSH key the script authenticates with. `SYSTEM` does not
-work -- the task exits 126, and it would be borrowing another user's key.
+Register both with `-LogonType S4U` as `labcomp2`: they run without an interactive
+session and without storing a password, and as the user who owns the SSH key the
+scripts authenticate with. `SYSTEM` does not work -- the task exits 126, and it
+would be borrowing another user's key.
 
 ## Step 5 - Firewall rules
 

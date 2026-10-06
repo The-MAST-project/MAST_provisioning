@@ -23,10 +23,6 @@ from prov import transport as T
 VENDOR_INPUTS = T.REPO_ROOT / "server" / "data" / "vendor-inputs.json"
 ASSETS = T.REPO_ROOT / "server" / "data" / "assets.json"
 BUILD_SCRIPTS = sorted((T.REPO_ROOT / "build").glob("*.ps1"))
-MIRROR = T.REPO_ROOT / "tools" / "vendor-mirror.sh"
-#: The delimited source list the mirror carries.
-SOURCES_BLOCK = re.compile(r"# MIRROR_SOURCES_BEGIN(.*?)# MIRROR_SOURCES_END", re.DOTALL)
-SOURCE_NAME = re.compile(r'^\s*"([^":]+):', re.MULTILINE)
 #: The machine-wide cache every asset is read from.
 ASSET_CACHE_ROOT = "C:\\MAST\\provider-assets"
 #: Any 'C:\MAST\...' string literal in the build scripts.
@@ -59,12 +55,11 @@ def test_a_cached_input_is_keyed_in_the_one_asset_namespace():
             assert entry.get("path"), f"{entry['name']}: an uncached input still needs a path"
             continue
         assert entry.get("files"), f"{entry['name']} is cached but declares no files"
-        # A store input is one directory and carries a prefix. The ex-LFS set
+        # A build-host input is one directory and carries a prefix. The ex-LFS set
         # frozen by #48 spans every module and the client media, so it has no
         # single root and declares each path in full instead.
         prefix = entry.get("prefix")
-        if entry.get("provenance", True):
-            assert prefix, f"{entry['name']} is a store input but declares no prefix"
+        if prefix:
             assert prefix.startswith("server/providers/"), f"{entry['name']}: {prefix}"
         for f in entry["files"]:
             if prefix:
@@ -132,42 +127,3 @@ def test_no_undeclared_build_host_path():
 def test_things_deliberately_excluded_say_why():
     for entry in load()["not_vendor_inputs"]:
         assert entry.get("reason"), f"{entry.get('path')} is excluded with no reason given"
-
-
-def test_the_mirror_carries_every_declared_input():
-    """The drift this catches has already happened once.
-
-    `nomachine-licenses` is declared here and was absent from the mirror script's
-    source list, so four of the five inputs were mirrored by the job and the fifth
-    reached mast-ns-control by hand. Nothing reported the gap -- the job exited 0
-    having done what it was told.
-    """
-    block = SOURCES_BLOCK.search(MIRROR.read_text(encoding="utf-8"))
-    assert block, "no MIRROR_SOURCES block in vendor-mirror.sh"
-    # Only the entries that have a directory in the store. The ex-LFS set frozen
-    # by #48 is already blobs there and is not a tree to rsync.
-    store = {e["name"] for e in load()["inputs"] if e.get("provenance", True)}
-    assert set(SOURCE_NAME.findall(block.group(1))) == store
-
-
-def test_the_mirror_reads_the_cache_slots_the_declaration_names():
-    # The mirror pushes the build host's only copy upstream. Pointed at a stale
-    # path it would skip the input and still exit 0, which is the failure above.
-    text = MIRROR.read_text(encoding="utf-8")
-    for entry in load()["inputs"]:
-        prefix = entry.get("prefix")
-        if not prefix:
-            continue
-        assert prefix.rstrip("/") in text, f"{entry['name']}: vendor-mirror.sh does not read {prefix}"
-
-
-def test_the_mirror_lives_in_the_repo():
-    """It ran from C:\\agent-worktrees\\... until 2026-09-17.
-
-    That is an agent task folder, which the workspace contract tears down with
-    `rm -rf`; the job was also registered One Time Only, so it had run once and had
-    no next run. A scheduled task pointing into disposable scratch is one teardown
-    from silently not existing.
-    """
-    assert MIRROR.is_file()
-    assert "agent-worktrees" not in MIRROR.read_text(encoding="utf-8")

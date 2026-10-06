@@ -1,0 +1,21 @@
+{
+  "_comment": [
+    "The bootstrap payload: every file an operator puts on the USB stick for a bare unit,",
+    "staged flat beside bootstrap.ps1, which finds them via $PSScriptRoot. One list, read",
+    "by prov.bootstrap_payload to stage it and to snapshot it on the relay as",
+    "bootstrap-payload/<hash>/. Each path is repo-relative and resolves from the repo,",
+    "else from the machine-wide asset cache, exactly as a provider asset does.",
+    "",
+    "vm/build-autounattend-iso.ps1 stages the same files for the dev VM, plus its VM-only",
+    "extras; a test keeps the two lists from drifting."
+  ],
+  "files": [
+    "client/bootstrap.cmd",
+    "client/bootstrap.ps1",
+    "client/mast-client-util.ps1",
+    "server/lib/mast-firmware.ps1",
+    "server/data/firmware-baseline.json",
+    "client/assets/npcap-1.88.exe",
+    "server/providers/openssh-server/assets/OpenSSH-Win64-v10.0.0.0.msi"
+  ]
+}

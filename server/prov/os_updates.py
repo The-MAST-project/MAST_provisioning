@@ -36,7 +36,7 @@ from typing import Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from prov import transport
+from prov import relay, transport
 
 MSRC_API = "https://api.msrc.microsoft.com/cvrf/v3.0"
 CATALOG = "https://www.catalog.update.microsoft.com"
@@ -344,9 +344,30 @@ def write_baseline(baseline: Baseline, out_dir: Path) -> Path:
     return dest
 
 
+def load_baseline(repo: Path, build: int, baseline_id: str) -> Baseline:
+    return Baseline.model_validate(transport.load_json_object(repo / BASELINES_DIR / str(build) / f"{baseline_id}.json"))
+
+
+def snapshot_files(baseline: Baseline, cache: Path) -> list[relay.SnapshotFile]:
+    """The baseline's files, each named by its own filename in the snapshot."""
+    files = []
+    for f in baseline.files:
+        source = cache / f.path
+        if not source.is_file():
+            raise OsUpdatesError(f"{f.filename} is not in the asset cache at {source}; propose fetches it")
+        files.append(relay.SnapshotFile(f.filename, f.sha256, f.size, source))
+    return files
+
+
 def _release(http: Http, release_id: str | None) -> MsrcRelease:
     updates = json.loads(http.get_text(f"{MSRC_API}/updates", {"Accept": "application/json"}))
     return release_by_id(updates, release_id) if release_id else latest_release(updates)
+
+
+def _cache_arg(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--cache", type=Path, required=True, help="the machine-wide asset cache, e.g. C:\\MAST\\provider-assets"
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -357,10 +378,15 @@ def main(argv: list[str] | None = None) -> int:
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("resolve", help="print what the baseline would contain; downloads nothing")
     prop = sub.add_parser("propose", help="fetch into the asset cache and write the baseline manifest")
-    prop.add_argument(
-        "--cache", type=Path, required=True, help="the machine-wide asset cache, e.g. C:\\MAST\\provider-assets"
-    )
+    _cache_arg(prop)
+    snap = sub.add_parser("snapshot", help="keep a committed baseline's files on the relay")
+    snap.add_argument("--baseline-id", required=True, help="e.g. 19044-2026-09")
+    _cache_arg(snap)
+    snap.add_argument("--site", default="ns", help="the staging host to keep it on (server/data/staging-hosts.json)")
     args = p.parse_args(argv)
+
+    if args.cmd == "snapshot":
+        return _snapshot(args)
 
     http = UrllibHttp()
     try:
@@ -379,6 +405,25 @@ def main(argv: list[str] | None = None) -> int:
         f"OS_BASELINE_PROPOSED id={baseline.baseline_id} target_ubr={baseline.target_ubr}"
         f" files={len(baseline.files)} -> {dest}"
     )
+    return 0
+
+
+def _snapshot(args: argparse.Namespace) -> int:
+    try:
+        site = relay.staging_host(args.repo / relay.STAGING_HOSTS, args.site)
+        baseline = load_baseline(args.repo, args.build, args.baseline_id)
+        files = snapshot_files(baseline, args.cache)
+    except (OsUpdatesError, relay.UnknownSiteError) as exc:
+        print(f"OS_BASELINE_ERROR {exc}", file=sys.stderr)
+        return 1
+    result = relay.sync_snapshot(
+        kind=relay.SnapshotKind.WINDOWS_OS_BASELINE, snapshot_id=baseline.baseline_id, files=files, relay=site
+    )
+    if not result.ok:
+        failure = f"OS_BASELINE_SNAPSHOT_FAILED id={baseline.baseline_id} rc={result.returncode} {result.detail}"
+        print(failure, file=sys.stderr)
+        return 1
+    print(f"OS_BASELINE_SNAPSHOT_OK id={baseline.baseline_id} {result.detail}")
     return 0
 
 

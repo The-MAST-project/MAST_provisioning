@@ -62,13 +62,13 @@
       "used_by": [],
       "why_not_in_repo": "Vendored binaries that git-LFS carried until MAST_provisioning#48 retired it. Frozen here because a digest derived from a pointer stops being derivable the moment the pointer is removed, and the index must not quietly lose 162 rows.",
       "origin": "Tracked in this repository via git-LFS. These digests are the ones the pointers recorded, frozen here when #48 retired LFS; until the untracking the pointers are still in the tree and each is checked against its row.",
-      "reacquire": "The content store on mast-ns-control holds every one of these digests. While the pointers remain, git lfs pull also restores them."
+      "reacquire": "The blobstore on mast-ns-control holds every one of these digests. While the pointers remain, git lfs pull also restores them."
     }
   ],
   "not_cached": [
     {
       "path": "C:\\MAST\\MAST-15GB-indexes-5202+5203.img",
-      "reason": "Superseded. The legacy index image the mast-indexes seed was extracted from once; the unit now builds its own sparse image from the seed. Kept only as the input to a re-extraction, and not worth 15 GB of mirror."
+      "reason": "Superseded as a build input: the unit builds its own sparse image from the mast-indexes seed. This machine mounts it read-write as its own D: for local astrometry testing, which is why its write time moves, and build/extract-index-seed.ps1 reads it to re-extract the seed. Not worth 15 GB in the blobstore."
     }
   ],
   "files": [
@@ -77,13 +77,6 @@
       "sha256": "a2f4ec1e5ea353ff67efd24b2ebf081ba44532410fae8d5e146af0310aa4f56b",
       "size": 1320424,
       "module": "client",
-      "source": "git-lfs"
-    },
-    {
-      "path": "server/providers/ascom/assets/AscomDeveloper662.4294.NewCertificate.exe",
-      "sha256": "17a4f9cb66ecbf8d5fa896fe8b7ea456b26b5b9cace5d4c046169d55785a13fe",
-      "size": 13863752,
-      "module": "ascom",
       "source": "git-lfs"
     },
     {

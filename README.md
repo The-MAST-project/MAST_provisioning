@@ -230,11 +230,25 @@ drifts from `sites/*.toml`. The shared enumerator is `Get-ConfiguredSites` in
 This is the only path operators run by hand. Everything else is autonomous.
 
 1. Install Windows IoT on the unit machine and complete OOBE.
-2. Copy `client/bootstrap.cmd`, `client/bootstrap.ps1` and
-   `client/mast-client-util.ps1` to the unit via USB thumb drive or a temporary network
-   share. All three files must be in the same folder. (In the VM workflow these files are
-   bundled on the autounattend ISO; for physical units that ISO is not present, so manual
-   copy is required.)
+2. Stage the **bootstrap payload** onto a USB stick, from the canonical clone on the
+   provisioning server:
+
+   ```cmd
+   cd server
+   python -m prov.bootstrap_payload --repo .. --cache C:\MAST\provider-assets stage --out E:\
+   ```
+
+   The payload is the seven files `client/bootstrap-payload.json` lists, staged flat:
+   `bootstrap.cmd`, `bootstrap.ps1`, `mast-client-util.ps1`, the BIOS power-policy reader
+   and its baseline, and the Npcap and OpenSSH installers. The command prints the payload's
+   hash. After changing any of those files, keep the new version on the relay as well, so
+   it can be staged again once its installers have left the repo:
+
+   ```cmd
+   python -m prov.bootstrap_payload --repo .. --cache C:\MAST\provider-assets snapshot
+   ```
+
+   (In the VM workflow the same files are bundled on the autounattend ISO.)
 3. On the unit, open an **elevated Command Prompt** (Run as administrator) and run:
 
    ```cmd
@@ -651,6 +665,8 @@ python -m prov.os_updates --repo .. --build 19044 resolve
 python -m prov.os_updates --repo .. --build 19044 --release 2026-Sep resolve
 # Fetch into the machine-wide asset cache and write the baseline manifest.
 python -m prov.os_updates --repo .. --build 19044 propose --cache 'C:\MAST\provider-assets'
+# Once the manifest is committed: keep its files on the relay for good.
+python -m prov.os_updates --repo .. --build 19044 snapshot --baseline-id 19044-2026-09 --cache 'C:\MAST\provider-assets'
 ```
 
 - **Which KB** comes from the MSRC CVRF feed, per the product names declared in
@@ -665,6 +681,11 @@ python -m prov.os_updates --repo .. --build 19044 propose --cache 'C:\MAST\provi
 - **The Catalog drops superseded updates** -- the fleet's June 2024 LCU (KB5039211) no longer
   resolves, and `resolve` / `propose` say so (`OS_BASELINE_ERROR the Update Catalog no longer
   serves KB5039211`). A baseline's bytes must therefore be kept by us.
+- **`snapshot`** is how they are kept: it hashes each file in the cache against the committed
+  manifest, sends the relay only the blobs its blobstore lacks, and records them as
+  `windows-os-baseline/<id>/` there. A snapshot is never rewritten under its id, and its
+  files outlive any payload, so `gc` cannot take them. Run it right after committing a
+  baseline: until then the asset cache on this machine is the only copy.
 
 Only 19044 (Windows 10 IoT Enterprise LTSC 2021, every production unit) is declared. To add
 a build, add a row to `os-builds.json` with the MSRC product names and the Catalog titles,
@@ -924,17 +945,27 @@ the orchestrator builds locally, rsyncs the payload there, and hands the unit th
 host's address and share instead of its own. A site with no entry keeps pulling
 from the orchestrator, which is what the bench and the dev VM want.
 
-It is cheap because the staging host keeps a **content-addressed store** and a
-host's payload is a tree of hardlinks into it. `build-mast.ps1` writes
+It is cheap because the staging host keeps a **blobstore** -- every distinct file
+once, named by its SHA-256 -- and a host's payload is a tree of hardlinks into it. `build-mast.ps1` writes
 `payload-manifest.json` beside the staging root — every staged path with its size
-and SHA-256 — and [`tools/relay-store.py`](tools/relay-store.py), run on the relay
-over ssh, answers which digests the store lacks (`want`), takes delivery of just
+and SHA-256 — and [`tools/blobstore.py`](tools/blobstore.py), run on the relay
+over ssh, answers which digests the blobstore lacks (`want`), takes delivery of just
 those, and builds the host tree from links (`assemble`):
 
 ```
-store/<aa>/<sha256>              one copy of each distinct blob
-hosts/<host>/01-provisioning/    hardlinks into store; what SMB serves
+blobstore/<aa>/<sha256>          one copy of each distinct blob
+hosts/<host>/01-provisioning/    hardlinks into blobstore; what SMB serves
+provisioning-payload/<hash>/     every payload ever assembled, one snapshot each
+bootstrap-payload/<hash>/        every bootstrap payload
+windows-os-baseline/<id>/        every committed OS patch baseline
 ```
+
+The blobstore only stores; it does not say what to keep. The snapshots do: each is
+a payload or baseline that was shipped or may be shipped again, written once and never rewritten
+under its id, and a blob lives while any tree names it. Assembling a host's tree
+also snapshots its payload, so every version a unit has run stays restorable. The
+snapshot leaves out `build-manifest.json`, which records when and for which host a
+payload was built and is not part of what `payload_hash` names.
 
 Two builds share exactly the bytes they share, with no notion of a previous
 version — which matters once units sit on deliberately different stacks, where
@@ -942,7 +973,8 @@ version — which matters once units sit on deliberately different stacks, where
 would degrade silently. Measured on mast07: a build that cost 1,959,264,676 bytes
 under `--link-dest` synced in **5.5 s with one blob, 41,800 bytes**.
 
-`relay-store.py gc` drops blobs no host tree references; it is run by hand.
+`blobstore.py gc` drops blobs no host tree or snapshot references; it is run by hand.
+Nothing prunes snapshots yet, so in practice it frees nothing.
 Setup and the transport gotchas are in
 [docs/provisioning-server-setup.md](docs/provisioning-server-setup.md) Step 4c.
 
@@ -964,7 +996,7 @@ one, why it cannot be tracked here, where it came from, and how to re-acquire it
 | `C:\MAST\full-frame.fits` | 90 MB | `astrometry`, `mast-validation` |
 | `vault\nomachine-licenses` | 8 KB | `nomachine` |
 
-Everything else a payload carries **is** tracked here (162 files in git-LFS, 58
+Everything else a payload carries **is** tracked here (161 files in git-LFS, 58
 provider assets), which is why this list is short.
 
 `C:\MAST\` on the build host also holds regenerable images and scratch. The
@@ -974,10 +1006,12 @@ listed in the same file under `not_vendor_inputs` with a reason.
 `build/*.ps1` appears in neither list — a new vendored input cannot become
 load-bearing without being written down.
 
-Canonical copies live on `mast-ns-control` at `/Storage/mast-vendor/`; the build
-host holds a working cache, so a build never depends on the WAN. Manifests,
-provenance records and the cache-verify job are
-[#194](https://github.com/The-MAST-project/MAST_provisioning/issues/194).
+The build host holds every one of them in its asset cache, so a build never depends
+on the WAN, and the relay's blobstore holds the second copy, kept there by the
+payload snapshots that carry them. Where each input came from and how to get it
+again is recorded in `vendor-inputs.json` itself. The daily cache fetch and the
+blobstore check are in
+[docs/provisioning-server-setup.md](docs/provisioning-server-setup.md) Step 4d.
 
 ## Secrets / vault
 

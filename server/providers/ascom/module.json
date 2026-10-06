@@ -1,7 +1,7 @@
 ﻿{
   "name": "ascom",
   "version": "7.0-RC4",
-  "description": "Install ASCOM Platform 7.0 RC4 and ASCOM Developer tools, enabling .NET 3.5 if needed. Pinned to mastw/mast00.",
+  "description": "Install ASCOM Platform 7.0 RC4, enabling .NET 3.5 if needed. Pinned to mastw/mast00.",
   "order": 800,
   "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-ascom.ps1\" -AssetsRoot \".\"",
   "commandfiles": [

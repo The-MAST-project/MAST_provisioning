@@ -25,18 +25,17 @@ that checked out as text while ``git lfs pull`` exited 0 and nothing noticed.
 
 from __future__ import annotations
 
-import hashlib
 import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from prov import hashing
+
 #: A file still holding its pointer has never been smudged.
 LFS_POINTER_PREFIX = b"version https://git-lfs"
 _OID = re.compile(rb"^oid sha256:([0-9a-f]{64})$", re.MULTILINE)
 _SIZE = re.compile(rb"^size (\d+)$", re.MULTILINE)
-#: Reading a large asset to hash it, without holding it all in memory.
-_CHUNK = 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -82,14 +81,6 @@ def _lfs_tracked(repo: Path) -> set[str]:
     except (subprocess.CalledProcessError, FileNotFoundError):
         return set()
     return {line for line in out.decode("utf-8", "surrogateescape").splitlines() if line}
-
-
-def _sha256(path: Path) -> str:
-    h = hashlib.sha256()
-    with path.open("rb") as fh:
-        while chunk := fh.read(_CHUNK):
-            h.update(chunk)
-    return h.hexdigest()
 
 
 def _check_ordinary(repo: Path, paths: list[str], blobs: dict[str, str]) -> list[Divergence]:
@@ -170,7 +161,7 @@ def _check_lfs(repo: Path, paths: list[str], *, thorough: bool) -> list[Divergen
             diverged.append(Divergence(path, "lfs-size", f"{actual_size} bytes on disk, pointer says {want_size}"))
             continue
         if thorough:
-            actual = _sha256(full)
+            actual = hashing.sha256_of(full)
             if actual != want_oid:
                 diverged.append(Divergence(path, "lfs-content", f"sha256 {actual[:12]}, pointer says {want_oid[:12]}"))
     return diverged

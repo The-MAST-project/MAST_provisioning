@@ -11,9 +11,9 @@ the relay exactly as it pulled from the orchestrator before. Only the address an
 share name it is handed change -- the pull script, the per-module exclusions
 (#195) and the destination verification (#189) are untouched.
 
-**Why the WAN cost is small.** The relay keeps a content-addressed store and a
-host's payload is a tree of hardlinks into it (#202, ``tools/relay-store.py``).
-The build writes a per-file manifest; this module asks the store which digests it
+**Why the WAN cost is small.** The relay keeps a blobstore and a host's payload
+is a tree of hardlinks into it (#202, ``tools/blobstore.py``).
+The build writes a per-file manifest; this module asks the blobstore which digests it
 lacks, sends only those, and has the tree assembled from links. Two builds share
 exactly the bytes they share, with no notion of a predecessor to be wrong about.
 Measured on mast07: 5.5 s and one 41,800-byte blob for a 14,877,440,807-byte
@@ -45,7 +45,10 @@ import subprocess
 import tempfile
 from collections.abc import Sequence
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
+
+from prov import hashing
 
 # Two path vocabularies are in play and they are not interchangeable.
 #
@@ -62,6 +65,22 @@ CYGWIN_SSH = "/usr/bin/ssh"
 DEFAULT_IDENTITY = "/cygdrive/c/Users/labcomp2/.ssh/id_ed25519"
 #: Directory entries the relay serves; the share points here, not at the root.
 HOSTS_SUBDIR = "hosts"
+#: The declared staging hosts, repo-relative.
+STAGING_HOSTS = Path("server/data/staging-hosts.json")
+
+
+class SnapshotKind(StrEnum):
+    """The snapshot kinds tools/blobstore.py accepts. That script runs on the relay
+    and cannot import this package, so the set lives in both and a test holds them
+    equal."""
+
+    PROVISIONING_PAYLOAD = "provisioning-payload"
+    BOOTSTRAP_PAYLOAD = "bootstrap-payload"
+    WINDOWS_OS_BASELINE = "windows-os-baseline"
+
+
+class UnknownSiteError(ValueError):
+    """No staging host is declared for the site asked for."""
 
 
 @dataclass(frozen=True)
@@ -104,6 +123,16 @@ def load_staging_hosts(path: Path) -> dict[str, StagingHost]:
     return out
 
 
+def staging_host(path: Path, site: str) -> StagingHost:
+    """The staging host declared for ``site``, or an error naming the file and the
+    sites it does declare -- not a bare KeyError."""
+    hosts = load_staging_hosts(path)
+    if site not in hosts:
+        declared = ", ".join(sorted(hosts)) or "none"
+        raise UnknownSiteError(f"no staging host for site '{site}' in {path} (declared: {declared})")
+    return hosts[site]
+
+
 def cygwin_path(windows_path: str | Path) -> str:
     """``C:\\MAST\\x`` -> ``/cygdrive/c/MAST/x``, for cygwin rsync's arguments."""
     text = str(windows_path).replace("\\", "/")
@@ -129,7 +158,7 @@ class SyncResult:
     detail: str
 
 
-# --- content-addressed store (#202) -----------------------------------------
+# --- blobstore (#202) -------------------------------------------------------
 #
 # Replaces the --link-dest passes. Those deduped against a tree we guessed was
 # similar, which meant the previous payload -- a linear-history assumption that
@@ -143,7 +172,7 @@ class SyncResult:
 
 #: Where the relay-side script lands. Shipped every run like the pull script, so
 #: the relay cannot be running an older copy than the driver expects.
-RELAY_STORE_REMOTE = "/tmp/mast-relay-store.py"
+RELAY_STORE_REMOTE = "/tmp/mast-blobstore.py"
 
 
 def _ssh_argv(relay: StagingHost, identity: str, remote_cmd: str) -> list[str]:
@@ -175,8 +204,77 @@ def sync_payload(
     entries = manifest.get("files")
     if not isinstance(entries, list) or not entries:
         return SyncResult(False, -1, f"{manifest_path}: no file list to assemble from")
+    staging = Path(staging_dir)
+    sources = {e["sha256"]: staging / e["path"] for e in entries}
+    return _sync(
+        manifest=manifest,
+        sources=sources,
+        final=("assemble", "--host", host),
+        relay=relay,
+        identity=identity,
+        timeout_s=timeout_s,
+        runner=runner,
+        script_path=script_path,
+    )
 
-    script = Path(script_path) if script_path else Path(__file__).resolve().parents[2] / "tools" / "relay-store.py"
+
+@dataclass(frozen=True)
+class SnapshotFile:
+    """One file of a snapshot: where it sits in the tree, what it must hash to, and
+    where its bytes are on this machine."""
+
+    path: str
+    sha256: str
+    size: int
+    source: Path
+
+
+def sync_snapshot(
+    *,
+    kind: SnapshotKind,
+    snapshot_id: str,
+    files: Sequence[SnapshotFile],
+    relay: StagingHost,
+    identity: str = DEFAULT_IDENTITY,
+    timeout_s: int = 7200,
+    runner=subprocess.run,
+    script_path: str | Path | None = None,
+) -> SyncResult:
+    """Record a payload or baseline as a snapshot on the relay, sending only the blobs it lacks.
+
+    Unlike a payload, a snapshot's sources were not just built: they come out of
+    a cache, so each is hashed before anything is sent. A blob uploaded under a
+    digest it does not have would be served to every tree that links that digest.
+    """
+    for f in files:
+        actual = hashing.sha256_of(f.source) if f.source.is_file() else "absent"
+        if actual != f.sha256:
+            return SyncResult(False, -1, f"{f.path}: {f.source} is {actual}, not {f.sha256}")
+    manifest = {"files": [{"path": f.path, "size": f.size, "sha256": f.sha256} for f in files]}
+    return _sync(
+        manifest=manifest,
+        sources={f.sha256: f.source for f in files},
+        final=("snapshot", "--kind", kind, "--id", snapshot_id),
+        relay=relay,
+        identity=identity,
+        timeout_s=timeout_s,
+        runner=runner,
+        script_path=script_path,
+    )
+
+
+def _sync(
+    *,
+    manifest: dict,
+    sources: dict[str, Path],
+    final: tuple[str, ...],
+    relay: StagingHost,
+    identity: str,
+    timeout_s: int,
+    runner,
+    script_path: str | Path | None,
+) -> SyncResult:
+    script = Path(script_path) if script_path else Path(__file__).resolve().parents[2] / "tools" / "blobstore.py"
     sent = runner(
         _ssh_argv(relay, identity, f"cat > {RELAY_STORE_REMOTE}"),
         input=script.read_text(encoding="utf-8"),
@@ -186,7 +284,7 @@ def sync_payload(
         check=False,
     )
     if sent.returncode != 0:
-        return SyncResult(False, sent.returncode, f"shipping relay-store.py: {(sent.stderr or '').strip()[:300]}")
+        return SyncResult(False, sent.returncode, f"shipping blobstore.py: {(sent.stderr or '').strip()[:300]}")
 
     payload = json.dumps(manifest)
     want = runner(
@@ -204,8 +302,7 @@ def sync_payload(
     if missing:
         staged = upload_blobs(
             missing=missing,
-            entries=entries,
-            staging_dir=staging_dir,
+            sources=sources,
             relay=relay,
             identity=identity,
             timeout_s=timeout_s,
@@ -215,7 +312,7 @@ def sync_payload(
             return staged
 
     done = runner(
-        _ssh_argv(relay, identity, _store_cmd(relay, "assemble", "--host", host)),
+        _ssh_argv(relay, identity, _store_cmd(relay, *final)),
         input=payload,
         capture_output=True,
         text=True,
@@ -223,15 +320,14 @@ def sync_payload(
         check=False,
     )
     if done.returncode != 0:
-        return SyncResult(False, done.returncode, f"assemble: {(done.stderr or '').strip()[:300]}")
+        return SyncResult(False, done.returncode, f"{final[0]}: {(done.stderr or '').strip()[:300]}")
     return SyncResult(True, 0, f"blobs_sent={len(missing)} {done.stdout.strip()}")
 
 
 def upload_blobs(
     *,
     missing: set[str],
-    entries: Sequence[dict],
-    staging_dir: str | Path,
+    sources: dict[str, Path],
     relay: StagingHost,
     identity: str = DEFAULT_IDENTITY,
     timeout_s: int = 7200,
@@ -241,20 +337,18 @@ def upload_blobs(
 
     Built as a hardlink farm in a temp directory rather than a copy: the staging
     tree is on the same volume, so naming 2 GB by hash costs directory entries.
-    The farm mirrors the store's own sharding so rsync can write straight into
+    The farm mirrors the blobstore's own sharding so rsync can write straight into
     it without an ingest step.
     """
-    by_hash = {e["sha256"]: e["path"] for e in entries if e["sha256"] in missing}
+    by_hash = {digest: src for digest, src in sources.items() if digest in missing}
     if len(by_hash) != len(missing):
         return SyncResult(False, -1, "manifest does not name every missing hash")
 
-    staging = Path(staging_dir)
     with tempfile.TemporaryDirectory(prefix="mast-blobs-") as tmp:
         farm = Path(tmp)
-        for digest, rel in by_hash.items():
+        for digest, src in by_hash.items():
             shard = farm / digest[:2]
             shard.mkdir(exist_ok=True)
-            src = staging / rel
             try:
                 os.link(src, shard / digest)
             except OSError:
@@ -271,7 +365,7 @@ def upload_blobs(
             "-e",
             ssh_spec(identity),
             cygwin_path(farm).rstrip("/") + "/",
-            f"{relay.ssh_target}:{relay.root}/store/",
+            f"{relay.ssh_target}:{relay.root}/blobstore/",
         ]
         done = runner(argv, capture_output=True, text=True, timeout=timeout_s, check=False)
     if done.returncode != 0:

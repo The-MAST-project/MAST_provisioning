@@ -35,7 +35,6 @@ DECLARED = {
         {
             "name": "big-catalog",
             "cached": True,
-            "kind": "directory",
             "prefix": "server/providers/planewave/assets/catalog/",
             "used_by": ["planewave"],
             "why_not_in_repo": "2 GB vendor download.",
@@ -49,11 +48,10 @@ DECLARED = {
             "name": "frozen",
             "cached": True,
             # No prefix: the frozen set spans every module and the client media.
-            "provenance": False,
             "used_by": [],
             "why_not_in_repo": "Carried by git-LFS until it was retired.",
             "origin": "This repository's history.",
-            "reacquire": "The content store.",
+            "reacquire": "The blobstore.",
             "files": [
                 {"path": "server/providers/chrome/assets/chrome.msi", "sha256": "c" * 64, "size": 4096},
                 {"path": "client/assets/npcap.exe", "sha256": "d" * 64, "size": 99},
@@ -62,7 +60,6 @@ DECLARED = {
         {
             "name": "secrets",
             "cached": False,
-            "kind": "directory",
             "path": "vault\\secrets",
             "used_by": ["nomachine"],
             "why_not_in_repo": "Issued certificates.",
@@ -216,7 +213,7 @@ def tracked_pointer_paths() -> set[str]:
 
 def committed_lfs_rows() -> dict[str, dict]:
     """The frozen ex-LFS rows. The build-host rows have no pointer to check
-    against -- their digests came from the content store, by inode."""
+    against -- their digests came from the blobstore, by inode."""
     return {f["path"]: f for f in json.loads(COMMITTED.read_text())["files"] if f["source"] == "git-lfs"}
 
 

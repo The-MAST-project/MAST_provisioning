@@ -217,3 +217,26 @@ def test_a_rereleased_kb_does_not_overwrite_the_baseline(tmp_path: Path):
     changed = [baseline.files[0].model_copy(update={"sha256": "0" * 64}), *baseline.files[1:]]
     with pytest.raises(OsUpdatesError, match="already exists with different files"):
         os_updates.write_baseline(baseline.model_copy(update={"files": changed}), tmp_path / "baselines")
+
+
+def test_snapshot_files_name_each_update_by_its_filename(tmp_path: Path):
+    cache = tmp_path / "cache"
+    baseline = os_updates.propose(MatchingDigestHttp(), declared_19044(), SEP, cache, datetime.now(UTC))
+    files = os_updates.snapshot_files(baseline, cache)
+    assert [f.path for f in files] == [f.filename for f in baseline.files]
+    assert [f.sha256 for f in files] == [f.sha256 for f in baseline.files]
+    assert all(f.source == cache / b.path for f, b in zip(files, baseline.files, strict=True))
+
+
+def test_snapshot_files_refuse_an_update_missing_from_the_cache(tmp_path: Path):
+    cache = tmp_path / "cache"
+    baseline = os_updates.propose(MatchingDigestHttp(), declared_19044(), SEP, cache, datetime.now(UTC))
+    (cache / baseline.files[0].path).unlink()
+    with pytest.raises(OsUpdatesError, match=baseline.files[0].filename):
+        os_updates.snapshot_files(baseline, cache)
+
+
+def test_snapshot_to_an_undeclared_site_is_an_error_line_not_a_traceback(tmp_path: Path, capsys):
+    argv = ["--repo", str(tmp_path), "--build", "19044", "snapshot", "--baseline-id", "x", "--cache", str(tmp_path)]
+    assert os_updates.main([*argv, "--site", "nowhere"]) == 1
+    assert "OS_BASELINE_ERROR" in capsys.readouterr().err

@@ -1,12 +1,12 @@
 #!/bin/bash
-# Populate the machine-wide asset cache from the content store.
+# Populate the machine-wide asset cache from the relay's blobstore.
 #
 # ONE cache for everything a payload needs that the build does not author: the
 # binaries leaving git-LFS and the build-host inputs that were never in git, which
 # used to sit in four separate C:\MAST\ directories with their own index, their own
 # mirror job and their own verify (MAST_provisioning#48). server/data/assets.json
 # is the index, keyed by the repo-relative path each file would have if it were
-# tracked, and the store on the relay already holds every one of those digests.
+# tracked, and the blobstore on the relay already holds every one of those digests.
 #
 # Idempotent by construction: a file that already hashes to the manifest's sha256
 # is skipped, so this is equally the first-run fetch, the repair path, and the
@@ -24,7 +24,12 @@ CACHE="${MAST_ASSET_CACHE:-/cygdrive/c/MAST/provider-assets}"
 MANIFEST="${ASSET_MANIFEST:-${REPO_TOP}/server/data/assets.json}"
 PYTHON="${MAST_PYTHON:-/cygdrive/c/Program Files/Python312/python.exe}"
 SSH_KEY="${VENDOR_MIRROR_KEY:-/cygdrive/c/Users/labcomp2/.ssh/id_ed25519}"
-# Cygwin ssh, for the reason vendor-mirror.sh documents.
+# CYGWIN ssh, not Windows OpenSSH. Under Task Scheduler (a non-console session)
+# cygwin tools cannot hand their pipes to a native Windows child: ssh authenticates
+# fine on its own, then the transfer dies with "connection unexpectedly closed (0
+# bytes received)". Interactively the identical command works, which is what makes
+# it expensive to diagnose. -i is explicit and UserKnownHostsFile is /dev/null
+# because cygwin ssh takes its home from /etc/passwd (/home/<user>), absent here.
 SSH="/usr/bin/ssh -i $SSH_KEY -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ServerAliveInterval=30 -o ServerAliveCountMax=10"
 
 LOG="${FETCH_ASSETS_LOG:-/cygdrive/c/MAST/logs/fetch-assets.log}"
@@ -72,7 +77,7 @@ fi
 
 # 2) One ssh, one tar stream. 418 separate transfers would spend minutes on
 #    handshakes alone, and the link is the slow part already.
-cut -f1 "$WORK/need.tsv" | sed 's|^\(..\)|store/\1/&|' > "$WORK/blobs.txt"
+cut -f1 "$WORK/need.tsv" | sed 's|^\(..\)|blobstore/\1/&|' > "$WORK/blobs.txt"
 if ! $SSH "$DEST" "tar -cf - -C '$STORE_ROOT' -T -" < "$WORK/blobs.txt" | tar -xf - -C "$WORK"; then
     say "FETCH_ASSETS_ERROR blob transfer failed"
     echo "FETCH-ASSETS-COMPLETE status=2"
@@ -83,9 +88,9 @@ fi
 #    that arrives wrong must not be installed under a name that claims it is right.
 fetched=0; bad=0
 while IFS=$'\t' read -r sha path size; do
-    blob="$WORK/store/${sha:0:2}/$sha"
+    blob="$WORK/blobstore/${sha:0:2}/$sha"
     dest="$CACHE/$path"
-    if [ ! -f "$blob" ]; then say "  MISSING from store: $path ($sha)"; bad=$((bad+1)); continue; fi
+    if [ ! -f "$blob" ]; then say "  MISSING from blobstore: $path ($sha)"; bad=$((bad+1)); continue; fi
     actual=$(sha256sum "$blob" | cut -d' ' -f1)
     if [ "$actual" != "$sha" ]; then say "  CORRUPT in transit: $path"; bad=$((bad+1)); continue; fi
     mkdir -p "$(dirname "$dest")"
