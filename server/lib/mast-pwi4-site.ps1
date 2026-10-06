@@ -104,9 +104,7 @@ function Format-MastSite {
 function Set-MastPwi4CfgField {
     # Overwrite "<Field> = <value>" in an aligned PWI4 .cfg, keeping the key and its
     # padding so the file stays aligned. Appends the key if it is absent. PWI4 cfgs are
-    # ASCII. Same logic as Set-CfgField in provide-instrument-profiles.ps1, which keeps its
-    # own copy: editing that provider changes its hash, and re-running it on a deployed unit
-    # re-copies every template .cfg over the live ones at the next logon.
+    # ASCII. provide-instrument-profiles.ps1 has its own copy of this as Set-CfgField.
     param(
         [Parameter(Mandatory)][string]${Path},
         [Parameter(Mandatory)][string]${Field},

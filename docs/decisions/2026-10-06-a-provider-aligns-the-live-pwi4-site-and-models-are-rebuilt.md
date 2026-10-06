@@ -26,10 +26,10 @@ areas:
 
 - *Refuse to write when a model would be orphaned* (#209's first suggestion). With every model being rebuilt anyway, a refusal would only stop the alignment it exists to protect.
 - *Write the model's site into `PWI4.cfg` instead.* It keeps a model loading, but leaves PWI4 disagreeing with `config.toml` and the DB, which is the inconsistency being removed.
-- *Move `Set-CfgField` out of `provide-instrument-profiles.ps1` into the shared lib.* Editing `instrument-profiles` changes its hash and re-runs it fleet-wide. Its provide deletes `C:\ProgramData\MAST\instrument-profiles`, including the `.applied` sentinel, so the next `mast` logon re-copies every template `.cfg` over the live ones and re-imports the PHD2 profiles. `Set-MastPwi4CfgField` is therefore a deliberate copy until that re-run is made safe.
+- *Move `Set-CfgField` out of `provide-instrument-profiles.ps1` into the shared lib, in this change.* At the time, editing `instrument-profiles` re-ran it fleet-wide, and a re-run deleted its `.applied` sentinel so the next `mast` logon re-copied every template `.cfg` over the live ones. That is fixed by `2026-10-06-re-running-instrument-profiles-never-overwrites-live-profiles` (#239), so the copy can now be folded in; `Set-MastPwi4CfgField` stays a copy until it is.
 - *Check PWI4's site from the unit service at startup.* Filed for later as MAST_unit#296; it touches unit startup, which waits for the supervisor's unit-side work.
 
 **Unsettled:**
 
-- **The `instrument-profiles` re-run.** Any run that re-runs `instrument-profiles` on a deployed unit still resets its live cfgs and PHD2 profiles at the next logon. That has to be fixed before the planned full provisioning run across the fleet.
+- **The `instrument-profiles` re-run** that reset live profiles is fixed by #239, a prerequisite for the full provisioning run that delivers this provider.
 - **PWI4's own tolerance** for a model whose site differs slightly is unknown. It does not matter while every model is rebuilt at the aligned site.
