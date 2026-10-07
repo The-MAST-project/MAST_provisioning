@@ -302,8 +302,9 @@ class Driver:
         if self.exit_code == EXIT_FATAL:
             return EXIT_FATAL
 
-        if self.cfg.only_hosts:
-            units = [u for u in units if u.hostname in self.cfg.only_hosts]
+        units, skipped = registry.select_units(units, self.cfg.only_hosts)
+        for unit in skipped:
+            self.log.event("UNIT_EXCLUDED", unit=unit.hostname, reason=unit.excluded)
         self.log.event("RUN_PLAN", units=",".join(u.hostname for u in units), dry_run=self.cfg.dry_run, force=self.cfg.force)
 
         for unit in units:

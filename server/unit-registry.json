@@ -13,6 +13,7 @@
   {
     "hostname": "mast00",
     "site": "ns",
+    "excluded": "development unit; never production-provisioned, and its PWI4 carries its own site and model",
     "timezone": "Asia/Jerusalem",
     "maintenance_window": {
       "start_hour": 0,
@@ -32,6 +33,7 @@
   {
     "hostname": "mastw",
     "site": "wis",
+    "excluded": "Weizmann site unit; no config.toml, and it cannot reach the provisioning server's staging share",
     "timezone": "Asia/Jerusalem",
     "maintenance_window": {
       "start_hour": 0,

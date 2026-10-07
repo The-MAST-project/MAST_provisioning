@@ -126,3 +126,44 @@ def test_assignment_is_validated():
     entry = R.UnitEntry(hostname="mast01", site="ns")
     with pytest.raises(ValidationError):
         entry.mac = 42  # pyright: ignore[reportAttributeAccessIssue]
+
+
+# --- excluded units ------------------------------------------------------------------------
+
+
+def _units(*entries: dict) -> list[R.UnitEntry]:
+    return [R.UnitEntry.model_validate(e) for e in entries]
+
+
+_FLEET = (
+    {"hostname": "mast01", "site": "ns"},
+    {"hostname": "mast00", "site": "ns", "excluded": "development unit"},
+    {"hostname": "mastw", "site": "wis", "excluded": "Weizmann bench unit"},
+)
+
+
+def test_a_default_run_leaves_out_excluded_units():
+    selected, skipped = R.select_units(_units(*_FLEET), only_hosts=[])
+    assert [u.hostname for u in selected] == ["mast01"]
+    assert [u.hostname for u in skipped] == ["mast00", "mastw"]
+
+
+def test_naming_an_excluded_unit_runs_it():
+    selected, skipped = R.select_units(_units(*_FLEET), only_hosts=["mast00"])
+    assert [u.hostname for u in selected] == ["mast00"]
+    assert skipped == []
+
+
+def test_a_host_filter_still_selects_only_what_it_names():
+    selected, _ = R.select_units(_units(*_FLEET), only_hosts=["mast01", "mastw"])
+    assert [u.hostname for u in selected] == ["mast01", "mastw"]
+
+
+def test_an_exclusion_must_give_a_reason():
+    with pytest.raises(ValidationError):
+        R.UnitEntry.model_validate({"hostname": "mast00", "site": "ns", "excluded": "  "})
+
+
+def test_the_registry_excludes_mast00_and_mastw():
+    units = R.load_unit_registry(T.REPO_ROOT / "server" / "unit-registry.json")
+    assert sorted(u.hostname for u in units if u.excluded) == ["mast00", "mastw"]
