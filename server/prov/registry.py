@@ -77,6 +77,21 @@ class UnitEntry(BaseModel):
     #: Omitted means "every provider discovered under server/providers"; a list
     #: deliberately restricts this unit to a subset.
     modules: list[str] | None = None
+    #: Why this unit is left out of a run that does not name it (`--only-hosts`).
+    #: A reason rather than a flag, so the registry says why; naming the unit still
+    #: runs it, for the deliberate one-off.
+    excluded: Identifier | None = None
+
+
+def select_units(units: list[UnitEntry], only_hosts: list[str]) -> tuple[list[UnitEntry], list[UnitEntry]]:
+    """The units a run provisions, and the excluded ones it leaves out.
+
+    With ``only_hosts`` the run is exactly the units it names, excluded or not. Without
+    it, every unit but the excluded ones.
+    """
+    if only_hosts:
+        return [u for u in units if u.hostname in only_hosts], []
+    return [u for u in units if not u.excluded], [u for u in units if u.excluded]
 
 
 def load_unit_registry(path: Path) -> list[UnitEntry]:

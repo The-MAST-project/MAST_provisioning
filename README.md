@@ -449,6 +449,11 @@ compares the payload hash to the unit's installed manifest, and provisions any
 unit whose hash has changed. Results are written to
 `C:\MAST\logs\prov\activity.csv`.
 
+A registry entry with an `"excluded": "<reason>"` key is left out of any run that
+does not name it: the log records `UNIT_EXCLUDED` with the reason. Naming the unit in
+`--only-hosts` still runs it. mast00 (the development unit) and mastw (the Weizmann
+site unit) are excluded this way.
+
 ---
 
 ## Fleet drift report (cross-unit version read)

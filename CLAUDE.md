@@ -325,6 +325,7 @@ MAST_common's config layer — not a dict, and not a TypedDict.
 | `UnitEntry` | One registry entry. **Annotate anything taking one `registry.UnitEntry`**, never `dict`, and reach fields by attribute (`unit.hostname`). |
 | `MaintenanceWindow` | A unit's provisioning hours. Both bounds are required, so no caller handles a half-specified window. |
 | `load_unit_registry(path)` | The validating read. Raises `TypeError` naming the file, like the JSON readers in `transport`. |
+| `select_units(units, only_hosts)` | The units a run provisions, and the excluded ones it leaves out. **The only place the driver decides which units run**: with `--only-hosts` exactly the named ones, excluded or not; without it, all but the `excluded` entries. |
 | `dump_unit_registry(entries)` | JSON-ready dicts for writing the file back. **Always write through this** — it preserves `_comment` and omits absent keys rather than stamping `null` over a hand-edited file. |
 
 Both models are **closed** (`extra="forbid"`): every key the file may carry is
@@ -565,7 +566,9 @@ stopping only because the SMB mount failed. The examples now carry a placeholder
 resolve any name you did not read off the VM before using it.
 
 The same care applies to the driver: `--only-hosts` names entries in
-`server/unit-registry.json`, and every name in it is a real machine.
+`server/unit-registry.json`, and every name in it is a real machine. An entry carrying
+`"excluded": "<reason>"` (mast00, mastw) is skipped by a run that does not name it, so a
+plain fleet run never reaches it; naming it in `--only-hosts` is the deliberate one-off.
 
 ## An asset may be left behind; a script never is
 
