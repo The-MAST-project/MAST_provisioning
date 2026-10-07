@@ -18,7 +18,8 @@
     "maintenance_window": {
       "start_hour": 0,
       "end_hour": 24
-    }
+    },
+    "mac": "10-7C-61-5B-06-2F"
   },
   {
     "hostname": "mast02",
@@ -38,7 +39,8 @@
     "maintenance_window": {
       "start_hour": 0,
       "end_hour": 24
-    }
+    },
+    "mac": "58-11-22-E2-D9-F8"
   },
   {
     "hostname": "mast03",
