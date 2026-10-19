@@ -31,6 +31,8 @@
 # an 'unavailable' result rather than throwing: a firmware read that does not
 # work must never be what stops a unit being built.
 
+# How-to: https://github.com/The-MAST-project/MAST/wiki/Provisioning-units
+
 $script:MastFirmwareSetupVariable = 'Setup'
 $script:MastFirmwareSetupGuid = '{EC87D643-EBA4-4BB5-A1E5-3F3E36B20DA9}'
 

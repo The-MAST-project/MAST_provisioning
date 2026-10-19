@@ -32,6 +32,8 @@ Exit codes: 0 = every unit in sync AND bootstrap current; 2 = drift/missing/outd
 1 = tool error.
 """
 
+# How-to: https://github.com/The-MAST-project/MAST/wiki/Provisioning-units
+
 from __future__ import annotations
 
 import argparse

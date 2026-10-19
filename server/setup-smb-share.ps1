@@ -1,4 +1,5 @@
 #Requires -Version 5.1
+# How-to: https://github.com/The-MAST-project/MAST/wiki/Provisioning-units
 <#
 .SYNOPSIS
   One-time elevated setup: create the mast-staging SMB share and mast-transfer account.

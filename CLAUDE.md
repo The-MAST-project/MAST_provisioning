@@ -1,5 +1,7 @@
 # MAST_provisioning — guidance for AI assistants
 
+**Operational how-tos live in the [MAST wiki](https://github.com/The-MAST-project/MAST/wiki), not in this repo.** A file carrying a `# How-to:` pointer, or covered by a wiki page's `triggers`, updates that page in the same change; run `/wiki-sweep` before opening a PR. The wiki is public.
+
 ## Scripts must be ASCII-only
 
 Do **not** introduce non-ASCII characters into executable scripts or modules under this repo (including inside comments and string literals).

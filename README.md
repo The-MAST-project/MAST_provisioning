@@ -228,62 +228,7 @@ drifts from `sites/*.toml`. The shared enumerator is `Get-ConfiguredSites` in
 
 ## Production path (physical unit)
 
-This is the only path operators run by hand. Everything else is autonomous.
-
-1. Install Windows IoT on the unit machine and complete OOBE.
-2. Stage the **bootstrap payload** onto a USB stick, from the canonical clone on the
-   provisioning server:
-
-   ```cmd
-   cd server
-   python -m prov.bootstrap_payload --repo .. --cache C:\MAST\provider-assets stage --out E:\
-   ```
-
-   The payload is the seven files `client/bootstrap-payload.json` lists, staged flat:
-   `bootstrap.cmd`, `bootstrap.ps1`, `mast-client-util.ps1`, the BIOS power-policy reader
-   and its baseline, and the Npcap and OpenSSH installers. The command prints the payload's
-   hash. After changing any of those files, keep the new version on the relay as well, so
-   it can be staged again once its installers have left the repo:
-
-   ```cmd
-   python -m prov.bootstrap_payload --repo .. --cache C:\MAST\provider-assets snapshot
-   ```
-
-   (In the VM workflow the same files are bundled on the autounattend ISO.)
-3. On the unit, open an **elevated Command Prompt** (Run as administrator) and run:
-
-   ```cmd
-   bootstrap.cmd
-   ```
-
-   The `.cmd` wrapper enables script execution for the session and invokes the `.ps1`.
-   If you need to pass arguments (e.g. `-MastHostName mast05`), pass them directly:
-
-   ```cmd
-   bootstrap.cmd -MastHostName mast05
-   ```
-
-   Confirm the script prints `[OK]` before continuing.
-
-   The first thing it does is assert the unit's hardware: **64 GB of RAM** and a **free
-   drive letter D:**, both required by the `imdisk` provider's 32 GB RAM-backed D: mount.
-   A machine missing either stops here, before anything has been changed on it -- fit the
-   memory (or pull the disk holding D:) and re-run. On a bare unit the bootstrap USB
-   itself takes D: (`C:` is the system disk); that is recognized and is **not** a failure,
-   and the run ends by telling you to unplug it. The memory requirement is declared once,
-   in `Get-MastRequiredMemoryGB` (`server/lib/mast-modules.psm1`); `bootstrap.ps1`
-   embeds it because it runs offline, and `build-mast.ps1` fails the build if the two
-   drift.
-
-4. **Unplug the bootstrap drive** when the run tells you to, before any reboot. A drive
-   left physically plugged in is picked up again on the next boot and takes `D:` back --
-   which is the state the preflight exists to prevent. Nothing automates this: bootstrap
-   used to eject the volume, which killed the `cmd` wrapper reading its own batch file
-   off it (#107), and the eject never survived a reboot anyway.
-
-5. Once bootstrap completes the unit is reachable over WinRM HTTP on port 5985. From
-   here the provisioning server's Task Scheduler loop picks up the unit automatically
-   and handles all further software installation and updates.
+How-to: [Provisioning units — Bring up a new physical unit](https://github.com/The-MAST-project/MAST/wiki/Provisioning-units#bring-up-a-new-physical-unit)
 
 ---
 
@@ -425,47 +370,17 @@ same config file, so the editor and CI agree on what counts. Why pyright and not
 what the first 50 findings turned out to be:
 `docs/decisions/2026-08-17-pyright-not-mypy-for-the-python-server.md`.
 
-The abbreviated setup sequence is:
-
-```powershell
-# 1. Clone repo + pull LFS assets, populate vault/creds.json
-# 2. Create server/unit-registry.json from the template
-
-# 3. One-time elevated setup (SMB shares + mast-transfer account):
-.\server\setup-smb-share.ps1
-
-# 4. Install the driver's dependencies:
-pip install -r server\requirements.txt
-
-# 5. Trigger the first run by hand and watch logs:
-python server\check_and_provision.py --dry-run
-Get-Content C:\MAST\logs\prov\sessions\run-*\*.log -Wait
-
-# 6. Install the service wrapper for the autonomous cadence -- see server\deploy\README.md
-```
-
-Each run reads `server/unit-registry.json`, builds a per-unit staging payload,
-compares the payload hash to the unit's installed manifest, and provisions any
-unit whose hash has changed. Results are written to
-`C:\MAST\logs\prov\activity.csv`.
-
-A registry entry with an `"excluded": "<reason>"` key is left out of any run that
-does not name it: the log records `UNIT_EXCLUDED` with the reason. Naming the unit in
-`--only-hosts` still runs it. mast00 (the development unit) and mastw (the Weizmann
-site unit) are excluded this way.
+How-to: [Provisioning units — Run the driver by hand](https://github.com/The-MAST-project/MAST/wiki/Provisioning-units#run-the-driver-by-hand) and [Excluded units](https://github.com/The-MAST-project/MAST/wiki/Provisioning-units#excluded-units)
 
 ---
 
 ## Fleet drift report (cross-unit version read)
 
-`tools/fleet-drift-report.py` gives a quick, **read-only** cross-unit answer to "what
-version is on each unit, and where do they differ?" -- useful as units are added and
-drift creeps in. It gathers each unit's `C:\MAST\installed-manifest.json` over **SSH**
-and prints a per-unit summary plus a module-version matrix flagging divergences (a
-missing manifest shows as `NO-MANIFEST`). It also reads each unit's
-`C:\MAST\bootstrap-manifest.json` (stamped by `bootstrap.ps1`) and flags units on
-an older or unstamped bootstrap, listing the bootstrap elements they may be missing
-(element history in `client/bootstrap-elements.json`). It changes nothing on the units.
+How-to: [Provisioning units — Check the fleet for drift](https://github.com/The-MAST-project/MAST/wiki/Provisioning-units#check-the-fleet-for-drift)
+
+The report is the MVP of the "Version / Drift Detection" feature in
+`autonomous-provisioning-requirements.md`; it trusts the static installed-manifest (the
+computed/live manifest + tiered self-validation are the growth path).
 
 ### The bootstrap element registry
 
@@ -499,21 +414,9 @@ failure the classification exists to prevent.
 
 ### Re-asserting an already-provisioned unit
 
-```powershell
-.\bootstrap.ps1 -ReassertOnly                              # every 'routine' element
-.\bootstrap.ps1 -ReassertOnly -Elements locale-en-us,service-trim
-.\bootstrap.ps1 -ReassertOnly -Elements openssh-from-msi   # repair, named explicitly
-```
+How-to: [Provisioning units — Re-assert bootstrap on an already-provisioned unit](https://github.com/The-MAST-project/MAST/wiki/Provisioning-units#re-assert-bootstrap-on-an-already-provisioned-unit)
 
-No prompts, no reboot, and none of bootstrap's first-touch work — no hardware preflight,
-account, autologon, rename, Npcap or media handling. The default set is every `routine`
-element; an `on-demand` element runs **only** when named, which is what keeps the two
-transport elements out of a routine convergence pass. Naming a `console` or `provider`
-element, or an unknown id, **refuses the whole run** (exit 1, nothing applied) rather
-than skipping it quietly — a silent skip would let you believe an element you explicitly
-asked for had been applied.
-
-It records a `reassert` block in `C:\MAST\bootstrap-manifest.json` and **deliberately
+A re-assert records a `reassert` block in `C:\MAST\bootstrap-manifest.json` and **deliberately
 does not touch `bootstrap_version`**: a re-assert applies the routine elements and by
 construction not the console ones, so the unit is not at the current bootstrap version
 afterwards, and the drift report must go on saying so.
@@ -538,60 +441,9 @@ exist, if `current_version` disagrees with either the newest `since:` or
 re-assertable element the script cannot dispatch, a dispatched id that is not a
 re-assertable element, or a map entry naming a function that does not exist.
 
-```
-# from the repo root on the prov server (or labcomp)
-python tools/fleet-drift-report.py                       # all hosts in unit-registry.json
-python tools/fleet-drift-report.py --hosts mast02,mast03
-python tools/fleet-drift-report.py --build-manifest staging/mast03/01-provisioning/build-manifest.json
-python tools/fleet-drift-report.py --json report.json --csv report.csv
-python tools/fleet-drift-report.py --from-json report.json   # re-render a saved gather, no SSH
-```
-
-Exit code `0` = all units in sync, `2` = drift/missing/unreachable found, `1` = tool error.
-This is the MVP of the "Version / Drift Detection" feature in
-`autonomous-provisioning-requirements.md`; it trusts the static installed-manifest (the
-computed/live manifest + tiered self-validation are the growth path).
-
 ### Runbook: the report says a unit is behind -- now what?
 
-The bootstrap section answers this directly. It splits what a unit is missing by **who
-can fix it**, so the only question left is whether you need to go anywhere:
-
-```
-  mast02: v2 OUTDATED (current 13)
-      self-heals next cycle : service-trim, timezone-israel-dst
-      NEEDS A CONSOLE VISIT : npcap
-      on-demand             : openssh-from-msi
-      provider              : execution-policy
-      re-asserted 2026-08-25T06:59:44Z (7 routine element(s) applied)
-```
-
-Read it line by line:
-
-- **`self-heals next cycle`** — nothing to do. The `bootstrap-reassert` provider applies
-  these on the unit's next provisioning cycle. If you want them now, trigger a cycle.
-- **`NEEDS A CONSOLE VISIT`** — the only line that costs you a trip. These are `console`
-  elements: first-touch work (the account, autologon, rename), or work that needs an
-  interactive session. Nothing remote will ever apply them.
-- **`on-demand`** — capable of running remotely, but never on a routine run, because
-  both entries re-assert the transport the run travels over. To repair one, name it, on
-  one unit, over the *other* channel:
-  ```powershell
-  .\bootstrap.ps1 -ReassertOnly -Elements openssh-from-msi   # fix sshd over WinRM
-  .\bootstrap.ps1 -ReassertOnly -Elements winrm-http-basic   # fix WinRM over SSH
-  ```
-- **`provider`** — nothing to do here either; a provisioning provider owns it (named in
-  `bootstrap-elements.json`), and it is re-asserted on its own schedule.
-- **`re-asserted <when>`** — an annotation, not an all-clear. It says the routine
-  elements were applied then. The unit stays flagged because `bootstrap_version` does
-  not advance on a re-assert, and the console line above is still outstanding.
-
-`UNSTAMPED` means the unit predates bootstrap version stamping, so **nothing** is known
-about which elements it has -- every element is listed as unverified. That is not the
-same as being broken; it is the same work order, with no evidence to narrow it.
-
-The `RESULT` block at the end names only the units that actually need a person, or says
-plainly that every gap self-heals on the next cycle.
+How-to: [Provisioning units — The report says a unit is behind](https://github.com/The-MAST-project/MAST/wiki/Provisioning-units#the-report-says-a-unit-is-behind)
 
 ---
 
@@ -626,29 +478,7 @@ baseline does not describe -- attention, because unverified is not the same as g
 
 ### Re-baselining, and adding a board
 
-**A BIOS update or a new board model invalidates both the hash and every offset**, and
-new hardware reports `unknown-baseline` until it is added. Offsets are *measured*, never
-derived -- the ASUS setup-item catalog preserves order but not spacing, so counting it
-gives wrong answers. To add a board:
-
-1. At the console, confirm `Restore AC Power Loss` reads `S0 State` (and the APM wake
-   sources read `Disabled`). The baseline must be verified by eye, not assumed.
-2. On the unit, dump the varstore:
-   `. mast-firmware.ps1; $s = Get-MastFirmwareSetup; $s.Sha256; $s.Length; [Convert]::ToBase64String($s.Bytes)`
-3. To locate a field: dump, toggle **that one setting** in BIOS setup, save, reboot, dump
-   again, and diff. Exactly one byte moves; that is the offset, and the value in the
-   known-good dump is `expect`. Change one setting per pass or the diff is ambiguous.
-4. Add a `boards[]` entry with `baseboard_product`, `bios_version`, `setup_length`,
-   `setup_sha256`, `setup_base64`, `captured_from`, `captured_at`, `verified_by` and the
-   `fields`. `server/tests/mast-firmware.Tests.ps1` checks the entry is internally
-   consistent.
-5. **Re-cut the USB/ISO kit.** The reader and the baseline are staged onto the bootstrap
-   medium, so a kit cut before the change carries the old baseline and will report
-   `unknown-baseline` on hardware that is actually fine.
-
-Known offsets for `PE2100U-C7136ES` BIOS `1.03.00` (measured on mast08, 2026-08-24):
-`Restore AC Power Loss` = 3378 (expect 1), `Power On By PCIE/PCI` = 3380 (expect 0),
-`Power On By Ring` = 3381 (expect 0).
+How-to: [Provisioning units — Re-baseline after a BIOS update, or add a board](https://github.com/The-MAST-project/MAST/wiki/Provisioning-units#re-baseline-after-a-bios-update-or-add-a-board)
 
 ---
 
@@ -820,43 +650,11 @@ historical).
 
 ### Run a test cycle
 
-```powershell
-# Single cycle, all modules (--host-unit is the WinRM target: hostname preferred):
-python .\vm\run-prov-test.py --host-unit mast01 --hostname mast01
-
-# Just the build (no transfer / execute):
-python .\vm\run-prov-test.py --host-unit mast01 --hostname mast01 --build-only
-
-# Build, HTTP transfer to C:\mast-staging, then run *-verify steps only (no installers):
-python .\vm\run-prov-test.py --host-unit mast01 --hostname mast01 --build-transfer-verify
-
-# Three cycles, restoring the post-prepare snapshot between each:
-python .\vm\run-prov-test.py --host-unit mast01 --hostname mast01 --repeat 3
-
-# Subset of modules (faster iteration on a single problem):
-python .\vm\run-prov-test.py --host-unit mast01 --hostname mast01 --modules python,mast
-```
-
-Cycle logs land in `C:\MAST\logs\dev\<timestamp>-cycle<N>\results.json`.
+How-to: [Provisioning units — Dev/test loop (VirtualBox)](https://github.com/The-MAST-project/MAST/wiki/Provisioning-units#devtest-loop-virtualbox)
 
 ### Named scenarios (test-suite.py)
 
-`vm/test-suite.py` wraps `run-prov-test.py` with named, repeatable scenarios
-(full provision, mid-stream failure, recovery without snapshot reset,
-per-module idempotency after manifest wipe, and STUBs for future work).
-
-```powershell
-# List all 11 scenarios (5 ACTIVE, 6 STUB):
-python .\vm\test-suite.py --list
-
-# Run one scenario:
-python .\vm\test-suite.py --scenario full-provision --host-unit mast-wis-01
-
-# Run every scenario (STUBs report SKIP):
-python .\vm\test-suite.py --all --host-unit mast-wis-01
-```
-
-Suite results land in `C:\MAST\logs\dev\tests\<UTC-stamp>\suite-results.json`.
+How-to: [Provisioning units — Dev/test loop (VirtualBox)](https://github.com/The-MAST-project/MAST/wiki/Provisioning-units#devtest-loop-virtualbox)
 
 ### Ad-hoc debugging against a unit
 
@@ -979,13 +777,7 @@ version — which matters once units sit on deliberately different stacks, where
 would degrade silently. Measured on mast07: a build that cost 1,959,264,676 bytes
 under `--link-dest` synced in **5.5 s with one blob, 41,800 bytes**.
 
-`blobstore.py gc` drops blobs no host tree or snapshot references; it is run by hand.
-Nothing prunes snapshots yet, so in practice it frees nothing.
-Setup and the transport gotchas are in
-[docs/provisioning-server-setup.md](docs/provisioning-server-setup.md) Step 4c.
-
-**Do not edit a file in a host tree in place** — it is a hardlink, and a
-write-through lands in the blob every other tree shares. Unlink and replace.
+How-to: [Provisioning units — Remote sites: the staging host](https://github.com/The-MAST-project/MAST/wiki/Provisioning-units#remote-sites-the-staging-host)
 
 ## Build-host vendor inputs
 

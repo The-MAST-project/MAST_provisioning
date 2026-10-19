@@ -763,138 +763,29 @@ same lines land in the journal (`journalctl -u mast-provision -f`).
 
 ### Add a new unit
 
-1. Onboard the physical unit (see README "Production path").
-2. Edit `server\unit-registry.json` - append a new entry with the unit hostname,
-   timezone, maintenance window, and module list.
-3. The next loop cycle picks up the new entry automatically.
+How-to: [Provisioning units — Bring up a new physical unit](https://github.com/The-MAST-project/MAST/wiki/Provisioning-units#bring-up-a-new-physical-unit) and [Add a unit to the registry](https://github.com/The-MAST-project/MAST/wiki/Provisioning-units#add-a-unit-to-the-registry)
 
 ### Force-provision a single unit now (manual)
 
-```powershell
-cd C:\repos\MAST_provisioning
-python server\check_and_provision.py --only-hosts mast03 --force
-```
-
-`--force` skips the hash comparison and re-runs provisioning even if the unit
-appears current. Useful after a suspected install corruption. `--only-hosts` takes a
-comma-separated list.
+How-to: [Provisioning units — Run the driver by hand](https://github.com/The-MAST-project/MAST/wiki/Provisioning-units#run-the-driver-by-hand)
 
 ### Pause the autonomous loop
 
-```powershell
-# Stop (the current cycle finishes first, then the process exits):
-nssm stop MAST-Provision
-
-# Resume:
-nssm start MAST-Provision
-```
-
-On Linux: `sudo systemctl stop mast-provision` / `start`.
+How-to: [Provisioning units — Run the loop as a service](https://github.com/The-MAST-project/MAST/wiki/Provisioning-units#run-the-loop-as-a-service)
 
 ### Rotate the SMB password
 
-1. Update `smb.pass` in `vault\creds.json`.
-2. Re-run `setup-smb-share.ps1` (elevated) - it updates the `mast-transfer`
-   account password and re-applies share permissions.
-3. No change needed on units; they read the password from their own copy of
-   `creds.json` at provisioning time.
+How-to: [Provisioning units — Rotate the SMB transfer password](https://github.com/The-MAST-project/MAST/wiki/Provisioning-units#rotate-the-smb-transfer-password)
 
 ### Update a module
 
-1. Drop the new installer into `server\providers\<module>\assets\`.
-2. Update the version reference in `server\providers\<module>\module.json`.
-3. Run a build to verify: `powershell.exe -File build\build-mast.ps1 -HostName mast01`
-4. Trigger a manual run (see above) to push the update.
+How-to: [Provisioning units — Update a module](https://github.com/The-MAST-project/MAST/wiki/Provisioning-units#update-a-module)
 
 ---
 
 ## Troubleshooting
 
-### Unit shows UNREACHABLE
-
-Check in order:
-1. DNS: `[System.Net.Dns]::GetHostAddresses('mastNN')` from the prov server.
-2. Ping: `Test-Connection mastNN` (requires ICMP open on both sides).
-3. WinRM port: `Test-NetConnection mastNN -Port 5985` - must show TcpTestSucceeded True.
-4. Is the unit powered on and past Windows login? WinRM starts after login completes.
-
-### TRANSFER_FAIL (robocopy error)
-
-The unit could not connect to `\\<address>\mast-staging`.
-
-The driver builds that UNC from **the prov server's IP address on the route to
-that unit**, derived per unit and logged as `PROV_ADDR`; it does not use the
-server's hostname, so the unit is not asked to resolve anything. Check `src_unc`
-in `TRANSFER_START` for the address actually used.
-
-1. Confirm the share exists on the prov server: `Get-SmbShare -Name mast-staging`.
-2. From a unit, test the share manually, using the address from `PROV_ADDR`:
-   ```powershell
-   net use \\<address>\mast-staging /user:mast-transfer <password>
-   ```
-3. Check TCP 445 inbound is allowed (Step 5 above). A run now probes this from
-   the unit *before* building — see `PREFLIGHT_UNIT_SMB_FAIL`.
-4. Verify the `mast-transfer` password in `vault\creds.json` matches the account
-   password: re-run `setup-smb-share.ps1` to synchronize them.
-
-### PREFLIGHT_UNIT_SMB_FAIL
-
-The unit cannot open TCP 445 to the staging address. Checked before the build, so
-a run that cannot transfer does not build a payload first. Reachability only — an
-authentication problem is reported later, by the pull.
-
-1. Read the `address` in the event and confirm the unit's subnet can reach it. A
-   `PROV_ADDR_FALLBACK` event just above means the driver could not derive a route
-   to the unit and fell back to the server's *name*, which the unit must then
-   resolve itself.
-2. From the unit: `Test-NetConnection <address> -Port 445`.
-3. Check the prov server's inbound 445 rule, and that nothing blocks the path
-   between the two subnets.
-
-Historic note: units used to be handed the server's hostname and resolved it
-through a hand-placed `hosts` entry. Three of four had it pinned to a stale APIPA
-address and every transfer failed with `net.exe` error 53; nothing in the repo
-maintained those entries. They are unused now — see
-`docs/decisions/2026-08-11-the-unit-is-told-an-address-not-a-name.md`.
-
-### EXECUTE_FAIL or smoke failures
-
-1. Open the unit's execution log:
-   ```powershell
-   $cred = Get-Credential   # mast / <unit password>
-   Invoke-Command -ComputerName mastNN -Credential $cred -ScriptBlock {
-       Get-ChildItem C:\MAST\logs\sessions | Sort-Object LastWriteTime | Select -Last 1 |
-           ForEach-Object { Get-Content (Join-Path $_.FullName 'provisioning-execute.log') }
-   }
-   ```
-2. Look for the first `[FAIL]` line - it names the failing module and the exit code.
-3. For installer-level failures, check the module provider script at
-   `server\providers\<module>\provide-<module>.ps1`.
-
-### BUILD_FAIL
-
-`build-mast.ps1` failed before the payload was staged.
-
-1. Run the build manually and inspect the output:
-   ```powershell
-   powershell.exe -ExecutionPolicy Bypass -File build\build-mast.ps1 -HostName mast01
-   ```
-2. Common causes: missing asset file in `server\providers\<module>\assets\`,
-   Git LFS pointer stub instead of real binary, or missing `vault\creds.json`.
-
-### Lock file left from a crashed run
-
-If `C:\MAST\execute.lock` exists on a unit after a crash:
-
-```powershell
-Invoke-Command -ComputerName mastNN -Credential $cred -ScriptBlock {
-    Remove-Item C:\MAST\execute.lock -Force -ErrorAction SilentlyContinue
-}
-```
-
-Then trigger a fresh run. The lock file replacement (lease-based, with TTL)
-is a planned Phase 1 improvement; until then, manual removal is the recovery
-procedure.
+How-to: [Provisioning units — Troubleshooting](https://github.com/The-MAST-project/MAST/wiki/Provisioning-units#troubleshooting)
 
 ---
 

@@ -4,6 +4,7 @@
 #   sudo cp mast-provision.service /etc/systemd/system/
 #   sudo systemctl daemon-reload && sudo systemctl enable --now mast-provision
 #   journalctl -u mast-provision -f
+# How-to: https://github.com/The-MAST-project/MAST/wiki/Provisioning-units
 [Unit]
 Description=MAST autonomous provisioning loop
 After=network-online.target

@@ -9,6 +9,8 @@ the PowerShell one it replaced was retired on 2026-08-16. Run from anywhere:
 Exit codes: 0 all OK/SKIPPED, 1 one or more units failed, 2 fatal startup error.
 """
 
+# How-to: https://github.com/The-MAST-project/MAST/wiki/Provisioning-units
+
 from __future__ import annotations
 
 import argparse
