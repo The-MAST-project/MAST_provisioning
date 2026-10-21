@@ -1,0 +1,14 @@
+{
+  "name": "long-paths",
+  "version": "1.0",
+  "description": "Enable Win32 long paths machine-wide (HKLM\\SYSTEM\\CurrentControlSet\\Control\\FileSystem LongPathsEnabled = 1). Acquisition products moved to the shared area by UNC path exceed MAX_PATH (263 characters measured on mast00); without this the move fails and is retried forever. Windows reads the value at process start, so processes already running keep the limit until restarted. always:true because a value changed out of band produces no payload-hash drift. See #248.",
+  "order": 30,
+  "always": true,
+  "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-long-paths.ps1\"",
+  "commandfiles": [
+    "provide-long-paths.ps1",
+    "verify-long-paths.ps1",
+    "mast-long-paths-lib.ps1"
+  ],
+  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\verify-long-paths.ps1\""
+}
