@@ -129,6 +129,7 @@ renumbering.
 | Order | Module | Description |
 |------:|--------|-------------|
 |    20 | `mast-services-standdown` | **Remove** every MAST nssm service before anything else runs, so no part of the run can command telescope hardware and nothing is left that an accidental start could raise (a running `mast-unit` opens the mirror covers and homes the mount) |
+|    30 | `long-paths` | Enable Win32 long paths (`LongPathsEnabled = 1`), re-asserted every run. Processes started before the change keep the 260-character `MAX_PATH` limit until restarted |
 |   100 | `proxy` | Soft proxy: set (on-campus) or clear (home) machine/WinHTTP/WinINet proxy settings |
 |   150 | `config-bootstrap` | Lay down `C:\WIS\config.toml` (machine identity + config-DB connection) with the `machine_role` field injected; site chosen by build `-Site` |
 |   200 | `openssh-server` | Drift check for OpenSSH Server (install/config owned by `bootstrap.ps1`) |
