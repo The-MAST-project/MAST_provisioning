@@ -35,6 +35,8 @@ param(
     # (add_path /cygdrive/d/mast-indexes).
     [string]${IndexSubdir}  = 'mast-indexes',
     [string]${TaskName}     = 'MAST-ImDisk-Persistent',
+    # Run by MAST_supervision's ramdisk.py (RESTART_TASK); the two names must agree.
+    [string]${RestartTaskName} = 'mast-ramdisk-restart',
     # 'vm' (production): RAM-backed, volatile, commits the full DiskSize of
     # virtual memory -- units have 64 GB. 'file': plain file-backed mount for
     # the dev VM (8 GB RAM; a 32 GB -t vm attach can NEVER succeed there --
@@ -53,6 +55,9 @@ param(
 )
 
 ${ErrorActionPreference} = "Stop"
+${DaclSecurityInformation} = 4
+# Interactive users (IU): read + execute, which is what running a task needs.
+${InteractiveRunAce} = '(A;;FRFX;;;IU)'
 if ([string]::IsNullOrWhiteSpace(${IndexSeedDir})) {
     ${IndexSeedDir} = Join-Path ${AssetsRoot} 'mast-indexes'
 }
@@ -363,6 +368,28 @@ try {
         -Principal ${taskPrincipal} `
         -ErrorAction Stop | Out-Null
     Write-ImDiskLog ("Scheduled task created: {0}" -f ${TaskName})
+
+    # The supervisor revives a lost D: by running this task (MAST_supervision#18). It is not
+    # elevated, so it can neither detach a disk nor run the SYSTEM boot task; this task does
+    # both, and its ACL lets interactive users run it. The boot task stays the only place that
+    # names the image. -D is a forced detach, and '&' runs the boot task even when nothing
+    # was mounted.
+    ${restartArgs} = ('/c ""{0}" -D -m D: & "{1}" /run /tn "\{2}""' -f ${imdiskExe}, (Join-Path ${env:SystemRoot} 'System32\schtasks.exe'), ${TaskName})
+    ${restartAction} = New-ScheduledTaskAction -Execute (Join-Path ${env:SystemRoot} 'System32\cmd.exe') -Argument ${restartArgs}
+    Unregister-ScheduledTask -TaskName ${RestartTaskName} -ErrorAction SilentlyContinue -Confirm:$false
+    Register-ScheduledTask -TaskName ${RestartTaskName} `
+        -Description ("Force-detach D: and re-run {0}, which re-mounts it from the image. Run on demand by the MAST supervisor; wipes everything on D:." -f ${TaskName}) `
+        -Action ${restartAction} `
+        -Principal ${taskPrincipal} `
+        -ErrorAction Stop | Out-Null
+    ${scheduler} = New-Object -ComObject 'Schedule.Service'
+    ${scheduler}.Connect()
+    ${restartTask} = ${scheduler}.GetFolder('\').GetTask(${RestartTaskName})
+    ${dacl} = ${restartTask}.GetSecurityDescriptor(${DaclSecurityInformation})
+    if (${dacl} -notlike ('*' + ${InteractiveRunAce} + '*')) {
+        ${restartTask}.SetSecurityDescriptor(${dacl} + ${InteractiveRunAce}, 0)
+    }
+    Write-ImDiskLog ("Scheduled task created: {0} (DACL {1})" -f ${RestartTaskName}, ${restartTask}.GetSecurityDescriptor(${DaclSecurityInformation}))
 
     # Mount D: immediately if (a) the image is present and (b) D: is not
     # already in use. This means provisioning steps that run later in the

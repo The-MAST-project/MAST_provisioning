@@ -133,7 +133,7 @@ renumbering.
 |   100 | `proxy` | Soft proxy: set (on-campus) or clear (home) machine/WinHTTP/WinINet proxy settings |
 |   150 | `config-bootstrap` | Lay down `C:\WIS\config.toml` (machine identity + config-DB connection) with the `machine_role` field injected; site chosen by build `-Site` |
 |   200 | `openssh-server` | Drift check for OpenSSH Server (install/config owned by `bootstrap.ps1`) |
-|   250 | `imdisk` | ImDisk driver; assert the machine has the fleet's required RAM, then mount D: from the astrometry index image, persist across reboots |
+|   250 | `imdisk` | ImDisk driver; assert the machine has the fleet's required RAM, then mount D: from the astrometry index image, persist across reboots. Also registers `mast-ramdisk-restart`, a SYSTEM task that interactive users may run: the MAST supervisor runs it to force-detach a lost D: and re-run the boot task |
 |   300 | `cygwin` | Cygwin environment from a prebuilt tgz (postinstall, PATH) |
 |   400 | `astrometry-dependencies` | Cygwin packages for astrometry.net (offline, from the frozen build-host cache `C:\MAST\cygwin-pkg-cache`) + bundled `fitsio` wheel |
 |   500 | `astrometry` | Prebuilt astrometry.net 0.97 tree into `C:\cygwin64\usr\local\astrometry` |
