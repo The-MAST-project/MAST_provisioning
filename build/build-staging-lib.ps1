@@ -338,6 +338,19 @@ function Get-MastAssetTreeEntries {
     }
 }
 
+# The astrometry index set server/data/assets.json declares: one Name/Size per
+# 'mast-indexes' row. The canonical set every provisioned unit must hold (#254);
+# build-mast.ps1 checks the staged seed against it and writes it as the unit's
+# mast-indexes.json.
+function Get-MastDeclaredIndexSet {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$AssetsJson)
+    $doc = Get-Content -LiteralPath $AssetsJson -Raw | ConvertFrom-Json
+    $rows = @($doc.files | Where-Object { $_.source -eq 'mast-indexes' })
+    if ($rows.Count -eq 0) { throw "$AssetsJson declares no 'mast-indexes' files" }
+    return @($rows | ForEach-Object { [pscustomobject]@{ Name = ($_.path -split '/')[-1]; Size = [long]$_.size } })
+}
+
 # A fresh module -> staged payload map, in build order.
 function New-MastStagedPayloadMap {
     return [ordered]@{}

@@ -1,13 +1,15 @@
 ﻿{
   "name": "imdisk",
   "version": "imdisktk-x64",
-  "description": "Install ImDisk virtual disk driver, build a sparse 32 GB NTFS index image (C:\\MAST\\Shared\\MAST-32GB-indexes-5202+5203.img) from the staged mast-indexes seed if it is not already present (the build mounts it file-backed to write the seed), then mount it as D: RAM-backed and VOLATILE (imdisk -a -m D: -t vm -f <image>) and register a boot-time task that re-mounts it the same way each boot. -t vm loads the index seed into RAM (fast solving) while runtime scratch writes are wiped on reboot; it commits ~32 GB RAM. The image is sparse: 32 GB logical, only ~10 GB of index files allocated on disk. Ordered before astrometry (500) so D:\\mast-indexes is reachable during astrometry's smoke solve. Asserts the machine has the fleet's required RAM (-MinMemoryGB, injected by build-mast) before attempting a -t vm mount, so an under-specced unit fails with the reason rather than with 'imdisk exited 3'.",
+  "description": "Install ImDisk virtual disk driver, build a sparse 32 GB NTFS index image (C:\\MAST\\Shared\\MAST-32GB-indexes-5202+5203.img) from the staged mast-indexes seed if it is not already present (the build mounts it file-backed to write the seed), then mount it as D: RAM-backed and VOLATILE (imdisk -a -m D: -t vm -f <image>) and register a boot-time task that re-mounts it the same way each boot. -t vm loads the index seed into RAM (fast solving) while runtime scratch writes are wiped on reboot; it commits ~32 GB RAM. The image is sparse: 32 GB logical, only ~10 GB of index files allocated on disk. Ordered before astrometry (500) so D:\\mast-indexes is reachable during astrometry's smoke solve. Asserts the machine has the fleet's required RAM (-MinMemoryGB, injected by build-mast) before attempting a -t vm mount, so an under-specced unit fails with the reason rather than with 'imdisk exited 3'. Installs the declared index set (server/data/assets.json, staged as mast-indexes.json) as C:\\MAST\\state\\mast-indexes.json and keeps D:\\mast-indexes identical to it by name and size: a D: that differs is remounted, then rebuilt from the seed, which is checked first (#254).",
   "order": 250,
   "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-imdisk.ps1\" -AssetsRoot \".\"",
   "commandfiles": [
     "provide-imdisk.ps1",
+    "verify-imdisk.ps1",
+    "mast-index-manifest-lib.ps1",
     "assets/ImDiskTk-x64.zip"
   ],
-  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -Command \"${log} = Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\verify\\imdisk-verify.log'; if (Test-Path 'C:\\Windows\\System32\\imdisk.exe') { 'ImDisk installed successfully' | Out-File -FilePath ${log} -Encoding UTF8; Set-Content -Path (Join-Path (Join-Path $env:SystemDrive 'MAST') 'logs\\smoke\\imdisk-smoke.txt') -Value 'imdisk_ok' } else { 'ImDisk executable not found' | Out-File -FilePath ${log} -Encoding UTF8; exit 1 }\""
+  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\verify-imdisk.ps1\""
 }
 
