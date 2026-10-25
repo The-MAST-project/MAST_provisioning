@@ -139,6 +139,12 @@ ${licensesLib} = Join-Path ${PSScriptRoot} 'build-nomachine-lib.ps1'
 if (-not (Test-Path ${licensesLib})) { throw "Missing build-nomachine-lib.ps1 at ${licensesLib}" }
 . ${licensesLib}
 
+# The astrometry index-set manifest (#254), dot-sourced from the imdisk provider so
+# the build and the unit compare a folder the same way.
+${indexManifestLib} = Join-Path ${providersRoot} 'imdisk\mast-index-manifest-lib.ps1'
+if (-not (Test-Path ${indexManifestLib})) { throw "Missing mast-index-manifest-lib.ps1 at ${indexManifestLib}" }
+. ${indexManifestLib}
+
 [string]${LicensesRoot} = (Join-Path ${Top} 'vault\nomachine-licenses')
 ${licensesVault} = (Join-Path ${vault} 'nomachine-licenses')
 
@@ -484,6 +490,7 @@ function New-CommandFile([string[]]${Mods}) {
         # provider only asserts it for a '-t vm' mount -- the dev VM's
         # file-backed mount commits nothing and is exempt by construction.
         ${cmd} = ${cmd} + (" -MinMemoryGB {0}" -f (Get-MastRequiredMemoryGB))
+        ${cmd} = ${cmd} + (" -IndexSetDigest {0}" -f ${indexSetDigest})
       }
       'config-bootstrap' {
         # Inject the explicitly-selected -Site so the provider deploys
@@ -559,6 +566,15 @@ function New-CommandFile([string[]]${Mods}) {
   }
 
   return (${cmds} | Sort-Object order, desc)
+}
+
+# The index set every provisioned unit must hold, from server/data/assets.json (#254).
+# Its digest goes on the imdisk command line, which is part of the module hash, so a
+# changed set re-runs imdisk on every unit; the same text is staged as mast-indexes.json.
+if (${Modules} -contains 'imdisk') {
+    ${declaredIndexSet} = Get-MastDeclaredIndexSet -AssetsJson (Join-Path ${serverRoot} 'data\assets.json')
+    ${indexManifestJson} = ConvertTo-MastIndexManifestJson -Entries ${declaredIndexSet}
+    ${indexSetDigest} = Get-MastIndexManifestDigest -Json ${indexManifestJson}
 }
 
 ${baseCmds} = New-CommandFile -Mods ${Modules}
@@ -831,6 +847,16 @@ function Assert-MastVendoredAsset {
 if (${Modules} -contains 'imdisk') {
     ${seedEntries} = @(Get-MastAssetTreeEntries -ProvidersRoot ${providersRoot} -Module 'imdisk' `
                            -RelativeDir 'assets\mast-indexes' -AssetCacheRoot ${AssetCacheRoot})
+    # The seed must be the declared set, or the unit builds an image no check accepts:
+    # fail here rather than on the unit hours later.
+    ${seedSet} = @(${seedEntries} | ForEach-Object { [pscustomobject]@{ Name = $_.Relative; Size = (Get-Item -LiteralPath $_.Source).Length } })
+    ${seedDiff} = @(Get-MastIndexSetMismatches -Expected ${declaredIndexSet} -Actual ${seedSet})
+    if (${seedEntries}.Count -gt 0 -and ${seedDiff}.Count -gt 0) {
+        ${msg} = "The staged astrometry index seed differs from server/data/assets.json: " + (${seedDiff} -join '; ')
+        if (${TestMode}) { Write-Warning "${msg} Continuing due to -TestMode." } else { throw ${msg} }
+    }
+    Write-MastIndexManifest -Path (Join-Path ${staging} 'mast-indexes.json') -Json ${indexManifestJson}
+    Add-MastStagedPayload -Map ${stagedPayload} -Module 'imdisk' -File 'mast-indexes.json'
     if (${seedEntries}.Count -gt 0) {
         ${seedGb} = ((${seedEntries} | ForEach-Object { (Get-Item -LiteralPath $_.Source).Length } | Measure-Object -Sum).Sum / 1GB)
         Add-MastAssetTree -Module 'imdisk' -StagedName 'mast-indexes' -Entries ${seedEntries}

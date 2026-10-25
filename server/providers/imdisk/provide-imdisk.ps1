@@ -51,7 +51,13 @@ param(
     # outside a build, which asserts nothing. bootstrap.ps1 is the primary
     # gate -- this is the one that still fires on a unit bootstrapped before that
     # check existed, or re-imaged since.
-    [int]   ${MinMemoryGB}  = 0
+    [int]   ${MinMemoryGB}  = 0,
+    # SHA-256 of the staged mast-indexes.json, put on the command line by build-mast
+    # (#254), so the module hash moves with the declared index set. Empty for a hand run
+    # outside a build, which checks no index set.
+    [string]${IndexSetDigest} = '',
+    # Where the declared index set is installed for the supervisor and the unit to read.
+    [string]${InstalledManifest} = 'C:\MAST\state\mast-indexes.json'
 )
 
 ${ErrorActionPreference} = "Stop"
@@ -65,6 +71,9 @@ if ([string]::IsNullOrWhiteSpace(${IndexSeedDir})) {
 ${mastLogDot} = Join-Path ${PSScriptRoot} 'mast-log.ps1'
 if (-not (Test-Path ${mastLogDot})) { ${mastLogDot} = Join-Path ${PSScriptRoot} '..\..\lib\mast-log.ps1' }
 . ${mastLogDot}
+${indexManifestLibDot} = Join-Path ${PSScriptRoot} 'mast-index-manifest-lib.ps1'
+if (-not (Test-Path ${indexManifestLibDot})) { throw 'mast-index-manifest-lib.ps1 not found next to provide-imdisk.ps1' }
+. ${indexManifestLibDot}
 
 # Test-MastMemoryRequirement: shared with bootstrap.ps1 so the unit is
 # measured the same way at both gates. build-mast stages it into the payload root
@@ -139,6 +148,53 @@ function Wait-ForDriveRoot {
         ${tries}++
     }
     return $false
+}
+
+function Mount-IndexDisk {
+    # Attach D: from the image, as the boot task does, and confirm the drive surfaced.
+    param(
+        [Parameter(Mandatory)][string]${ImdiskExe},
+        [Parameter(Mandatory)][string]${MountType},
+        [Parameter(Mandatory)][string]${ImagePath}
+    )
+    Write-ImDiskLog ("Mounting D: from {0} via ImDisk (immediate, -t {1}) ..." -f ${ImagePath}, ${MountType})
+    ${mountArgs} = @('-a', '-m', 'D:', '-t', ${MountType}, '-f', ${ImagePath})
+    # Capture stderr: Start-Process discards it, which left "exited 3"
+    # (ENOMEM on the dev VM) undiagnosable from the logs.
+    ${mountErrFile} = Join-Path ${env:TEMP} 'imdisk-mount-stderr.txt'
+    ${mp} = Start-Process -FilePath ${ImdiskExe} -ArgumentList ${mountArgs} `
+        -PassThru -Wait -WindowStyle Hidden -RedirectStandardError ${mountErrFile}
+    try { ${mp}.Refresh() } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
+    ${mountExit} = ${mp}.ExitCode
+    ${mountErr} = ''
+    if (Test-Path -LiteralPath ${mountErrFile}) {
+        # Out-String: Get-Content can return an array here (bit us on
+        # mast01 -- .Trim() on Object[] threw AFTER a successful mount,
+        # failing the provider for cosmetics).
+        ${mountErr} = ((@(Get-Content -LiteralPath ${mountErrFile} -ErrorAction SilentlyContinue) | Out-String) -replace '\s+', ' ').Trim()
+        Remove-Item -LiteralPath ${mountErrFile} -Force -ErrorAction SilentlyContinue
+    }
+    if ($null -eq ${mountExit}) {
+        throw "imdisk -a -m D: did not report an exit code (treating as failure)."
+    }
+    if (${mountExit} -ne 0) {
+        throw ("imdisk -a -m D: exited {0} ({1}). Boot-time task is still registered, but the immediate mount failed." -f ${mountExit}, ${mountErr})
+    }
+    # Confirm the mount actually surfaced as a drive. ImDisk can return 0 even
+    # if the mount silently misbehaved, so probe the drive root explicitly.
+    if (-not (Wait-ForDriveRoot -Root 'D:\' -TimeoutMs 2000)) {
+        throw "imdisk reported success but D:\ is not visible after 2s. Check imdisk service state."
+    }
+    Write-ImDiskLog "D: mounted successfully (immediate)."
+}
+
+function Dismount-IndexDisk {
+    # Forced detach (-D), as the restart task does: whatever holds D: open loses it.
+    param([Parameter(Mandatory)][string]${ImdiskExe})
+    if (-not (Test-Path -LiteralPath 'D:\')) { return }
+    Write-ImDiskLog 'Detaching D: (forced)...'
+    & ${ImdiskExe} -D -m D: | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw ("imdisk -D -m D: failed (exit {0})." -f $LASTEXITCODE) }
 }
 
 function New-SparseIndexImage {
@@ -329,6 +385,32 @@ try {
         Write-ImDiskLog ("Created image directory: {0}" -f ${imageDir})
     }
 
+    # The declared index set (#254). The staged seed is checked against it before anything
+    # on the unit changes, so a short seed fails the run without touching a working image.
+    ${expectedIndexSet} = $null
+    ${stagedManifest} = Join-Path ${AssetsRoot} 'mast-indexes.json'
+    if (${IndexSetDigest}) {
+        if (-not (Test-Path -LiteralPath ${stagedManifest})) {
+            throw ("mast-indexes.json is not staged at {0}." -f ${stagedManifest})
+        }
+        ${stagedDigest} = (Get-FileHash -Algorithm SHA256 -LiteralPath ${stagedManifest}).Hash
+        if (${stagedDigest} -ne ${IndexSetDigest}) {
+            throw ("mast-indexes.json hashes to {0}, but the build declared {1}." -f ${stagedDigest}, ${IndexSetDigest})
+        }
+        ${expectedIndexSet} = @(Read-MastIndexManifest -Path ${stagedManifest})
+        if (Test-Path -LiteralPath ${IndexSeedDir}) {
+            ${seedDiff} = @(Get-MastIndexSetMismatches -Expected ${expectedIndexSet} -Actual @(Get-MastIndexFolderEntries -Dir ${IndexSeedDir}))
+            if (${seedDiff}.Count -gt 0) {
+                throw ("The staged index seed differs from mast-indexes.json: {0}" -f (${seedDiff} -join '; '))
+            }
+        }
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent ${InstalledManifest}) | Out-Null
+        Copy-Item -LiteralPath ${stagedManifest} -Destination ${InstalledManifest} -Force
+        Write-ImDiskLog ("Installed the declared index set ({0} files) as {1}." -f ${expectedIndexSet}.Count, ${InstalledManifest})
+    } else {
+        Write-ImDiskLog "[INFO] No -IndexSetDigest (a run outside build-mast): the index set is not checked."
+    }
+
     # Build the sparse 32 GB index image from the staged seed, unless it is
     # already present at the persistent path (idempotent re-runs, or a unit
     # where the image was pre-built / built on a previous provision). The seed
@@ -410,35 +492,37 @@ try {
         if (${dDisk}) { ${dDesc} = ('DriveType={0} label=''{1}''' -f ${dDisk}.DriveType, ${dDisk}.VolumeName) }
         throw ("D: is taken by another device ({0}); the MAST index RAM disk requires D:. Reassign that device's letter and re-run." -f ${dDesc})
     } else {
-        Write-ImDiskLog ("Mounting D: from {0} via ImDisk (immediate, -t {1}) ..." -f ${ImagePath}, ${MountType})
-        ${mountArgs} = @('-a', '-m', 'D:', '-t', ${MountType}, '-f', ${ImagePath})
-        # Capture stderr: Start-Process discards it, which left "exited 3"
-        # (ENOMEM on the dev VM) undiagnosable from the logs.
-        ${mountErrFile} = Join-Path ${env:TEMP} 'imdisk-mount-stderr.txt'
-        ${mp} = Start-Process -FilePath ${imdiskExe} -ArgumentList ${mountArgs} `
-            -PassThru -Wait -WindowStyle Hidden -RedirectStandardError ${mountErrFile}
-        try { ${mp}.Refresh() } catch { Write-Verbose "ignored: $($_.Exception.Message)" }
-        ${mountExit} = ${mp}.ExitCode
-        ${mountErr} = ''
-        if (Test-Path -LiteralPath ${mountErrFile}) {
-            # Out-String: Get-Content can return an array here (bit us on
-            # mast01 -- .Trim() on Object[] threw AFTER a successful mount,
-            # failing the provider for cosmetics).
-            ${mountErr} = ((@(Get-Content -LiteralPath ${mountErrFile} -ErrorAction SilentlyContinue) | Out-String) -replace '\s+', ' ').Trim()
-            Remove-Item -LiteralPath ${mountErrFile} -Force -ErrorAction SilentlyContinue
+        Mount-IndexDisk -ImdiskExe ${imdiskExe} -MountType ${MountType} -ImagePath ${ImagePath}
+    }
+
+    # Every provisioned unit holds the declared set (#254). A D: that differs is first
+    # remounted from the image (under -t vm the RAM overlay can be what differs); only an
+    # image that still differs is rebuilt from the seed, checked above.
+    if (${expectedIndexSet}) {
+        ${dIndexDir} = Join-Path 'D:\' ${IndexSubdir}
+        ${diff} = @(Get-MastIndexSetMismatches -Expected ${expectedIndexSet} -Actual @(Get-MastIndexFolderEntries -Dir ${dIndexDir}))
+        if (${diff}.Count -gt 0 -and (Test-Path -LiteralPath ${ImagePath})) {
+            Write-ImDiskLog ("D: differs from the declared index set ({0}); remounting from the image." -f (${diff} -join '; '))
+            Dismount-IndexDisk -ImdiskExe ${imdiskExe}
+            Mount-IndexDisk -ImdiskExe ${imdiskExe} -MountType ${MountType} -ImagePath ${ImagePath}
+            ${diff} = @(Get-MastIndexSetMismatches -Expected ${expectedIndexSet} -Actual @(Get-MastIndexFolderEntries -Dir ${dIndexDir}))
         }
-        if ($null -eq ${mountExit}) {
-            throw "imdisk -a -m D: did not report an exit code (treating as failure)."
+        if (${diff}.Count -gt 0) {
+            if (-not (Test-Path -LiteralPath ${IndexSeedDir})) {
+                throw ("D: differs from the declared index set ({0}), and there is no staged seed to rebuild the image from." -f (${diff} -join '; '))
+            }
+            Write-ImDiskLog ("The image differs from the declared index set ({0}); rebuilding it from the seed." -f (${diff} -join '; '))
+            Dismount-IndexDisk -ImdiskExe ${imdiskExe}
+            Remove-Item -LiteralPath ${ImagePath} -Force -ErrorAction SilentlyContinue
+            New-SparseIndexImage -ImagePath ${ImagePath} -SeedDir ${IndexSeedDir} `
+                -SizeBytes ${DiskSizeBytes} -SizeArg ${DiskSize} -ImdiskExe ${imdiskExe} -IndexSubdir ${IndexSubdir}
+            Mount-IndexDisk -ImdiskExe ${imdiskExe} -MountType ${MountType} -ImagePath ${ImagePath}
+            ${diff} = @(Get-MastIndexSetMismatches -Expected ${expectedIndexSet} -Actual @(Get-MastIndexFolderEntries -Dir ${dIndexDir}))
+            if (${diff}.Count -gt 0) {
+                throw ("D: still differs from the declared index set after a rebuild: {0}" -f (${diff} -join '; '))
+            }
         }
-        if (${mountExit} -ne 0) {
-            throw ("imdisk -a -m D: exited {0} ({1}). Boot-time task is still registered, but the immediate mount failed." -f ${mountExit}, ${mountErr})
-        }
-        # Confirm the mount actually surfaced as a drive. ImDisk can return 0 even
-        # if the mount silently misbehaved, so probe the drive root explicitly.
-        if (-not (Wait-ForDriveRoot -Root 'D:\' -TimeoutMs 2000)) {
-            throw "imdisk reported success but D:\ is not visible after 2s. Check imdisk service state."
-        }
-        Write-ImDiskLog "D: mounted successfully (immediate)."
+        Write-ImDiskLog ("D:\{0} holds the declared index set ({1} files)." -f ${IndexSubdir}, ${expectedIndexSet}.Count)
     }
 
     Remove-Item -Path ${extractDir} -Recurse -Force -ErrorAction SilentlyContinue
