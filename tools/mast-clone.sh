@@ -13,6 +13,7 @@
 #     gui/       MAST_gui
 #     spec/      MAST_spec
 #     claude/    mast-claude-config
+#     supervision/ MAST_supervision   (the 'supervision' package)
 #
 # Which folders appear is driven by --role and the manifest mast-repos.tsv.
 #
@@ -245,6 +246,12 @@ MANIFEST_TEXT="$(tr -d '\r' < "$MANIFEST")"
 # so the sh and ps1 halves cannot drift. They start with '#', so the repo-row
 # parser below skips them.
 UV_VERSION="$(awk -F'\t' '/^#!uv-version\t/ {print $2; exit}' <<< "$MANIFEST_TEXT" | tr -d '[:space:]')"
+PACKAGE_ROOTS="$(awk -F'\t' '/^#!package-roots\t/ {print $2; exit}' <<< "$MANIFEST_TEXT" | tr -d '[:space:]')"
+
+is_package_root() {  # $1 = folder name
+    case ",${PACKAGE_ROOTS}," in *",$1,"*) return 0 ;; esac
+    return 1
+}
 
 # Validate roles against the manifest so a typo fails loudly instead of
 # silently cloning nothing.
@@ -659,6 +666,14 @@ if [ -n "$VENV" ]; then
         if [ -f "$req" ]; then
             REQ_ARGS+=(-r "$req")
             REQ_NAMES="${REQ_NAMES}${REQ_NAMES:+, }${d}"
+        elif [ -f "${TOP_ABS}/${d}/pyproject.toml" ]; then
+            # A repo on pyproject.toml (MAST_supervision is the first) joins the
+            # same single resolve with its runtime dependencies only. Its dev group
+            # is its own CI's toolchain (a type checker that brings a Node runtime);
+            # ruff and pytest already reach the venv through the other repos'
+            # requirements-dev.txt.
+            REQ_ARGS+=(-r "${TOP_ABS}/${d}/pyproject.toml")
+            REQ_NAMES="${REQ_NAMES}${REQ_NAMES:+, }${d}(pyproject)"
         fi
         # requirements-dev.txt too: it is where the fleet pins ruff
         # (ruff==0.16.0 in every repo) and pytest. Formatter output differs
@@ -782,7 +797,7 @@ fi
 # module. Fail loudly here rather than debugging it at 3am.
 shadow_problems=0
 for d in "${CLONED[@]}"; do
-    [ "$d" = "common" ] && continue          # common's root __init__.py is required
+    is_package_root "$d" && continue         # a package root's __init__.py is required
     if [ -f "${TOP_ABS}/${d}/__init__.py" ]; then
         warn "${d}/__init__.py exists -- it will shadow '${d}' as a package and break imports"
         shadow_problems=1

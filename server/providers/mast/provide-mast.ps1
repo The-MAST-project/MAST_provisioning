@@ -25,6 +25,7 @@
       common\     MAST_common -- the repo root IS the 'common' package
       unit\       MAST_unit.2024-12-12
       claude\     mast-claude-config
+      supervision\ MAST_supervision -- the repo root IS the 'supervision' package
 
   <Top> is put on sys.path by a mast.pth that mast-clone writes into the venv, so
   the unit's existing 'from common.X import ...' resolves with no source edits and

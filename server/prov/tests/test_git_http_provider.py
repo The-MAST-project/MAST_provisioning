@@ -101,7 +101,7 @@ echo "$* | GIT_CONFIG_COUNT=${GIT_CONFIG_COUNT:-} \
 ${GIT_CONFIG_KEY_0:-}=${GIT_CONFIG_VALUE_0:-} ${GIT_CONFIG_KEY_1:-}=${GIT_CONFIG_VALUE_1:-} \
 ${GIT_CONFIG_KEY_2:-}=${GIT_CONFIG_VALUE_2:-} ${GIT_CONFIG_KEY_3:-}=${GIT_CONFIG_VALUE_3:-}" >> "$FAKE_GIT_LOG"
 case "$*" in
-  *"remote get-url origin"*) echo "https://github.com/The-MAST-project/MAST_common MAST_unit.2024-12-12 mast-claude-config";;
+  *"remote get-url origin"*) echo "MAST_common MAST_unit.2024-12-12 mast-claude-config MAST_supervision";;
   *" fetch "*) exit 1;;
   "clone "*) mkdir -p "${@: -1}"; exit 1;;
   *"rev-parse"*) echo 0123456789abcdef;;
@@ -110,6 +110,11 @@ exit 0
 """
 
 needs_bash = pytest.mark.skipif(os.name == "nt" or shutil.which("bash") is None, reason="runs mast-clone.sh")
+
+
+def _unit_dirs() -> list[str]:
+    rows = [line.split("\t") for line in (_REPO_ROOT / "tools" / "mast-repos.tsv").read_text(encoding="utf-8").splitlines()]
+    return [r[0] for r in rows if len(r) >= 4 and not r[0].startswith("#") and "unit" in r[2].split(",")]
 
 
 def _run_clone(tmp_path: Path, top: Path) -> tuple[list[str], str]:
@@ -141,15 +146,16 @@ def _run_clone(tmp_path: Path, top: Path) -> tuple[list[str], str]:
 @needs_bash
 def test_a_dead_remote_costs_three_attempts_once_then_one_each(tmp_path: Path) -> None:
     top = tmp_path / "top"
-    for d in ("common", "unit", "claude"):
+    dirs = _unit_dirs()
+    for d in dirs:
         (top / d / ".git").mkdir(parents=True)
     calls, _ = _run_clone(tmp_path, top)
     fetches = [c for c in calls if " fetch --prune " in c]
-    assert len(fetches) == 3 + 1 + 1, fetches
+    assert len(fetches) == 3 + (len(dirs) - 1), fetches
     expected = "GIT_CONFIG_COUNT=4 core.caller=kept http.version=HTTP/1.1 http.lowSpeedLimit=1000 http.lowSpeedTime=60"
     assert all(c.endswith(expected) for c in fetches), fetches[0]
     manifest = json.loads((top / "clone-manifest.json").read_text(encoding="utf-8"))
-    assert [r["fetch_ok"] for r in manifest["repos"]] == [False, False, False]
+    assert [r["fetch_ok"] for r in manifest["repos"]] == [False] * len(dirs)
 
 
 @needs_bash

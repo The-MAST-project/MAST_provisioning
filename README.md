@@ -362,6 +362,16 @@ was indistinguishable from a current one, and an unreachable remote reported exa
 what a clean run reports. See
 `docs/decisions/2026-08-31-a-failed-fetch-is-recorded-by-the-tool-and-asserted-by-the-provider.md`.
 
+Each repo's dependencies come from its `requirements.txt` (and `requirements-dev.txt`),
+or, for a repo with neither, from its `pyproject.toml`'s runtime dependencies
+(MAST_supervision is the first; its `dev` group is its own CI's toolchain and is not
+installed on units). Every cloned repo joins **one** `uv pip install`, so
+two repos that pin a shared package differently fail loudly rather than the last one
+winning. The `#!package-roots` directive names the folders whose repo root is itself a
+Python package (`common`, `supervision`); the clone scripts warn when any other repo
+root carries an `__init__.py`, since that repo would shadow its own module. See
+`docs/decisions/2026-11-04-a-repo-may-declare-its-dependencies-in-pyproject-toml.md`.
+
 Why this exists: sibling clones replaced git submodules, which pinned a commit by
 construction. Without a `rev` the fleet can silently diverge — on 2026-08-11 two
 upstream merges landed mid-fleet-run and left three units on two different
@@ -873,7 +883,7 @@ check logs), follow the convention in `vm/DEBUGGING.md`: name the script
 
 - `execute-mast-provisioning.ps1` exits 0
 - `C:\Python312\python.exe --version` succeeds
-- `C:\MAST\src\` holds the role's clones (`common\`, `unit\`, `claude\`) and one venv at `C:\MAST\src\.venv`
+- `C:\MAST\src\` holds the role's clones (`common\`, `unit\`, `claude\`, `supervision\`) and one venv at `C:\MAST\src\.venv`
 - Every module wrote a non-empty `C:\MAST\logs\smoke\<module>-smoke.txt`
 - `C:\MAST\installed-manifest.json` exists and matches the build's
   `payload_hash`
