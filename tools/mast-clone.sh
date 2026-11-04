@@ -202,6 +202,34 @@ else
     PROXY_DESC="$PROXY"
 fi
 
+# HTTPS through bcproxy: at git's default HTTP/2 the transfer HANGS forever
+# once the tunnel is up (#220), which no fetch_ok check can see because the call
+# never returns. HTTP/1.1 makes it work; the low-speed pair turns any remaining
+# stall into an error that fetch_ok records. Set for this process only, through
+# GIT_CONFIG_COUNT, for the same leave-nothing-behind reason as the proxy above,
+# and appended after any entries the caller already exported. A test pins these
+# values to mast-clone.ps1's and the git-http provider's.
+GIT_HTTP_CONFIG=(
+    "http.version=HTTP/1.1"
+    "http.lowSpeedLimit=1000"
+    "http.lowSpeedTime=60"
+)
+_gc_index="${GIT_CONFIG_COUNT:-0}"
+for _kv in "${GIT_HTTP_CONFIG[@]}"; do
+    export "GIT_CONFIG_KEY_${_gc_index}=${_kv%%=*}" "GIT_CONFIG_VALUE_${_gc_index}=${_kv#*=}"
+    _gc_index=$((_gc_index + 1))
+done
+export GIT_CONFIG_COUNT="$_gc_index"
+
+# Even at HTTP/1.1 the proxy occasionally answers 'Empty reply from server', and
+# a retry succeeds (#220). A proxy that is down is down for every repo, though,
+# so once one network call has used up its attempts the rest get one each:
+# 8 calls x 3 attempts x the 60 s stall limit would spend most of a unit's
+# execute budget on a dead proxy.
+GIT_NETWORK_ATTEMPTS=3
+GIT_RETRY_PAUSE_SECONDS=5
+GIT_RETRIES_EXHAUSTED=0
+
 # The manifest does not always arrive LF-only: git checks it out with CRLF
 # wherever core.autocrlf is on (any Windows clone), and a Windows editor can
 # save it that way regardless. bash's 'read' does not strip the CR, so it lands
@@ -256,6 +284,29 @@ run() {  # echo-and-execute, honouring --dry-run
         return 0
     fi
     "$@"
+}
+
+# run() for a call that reaches the remote (clone, fetch): retried.
+# --creates <dir> names the folder a clone makes. git removes it after a
+# transport failure but keeps it when the checkout fails, which no retry fixes --
+# a retry would only bury the cause under 'destination path already exists'.
+run_net() {
+    local attempts="$GIT_NETWORK_ATTEMPTS" n creates=""
+    if [ "$1" = "--creates" ]; then creates="$2"; shift 2; fi
+    [ "$GIT_RETRIES_EXHAUSTED" -eq 1 ] && attempts=1
+    for ((n = 1; n <= attempts; n++)); do
+        run "$@" && return 0
+        if [ -n "$creates" ] && [ -e "$creates" ]; then
+            warn "git left '$creates' behind, so this was not the network; not retrying -- the cause is in git's output above"
+            return 1
+        fi
+        if [ "$n" -lt "$attempts" ]; then
+            warn "$* failed (attempt $n of $attempts); retrying in ${GIT_RETRY_PAUSE_SECONDS} s"
+            sleep "$GIT_RETRY_PAUSE_SECONDS"
+        fi
+    done
+    GIT_RETRIES_EXHAUSTED=1
+    return 1
 }
 
 info "top       : $TOP"
@@ -324,7 +375,7 @@ while IFS=$'\t' read -r dir repo roles manifest_branch manifest_rev; do
         # here -- before the submodule disarm, the sidecar and the summary, so an
         # offline refresh produced no clone-manifest.json at all. Recording it and
         # carrying on is what the ps1 half does, and this file is the same tool.
-        if ! run git -C "$dest" fetch --prune origin; then
+        if ! run_net git -C "$dest" fetch --prune origin; then
             warn "$dir: fetch failed -- checkout NOT verified against origin, leaving it as it is"
             FETCH_FAILED["$dir"]=1
         elif [ "$UPDATE" -eq 1 ]; then
@@ -339,7 +390,7 @@ while IFS=$'\t' read -r dir repo roles manifest_branch manifest_rev; do
                 # Same reasoning as the fetch above, one layer quieter: a tag that
                 # moved upstream but was not fetched still checks out, against the
                 # object this clone already had.
-                if ! run git -C "$dest" fetch --tags --force origin; then
+                if ! run_net git -C "$dest" fetch --tags --force origin; then
                     warn "$dir: tag fetch failed -- '$rev' may have moved upstream, checkout NOT verified against origin"
                     FETCH_FAILED["$dir"]=1
                 fi
@@ -359,12 +410,12 @@ while IFS=$'\t' read -r dir repo roles manifest_branch manifest_rev; do
         else
             info "$dir: cloning $repo (branch $branch)"
         fi
-        run git clone --branch "$branch" "$url" "$dest"
+        run_net --creates "$dest" git clone --branch "$branch" "$url" "$dest" || die "$dir: clone failed"
         if [ -n "$rev" ]; then
             # Clone the branch first rather than 'clone --branch <tag>': it leaves the
             # branch ref present, which --branch overrides and the wrong-branch
             # diagnostic both rely on.
-            if ! run git -C "$dest" fetch --tags --force origin; then
+            if ! run_net git -C "$dest" fetch --tags --force origin; then
                 warn "$dir: tag fetch failed -- '$rev' may have moved upstream, checkout NOT verified against origin"
                 FETCH_FAILED["$dir"]=1
             fi

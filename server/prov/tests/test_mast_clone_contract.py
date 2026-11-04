@@ -39,7 +39,7 @@ EXPECTED_UV_VERSION = "0.11.33"
 #: including ones no assertion below covers. Taken over LF-normalized text, not
 #: raw bytes: the CI matrix checks out on both platforms and a Windows checkout
 #: rewrites the line endings, so a byte digest would differ by platform alone.
-EXPECTED_CLONE_PS1_SHA256 = "8bfa0d7cc21dec2d169b9b1094069784bcb3d0f577be6c2b1d8d0bcbf54b0aa2"
+EXPECTED_CLONE_PS1_SHA256 = "280a37b6126851d6e706925f9c257cf31c294b2fec1f23f1ae75cf9ede589910"
 
 #: Parameters provide-mast.ps1 passes, or relies on existing.
 REQUIRED_PARAMETERS = ("Top", "Role", "Transport", "Update", "DryRun")

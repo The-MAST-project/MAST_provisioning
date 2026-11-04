@@ -147,6 +147,32 @@ function Invoke-Git {
     return $true
 }
 
+function Invoke-GitNetwork {
+    # Invoke-Git for a call that reaches the remote (clone, fetch): retried, since
+    # the proxy is lossy. Returns $true on success. See $GitNetworkAttempts.
+    #
+    # -Creates names the folder a clone makes. git removes it after a transport
+    # failure but keeps it when the checkout fails (a path Windows refuses, say),
+    # which no retry fixes -- a retry would only bury the cause under
+    # 'destination path already exists'.
+    param([string[]] $GitArgs, [string] $Creates = '')
+    $attempts = $GitNetworkAttempts
+    if ($script:GitRetriesExhausted) { $attempts = 1 }
+    for ($n = 1; $n -le $attempts; $n++) {
+        if (Invoke-Git $GitArgs) { return $true }
+        if ($Creates -and (Test-Path -LiteralPath $Creates)) {
+            Write-Warn ("git left '{0}' behind, so this was not the network; not retrying -- the cause is in git's output above" -f $Creates)
+            return $false
+        }
+        if ($n -lt $attempts) {
+            Write-Warn ("git {0} failed (attempt {1} of {2}); retrying in {3} s" -f ($GitArgs -join ' '), $n, $attempts, $GitRetryPauseSeconds)
+            Start-Sleep -Seconds $GitRetryPauseSeconds
+        }
+    }
+    $script:GitRetriesExhausted = $true
+    return $false
+}
+
 if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
     throw 'git is not on PATH'
 }
@@ -212,6 +238,37 @@ else {
         $env:no_proxy = $DefaultNoProxy
     }
 }
+
+# git over HTTPS through bcproxy: at git's default HTTP/2 a fetch HANGS forever
+# once the tunnel is up (#220), which no fetch_ok check can see because the call
+# never returns. HTTP/1.1 makes it work; the low-speed pair turns any remaining
+# stall into an error that fetch_ok records. Set for this process only, through
+# GIT_CONFIG_COUNT, for the same leave-nothing-behind reason as the proxy above,
+# and appended after any entries the caller already exported. The same values
+# are written machine-wide by the git-http provider; a test pins the three
+# copies (this, mast-clone.sh, mast-git-http-lib.ps1) together.
+$GitHttpConfig = [ordered]@{
+    'http.version'       = 'HTTP/1.1'
+    'http.lowSpeedLimit' = '1000'
+    'http.lowSpeedTime'  = '60'
+}
+$gitConfigIndex = 0
+if (-not [string]::IsNullOrWhiteSpace($env:GIT_CONFIG_COUNT)) { $gitConfigIndex = [int]$env:GIT_CONFIG_COUNT }
+foreach ($key in $GitHttpConfig.Keys) {
+    Set-Item -Path ("env:GIT_CONFIG_KEY_{0}" -f $gitConfigIndex) -Value $key
+    Set-Item -Path ("env:GIT_CONFIG_VALUE_{0}" -f $gitConfigIndex) -Value $GitHttpConfig[$key]
+    $gitConfigIndex++
+}
+$env:GIT_CONFIG_COUNT = [string]$gitConfigIndex
+
+# Even at HTTP/1.1 the proxy occasionally answers 'Empty reply from server', and
+# a retry succeeds (#220). A proxy that is down is down for every repo, though,
+# so once one network call has used up its attempts the rest get one each:
+# 8 calls x 3 attempts x the 60 s stall limit would spend most of a unit's
+# execute budget on a dead proxy.
+$GitNetworkAttempts   = 3
+$GitRetryPauseSeconds = 5
+$script:GitRetriesExhausted = $false
 
 if (-not (Test-Path -LiteralPath $Manifest)) {
     throw "manifest not found: $Manifest"
@@ -349,7 +406,7 @@ foreach ($row in $rows) {
         # Recorded, not thrown: this script is also the casual dev clone tool, where
         # refreshing an existing tree off-network is a legitimate thing to do.
         # provide-mast.ps1 asserts fetch_ok for the fleet.
-        if (-not (Invoke-Git @('-C', $dest, 'fetch', '--prune', 'origin'))) {
+        if (-not (Invoke-GitNetwork @('-C', $dest, 'fetch', '--prune', 'origin'))) {
             Write-Warn ("{0}: fetch failed -- checkout NOT verified against origin, leaving it as it is" -f $row.Dir)
             $fetchFailures += $row.Dir
         }
@@ -372,7 +429,7 @@ foreach ($row in $rows) {
                 # moved upstream but was not fetched still checks out, against the
                 # object this clone already had. The checkout succeeding is then not
                 # evidence the pin resolves to what origin says it does.
-                if (-not (Invoke-Git @('-C', $dest, 'fetch', '--tags', '--force', 'origin'))) {
+                if (-not (Invoke-GitNetwork @('-C', $dest, 'fetch', '--tags', '--force', 'origin'))) {
                     Write-Warn ("{0}: tag fetch failed -- '{1}' may have moved upstream, checkout NOT verified against origin" -f $row.Dir, $rev)
                     $fetchFailures += $row.Dir
                 }
@@ -395,14 +452,14 @@ foreach ($row in $rows) {
     else {
         Write-Info ("{0}: cloning {1} (branch {2}{3})" -f $row.Dir, $row.Repo, $pin,
                     $(if ($rev) { ", pinned at $rev" } else { '' }))
-        if (-not (Invoke-Git @('clone', '--branch', $pin, $url, $dest))) {
+        if (-not (Invoke-GitNetwork -GitArgs @('clone', '--branch', $pin, $url, $dest) -Creates $dest)) {
             throw ("{0}: clone failed" -f $row.Dir)
         }
         if ($rev) {
             # Clone the branch first rather than 'clone --branch <tag>': it leaves
             # the branch ref present, which the -Branch override and the wrong-branch
             # diagnostic below both rely on.
-            if (-not (Invoke-Git @('-C', $dest, 'fetch', '--tags', '--force', 'origin'))) {
+            if (-not (Invoke-GitNetwork @('-C', $dest, 'fetch', '--tags', '--force', 'origin'))) {
                 Write-Warn ("{0}: tag fetch failed -- '{1}' may have moved upstream, checkout NOT verified against origin" -f $row.Dir, $rev)
                 $fetchFailures += $row.Dir
             }

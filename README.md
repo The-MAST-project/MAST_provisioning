@@ -139,6 +139,7 @@ renumbering.
 |   500 | `astrometry` | Prebuilt astrometry.net 0.97 tree into `C:\cygwin64\usr\local\astrometry` |
 |   600 | `python` | Python 3.12.2 + pip; removes `virtualenv` where an earlier run installed it (the jupyter venv is built with the stdlib `venv` module). Its `module.json` `version` is the fleet's authoritative interpreter pin -- the `jupyter` wheelhouse is checked against it at build time |
 |   700 | `git` | Git for Windows (silent) + PATH |
+|   710 | `git-http` | `git config --system`: `http.version HTTP/1.1` and a stall limit (`http.lowSpeedLimit 1000`, `http.lowSpeedTime 60`), re-asserted every run. Through bcproxy git's default HTTP/2 hangs a fetch forever (#220); `mast-clone` sets the same values for its own process |
 |   750 | `gh` | GitHub CLI (gh) + PATH (after git) |
 |   800 | `ascom` | ASCOM Platform 7.0 RC4 + Developer tools (enables .NET 3.5 if needed) |
 |   900 | `mongodb-client` | MongoDB client tools: mongosh, Database Tools, Compass (no mongod) |
