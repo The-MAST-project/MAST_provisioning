@@ -1,6 +1,7 @@
 ---
 decided: 2026-08-12
-status: proposed
+status: superseded
+superseded_by: 2026-11-12-provisioning-installs-and-runs-mast-service-on-supervised-units
 issue: MAST_provisioning#82
 areas:
   - services

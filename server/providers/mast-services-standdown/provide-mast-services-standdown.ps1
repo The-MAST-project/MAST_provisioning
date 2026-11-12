@@ -11,6 +11,11 @@ param()
 # competing path into the same processes (issue #159, and the header of
 # mast-service-names.ps1).
 #
+# The supervisor's mast-service is stopped first and never deleted. Its stop tears the
+# supervised programs down in order (MAST_supervision), and a supervisor left running
+# would restart what this run stops or replaces. mast-services-finalize starts it
+# again at the end of the run on a supervised unit.
+#
 # Set-Service and sc.exe, not nssm: nssm arrives at order 1200 and this runs at 20.
 #
 # Failing here fails the module. A unit whose services cannot be removed is the one
@@ -46,6 +51,24 @@ try {
 
     ${failures} = New-Object 'System.Collections.Generic.List[string]'
 
+    ${supervisorService} = Get-MastSupervisorServiceName
+    ${running} = Get-Service -Name (Get-MastSupervisorServiceName) -ErrorAction SilentlyContinue
+    if ($null -eq ${running}) {
+        Write-Host ("{0}: absent" -f ${supervisorService})
+    }
+    elseif (${running}.Status -eq 'Stopped') {
+        Write-Host ("{0}: already stopped" -f ${supervisorService})
+    }
+    else {
+        try {
+            Stop-Service -Name (Get-MastSupervisorServiceName) -ErrorAction Stop
+            Write-Host ("{0}: stopped; kept registered for finalize to start" -f ${supervisorService})
+        }
+        catch {
+            [void]${failures}.Add(("{0}: stop failed: {1}" -f ${supervisorService}, $_.Exception.Message))
+        }
+    }
+
     # The mast-* names are unambiguous and are always attempted. A legacy name is
     # attempted only when it is registered AND nssm-hosted, which is what proves the
     # registration is one of ours rather than someone else's service of the same name.
@@ -79,7 +102,7 @@ try {
         exit 1
     }
 
-    Write-Host "mast-services-standdown: no MAST service is registered on this unit."
+    Write-Host ("mast-services-standdown: no legacy MAST service is registered, and {0} is not running." -f ${supervisorService})
     exit 0
 }
 finally {

@@ -1,0 +1,16 @@
+{
+  "name": "mast-service",
+  "version": "1.0",
+  "description": "The supervisor's Windows service, on supervised units only. With -Supervised (the unit's registry entry says supervised: true; injected by the build) it runs MAST_supervision's own installer, <Top>\\supervision\\install\\install-mast-service.ps1, and fails when the checkout has none. Without it, it removes mast-service through provisioning's own removal, so a unit taken off supervision loses it whatever its checkout holds. It never starts the service: mast-services-standdown (20) stops it at the start of every run and mast-services-finalize (9500) starts it at the end. Runs after mast (2200), which lays down the supervision checkout and its venv, and nssm (1200). Hash-driven, not always: the flag and the supervision pin (tools/mast-repos.tsv) are in its hash. See docs/decisions/2026-11-12-provisioning-installs-and-runs-mast-service-on-supervised-units.md.",
+  "order": 2220,
+  "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-mast-service.ps1\" -Top \"C:\\MAST\\src\"",
+  "commandfiles": [
+    "provide-mast-service.ps1",
+    "verify-mast-service.ps1"
+  ],
+  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\verify-mast-service.ps1\" -Top \"C:\\MAST\\src\"",
+  "repofiles": [
+    "tools/mast-service-names.ps1",
+    "tools/mast-repos.tsv"
+  ]
+}

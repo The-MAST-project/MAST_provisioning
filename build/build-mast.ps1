@@ -62,8 +62,9 @@ param(
   [string]${Site} = 'wis',
 
   # The unit's registry 'supervised' flag: whether the mast-service provider
-  # installs and runs the supervisor's service. Baked into that module's command,
-  # so a flip changes its content hash and drift re-runs it.
+  # installs the supervisor's service and finalize starts it. Baked into the
+  # commands of the modules in ${SupervisedModules}, so a flip changes their
+  # content hashes and drift re-runs them.
   [switch]${Supervised}
 )
 
@@ -454,6 +455,12 @@ Write-Host ("[build-mast] proxy provider           -> -ForceMode {0}" -f ${proxy
 Write-Host  "[build-mast] astrometry-dependencies  -> offline (frozen cygwin-pkg-cache; no proxy mode)"
 Write-Host "==================================================================="
 
+# The modules that read the unit's registry 'supervised' flag: mast-service installs or
+# removes the supervisor's service, and mast-services-finalize starts it or asserts it
+# absent. The flag goes on both their command and their verify, so a flip changes both
+# modules' content hashes and drift re-runs them.
+${SupervisedModules} = @('mast-service', 'mast-services-finalize')
+
 # Build commands list once (same for all), then tweak per host only if we add a SingleLicensePath
 function New-CommandFile([string[]]${Mods}) {
   ${cmds}=@()
@@ -515,9 +522,6 @@ function New-CommandFile([string[]]${Mods}) {
           ${cmd} = ${cmd} + (" -RpiNtp {0}" -f ${siteRpiNtp}[${Site}])
         }
       }
-      'mast-service' {
-        if (${Supervised}) { ${cmd} = ${cmd} + ' -Supervised' }
-      }
       'mast-validation' {
         # Dev-VM escape: forward --allow-missing-avx to the python validator
         # under -TestMode. astrometry-engine crashes with SIGILL on guest CPUs
@@ -527,6 +531,7 @@ function New-CommandFile([string[]]${Mods}) {
         if (${TestMode}) { ${cmd} = ${cmd} + ' -AllowMissingAvx' }
       }
     }
+    if (${Supervised} -and ${m} -in ${SupervisedModules}) { ${cmd} = ${cmd} + ' -Supervised' }
 
     ${cmds} += [pscustomobject]@{ order = [int]${mf}.order; desc = [string]${mf}.description; cmd = ${cmd}; module = ${m} }
 
@@ -546,7 +551,8 @@ function New-CommandFile([string[]]${Mods}) {
       if (${TestMode} -and ${m} -eq 'usbpcap') {
           ${verifyCmd} = ${verifyCmd} + ' -AllowPendingReboot'
       }
-      ${cmds} += [pscustomobject]@{ order = [int](${mf}.order + 1); desc = "[verify] " + [string]${mf}.name; cmd = ${verifyCmd}; module="${m}-verify" }
+      if (${Supervised} -and ${m} -in ${SupervisedModules}) { ${verifyCmd} = ${verifyCmd} + ' -Supervised' }
+      ${cmds} +=[pscustomobject]@{ order = [int](${mf}.order + 1); desc = "[verify] " + [string]${mf}.name; cmd = ${verifyCmd}; module="${m}-verify" }
     }
   }
 
