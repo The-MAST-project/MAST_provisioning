@@ -25,7 +25,7 @@ param(
     # Folder names mast-clone creates for the 'unit' role, injected from
     # module.json so the expectation is build-time data rather than a second
     # copy of the role table living in this script.
-    [string]${Expect} = 'common,unit,claude'
+    [string]${Expect} = 'common,unit,claude,supervision'
 )
 
 ${mastLogDot} = Join-Path ${PSScriptRoot} 'mast-log.ps1'

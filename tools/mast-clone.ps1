@@ -13,6 +13,7 @@
       gui\       MAST_gui
       spec\      MAST_spec
       claude\    mast-claude-config
+      supervision\ MAST_supervision     (the 'supervision' package)
 
   Which folders appear is driven by -Role and the manifest mast-repos.tsv,
   which is the single source of truth shared with tools/mast-clone.sh.
@@ -300,8 +301,12 @@ if ($rows.Count -eq 0) { throw "manifest '$Manifest' yielded no rows" }
 # the ps1 and sh halves cannot drift. They start with '#', so the row loop above
 # already skipped them.
 $UvVersion = ''
+$PackageRoots = @()
 foreach ($line in (Get-Content -LiteralPath $Manifest)) {
-    if ($line -match '^#!uv-version\s+(\S+)') { $UvVersion = $Matches[1]; break }
+    if ($line -match '^#!uv-version\s+(\S+)') { $UvVersion = $Matches[1] }
+    elseif ($line -match '^#!package-roots\s+(\S+)') {
+        $PackageRoots = @($Matches[1].Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    }
 }
 
 # Validate roles against the manifest so a typo fails loudly rather than
@@ -729,7 +734,19 @@ foreach ($d in $cloned) {
             $req = $legacy
             Write-Warn "${d}: using legacy 'required.txt' -- rename it to requirements.txt"
         }
-        else { continue }
+        else {
+            # A repo on pyproject.toml (MAST_supervision is the first) joins the
+            # same single resolve with its runtime dependencies only. Its dev group
+            # is its own CI's toolchain (a type checker that brings a Node runtime);
+            # ruff and pytest already reach the venv through the other repos'
+            # requirements-dev.txt.
+            $pyproject = Join-Path $topAbs "$d\pyproject.toml"
+            if (Test-Path -LiteralPath $pyproject) {
+                $reqArgs  += @('-r', $pyproject)
+                $reqNames += "$d(pyproject)"
+            }
+            continue
+        }
     }
     $reqArgs  += @('-r', $req)
     $reqNames += $d
@@ -861,7 +878,7 @@ else {
 # module. Fail loudly here rather than debugging it later.
 $shadowProblems = $false
 foreach ($d in $cloned) {
-    if ($d -eq 'common') { continue }   # common's root __init__.py is required
+    if ($PackageRoots -contains $d) { continue }   # a package root's __init__.py is required
     if (Test-Path -LiteralPath (Join-Path (Join-Path $topAbs $d) '__init__.py')) {
         Write-Warn ("{0}\__init__.py exists -- it will shadow '{0}' as a package and break imports" -f $d)
         $shadowProblems = $true

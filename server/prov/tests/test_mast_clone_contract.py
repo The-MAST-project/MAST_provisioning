@@ -30,6 +30,7 @@ EXPECTED_UNIT_ROWS = {
     ("common", "MAST_common", "master", "df2669fa95510c84724e4178c9032d2f783b1e35"),
     ("unit", "MAST_unit.2024-12-12", "main", "9fc7be6a3706158e29c76dc654713d8a40e4712f"),
     ("claude", "mast-claude-config", "main", "58b37d09513ed9e5da5cec193794f3f11281fbf4"),
+    ("supervision", "MAST_supervision", "main", "395f7f88e82ed71c8ca936ad4c84b09b7cb5defa"),
 }
 
 #: `#!uv-version` directive: the resolver every unit's venv is built with.
@@ -39,7 +40,7 @@ EXPECTED_UV_VERSION = "0.11.33"
 #: including ones no assertion below covers. Taken over LF-normalized text, not
 #: raw bytes: the CI matrix checks out on both platforms and a Windows checkout
 #: rewrites the line endings, so a byte digest would differ by platform alone.
-EXPECTED_CLONE_PS1_SHA256 = "280a37b6126851d6e706925f9c257cf31c294b2fec1f23f1ae75cf9ede589910"
+EXPECTED_CLONE_PS1_SHA256 = "d0733f1eb9cb3985aa8542a86503cf736538541755f4b6cb7397d69f8957724c"
 
 #: Parameters provide-mast.ps1 passes, or relies on existing.
 REQUIRED_PARAMETERS = ("Top", "Role", "Transport", "Update", "DryRun")
@@ -103,10 +104,50 @@ def test_uv_version_is_the_pinned_one(manifest) -> None:
     assert uv_version == EXPECTED_UV_VERSION
 
 
-def test_unit_layout_is_common_unit_claude(manifest) -> None:
-    """<Top>\\{common,unit,claude} -- the three NSSM coordinates are built on it."""
+def test_unit_layout_is_common_unit_claude_supervision(manifest) -> None:
+    """<Top>\\{common,unit,claude,supervision} -- what a unit's code is laid out as."""
     rows, _ = manifest
-    assert {d for d, _, _, _ in _unit_rows(rows)} == {"common", "unit", "claude"}
+    assert {d for d, _, _, _ in _unit_rows(rows)} == {"common", "unit", "claude", "supervision"}
+
+
+def test_mast_verify_expects_every_unit_folder(manifest) -> None:
+    """verify-mast walks only the -Expect folders, so a unit-role repo missing from
+    it is never checked for presence, a dirty tree, or currency against origin."""
+    rows, _ = manifest
+    unit_dirs = {d for d, _, _, _ in _unit_rows(rows)}
+    module = (_REPO_ROOT / "server" / "providers" / "mast" / "module.json").read_text(encoding="utf-8-sig")
+    expect = re.search(r'-Expect \\"([^"\\]+)\\"', module)
+    assert expect, "the mast verify passes no -Expect"
+    assert set(expect.group(1).split(",")) == unit_dirs
+    verify = (_REPO_ROOT / "server" / "providers" / "mast" / "verify-mast.ps1").read_text(encoding="utf-8")
+    default = re.search(r"\[string\]\$\{Expect\} = '([^']+)'", verify)
+    assert default and set(default.group(1).split(",")) == unit_dirs
+
+
+def test_package_roots_come_from_the_manifest() -> None:
+    """The folders whose root is a package are named once, in the manifest, and both
+    halves read them from there: the shadowing guard exempts exactly those."""
+    manifest = _MANIFEST.read_text(encoding="utf-8")
+    roots = re.search(r"^#!package-roots\t(\S+)$", manifest, re.MULTILINE)
+    assert roots and set(roots.group(1).split(",")) == {"common", "supervision"}
+    ps1 = _CLONE_PS1.read_text(encoding="utf-8")
+    sh = _CLONE_SH.read_text(encoding="utf-8")
+    assert "#!package-roots" in ps1 and "if ($PackageRoots -contains $d) { continue }" in ps1
+    assert "#!package-roots" in sh and 'is_package_root "$d" && continue' in sh
+    assert "if ($d -eq 'common') { continue }   # common's root" not in ps1
+    assert '[ "$d" = "common" ] && continue          # common' not in sh
+
+
+def test_both_halves_install_a_pyproject_in_the_one_resolve() -> None:
+    """A repo with no requirements.txt but a pyproject.toml joins the single
+    `uv pip install` with its runtime dependencies -- never a second install, and
+    never its dev group, which is its own CI's toolchain (basedpyright brings a
+    42 MB Node runtime onto every unit)."""
+    ps1 = _CLONE_PS1.read_text(encoding="utf-8")
+    sh = _CLONE_SH.read_text(encoding="utf-8")
+    assert "$reqArgs  += @('-r', $pyproject)" in ps1
+    assert 'REQ_ARGS+=(-r "${TOP_ABS}/${d}/pyproject.toml")' in sh
+    assert "--group" not in ps1 and "--group" not in sh
 
 
 def test_common_is_named_common(manifest) -> None:
