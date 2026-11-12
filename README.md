@@ -466,6 +466,12 @@ does not name it: the log records `UNIT_EXCLUDED` with the reason. Naming the un
 `--only-hosts` still runs it. mast00 (the development unit) and mastw (the Weizmann
 site unit) are excluded this way.
 
+A registry entry may carry `"supervised": true` to mark a unit that gets the supervisor's
+Windows service, `mast-service`. The driver then builds that unit with `-Supervised`, which
+folds into the service module's command. Absent and `false` both mean unsupervised. No unit
+is flagged yet: the flag is inert until the `mast-service` provider lands. The dev VM
+runs take `vm/run-prov-test.py --supervised` instead, since the VM has no registry entry.
+
 ---
 
 ## Fleet drift report (cross-unit version read)

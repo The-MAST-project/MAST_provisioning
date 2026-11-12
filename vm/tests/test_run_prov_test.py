@@ -116,3 +116,32 @@ def test_dev_vm_address_rejects_real_units():
     # An unresolved name must not read as the VM.
     assert not rpt.is_dev_vm_address("")
     assert not rpt.is_dev_vm_address("mast08")
+
+
+def _phase_build_command(monkeypatch, supervised: bool) -> list:
+    seen = []
+
+    def fake_run(cmd, **_kw):
+        seen.append(cmd)
+        return rpt.subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(rpt.subprocess, "run", fake_run)
+    monkeypatch.setattr(rpt, "all_modules", lambda: ["git"])
+    rpt.phase_build("mast-wis-01", ["git"], "direct", supervised)
+    (cmd,) = seen
+    return cmd
+
+
+def test_supervised_reaches_the_build(monkeypatch):
+    assert "-Supervised" in _phase_build_command(monkeypatch, supervised=True)
+
+
+def test_unsupervised_leaves_it_out(monkeypatch):
+    assert "-Supervised" not in _phase_build_command(monkeypatch, supervised=False)
+
+
+def test_supervised_is_off_unless_asked(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["run-prov-test.py", "--host-unit", "192.168.56.113"])
+    assert rpt.parse_args().supervised is False
+    monkeypatch.setattr(sys, "argv", ["run-prov-test.py", "--host-unit", "192.168.56.113", "--supervised"])
+    assert rpt.parse_args().supervised is True

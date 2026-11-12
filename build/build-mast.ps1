@@ -59,7 +59,12 @@ param(
   # becomes the unit's C:\WIS\config.toml via the config-bootstrap provider. Selected
   # EXPLICITLY here, never derived from the hostname (per the config-file epic). The
   # config-bootstrap switch case below validates it against the available profiles.
-  [string]${Site} = 'wis'
+  [string]${Site} = 'wis',
+
+  # The unit's registry 'supervised' flag: whether the mast-service provider
+  # installs and runs the supervisor's service. Baked into that module's command,
+  # so a flip changes its content hash and drift re-runs it.
+  [switch]${Supervised}
 )
 
 # Normalize -Modules: subprocess passes comma-joined strings as a single element.
@@ -509,6 +514,9 @@ function New-CommandFile([string[]]${Mods}) {
         if (${siteRpiNtp}.ContainsKey(${Site})) {
           ${cmd} = ${cmd} + (" -RpiNtp {0}" -f ${siteRpiNtp}[${Site}])
         }
+      }
+      'mast-service' {
+        if (${Supervised}) { ${cmd} = ${cmd} + ' -Supervised' }
       }
       'mast-validation' {
         # Dev-VM escape: forward --allow-missing-avx to the python validator

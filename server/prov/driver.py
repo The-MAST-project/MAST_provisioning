@@ -899,6 +899,8 @@ class Driver:
         # No SITE_MISSING fallback: load_unit_registry rejects an entry without a
         # site, so there is no path here with one absent.
         args += ["-Site", unit.site]
+        if unit.supervised:
+            args += ["-Supervised"]
         if modules:
             args += ["-Modules", ",".join(modules)]
         if self.cfg.test_mode:

@@ -167,3 +167,39 @@ def test_an_exclusion_must_give_a_reason():
 def test_the_registry_excludes_mast00_and_mastw():
     units = R.load_unit_registry(T.REPO_ROOT / "server" / "unit-registry.json")
     assert sorted(u.hostname for u in units if u.excluded) == ["mast00", "mastw"]
+
+
+# --- supervised: which units get mast-service ----------------------------------------
+
+
+@pytest.mark.parametrize("flag", [True, False])
+def test_a_supervised_flag_round_trips_as_written(tmp_path, flag):
+    entry = {"hostname": "mast06", "site": "ns", "supervised": flag}
+    p = tmp_path / "unit-registry.json"
+    p.write_text(json.dumps([entry]), encoding="utf-8")
+    (loaded,) = R.load_unit_registry(p)
+    assert loaded.supervised is flag
+    assert R.dump_unit_registry([loaded]) == [entry]
+
+
+def test_an_unflagged_entry_is_written_back_without_the_key(tmp_path):
+    # None, not False: dump_unit_registry drops only None, so a False default would
+    # stamp "supervised": false onto every entry at the next MAC write.
+    minimal = {"hostname": "mast01", "site": "ns"}
+    p = tmp_path / "unit-registry.json"
+    p.write_text(json.dumps([minimal]), encoding="utf-8")
+    (loaded,) = R.load_unit_registry(p)
+    assert loaded.supervised is None
+    assert R.dump_unit_registry([loaded]) == [minimal]
+
+
+def test_supervised_must_be_a_boolean():
+    with pytest.raises(ValidationError):
+        R.UnitEntry.model_validate({"hostname": "mast06", "site": "ns", "supervised": "yes"})
+
+
+def test_the_registry_supervises_no_unit_yet():
+    # The flag is inert until the mast-service provider exists; flagging a unit
+    # before then would promise a service nothing installs.
+    units = R.load_unit_registry(T.REPO_ROOT / "server" / "unit-registry.json")
+    assert [u.hostname for u in units if u.supervised] == []

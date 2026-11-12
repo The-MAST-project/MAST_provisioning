@@ -492,7 +492,7 @@ class ExecuteLogPoller:
 # ---------------------------------------------------------------------------
 
 
-def phase_build(hostname: str, modules: list[str], proxy_mode: str) -> None:
+def phase_build(hostname: str, modules: list[str], proxy_mode: str, supervised: bool) -> None:
     """Build runs LOCALLY on this Windows host (no VM, no WinRM)."""
     with timed("BUILD PHASE"):
         build_script = REPO_ROOT / "build" / "build-mast.ps1"
@@ -522,6 +522,8 @@ def phase_build(hostname: str, modules: list[str], proxy_mode: str) -> None:
             "-ImdiskMountType",
             "file",
         ]
+        if supervised:
+            cmd += ["-Supervised"]
         if sorted(modules) != sorted(all_modules()):
             cmd += ["-Modules", ",".join(modules)]
 
@@ -1165,6 +1167,15 @@ def parse_args() -> argparse.Namespace:
             "against an off-campus unit uses 'direct'."
         ),
     )
+    p.add_argument(
+        "--supervised",
+        action="store_true",
+        help=(
+            "Build as for a unit whose registry entry is supervised: true, so the "
+            "mast-service module installs and runs the supervisor's service. The dev "
+            "VM has no registry entry, so this stands in for the flag."
+        ),
+    )
     p.add_argument("--vbox-vm", default="mast-unit", help="VirtualBox VM name (default: 'mast-unit')")
     p.add_argument(
         "--snapshot", default="post-prepare", help="Snapshot name to restore between cycles (default: 'post-prepare')"
@@ -1284,7 +1295,7 @@ def main() -> None:  # noqa: C901 -- argparse branching IS the CLI surface, plus
                     if not passed:
                         _fetch_diagnostics(unit_session)
                 else:  # rebuild_repos
-                    phase_build(args.hostname, ["mast"], args.proxy_mode)
+                    phase_build(args.hostname, ["mast"], args.proxy_mode, args.supervised)
                     unit_stage = phase_transfer(
                         unit_session,
                         args.hostname,
@@ -1329,7 +1340,7 @@ def main() -> None:  # noqa: C901 -- argparse branching IS the CLI surface, plus
 
                     # BUILD
                     if "build" in phases and (not built or args.rebuild):
-                        phase_build(args.hostname, modules, args.proxy_mode)
+                        phase_build(args.hostname, modules, args.proxy_mode, args.supervised)
                         built = True
 
                     # CONNECT (needed for any non-build phase). Prefers WinRM,
