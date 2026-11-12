@@ -1,0 +1,14 @@
+{
+  "name": "git-http",
+  "version": "1.0",
+  "description": "Make git speak HTTP/1.1 and abort a stalled transfer, machine-wide (git config --system http.version HTTP/1.1, http.lowSpeedLimit 1000, http.lowSpeedTime 60). Through bcproxy git's default HTTP/2 hangs a fetch forever once the tunnel is up, so units silently never updated (#220). Covers people (VS Code, shells) and verify-mast's own ls-remote; mast-clone sets the same values for its own process. Runs after git (700), which installs git.exe. always:true because a value changed out of band produces no payload-hash drift.",
+  "order": 710,
+  "always": true,
+  "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-git-http.ps1\"",
+  "commandfiles": [
+    "provide-git-http.ps1",
+    "verify-git-http.ps1",
+    "mast-git-http-lib.ps1"
+  ],
+  "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\verify-git-http.ps1\""
+}
