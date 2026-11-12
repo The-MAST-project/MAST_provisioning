@@ -19,7 +19,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Annotated, Any
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StringConstraints, ValidationError
 
 from prov import transport
 
@@ -81,6 +81,11 @@ class UnitEntry(BaseModel):
     #: A reason rather than a flag, so the registry says why; naming the unit still
     #: runs it, for the deliberate one-off.
     excluded: Identifier | None = None
+    #: Whether provisioning installs and runs mast-service on this unit. None, not
+    #: False, when absent: dump_unit_registry drops only None, so a False default
+    #: would be written into every entry at the next MAC write. Strict, so a
+    #: hand-written "yes" or 1 is an error rather than a service installed.
+    supervised: StrictBool | None = None
 
 
 def select_units(units: list[UnitEntry], only_hosts: list[str]) -> tuple[list[UnitEntry], list[UnitEntry]]:

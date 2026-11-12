@@ -1091,3 +1091,48 @@ def test_stand_down_absent_service_is_not_a_failure(root, monkeypatch):
 
     assert "STANDDOWN_OK" in log, log
     assert code == D.EXIT_OK, log
+
+
+# --- the build's command line ----------------------------------------------------------
+
+# _make_driver replaces Driver._build with a fake; these tests need the real one.
+_REAL_BUILD = D.Driver._build
+
+
+def _build_args(root, monkeypatch, unit: dict) -> list[str]:
+    """The command line _build hands to build-mast.ps1 for this unit."""
+    drv, _sess = _make_driver(root, monkeypatch, make_responder(), unit=unit)
+    seen: list[list[str]] = []
+
+    def fake_run(args, **_kw):
+        seen.append(list(args))
+        return D.subprocess.CompletedProcess(args, 1)
+
+    monkeypatch.setattr(D.subprocess, "run", fake_run)
+    monkeypatch.setattr(D, "_powershell_exe", lambda: "pwsh")
+    (entry,) = D.registry.load_unit_registry(drv.cfg.unit_registry)
+    _REAL_BUILD(drv, entry, entry.hostname, ["git"], lambda: 0.0)
+    (args,) = seen
+    return args
+
+
+def test_a_supervised_unit_builds_with_the_switch(root, monkeypatch):
+    args = _build_args(root, monkeypatch, {**UNIT, "supervised": True})
+    assert args.count("-Supervised") == 1
+
+
+@pytest.mark.parametrize("flag", [{}, {"supervised": False}])
+def test_an_unsupervised_unit_builds_without_it(root, monkeypatch, flag):
+    args = _build_args(root, monkeypatch, {**UNIT, **flag})
+    assert "-Supervised" not in args
+
+
+def test_build_mast_takes_the_switch_into_the_mast_service_command():
+    # Baked into commands.json like -Site and -DirectHttp, so it folds into the
+    # module's content hash and a flag flip re-runs the module. The provider does
+    # not exist yet; the switch case is where it will read the flag.
+    text = (Path(__file__).resolve().parents[3] / "build" / "build-mast.ps1").read_text(encoding="utf-8")
+    assert re.search(r"\[switch\]\$\{Supervised\}", text), "build-mast.ps1 declares no -Supervised switch"
+    case = re.search(r"'mast-service'\s*\{(.*?)\n      \}", text, re.DOTALL)
+    assert case, "build-mast.ps1 has no 'mast-service' case in New-CommandFile"
+    assert re.search(r"if \(\$\{Supervised\}\)\s*\{\s*\$\{cmd\} = \$\{cmd\} \+ ' -Supervised'", case.group(1))
