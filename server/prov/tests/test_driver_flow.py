@@ -1127,12 +1127,8 @@ def test_an_unsupervised_unit_builds_without_it(root, monkeypatch, flag):
     assert "-Supervised" not in args
 
 
-def test_build_mast_takes_the_switch_into_the_mast_service_command():
-    # Baked into commands.json like -Site and -DirectHttp, so it folds into the
-    # module's content hash and a flag flip re-runs the module. The provider does
-    # not exist yet; the switch case is where it will read the flag.
+def test_build_mast_declares_the_switch():
+    # Where build-mast.ps1 puts it -- the commands of the modules that read it -- is
+    # pinned in test_mast_service_provider.py.
     text = (Path(__file__).resolve().parents[3] / "build" / "build-mast.ps1").read_text(encoding="utf-8")
     assert re.search(r"\[switch\]\$\{Supervised\}", text), "build-mast.ps1 declares no -Supervised switch"
-    case = re.search(r"'mast-service'\s*\{(.*?)\n      \}", text, re.DOTALL)
-    assert case, "build-mast.ps1 has no 'mast-service' case in New-CommandFile"
-    assert re.search(r"if \(\$\{Supervised\}\)\s*\{\s*\$\{cmd\} = \$\{cmd\} \+ ' -Supervised'", case.group(1))

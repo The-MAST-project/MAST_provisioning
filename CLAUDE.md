@@ -485,9 +485,20 @@ needs `SystemParametersInfo` / `WM_SETTINGCHANGE` from **inside** the session, w
 `desktop-appearance`'s AtLogon task is for. See
 `docs/decisions/2026-08-19-per-user-desktop-state-is-written-into-the-target-hive-and-re-asserted-at-logon.md`.
 
-## MAST services: provisioning registers none, and removes any it finds
+## MAST services: the supervisor's on supervised units, and none of the legacy four
 
-**No provider registers a Windows service.** The four MAST nssm services (`mast-unit`,
+**Provisioning runs one MAST service, `mast-service`, on supervised units only.** The
+registry's `supervised: true` makes the build pass `-Supervised` to `mast-service` and
+`mast-services-finalize` (`${SupervisedModules}` in `build-mast.ps1`). Standdown (20) stops it
+and never deletes it; the `mast-service` provider (2220) runs MAST_supervision's own
+`install\install-mast-service.ps1` or, unsupervised, removes it with `Remove-MastService`; it
+never starts it; finalize (9500) starts it or asserts it absent. Name it only through
+`Get-MastSupervisorServiceName`, never in `Get-MastServiceNames`, which is the removal list.
+`test_no_service_registration.py` allows a start of it in finalize only, and still forbids
+any `nssm install` under the provider tree. See
+`docs/decisions/2026-11-12-provisioning-installs-and-runs-mast-service-on-supervised-units.md`.
+
+**No provider registers a Windows service itself.** The four legacy MAST nssm services (`mast-unit`,
 `mast-pwi4`, `mast-pwshutter`, `mast-phd2`) are *removed*, and the names live once in
 `tools/mast-service-names.ps1` (`Get-MastServiceNames`, `Get-MastLegacyServiceNames`,
 the `Test-MastNssmService` gate and `Remove-MastService`), staged into the two providers

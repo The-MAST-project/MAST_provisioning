@@ -31,7 +31,7 @@ front. Expect it to be wrong in places and to shift.
 | `orchestration` | The server control plane: the driver, loop/service mode, detached execute |
 | `scheduling` | Maintenance windows, leases, TTLs, heartbeats |
 | `logging` | Log paths, archival, retention, noise control |
-| `services` | The NSSM MAST services: naming, start policy, dependencies |
+| `services` | The NSSM MAST services: the legacy four provisioning removes and the supervisor's `mast-service` it runs on supervised units; naming, start policy, dependencies |
 | `unit-config` | Per-unit and per-site configuration, and the unit registry |
 | `instruments` | Mount, focuser, cameras, instrument profiles, COM binding, calibration |
 | `astrometry` | Plate solving, index files, the cygwin toolchain |

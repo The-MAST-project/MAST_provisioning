@@ -1,8 +1,8 @@
-# Canonical inventory of the MAST nssm services, and the single source of truth for
-# the only thing provisioning does with them: remove them. Shared by the two
-# providers that act on it -- mast-services-standdown (order 20) removes them before
-# any module installs anything, and mast-services-finalize (9500) asserts at the end
-# of a run that none came back. Staged into both by `repofiles`.
+# Canonical inventory of the MAST nssm services. The four legacy services have one
+# fate, removal: mast-services-standdown (order 20) removes them before any module
+# installs anything, and mast-services-finalize (9500) asserts at the end of a run
+# that none came back. The supervisor's mast-service is the exception, kept apart
+# from them below. Staged by `repofiles` into standdown, finalize and mast-service.
 #
 # Why removal rather than a start mode: none of these four processes is started by
 # its service. The unit is run by hand and raises PWI4, ps3cli and PHD2 itself
@@ -18,6 +18,16 @@
 # parameter is DependOnService -- but the order costs nothing to keep.
 function Get-MastServiceNames {
     @('mast-unit', 'mast-pwi4', 'mast-pwshutter', 'mast-phd2')
+}
+
+# The supervisor's service, installed by MAST_supervision's own installer on units
+# whose registry entry is supervised. Deliberately not in Get-MastServiceNames: that
+# list feeds the driver's phase 2b and the standdown, which delete, and a supervised
+# unit's service must survive every run. Standdown stops it, finalize starts it, and
+# the mast-service provider installs or removes it. Every script names it through
+# this accessor, which is what test_no_service_registration.py keys on.
+function Get-MastSupervisorServiceName {
+    'mast-service'
 }
 
 # The names an earlier provisioning generation registered, before the mast-* prefix.

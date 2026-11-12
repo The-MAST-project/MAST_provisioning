@@ -21,6 +21,15 @@ if (${remaining}.Count -gt 0) {
     exit 1
 }
 
-"mast-services-standdown OK: no MAST service is registered" | Out-File -FilePath ${verifyLog} -Encoding UTF8
+${supervisorService} = Get-MastSupervisorServiceName
+${supervisor} = Get-Service -Name (Get-MastSupervisorServiceName) -ErrorAction SilentlyContinue
+if (($null -ne ${supervisor}) -and (${supervisor}.Status -ne 'Stopped')) {
+    ("mast-services-standdown FAIL: {0} is {1}, expected Stopped for the run" -f ${supervisorService}, ${supervisor}.Status) |
+        Out-File -FilePath ${verifyLog} -Encoding UTF8
+    exit 1
+}
+
+("mast-services-standdown OK: no legacy MAST service is registered, and {0} is not running" -f ${supervisorService}) |
+    Out-File -FilePath ${verifyLog} -Encoding UTF8
 Write-MastSmokeOk -Module 'mast-services-standdown' | Out-Null
 exit 0

@@ -128,7 +128,7 @@ renumbering.
 
 | Order | Module | Description |
 |------:|--------|-------------|
-|    20 | `mast-services-standdown` | **Remove** every MAST nssm service before anything else runs, so no part of the run can command telescope hardware and nothing is left that an accidental start could raise (a running `mast-unit` opens the mirror covers and homes the mount) |
+|    20 | `mast-services-standdown` | **Stop** the supervisor's `mast-service` when present (kept registered), then **remove** every legacy MAST nssm service before anything else runs, so no part of the run can command telescope hardware and nothing is left that an accidental start could raise (a running `mast-unit` opens the mirror covers and homes the mount) |
 |    30 | `long-paths` | Enable Win32 long paths (`LongPathsEnabled = 1`), re-asserted every run. Processes started before the change keep the 260-character `MAX_PATH` limit until restarted |
 |   100 | `proxy` | Soft proxy: set (on-campus) or clear (home) machine/WinHTTP/WinINet proxy settings |
 |   150 | `config-bootstrap` | Lay down `C:\WIS\config.toml` (machine identity + config-DB connection) with the `machine_role` field injected; site chosen by build `-Site` |
@@ -160,8 +160,9 @@ renumbering.
 |  2000 | `sysinternals` | Sysinternals Suite |
 |  2050 | `jupyter` | Jupyter Notebook + scientific stack (astropy, numpy, scipy, matplotlib, pandas, astroquery, photutils) in a contained venv under `C:\MAST\jupyter` (state kept there; launcher + desktop shortcut). Installs the locked set from `assets/requirements.txt` out of a vendored 118-wheel wheelhouse with `--no-index`, so the wheels are bound to the interpreter the `python` provider pins; `build-mast.ps1` runs `Assert-JupyterWheelhouseInterpreterInSync` and **fails the build** when the two drift -- on either module's build |
 |  2100 | `chrome` | Google Chrome (offline Enterprise MSI) |
-|  2200 | `mast` | Clone MAST repos, create the venv, install requirements, open the unit API port. Registers no service |
+|  2200 | `mast` | Clone MAST repos, create the venv, install requirements, open the unit API port. Registers no service itself |
 |  2210 | `mast-shared-mount` | Map `Z:` to the operational share `\\<controller_host>\mast-share` **in the LocalSystem session** (SYSTEM at-startup task); clear stale per-user mappings |
+|  2220 | `mast-service` | The supervisor's Windows service, on supervised units only (registry `supervised: true`, passed by the build as `-Supervised`): runs MAST_supervision's `install\install-mast-service.ps1` from the supervision checkout, failing when it has none; on any other unit removes `mast-service`. Never starts it: standdown stops it, finalize starts it |
 |  2350 | `windows-update-lockdown` | Keep auto Windows Updates disabled: daily + at-startup SYSTEM task re-asserts the policy/services (Windows self-heals, so it must be re-applied). Also disables Microsoft Edge's own updater (its services and tasks; its policy is ignored on a non-managed machine), which Windows Update's settings do not reach |
 |  2400 | `windows-exporter-monitoring` | Prometheus windows_exporter service (TCP 9182) |
 |  2500 | `diagnostics` | Post-smoke runtime checks (ASCOM, app launch, PHD2 RPC). Nothing here touches the MAST services |
@@ -169,10 +170,19 @@ renumbering.
 |  2700 | `desktop-shortcuts` | Rebuilds `Desktop\MAST` on the Public desktop from scratch each run -- **MAST Unit Operation** (FastAPI contract page, weather, DS9, logs, PWI4, ASICap, NoMachine, Chrome), **Setup and Calibration** (instrument calibration, proxy tool, XILab, ASIMount, ASCOM Diagnostics), **Development** (the mast-clone VS Code workspace, VS Code, Jupyter, Compass, `C:\MAST`), **Vendor** for strays. Web shortcuts launch Chrome directly; third-party tools are created from the resolved exe, never inherited from the sweep |
 |  2750 | `desktop-appearance` | Every per-user desktop value: dark Windows theme, a dark background carrying the machine's identity (hostname, site spelled out, site coordinates), and the toast / content-delivery quieting that used to sit in bootstrap. Written into the autologin `mast` hive; the live desktop is repainted at the end of the run by `execute-mast-provisioning.ps1`, which runs as `mast` inside the logon session and elevated |
 |  2900 | `mast-validation` | End-to-end plate-solve validation through production code paths. **On-site only**: the solver reads its acquisition ROI from the config DB, so a unit that cannot reach its controller fails here |
-|  9500 | `mast-services-finalize` | Assert the end-of-run posture: no MAST service is registered |
+|  9500 | `mast-services-finalize` | Assert the end-of-run posture: no legacy MAST service is registered; on a supervised unit, start `mast-service`, otherwise assert it absent |
 |  9999 | `reboot` | Detect pending-reboot state; drop a flag for the orchestrator |
 
-**Provisioning registers no Windows service, and removes any it finds.** The four MAST nssm
+**Provisioning runs one MAST service, the supervisor's `mast-service`, on supervised units
+only.** A unit opts in with `supervised: true` in the registry; the build passes `-Supervised`
+to `mast-service` and `mast-services-finalize`. Each run brackets the service: standdown (20)
+stops it, the `mast-service` provider (2220) runs MAST_supervision's own installer (or removes
+the service on an unsupervised unit), and finalize (9500) starts it. Provisioning registers
+nothing itself, and `server/prov/tests/test_no_service_registration.py` allows a start of
+`mast-service` only in finalize. See
+`docs/decisions/2026-11-12-provisioning-installs-and-runs-mast-service-on-supervised-units.md`.
+
+**The four legacy services are removed wherever they are found.** The four MAST nssm
 services (`mast-unit`, `mast-pwi4`, `mast-pwshutter`, `mast-phd2`) are deleted at order 20 and
 again by the driver before the build and transfer; `tools/mast-service-names.ps1` holds the
 names, and `mast-services-finalize` asserts at 9500 that none came back.
