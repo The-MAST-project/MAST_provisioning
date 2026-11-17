@@ -80,4 +80,4 @@ control	MAST_control	control	master	8f6a917169a93a360b12cedd72fe242ae3d84f81
 gui	MAST_gui	control	main	4f38d95460efcf6ef71289316d2e3e6d7f4bd8dc
 spec	MAST_spec	spec	master	5f7be26b70fa103a602c98034aa6ab0ad34bf0f4
 claude	mast-claude-config	unit,control,spec	main	542e7e6b84cdee69306f7d9de018df51c21b9e42
-supervision	MAST_supervision	unit	main	51c369c98c19faee205872edad1a022c82c07d36
+supervision	MAST_supervision	unit	main	3bc3be826940c23174065c9a988e0c1d4ecec937
