@@ -74,7 +74,7 @@
 #!package-roots	common,supervision
 #
 # dir	repo	roles	branch	rev
-common	MAST_common	unit,control,spec	master	ecdabedb829e885d6a15beaa31a1f44f1bf7fae0
+common	MAST_common	unit,control,spec	master	0807319c5a1dfce6f30cf5c959a32dfa0da0e5d8
 unit	MAST_unit.2024-12-12	unit	main	fa8d3a431017a164b8f1fb49283a21f8e4170355
 control	MAST_control	control	master	8f6a917169a93a360b12cedd72fe242ae3d84f81
 gui	MAST_gui	control	main	4f38d95460efcf6ef71289316d2e3e6d7f4bd8dc
