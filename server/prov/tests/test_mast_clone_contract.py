@@ -27,7 +27,7 @@ _CLONE_SH = _REPO_ROOT / "tools" / "mast-clone.sh"
 #: the role, retargeting one at a feature branch, or pinning a rev changes what
 #: every unit receives.
 EXPECTED_UNIT_ROWS = {
-    ("common", "MAST_common", "master", "ecdabedb829e885d6a15beaa31a1f44f1bf7fae0"),
+    ("common", "MAST_common", "master", "0807319c5a1dfce6f30cf5c959a32dfa0da0e5d8"),
     ("unit", "MAST_unit.2024-12-12", "main", "fa8d3a431017a164b8f1fb49283a21f8e4170355"),
     ("claude", "mast-claude-config", "main", "542e7e6b84cdee69306f7d9de018df51c21b9e42"),
     ("supervision", "MAST_supervision", "main", "3bc3be826940c23174065c9a988e0c1d4ecec937"),
