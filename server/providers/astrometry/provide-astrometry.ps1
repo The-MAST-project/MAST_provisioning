@@ -25,6 +25,10 @@ catch {
     throw "Failed to import provisioning.psm1: $($_.Exception.Message)"
 }
 
+${archiveLibDot} = Join-Path ${PSScriptRoot} 'cygwin-archive.ps1'
+if (-not (Test-Path ${archiveLibDot})) { ${archiveLibDot} = Join-Path ${PSScriptRoot} '..\..\lib\cygwin-archive.ps1' }
+. ${archiveLibDot}
+
 ${null} = Start-ProvisionLog -Component 'provide-astrometry'
 try {
     ${archivePath} = Join-Path ${AssetsRoot} ${ArchiveName}
@@ -55,8 +59,15 @@ try {
     }
     Confirm-Dir ${InstallRoot}
 
-    Write-Host "Expanding ${archivePath} -> ${InstallRoot} ..."
-    Expand-AnyArchive -ArchivePath ${archivePath} -Destination ${InstallRoot}
+    # Symlinks are left out of the extract and made by Cygwin's ln (see cygwin-archive.ps1).
+    ${workDir} = Join-Path ${env:TEMP} ("astrometry_meta_{0:yyyyMMdd_HHmmss}" -f (Get-Date))
+    Confirm-Dir ${workDir}
+    ${links} = Get-MastArchiveSymlinks -ArchivePath ${archivePath} -WorkDir ${workDir}
+    Write-Host ("Expanding {0} -> {1}, leaving out {2} symlinks ..." -f ${archivePath}, ${InstallRoot}, ${links}.Count)
+    Expand-MastArchiveWithoutSymlinks -ArchivePath ${archivePath} -Destination ${InstallRoot} -Links ${links} -WorkDir ${workDir}
+    ${treeRoot} = & (Join-Path ${binDir} 'cygpath.exe') -u ${InstallRoot}
+    ${summary} = Restore-MastArchiveSymlinks -BashExe ${CygwinBashExe} -Links ${links} -TreeRoot ${treeRoot} -WorkDir ${workDir}
+    Write-Host ("Astrometry symlinks: {0}" -f ${summary})
 
     # Sanity: the canonical solve-field.exe must exist.
     ${solveField} = Join-Path ${InstallRoot} 'bin\solve-field.exe'

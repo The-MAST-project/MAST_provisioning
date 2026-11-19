@@ -27,6 +27,31 @@ catch {
     throw "Failed to import provisioning.psm1: $($_.Exception.Message)"
 }
 
+${archiveLibDot} = Join-Path ${PSScriptRoot} 'cygwin-archive.ps1'
+if (-not (Test-Path ${archiveLibDot})) { ${archiveLibDot} = Join-Path ${PSScriptRoot} '..\..\lib\cygwin-archive.ps1' }
+. ${archiveLibDot}
+
+${ARCHIVE_TREE_DIR} = 'cygwin64-clean'
+${CYGWIN_TREE_ROOT} = '/'
+
+function New-CygwinWorkDir {
+    ${dir} = Join-Path ${env:TEMP} ("cygwin_meta_{0:yyyyMMdd_HHmmss}" -f (Get-Date))
+    Confirm-Dir ${dir}
+    return ${dir}
+}
+
+# The archive's symlinks were never extracted as links (see cygwin-archive.ps1), so an
+# install made before that change is repaired by the same restore a fresh one runs.
+function Restore-CygwinSymlinks {
+    param([string]${BashExe}, [string]${WorkDir})
+    ${archivePath} = Join-Path ${AssetsRoot} ${ArchiveName}
+    if (-not (Test-Path ${archivePath})) { throw "Cygwin archive not found: ${archivePath}" }
+    ${links} = Get-MastArchiveSymlinks -ArchivePath ${archivePath} -WorkDir ${WorkDir}
+    ${prefix} = if (${links}.Count -gt 0 -and ${links}[0].Path.StartsWith("./${ARCHIVE_TREE_DIR}/")) { ${ARCHIVE_TREE_DIR} } else { '' }
+    ${summary} = Restore-MastArchiveSymlinks -BashExe ${BashExe} -Links ${links} -TreeRoot ${CYGWIN_TREE_ROOT} -RootPrefix ${prefix} -WorkDir ${WorkDir}
+    Write-Host ("Cygwin symlinks: {0} of {1} archive links ({2})" -f ${summary}, ${links}.Count, ${archivePath})
+}
+
 # --- Idempotent skip: leave an already-healthy Cygwin in place ---------------
 # A full provision re-extracts the tgz, robocopy /MIR's the whole tree into
 # ${InstallRoot}, and re-runs every /etc/postinstall/*.sh -- minutes of work,
@@ -39,6 +64,7 @@ if (-not ${Force} -and (Test-Path ${bashExeExisting})) {
     ${uname} = & ${bashExeExisting} -lc 'uname -a' 2>$null
     if (${LASTEXITCODE} -eq 0 -and ${uname}) {
         Write-Host ("Cygwin already installed and healthy at {0} ({1}); skipping extract/mirror/postinstall. Use -Force to reinstall." -f ${InstallRoot}, ${uname})
+        Restore-CygwinSymlinks -BashExe ${bashExeExisting} -WorkDir (New-CygwinWorkDir)
         Add-ToSystemPath -Dir (Join-Path ${InstallRoot} 'bin')
         ${verifyLogSkip} = Join-Path (Get-MastVerifyDir) 'cygwin-verify.log'
         Confirm-Dir (Split-Path ${verifyLogSkip} -Parent)
@@ -58,17 +84,17 @@ try {
         throw "Cygwin archive not found: ${archivePath}"
     }
 
-    # --- Stage extraction to a temp folder ---
+    # --- Stage extraction to a temp folder, symlinks left out ---
     ${stage} = Join-Path ${env:TEMP} ("cygwin_stage_{0:yyyyMMdd_HHmmss}" -f (Get-Date))
+    ${meta}  = New-CygwinWorkDir
     Confirm-Dir ${stage}
-
-    Write-Host "Extracting ${archivePath} to staging ${stage} ..."
-    # Expand-AnyArchive should handle .zip, .7z, .tar.gz/.tgz per your provisioning.psm1
-    Expand-AnyArchive -ArchivePath ${archivePath} -Destination ${stage}
+    ${links} = Get-MastArchiveSymlinks -ArchivePath ${archivePath} -WorkDir ${meta}
+    Write-Host ("Extracting {0} to staging {1}, leaving out {2} symlinks ..." -f ${archivePath}, ${stage}, ${links}.Count)
+    Expand-MastArchiveWithoutSymlinks -ArchivePath ${archivePath} -Destination ${stage} -Links ${links} -WorkDir ${meta}
 
     # The tgz may contain a top-level "cygwin64" folder or the tree directly.
     # Resolve the source folder that actually contains /bin, /etc, etc.
-    ${candidate} = Join-Path ${stage} 'cygwin64-clean'
+    ${candidate} = Join-Path ${stage} ${ARCHIVE_TREE_DIR}
     if (Test-Path ${candidate} -PathType Container) {
         ${srcRoot} = ${candidate}
     }
@@ -91,6 +117,9 @@ try {
     if (-not (Test-Path ${bashExe})) {
         throw "bash.exe not found at ${bashExe}"
     }
+
+    # Before postinstall, which runs inside the tree.
+    Restore-CygwinSymlinks -BashExe ${bashExe} -WorkDir ${meta}
 
     # Execute any pending /etc/postinstall/*.sh (rename to .done after success).
     # Run inline, but strip CR first: if this .ps1 is checked out CRLF (Windows

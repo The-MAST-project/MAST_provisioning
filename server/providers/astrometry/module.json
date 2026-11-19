@@ -9,6 +9,9 @@
     "verify-astrometry.ps1",
     "assets/astrometry.tgz"
   ],
+  "repofiles": [
+    "server/lib/cygwin-archive.ps1"
+  ],
   "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\verify-astrometry.ps1\""
 }
 
