@@ -14,7 +14,7 @@
 # see Z:. See issue #159.
 #
 # mast-unit is listed first so it is stopped ahead of mast-pwi4. Nothing enforces
-# that today -- `nssm set ... AppDependencies` is a no-op on nssm 2.24, whose valid
+# that today -- `nssm set ... AppDependencies` is a no-op in nssm, whose valid
 # parameter is DependOnService -- but the order costs nothing to keep.
 function Get-MastServiceNames {
     @('mast-unit', 'mast-pwi4', 'mast-pwshutter', 'mast-phd2')

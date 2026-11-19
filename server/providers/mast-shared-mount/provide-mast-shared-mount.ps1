@@ -23,7 +23,7 @@ param(
 # from boot, retrying if the network is not up yet. There is no second, service-bound
 # path: the nssm Start/Pre hook that used to complement it hung off mast-unit, and no
 # MAST service is registered any more (#159). It was inert on the fleet in any case --
-# the vendored nssm 2.24 rejects AppEvents outright (#55).
+# nssm 2.24, vendored at the time, rejected AppEvents outright (#55).
 #
 # Best-effort on the mount itself: a unit provisioned in the lab cannot reach the site
 # controller, and that must not fail the run. The INSTALL (script, task) is not

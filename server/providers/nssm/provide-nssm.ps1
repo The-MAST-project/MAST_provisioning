@@ -2,9 +2,9 @@
 [CmdletBinding()]
 param(
     [string]${AssetsRoot} = ${PSScriptRoot},
-    [string]${ZipPath},                                   # Optional explicit path to nssm-2.24.zip
+    [string]${ZipPath},                                   # Optional explicit path to the nssm-*.zip
     [string]${InstallDir} = 'C:\Program Files\nssm',      # Final install location (added to PATH)
-    # Re-extract/copy even if nssm.exe is already present (otherwise left as-is).
+    # Copy even if the installed nssm.exe already matches the archive's.
     [switch]${Force}
 )
 
@@ -25,15 +25,6 @@ try {
 }
 catch {
     throw "Failed to import provisioning.psm1: $($_.Exception.Message)"
-}
-
-# Idempotent skip: nssm.exe already present means it is installed. Re-assert PATH
-# and skip the unzip/copy. Use -Force to reinstall.
-${nssmExeGuard} = Join-Path ${InstallDir} 'nssm.exe'
-if (-not ${Force} -and (Test-Path ${nssmExeGuard})) {
-    Add-ToSystemPath -Dir ${InstallDir}
-    Write-Host "NSSM already installed at ${InstallDir}; skipping. Use -Force to reinstall."
-    exit 0
 }
 
 try {
@@ -71,8 +62,17 @@ try {
     }
 
     # --- Install NSSM ---
-    Confirm-Dir ${InstallDir}
+    # An nssm.exe already there is kept only when it IS the archive's: a unit carrying
+    # an earlier vendored version must get the new one.
     ${destExe} = Join-Path ${InstallDir} 'nssm.exe'
+    ${wantHash} = (Get-FileHash -LiteralPath ${exe} -Algorithm SHA256).Hash
+    if (-not ${Force} -and (Test-Path -LiteralPath ${destExe}) -and
+        (Get-FileHash -LiteralPath ${destExe} -Algorithm SHA256).Hash -eq ${wantHash}) {
+        Add-ToSystemPath -Dir ${InstallDir}
+        Write-Host "NSSM at ${InstallDir} already matches the archive; skipping. Use -Force to reinstall."
+        exit 0
+    }
+    Confirm-Dir ${InstallDir}
     Copy-Item -Force ${exe} ${destExe}
 
     Add-ToSystemPath -Dir ${InstallDir}

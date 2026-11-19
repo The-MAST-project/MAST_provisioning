@@ -1,13 +1,13 @@
 ﻿{
   "name": "nssm",
-  "version": "2.24",
-  "description": "Install NSSM (Non-Sucking Service Manager) from nssm-2.24.zip and add to PATH.",
+  "version": "2.24-101-g897c7ad",
+  "description": "Install NSSM (Non-Sucking Service Manager) from nssm-2.24-101-g897c7ad.zip and add to PATH. The pre-release, not the 2.24 release: MAST_supervision's mast-service installer sets AppKillProcessTree to 0, which 2.24 rejects. Replaces an installed nssm.exe that differs from the archive's. See docs/decisions/2026-11-19-provisioning-vendors-the-nssm-2.24-101-pre-release.md.",
   "order": 1200,
   "command": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\provide-nssm.ps1\" -AssetsRoot \".\" -InstallDir \"C:\\Program Files\\nssm\"",
   "commandfiles": [
     "provide-nssm.ps1",
     "verify-nssm.ps1",
-    "assets/nssm-2.24.zip"
+    "assets/nssm-2.24-101-g897c7ad.zip"
   ],
   "verify": "powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File \".\\verify-nssm.ps1\""
 }
