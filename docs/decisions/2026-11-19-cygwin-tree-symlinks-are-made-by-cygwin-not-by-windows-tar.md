@@ -33,6 +33,7 @@ All 313 were empty files on both units. So were the relative links whose targets
 
 **Unsettled:**
 - Whether anything on a unit actually used the broken files. Cygwin's TLS trust store and `/etc/hosts` were empty, but nothing was traced to a failure from it.
+- A repair run also recreates a link whose path a later package upgrade removed, together with its directory. On the dev VM, `astrometry-dependencies` had upgraded groff from 1.23.0 to 1.24.1, and the repair run recreated `/usr/share/doc/groff-1.23.0/pdf/mom-pdf.pdf` as a dangling link. Skipping links whose parent directory is missing would avoid that.
 - Repaired units keep their relative-link copies. They work, but `ls -l` shows files where the tree has links.
 - The fix was run end to end only on bsdtar 3.5.2 (19044.3086), plus 3.7 and macOS's 3.5.3 for the listing and exclude steps. Release media's bsdtar 3.3.2 was not run with it.
 - `REGENERATING-CLEAN-TGZ.md` checks the archive with Cygwin's own tar, which extracts links correctly, so it would not catch a link-bearing archive that Windows' tar mishandles.
