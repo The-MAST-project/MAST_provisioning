@@ -79,6 +79,6 @@ Describe 'ConvertTo-MastSymlinkTable' {
 
 Describe 'Restore-MastArchiveSymlinks' {
     It 'has nothing to do for an archive without symlinks, and does not start bash' {
-        Restore-MastArchiveSymlinks -BashExe 'C:\no\such\bash.exe' -Links @() -TreeRoot '/' -WorkDir $env:TEMP | Should Be 'created=0 kept=0'
+        Restore-MastArchiveSymlinks -BashExe 'C:\no\such\bash.exe' -Links @() -TreeRoot '/' -WorkDir $env:TEMP | Should Be 'created=0 kept=0 skipped=0'
     }
 }

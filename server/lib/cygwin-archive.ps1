@@ -12,7 +12,9 @@
 # Restoring creates a link only where the path is missing or an empty regular file: an
 # existing link, or a working copy left by an earlier extract, is kept. That makes the
 # same step a repair for a unit extracted the old way, without clobbering anything a
-# later Cygwin package upgrade put in place.
+# later Cygwin package upgrade put in place. A link whose directory is gone is skipped:
+# every link's directory is in the archive, so on a repair that means a package upgrade
+# moved it (groff-1.23.0 -> groff-1.24.1), and the link would dangle in a stale tree.
 #
 # Dot-sourced by provide-cygwin.ps1 and provide-astrometry.ps1, staged flat as a
 # repofiles entry.
@@ -27,19 +29,22 @@ ${script:MastUtf8NoBom} = New-Object System.Text.UTF8Encoding($false)
 # the double quotes inside a native argument, so a quoted script arrives cut in two.
 ${script:MastRestoreLinksSh} = @'
 set -e
-created=0; kept=0
+created=0; kept=0; skipped=0
 while IFS=$'\t' read -r target link; do
   if [ -L "$link" ] || [ -d "$link" ] || [ -s "$link" ]; then
     kept=$((kept+1))
     continue
   fi
-  mkdir -p "$(dirname "$link")"
+  if [ ! -d "$(dirname "$link")" ]; then
+    skipped=$((skipped+1))
+    continue
+  fi
   rm -f -- "$link"
   ln -s -- "$target" "$link"
   [ -L "$link" ]
   created=$((created+1))
 done < "$1"
-echo "created=$created kept=$kept"
+echo "created=$created kept=$kept skipped=$skipped"
 '@
 
 # mtree escapes a byte outside the safe set as a backslash and three octal digits.
@@ -139,7 +144,7 @@ function Expand-MastArchiveWithoutSymlinks {
     if ($LASTEXITCODE -ne 0) { throw "tar failed ${LASTEXITCODE}" }
 }
 
-# Returns the restore script's "created=N kept=M" line; throws unless every link is accounted for.
+# Returns the restore script's "created=N kept=M skipped=K" line; throws unless every link is accounted for.
 function Restore-MastArchiveSymlinks {
     [CmdletBinding()]
     param(
@@ -149,7 +154,7 @@ function Restore-MastArchiveSymlinks {
         [AllowEmptyString()][string]${RootPrefix} = '',
         [Parameter(Mandatory)][string]${WorkDir}
     )
-    if (${Links}.Count -eq 0) { return 'created=0 kept=0' }
+    if (${Links}.Count -eq 0) { return 'created=0 kept=0 skipped=0' }
     ${tablePath}  = Join-Path ${WorkDir} 'symlinks.tsv'
     ${scriptPath} = Join-Path ${WorkDir} 'restore-symlinks.sh'
     ${table} = [string[]]@(ConvertTo-MastSymlinkTable -Links ${Links} -TreeRoot ${TreeRoot} -RootPrefix ${RootPrefix})
@@ -161,7 +166,7 @@ function Restore-MastArchiveSymlinks {
     ${out} = @(& ${BashExe} -l ${scriptPosix} ${tablePosix})
     if ($LASTEXITCODE -ne 0) { throw "restoring archive symlinks failed (exit ${LASTEXITCODE}): $(${out} -join ' ')" }
     ${summary} = [string](${out} | Select-Object -Last 1)
-    if (${summary} -notmatch '^created=(\d+) kept=(\d+)$' -or ([int]${Matches}[1] + [int]${Matches}[2]) -ne ${Links}.Count) {
+    if (${summary} -notmatch '^created=(\d+) kept=(\d+) skipped=(\d+)$' -or ([int]${Matches}[1] + [int]${Matches}[2] + [int]${Matches}[3]) -ne ${Links}.Count) {
         throw "restoring archive symlinks: expected $(${Links}.Count) entries, got '${summary}'"
     }
     return ${summary}

@@ -21,6 +21,7 @@ All 313 were empty files on both units. So were the relative links whose targets
 - `Get-MastArchiveSymlinks` lists the archive's links with bsdtar's mtree writer (`--format=mtree --options 'mtree:!all,type,link'`), which gives one escaped entry per line.
 - `Expand-MastArchiveWithoutSymlinks` extracts everything else, excluding the links with `-X`.
 - `Restore-MastArchiveSymlinks` has Cygwin's `ln -s` create each link. It creates a link only where the path is missing or an empty regular file, and keeps an existing link, directory or non-empty file.
+  - It skips a link whose directory is missing. The archive holds a directory entry for every link's parent, so on a fresh extract the directory is always there. On a repair, a missing directory means a package upgrade moved it, and the link would dangle in a stale tree. On the dev VM, `astrometry-dependencies` had upgraded groff from 1.23.0 to 1.24.1, and a repair without this check recreated `/usr/share/doc/groff-1.23.0/pdf/mom-pdf.pdf` as a dangling link.
 - The bash script is passed as a file, not with `-c`, because PowerShell 5.1 does not escape double quotes inside a native argument and the quoted script arrived cut in two.
 - `provide-cygwin.ps1` runs the restore after robocopy, before postinstall. It also runs it on its "already healthy" skip path, so an ordinary `cygwin` module run repairs a unit extracted the old way.
 - `provide-astrometry.ps1` uses the same three steps.
@@ -33,7 +34,6 @@ All 313 were empty files on both units. So were the relative links whose targets
 
 **Unsettled:**
 - Whether anything on a unit actually used the broken files. Cygwin's TLS trust store and `/etc/hosts` were empty, but nothing was traced to a failure from it.
-- A repair run also recreates a link whose path a later package upgrade removed, together with its directory. On the dev VM, `astrometry-dependencies` had upgraded groff from 1.23.0 to 1.24.1, and the repair run recreated `/usr/share/doc/groff-1.23.0/pdf/mom-pdf.pdf` as a dangling link. Skipping links whose parent directory is missing would avoid that.
 - Repaired units keep their relative-link copies. They work, but `ls -l` shows files where the tree has links.
 - The fix was run end to end only on bsdtar 3.5.2 (19044.3086), plus 3.7 and macOS's 3.5.3 for the listing and exclude steps. Release media's bsdtar 3.3.2 was not run with it.
 - `REGENERATING-CLEAN-TGZ.md` checks the archive with Cygwin's own tar, which extracts links correctly, so it would not catch a link-bearing archive that Windows' tar mishandles.
