@@ -134,7 +134,7 @@ renumbering.
 |   150 | `config-bootstrap` | Lay down `C:\WIS\config.toml` (machine identity + config-DB connection) with the `machine_role` field injected; site chosen by build `-Site` |
 |   200 | `openssh-server` | Drift check for OpenSSH Server (install/config owned by `bootstrap.ps1`) |
 |   250 | `imdisk` | ImDisk driver; assert the machine has the fleet's required RAM, then mount D: from the astrometry index image, persist across reboots. Also registers `mast-ramdisk-restart`, a SYSTEM task that interactive users may run: the MAST supervisor runs it to force-detach a lost D: and re-run the boot task. Installs the declared index set (`server/data/assets.json`) as `C:\MAST\state\mast-indexes.json` and keeps `D:\mast-indexes` identical to it by name and size, remounting and then rebuilding the image when it differs; the build fails when the staged seed differs from the declaration |
-|   300 | `cygwin` | Cygwin environment from a prebuilt tgz (postinstall, PATH) |
+|   300 | `cygwin` | Cygwin environment from a prebuilt tgz (postinstall, PATH); the tgz's symlinks are made by Cygwin's `ln`, not Windows' tar, and restored on every run |
 |   400 | `astrometry-dependencies` | Cygwin packages for astrometry.net (offline, from the frozen build-host cache `C:\MAST\cygwin-pkg-cache`) + bundled `fitsio` wheel |
 |   500 | `astrometry` | Prebuilt astrometry.net 0.97 tree into `C:\cygwin64\usr\local\astrometry` |
 |   600 | `python` | Python 3.12.2 + pip; removes `virtualenv` where an earlier run installed it (the jupyter venv is built with the stdlib `venv` module). Its `module.json` `version` is the fleet's authoritative interpreter pin -- the `jupyter` wheelhouse is checked against it at build time |

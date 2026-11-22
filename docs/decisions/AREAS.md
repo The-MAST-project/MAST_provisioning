@@ -35,6 +35,7 @@ front. Expect it to be wrong in places and to shift.
 | `unit-config` | Per-unit and per-site configuration, and the unit registry |
 | `instruments` | Mount, focuser, cameras, instrument profiles, COM binding, calibration |
 | `astrometry` | Plate solving, index files, the cygwin toolchain |
+| `archive extraction` | Unpacking a provider's archive on the unit: which tool, and what it does to links, modes and long paths |
 | `source-layout` | Where unit code lives: clone tooling, repo set, venv, remotes |
 | `dev-harness` | The VM test loop: snapshots, scenarios, `run-prov-test` |
 | `docs-process` | How this repo records and communicates its own decisions |
