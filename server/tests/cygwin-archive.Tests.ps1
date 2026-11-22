@@ -76,3 +76,9 @@ Describe 'ConvertTo-MastSymlinkTable' {
         { ConvertTo-MastSymlinkTable -Links $links -TreeRoot '/' -RootPrefix 'cygwin64-clean' } | Should Throw
     }
 }
+
+Describe 'Restore-MastArchiveSymlinks' {
+    It 'has nothing to do for an archive without symlinks, and does not start bash' {
+        Restore-MastArchiveSymlinks -BashExe 'C:\no\such\bash.exe' -Links @() -TreeRoot '/' -WorkDir $env:TEMP | Should Be 'created=0 kept=0'
+    }
+}

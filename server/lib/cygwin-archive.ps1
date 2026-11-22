@@ -121,7 +121,8 @@ function Get-MastArchiveSymlinks {
     ${mtreePath} = Join-Path ${WorkDir} 'archive.mtree'
     & ${script:MastSystemTar} -c -f "`"${mtreePath}`"" --format=mtree --options 'mtree:!all,type,link' "`"@${ArchivePath}`""
     if ($LASTEXITCODE -ne 0) { throw "tar could not list ${ArchivePath} (exit ${LASTEXITCODE})" }
-    return @(Get-MastMtreeSymlinks -Lines (Get-Content -LiteralPath ${mtreePath}))
+    # The comma keeps an empty result an empty array; a bare @() return unrolls to $null.
+    return ,@(Get-MastMtreeSymlinks -Lines (Get-Content -LiteralPath ${mtreePath}))
 }
 
 function Expand-MastArchiveWithoutSymlinks {
@@ -148,6 +149,7 @@ function Restore-MastArchiveSymlinks {
         [AllowEmptyString()][string]${RootPrefix} = '',
         [Parameter(Mandatory)][string]${WorkDir}
     )
+    if (${Links}.Count -eq 0) { return 'created=0 kept=0' }
     ${tablePath}  = Join-Path ${WorkDir} 'symlinks.tsv'
     ${scriptPath} = Join-Path ${WorkDir} 'restore-symlinks.sh'
     ${table} = [string[]]@(ConvertTo-MastSymlinkTable -Links ${Links} -TreeRoot ${TreeRoot} -RootPrefix ${RootPrefix})
